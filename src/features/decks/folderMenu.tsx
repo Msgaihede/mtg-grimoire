@@ -15,10 +15,10 @@
  */
 import type { ComponentType, JSX, ReactNode } from "react";
 import { Folder, FolderInput, FolderPlus, Layers, Pencil, Plus, Trash2 } from "lucide-react";
+import { ROW_CLASS } from "@/components/menu/panel";
 import type { MenuItem } from "@/components/menu/types";
 import { ipcError, type DeckFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { FOCUS_INSET } from "./cardControl";
 import { folderPaths } from "./DeckSettingsForm";
 import { folderDescendants } from "./FolderTree";
 import { useDeckFolders } from "./useDeckFolders";
@@ -135,11 +135,20 @@ export function moveToFolderContent({
             type="button"
             role="menuitem"
             // The panel owns the caret: a menu is one roving tab stop, so every row it can land
-            // on is out of the tab order and reached by the keyboard model rather than by Tab.
+            // on is out of the tab order and reached by `moveCaret` rather than by Tab. It finds
+            // these rows by their **role**, which is what lets a lazy panel's own rows — rows it
+            // never saw — take the caret like any other.
             tabIndex={-1}
+            // Both row attributes on one element, because a plain row *is* its button. The
+            // pointer's hover handler resolves a row by `ROW_ATTR`, and without it a submenu
+            // opened by hover stays open while the pointer sweeps past to the row below —
+            // `ContextMenu`'s `ActionRow` carries the pair for the same reason.
+            data-menu-row={`destination-${destination.folderId ?? "root"}`}
+            data-menu-row-button=""
             // `aria-disabled`, never the attribute — a `disabled` button leaves the tab order,
             // and a greyed row here exists to be *read*: "Here now" and the two fences are
-            // answers rather than omissions.
+            // answers rather than omissions. `menuRowsIn` reads exactly this to keep the caret
+            // off them.
             aria-disabled={destination.inert === null ? undefined : true}
             {...(destination.folderId === null
               ? {}
@@ -149,15 +158,17 @@ export function moveToFolderContent({
               onPick(destination.folderId);
               onDone();
             }}
-            className={cn(ROW, destination.inert !== null && "cursor-default text-dim")}
+            className={cn(ROW_CLASS, destination.inert === null ? LIVE_ROW : INERT_ROW)}
           >
             {destination.folderId === null ? (
-              <Layers className="size-4 shrink-0" aria-hidden="true" />
+              <Layers className="size-4 flex-none" aria-hidden="true" />
             ) : (
-              <Folder className="size-4 shrink-0" aria-hidden="true" />
+              <Folder className="size-4 flex-none" aria-hidden="true" />
             )}
             <span className="min-w-0 flex-1 truncate">{destination.name}</span>
-            {destination.inert !== null && <span className="text-dim">{destination.inert}</span>}
+            {destination.inert !== null && (
+              <span className="flex-none text-[0.7rem] text-dim">{destination.inert}</span>
+            )}
           </button>
         ))}
       </>
@@ -166,24 +177,17 @@ export function moveToFolderContent({
 }
 
 /**
- * A destination row, in `cardMenu`'s picker recipe.
+ * A destination row's two states, over the panel's own {@link ROW_CLASS}.
  *
- * The two are the app's only `lazy` submenu contents and they are one gesture apart — the deck
- * picker behind "Add to" and this one behind "Move to" — so a row that agreed with neither its
- * own panel nor its sibling would read as a third feature. **The recipe is copied rather than
- * shared because `src/features/card/cardMenu.tsx` exports neither its row nor its class
- * string**; when the panel lands a shared row renderer is the thing to pull out, and this is one
- * of the two call sites.
+ * The geometry is imported rather than copied, so a row this file draws inside a menu really is
+ * one of that menu's rows — `ContextMenu`'s `ActionRow` and `Submenu`'s trigger are built the
+ * same way, and the colours are the row's own to add because they are what differs by state.
+ * **The caret is real focus here**, which is why the live state names `focus:` alongside
+ * `hover:`, exactly as `ActionRow`'s `LIVE_ROW` does; the greyed state paints no hover at all,
+ * because a row that cannot be pressed must not light up under the pointer.
  */
-const ROW = cn(
-  "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text",
-  "transition-colors duration-150 hover:bg-bg motion-reduce:transition-none",
-  // An inert row lights up under the pointer otherwise, which is the one thing a row that
-  // cannot be pressed must not do. Written out whole, variant and all: Tailwind scans source
-  // text for class names.
-  "aria-disabled:hover:bg-transparent",
-  FOCUS_INSET,
-);
+const LIVE_ROW = "text-text hover:bg-bg focus:bg-bg";
+const INERT_ROW = "cursor-default text-dim";
 
 /**
  * What the panel says while it is reading, or when the read was refused — never a blank box,
