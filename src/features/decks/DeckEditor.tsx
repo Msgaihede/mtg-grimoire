@@ -599,8 +599,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * **`ipc.deckTagCreate` rather than `useDeckMeta.createTag`, and the cost is named.** That hook
    * is the single definition of this app's tag CRUD, and mounting it here for one write would
-   * cost the editor **three reads on every deck opened** — the categories (a *priced* per-category
-   * aggregate), the tags, and the suggestion palette — none of which this screen draws. So this is
+   * cost the editor **four reads on every deck opened** — the categories (a *priced* per-category
+   * aggregate), the tags of the list on screen, the tags of the **other** list, and the global
+   * suggestion palette, every one of them `enabled` on nothing but the deck id, and none of them
+   * drawn by this screen. (Counted off `useDeckMeta.ts`'s four `useQuery` calls, not off its
+   * prose; this comment said three until it was re-counted.) So this is
    * a second caller of one command rather than a second definition of a rule: there is no refusal
    * policy on that mutation to copy (`useDeckMeta`'s shared `writes` is an invalidation), and the
    * invalidation this owes is `setTag`'s own, which runs on both of that mutation's arms.
