@@ -329,6 +329,13 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       // this column that is not a printings row is a right-click on the card the column is
       // about. A row's own handler stops the event, so the innermost surface still wins.
       //
+      // **Every other control in the column is included, and that is the intent rather than an
+      // oversight** — the close button, the two view toggles, the printings list's `Group by`
+      // select. Only a text field is carved out, by `isTextField` inside the primitive, and a
+      // `<select>` is not one: WebView2's own menu on a select offers nothing this app cannot,
+      // while the whole column consistently answering about the card it is showing is worth
+      // more than a handful of dead spots the reader would have to learn.
+      //
       // `menuKey` is on the same element and that is the load-bearing half: the pane takes the
       // caret as it opens (see {@link Body}'s mount effect), so with nothing else focused
       // Shift+F10 is a press on this element and on no other. There is no focusable box inside
@@ -1376,6 +1383,23 @@ function PrintingRow({
   return (
     <li
       ref={rowRef}
+      // **Focusable because it is a menu opener, and for no other reason.**
+      //
+      // `menu()` hands the element the press landed on to the panel, and the panel calls
+      // `opener?.focus()` on Escape and before every row it runs — so an opener that cannot take
+      // focus silently gets none: the caret stays on the panel and drops to `<body>` when it
+      // unmounts, and the next Tab restarts from the top of the app. `focus()` on an `<li>` with
+      // no `tabIndex` is exactly that no-op.
+      //
+      // `-1` and never `0`: this adds no tab stop. The row's keyboard handle is still the
+      // set-code button inside it, and Tab reaches that; this only makes the row a place the
+      // caret can be *put*. It is the same value, for the same reason, that the pane itself
+      // carries.
+      //
+      // The dwell's `onFocus` therefore fires when a dismissed menu hands the caret back, and a
+      // preview opens a quarter second later — which is the behaviour a caret arriving on this
+      // row already had, since the set-code button's own focus bubbles to this same handler.
+      tabIndex={-1}
       {...dwell}
       // The mouse's way into the printing: a click anywhere on the row that is not one of its
       // own controls does whatever this row does — show it, or put it in the deck. The

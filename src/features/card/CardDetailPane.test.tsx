@@ -133,6 +133,15 @@ const setPrintingGroupBy = vi.fn();
  */
 const deckGet = vi.fn();
 const deckSwapPrinting = vi.fn();
+/**
+ * The write behind the card menu's "Add to → Collection", which is the pane's own — reached
+ * through `useCardMenuDeps`, mounted here rather than by a page.
+ *
+ * It exists so a **refusal** can be driven end to end. The menu cannot report its own: `ctx.run`
+ * closes the panel before a row's handler runs, so by the time the answer arrives there is no
+ * menu left to put a sentence in, and the surface has to draw it or the add fails silently.
+ */
+const collectionAdd = vi.fn();
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -150,6 +159,7 @@ vi.mock("@/lib/ipc", async (original) => ({
       categoryId: number,
       variant: DeckVariant,
     ) => deckSwapPrinting(deckId, from, to, categoryId, variant),
+    collectionAdd: (input: unknown) => collectionAdd(input),
   },
 }));
 /**
@@ -279,6 +289,7 @@ beforeEach(() => {
   // and the pane stops offering swaps it could only have refused (see the `gone` test).
   deckGet.mockReset().mockResolvedValue(DECK_DETAIL);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  collectionAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   useAppStore.setState(useAppStore.getInitialState());
 });
 
@@ -1426,6 +1437,33 @@ describe("the card menu", () => {
     expect(useAppStore.getState().selectedCardId).toBe("p2");
   });
 
+  /**
+   * **The caret comes back to the row the menu was opened on.**
+   *
+   * `menu()` hands `e.currentTarget` to the panel as the opener, and the panel calls
+   * `opener?.focus()` on Escape and before every row it runs — so the opener has to be an
+   * element that can *take* focus. This one is an `<li>`, and `focus()` on an `<li>` with no
+   * `tabIndex` is a **no-op**: the caret would stay on the panel and land on `<body>` the moment
+   * it unmounted, after which the next Tab restarts from the top of the app.
+   *
+   * It is the same rule the deck tile and the folder row are wired by three files away, where
+   * the handler is on a `<button>` precisely because an `<li>` cannot serve. Here the row really
+   * is the surface — a printing is pointed at as a whole row, not by its four-character set code
+   * — so the `<li>` is made focusable instead of the menu being moved off it.
+   */
+  it("hands the caret back to the printings row when its menu is dismissed", async () => {
+    const user = userEvent.setup();
+    wrapWithMenu("p1");
+    await screen.findByRole("button", { name: "Show 4ED · 209" });
+    const row = rowFor("4ED", "209");
+
+    rightClick(row);
+    await screen.findByRole("menu");
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(document.activeElement).toBe(row));
+  });
+
   it("opens the open card's own menu from a right-click on its art", async () => {
     const user = userEvent.setup();
     wrapWithMenu("p1");
@@ -1471,6 +1509,139 @@ describe("the card menu", () => {
 
     // The row's printing, so the press really did open *that* row's menu rather than the pane's.
     expect(vi.mocked(openExternal)).toHaveBeenCalledWith("https://scryfall.com/card/4ed/209");
+  });
+
+  /**
+   * **A refused add says so, in the pane.**
+   *
+   * The menu has nowhere to report it: `ctx.run` closes the panel before a row's handler runs,
+   * so the write outlives the surface that started it and the *page* has to draw the sentence.
+   * That makes this failure mode a silent one — the reader presses "Collection", nothing is
+   * added, and nothing on screen says why — which is exactly what `CardMenuRefusal`'s own doc
+   * warns about and exactly what no other case here would catch.
+   *
+   * Driven through the real `ipc.collectionAdd` rather than a spy on the callback, so what is
+   * proved is the whole path: the menu's row, `useCardMenuDeps`' mutation, its `onError`, and
+   * the banner this pane draws.
+   */
+  it("says so in the pane when a menu add is refused", async () => {
+    const user = userEvent.setup();
+    collectionAdd.mockRejectedValue(new Error("The card database is busy finishing a sync."));
+    wrapWithMenu("p1");
+    const art = await screen.findByAltText("Delver of Secrets");
+
+    rightClick(art);
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Add to" }));
+    // Two finishes on this printing, so the collection row is a submenu rather than a silent add.
+    await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Nonfoil" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not add to your collection — The card database is busy finishing a sync.",
+    );
+  });
+
+  /* ---------------------------------------------------------------------------------------- *
+   * "View all printings", and the one dep this pane overrides
+   * ---------------------------------------------------------------------------------------- */
+
+  /**
+   * A deck is open behind the pane. `openDeckId` is the test, deliberately **not**
+   * `paneDeckContext`: a card opened from the docked search panel carries no deck context and is
+   * still inside the editor, where navigating away would close the deck.
+   *
+   * `activeView` is moved off its default, and that is not scenery: the store starts on
+   * `"search"`, so an assertion that the pane *did not navigate* is satisfied by the initial
+   * state and proves nothing. Standing on `"decks"` is what makes both directions visible.
+   */
+  function insideTheEditor() {
+    useAppStore.setState({ openDeckId: 4, selectedCardId: "p1", activeView: "decks" });
+  }
+
+  /** Down "View all printings", from whatever menu is open. */
+  async function viewAllPrintings(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("menuitem", { name: "View all printings" }));
+  }
+
+  /**
+   * **The whole point of the override**: `requestAllPrintings` sets `activeView`, and that write
+   * clears `openDeckId` *and* `selectedCardId` — so the app's default would close the deck the
+   * reader is building **and** the pane they were reading it from, to show them a list that is
+   * already on screen under their pointer.
+   */
+  it("keeps the deck and the pane open when a printings row asks for all printings", async () => {
+    const user = userEvent.setup();
+    insideTheEditor();
+    wrapWithMenu("p1");
+    await screen.findByRole("button", { name: "Show 4ED · 209" });
+
+    rightClick(rowFor("4ED", "209"));
+    await screen.findByRole("menu");
+    await viewAllPrintings(user);
+
+    // The deck is untouched and the pane never went to Search.
+    expect(useAppStore.getState().openDeckId).toBe(4);
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState().pendingCardSearch).toBeNull();
+    // **Accepted and stated rather than hidden**: on a printings row inside the editor the item
+    // moves the pane onto that printing, which is more than the label promises and less than
+    // navigating would cost. The pane it lands on *is* the all-printings view for the same card.
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+  });
+
+  /**
+   * **Accepted, explicitly, in the name**: for the card the pane is already showing this item is
+   * a no-op, because the answer is the list directly below it.
+   *
+   * Greying it instead is not available from here — the reason a row is disabled is
+   * `buildCardMenu`'s to give, and it has one arm for it (a missing oracle id), which would be
+   * the wrong sentence. A row that does nothing was judged better than one that closes the
+   * reader's deck and their pane.
+   */
+  it("does nothing for the card the pane is already showing, inside the editor", async () => {
+    const user = userEvent.setup();
+    insideTheEditor();
+    wrapWithMenu("p1");
+    const art = await screen.findByAltText("Delver of Secrets");
+
+    rightClick(art);
+    await screen.findByRole("menu");
+    await viewAllPrintings(user);
+
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().openDeckId).toBe(4);
+    expect(useAppStore.getState().pendingCardSearch).toBeNull();
+    expect(useAppStore.getState().activeView).toBe("decks");
+  });
+
+  /**
+   * The other arm, and the app's own default: with no deck open there is nothing to close, and
+   * the search wall is a genuinely bigger answer than a 384px column — every printing as art,
+   * uncapped, with the filters cleared.
+   */
+  it("goes to the search wall for the whole card when no deck is open", async () => {
+    const user = userEvent.setup();
+    // Standing somewhere that is not Search, so "it navigated" is a change rather than the
+    // store's own default — which `activeView` starts on.
+    useAppStore.setState({ activeView: "decks" });
+    wrapWithMenu("p1");
+    const art = await screen.findByAltText("Delver of Secrets");
+    expect(useAppStore.getState().openDeckId).toBeNull();
+
+    rightClick(art);
+    await screen.findByRole("menu");
+    await viewAllPrintings(user);
+
+    expect(useAppStore.getState().activeView).toBe("search");
+    // The card's oracle id, which is what "every printing of this card" is asked by — and which
+    // a `Printing` does not carry.
+    expect(useAppStore.getState().pendingCardSearch).toEqual({
+      oracleId: "o1",
+      name: "Delver of Secrets // Insectile Aberration",
+    });
+    // …and that write closes the pane, which is right when the wall is where the reader is going.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 
   /**

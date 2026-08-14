@@ -157,7 +157,20 @@ type Panel =
   | { kind: "newFolder"; parentId: number | null }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
-  | { kind: "deleteFolder"; folderId: number }
+  /**
+   * The delete question, which carries **no folder id — and must not**.
+   *
+   * It used to, and nothing ever read it: {@link DeleteFolderConfirm} both names and deletes
+   * `openNode.folder.id`, because it is anchored to the heading row's own "Delete folder…"
+   * control and that control exists only for the folder the reader is standing in. A second id
+   * in here would be a second source of truth that no code consults — and the day one did, the
+   * two could disagree about which folder a delete was aimed at.
+   *
+   * Both routes into it therefore make that folder the open one: the heading's control is
+   * already about it, and the folder row's menu opens the drawer on its way (see
+   * {@link folderMenuDeps}).
+   */
+  | { kind: "deleteFolder" }
   | null;
 
 /**
@@ -628,9 +641,15 @@ export function DecksPage() {
       // also the honest order for a question about what is *inside* something: the wall behind
       // the sentence is then the thing the sentence is about. The confirm names the folder, and
       // its own Cancel and Escape leave the selection where this put it.
+      // **The drawer is opened on the way, and this line is required rather than a courtesy.**
+      // `DeleteFolderConfirm` both names *and deletes* `openNode.folder.id`, so without it the
+      // question would be asked about — and the write aimed at — whichever folder the reader
+      // happened to be standing in. It is also the honest order for a question about what is
+      // *inside* something: the wall behind the sentence is then the thing the sentence is
+      // about. The confirm's own Cancel and Escape leave the selection where this put it.
       askDelete: (folder) => {
         setSelectedFolderId(folder.id);
-        open({ kind: "deleteFolder", folderId: folder.id }, menuOpenerRef.current);
+        open({ kind: "deleteFolder" }, menuOpenerRef.current);
       },
     }),
     [decks.create, folders.create, open, startRename, moveFolder],
@@ -821,10 +840,7 @@ export function DecksPage() {
                       onClick={(e) =>
                         panel?.kind === "deleteFolder"
                           ? dismiss()
-                          : open(
-                              { kind: "deleteFolder", folderId: openNode.folder.id },
-                              e.currentTarget,
-                            )
+                          : open({ kind: "deleteFolder" }, e.currentTarget)
                       }
                       className={cn(HEADING_BUTTON, "hover:text-destructive")}
                     >
