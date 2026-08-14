@@ -5,9 +5,10 @@
 #   PostToolUse / Bash    - fires after `git commit`, the one moment the tree is clean
 #   SessionStart          - catches a worktree that has sat idle for days
 #
-# It never starts a merge it cannot finish. `git merge-tree` performs the whole merge in
-# memory first (git 2.38+); the working tree is only touched when that dry run comes back
-# clean. On a conflict nothing is modified at all - Claude is told to merge deliberately.
+# On a conflict the merge is left IN PROGRESS, with markers in the tree, and Claude is told
+# to resolve it before carrying on - resolving while the conflict is still small is the whole
+# point. Merging is only ever started from a clean tree, so `git merge --abort` stays a
+# lossless escape hatch for a human at any point.
 #
 # Only ever touches a checkout under .claude/worktrees/. The main checkout only fetches.
 
@@ -73,8 +74,26 @@ case "$behind" in ''|*[!0-9]*) exit 0 ;; esac
 [ "$behind" -eq 0 ] && exit 0
 
 wt="${root##*/}"
+gitdir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)"
 
-# A merge is lossless only from a clean tree - and right after a commit, it is one.
+# An unfinished merge from a previous round. Never stack a second one on top of it.
+if [ -f "$gitdir/MERGE_HEAD" ]; then
+  stuck="$(git diff --name-only --diff-filter=U 2>/dev/null | grep -c . || true)"
+  if [ "${stuck:-0}" -gt 0 ]; then
+    emit "$wt has an unfinished merge of main - $stuck files still conflicted." \
+         "A merge of origin/main into this worktree is still in progress, with $stuck files still conflicted. Finish it before anything else: resolve each one, 'git add' it, then 'git commit --no-edit'. Do not 'git add -A' - that stages the conflict markers verbatim."
+  else
+    # Nothing unmerged, but MERGE_HEAD is still set: everything has been staged without
+    # being committed. This is exactly the state a blanket `git add -A` produces, so the
+    # markers may well still be in there.
+    emit "$wt has a staged but uncommitted merge of main - close it out." \
+         "A merge of origin/main into this worktree is fully staged but not committed. Nothing reports as conflicted, which is also what a blanket 'git add -A' looks like - so first check the staged files for surviving '<<<<<<<' or '>>>>>>>' markers ('git diff --cached | grep -n \"^+<<<<<<< \"'), fix any you find, then 'git commit --no-edit' to close the merge before doing anything else."
+  fi
+  exit 0
+fi
+
+# Merging is only ever started from a clean tree - and right after a commit, it is one.
+# That is what keeps `git merge --abort` a lossless escape hatch at any later point.
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
   if [ "$behind" -ge 50 ]; then
     emit "main is $behind commits ahead of $wt - merge skipped, uncommitted changes present." \
@@ -83,36 +102,38 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
   exit 0
 fi
 
-# Dry run: the whole merge, in memory. Nothing on disk is touched, whatever the outcome.
-dry="$(git merge-tree --write-tree --name-only HEAD origin/main 2>/dev/null)"
-dry_rc=$?
-
-if [ "$dry_rc" -ne 0 ]; then
-  # Conflicts. Do not start a merge we would have to abort - report and let Claude own it.
-  files="$(printf '%s\n' "$dry" | tail -n +2 | sed -n '/^$/q;p')"
-  count="$(printf '%s\n' "$files" | grep -c . || printf 0)"
-  head_list="$(printf '%s\n' "$files" | grep . | head -n 8 |
-                 awk 'NR>1{printf ", "}{printf "%s", $0}')"
-  more=""
-  [ "$count" -gt 8 ] && more=" (+$((count - 8)) more)"
-  emit "$wt is $behind commits behind main and would conflict in $count files - not merged." \
-       "This worktree is $behind commits behind origin/main. A dry-run merge (git merge-tree) conflicts in $count files: ${head_list}${more}. Nothing was modified. Merge it now rather than at PR time - the conflict only grows: run 'git merge origin/main', resolve those files, then 'npm run verify'. If package-lock.json is among them, re-run 'npm install' in this worktree afterwards."
-  exit 0
-fi
-
 before="$(git rev-parse HEAD 2>/dev/null)"
+
 if git merge --no-edit --quiet origin/main >/dev/null 2>&1; then
-  changed="$(git diff --name-only "$before" HEAD 2>/dev/null | grep -c . || printf 0)"
+  changed="$(git diff --name-only "$before" HEAD 2>/dev/null | grep -c . || true)"
   note=""
   if git diff --name-only "$before" HEAD 2>/dev/null | grep -q 'package-lock\.json\|package\.json'; then
     note=" Dependencies changed - run 'npm install' in this worktree."
   fi
-  emit "Merged main into $wt: $behind commits, $changed files.$note" \
-       "origin/main was merged into this worktree automatically ($behind commits, $changed files changed) because the dry run was conflict-free.$note Your own commits are untouched. If the suite now fails in files you did not write, it is the merge - not your change."
-else
-  # Race: the tree changed between the dry run and the merge. A clean tree was verified
-  # above, so --abort restores it exactly.
-  git merge --abort >/dev/null 2>&1 || true
-  emit "Merge of main into $wt failed unexpectedly and was rolled back." \
-       "An automatic merge of origin/main into this worktree failed after a clean dry run and was rolled back with 'git merge --abort' (the tree was verified clean first, so nothing was lost). Run 'git merge origin/main' by hand to see why."
+  emit "Merged main into $wt cleanly: $behind commits, $changed files.$note" \
+       "origin/main was merged into this worktree automatically ($behind commits, $changed files changed), with no conflicts.$note Your own commits are untouched. If the suite now fails in files you did not write, it is the merge - not your change."
+  exit 0
 fi
+
+files="$(git diff --name-only --diff-filter=U 2>/dev/null)"
+count="$(printf '%s\n' "$files" | grep -c . || true)"
+
+if [ "$count" -eq 0 ]; then
+  # Failed before producing any conflict - typically an untracked file the merge would
+  # clobber. Nothing is half-applied, so roll back rather than leave a stalled merge.
+  git merge --abort >/dev/null 2>&1 || true
+  emit "Merge of main into $wt could not start - rolled back, worktree untouched." \
+       "An automatic merge of origin/main into this worktree failed without producing conflicts - usually an untracked file it would overwrite - and was rolled back with 'git merge --abort'. The tree was verified clean beforehand, so nothing was lost. Run 'git merge origin/main' by hand to see the actual error."
+  exit 0
+fi
+
+# Conflicts. The merge stays IN PROGRESS on purpose: resolving now, while the conflict is
+# this small, is the entire point. The tree was clean before, so a human can always bail
+# out losslessly with `git merge --abort`.
+head_list="$(printf '%s\n' "$files" | grep . | head -n 8 |
+               awk 'NR>1{printf ", "}{printf "%s", $0}')"
+more=""
+[ "$count" -gt 8 ] && more=" (+$((count - 8)) more)"
+
+emit "Merging main into $wt ($behind commits) conflicts in $count files - resolving now." \
+     "origin/main was merged into this worktree automatically and the merge is IN PROGRESS with $count conflicted files: ${head_list}${more}. Resolve them before continuing with anything else - stopping here leaves the worktree unbuildable, and the conflict only grows. Resolve each file, 'git add' it, then 'git commit --no-edit'. Never 'git add -A' or 'git checkout --ours/--theirs' wholesale here: main's side is other agents' shipped work and your side is yours, so both have to be reconciled by reading them. If package-lock.json conflicted, re-run 'npm install' after resolving. Then 'npm run verify' before going back to what you were doing. To bail out instead, 'git merge --abort' restores the pre-merge state exactly."
