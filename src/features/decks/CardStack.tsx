@@ -496,7 +496,8 @@ export interface CardStackProps {
    */
   actions?: DeckCardActions;
   /**
-   * How large the reader has asked cards to be drawn — `useAppStore`'s `cardZoom`.
+   * How large the reader has asked cards to be drawn — `useAppStore`'s `cardZoom.deck`, which is
+   * the deck desk's own number and not the docked search column's beside it.
    *
    * **Passed in rather than read here, for the reason `currency` is.** The card's width is not
    * this component's to know: it is whatever the column gives it, and `StackView` is what sizes

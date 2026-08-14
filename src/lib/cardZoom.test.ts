@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  DEFAULT_SECTION_ZOOMS,
   DEFAULT_ZOOM,
   MAX_ZOOM,
   MIN_ZOOM,
+  ZOOM_SECTIONS,
   ZOOM_STEPS,
   formatZoom,
   scaled,
@@ -116,21 +118,85 @@ describe("scaled", () => {
   });
 });
 
+/**
+ * `DEFAULT_SECTION_ZOOMS` is a spelled-out literal rather than a reduce over `ZOOM_SECTIONS`
+ * precisely so that a new section cannot be added without somebody saying what it starts at. That
+ * is a compile-time guarantee, and a compile-time guarantee is invisible to a green suite — this
+ * is the runtime half of it, so a section added to the list and nowhere else fails here too.
+ */
+describe("the sections", () => {
+  it("gives every section a default, and defaults nothing that is not a section", () => {
+    expect(Object.keys(DEFAULT_SECTION_ZOOMS).sort()).toEqual([...ZOOM_SECTIONS].sort());
+  });
+
+  it("starts every section at the default zoom", () => {
+    for (const section of ZOOM_SECTIONS) expect(DEFAULT_SECTION_ZOOMS[section]).toBe(DEFAULT_ZOOM);
+  });
+});
+
 describe("the zoom the store keeps", () => {
   beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
 
-  it("starts at the default, unpulsed", () => {
-    expect(useAppStore.getState().cardZoom).toBe(DEFAULT_ZOOM);
+  /**
+   * Asserted against `ZOOM_SECTIONS` rather than against four literals: a section added to the
+   * list without a starting value fails here, which is the same failure the `Record` type is
+   * there to raise at compile time.
+   */
+  it("starts every section at the default, unpulsed and unaimed", () => {
+    for (const section of ZOOM_SECTIONS) {
+      expect(useAppStore.getState().cardZoom[section]).toBe(DEFAULT_ZOOM);
+    }
     expect(useAppStore.getState().zoomPulse).toBe(0);
+    expect(useAppStore.getState().zoomSection).toBeNull();
   });
 
   it("steps the ladder in both directions", () => {
-    useAppStore.getState().zoomCards(1);
-    expect(useAppStore.getState().cardZoom).toBe(1.1);
+    useAppStore.getState().zoomCards("search", 1);
+    expect(useAppStore.getState().cardZoom.search).toBe(1.1);
 
-    useAppStore.getState().zoomCards(-1);
-    useAppStore.getState().zoomCards(-1);
-    expect(useAppStore.getState().cardZoom).toBe(0.9);
+    useAppStore.getState().zoomCards("search", -1);
+    useAppStore.getState().zoomCards("search", -1);
+    expect(useAppStore.getState().cardZoom.search).toBe(0.9);
+  });
+
+  /**
+   * The defect this whole shape exists to fix, stated as a test. The deck editor draws its docked
+   * card search column *beside* the deck, so with one shared number a reader enlarging a search
+   * result was enlarging the deck at the same time. Every section that was not named stays where
+   * it was.
+   */
+  it("moves only the section it was given", () => {
+    useAppStore.getState().zoomCards("search", 1);
+
+    expect(useAppStore.getState().cardZoom.search).toBe(1.1);
+    for (const section of ZOOM_SECTIONS) {
+      if (section === "search") continue;
+      expect(useAppStore.getState().cardZoom[section]).toBe(DEFAULT_ZOOM);
+    }
+  });
+
+  /** And each one keeps its own history, so returning to a section returns to its size. */
+  it("keeps a separate value per section", () => {
+    useAppStore.getState().zoomCards("search", 1);
+    useAppStore.getState().zoomCards("search", 1);
+    useAppStore.getState().zoomCards("deck", -1);
+
+    expect(useAppStore.getState().cardZoom.search).toBe(1.25);
+    expect(useAppStore.getState().cardZoom.deck).toBe(0.9);
+    expect(useAppStore.getState().cardZoom.deckSearch).toBe(DEFAULT_ZOOM);
+    expect(useAppStore.getState().cardZoom.collection).toBe(DEFAULT_ZOOM);
+  });
+
+  /**
+   * The badge draws itself over the section that was zoomed, so the store has to remember which
+   * one that was — the pulse says *that* a gesture happened, this says *where*.
+   */
+  it("records the section the last gesture landed in", () => {
+    useAppStore.getState().zoomCards("collection", 1);
+    expect(useAppStore.getState().zoomSection).toBe("collection");
+
+    useAppStore.getState().zoomCards("deckSearch", -1);
+    expect(useAppStore.getState().zoomSection).toBe("deckSearch");
   });
 
   /**
@@ -140,33 +206,46 @@ describe("the zoom the store keeps", () => {
    * still asking for more, reading as the app having stopped listening.
    */
   it("pulses on every gesture, including the ones the clamp swallows", () => {
-    useAppStore.setState({ cardZoom: MAX_ZOOM });
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, search: MAX_ZOOM } });
     const before = useAppStore.getState().zoomPulse;
 
-    useAppStore.getState().zoomCards(1);
-    useAppStore.getState().zoomCards(1);
-    useAppStore.getState().zoomCards(1);
+    useAppStore.getState().zoomCards("search", 1);
+    useAppStore.getState().zoomCards("search", 1);
+    useAppStore.getState().zoomCards("search", 1);
 
-    expect(useAppStore.getState().cardZoom).toBe(MAX_ZOOM);
+    expect(useAppStore.getState().cardZoom.search).toBe(MAX_ZOOM);
     expect(useAppStore.getState().zoomPulse).toBe(before + 3);
   });
 
+  /** A clamped gesture still aims the badge, or it would be left pointing at the previous one. */
+  it("aims the badge on a gesture the clamp swallowed", () => {
+    useAppStore.setState({
+      cardZoom: { ...DEFAULT_SECTION_ZOOMS, deck: MAX_ZOOM },
+      zoomSection: "search",
+    });
+
+    useAppStore.getState().zoomCards("deck", 1);
+
+    expect(useAppStore.getState().cardZoom.deck).toBe(MAX_ZOOM);
+    expect(useAppStore.getState().zoomSection).toBe("deck");
+  });
+
   it("pulses at the bottom of the ladder too", () => {
-    useAppStore.setState({ cardZoom: MIN_ZOOM });
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, collection: MIN_ZOOM } });
 
-    useAppStore.getState().zoomCards(-1);
+    useAppStore.getState().zoomCards("collection", -1);
 
-    expect(useAppStore.getState().cardZoom).toBe(MIN_ZOOM);
+    expect(useAppStore.getState().cardZoom.collection).toBe(MIN_ZOOM);
     expect(useAppStore.getState().zoomPulse).toBe(1);
   });
 
   /** A subscriber sees the clamped gesture, because the pulse moved even though the zoom did not. */
   it("notifies subscribers on a gesture that changed no zoom", () => {
-    useAppStore.setState({ cardZoom: MAX_ZOOM });
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, search: MAX_ZOOM } });
     let seen = 0;
     const stop = useAppStore.subscribe(() => void seen++);
 
-    useAppStore.getState().zoomCards(1);
+    useAppStore.getState().zoomCards("search", 1);
     stop();
 
     expect(seen).toBe(1);
@@ -174,11 +253,11 @@ describe("the zoom the store keeps", () => {
 
   /** Zoom is about how cards are read, not about which list is open — it survives the trip. */
   it("survives a change of view and of layout", () => {
-    useAppStore.getState().zoomCards(1);
+    useAppStore.getState().zoomCards("collection", 1);
 
     useAppStore.getState().setActiveView("collection");
     useAppStore.getState().setCollectionView("grid");
 
-    expect(useAppStore.getState().cardZoom).toBe(1.1);
+    expect(useAppStore.getState().cardZoom.collection).toBe(1.1);
   });
 });

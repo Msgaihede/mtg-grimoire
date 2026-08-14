@@ -80,7 +80,8 @@ const AUTO_LABEL = "Auto (by what it does)";
  * 331 is two 159px tiles, which is the "~2 tiles per row" this panel was scoped around.
  *
  * **All of that describes 100% zoom, and only 100%.** `CardGrid` scales whatever floor it is
- * handed by the reader's `cardZoom`, this number included, so the two-per-row scoping above is
+ * handed by the reader's zoom for **this column's own section** (`deckSearch` — every card
+ * section carries its own number), this floor included, so the two-per-row scoping above is
  * the *resting* shape rather than an invariant: at 2× this column draws one 300px tile and at
  * 0.5× it draws four 75px ones, which is the reader asking for exactly that and getting it. The
  * measurement is kept unqualified because it is what sets the resting value; nothing here needs
@@ -223,7 +224,10 @@ export function DeckSearchPanel({
    * which way a reader last left one particular deck's search column is not one of them. It is
    * not the deck's either — `rememberView` keeps `lastVariant`/`lastGroupBy`/`lastSortBy` on the
    * deck row because they say where the reader had got to *in that deck*, and a search column is
-   * a thing you open to do a job and shut when the job is done.
+   * a thing you open to do a job and shut when the job is done. (`cardZoom` is a number per card
+   * *section* now, and this column is one of those sections — `deckSearch`. That does not move
+   * the line above: a section is still one answer for every deck the reader opens rather than one
+   * per deck, which is exactly the kind of answer this flag is not.)
    *
    * **The search comes up with the disclosure and costs nothing before it** — {@link OpenPanel}
    * is where `useCardSearch` lives, and **this flag on its own is what mounts it**. Closed is
@@ -626,6 +630,12 @@ function OpenPanel({
           // The panel's own search, so a new one starts at the top of the wall rather than
           // wherever the last one was scrolled to.
           listKey={searchKey}
+          // **The section this whole change was made for.** This column and the deck laid out
+          // beside it are on screen together, and until now one number sized both — so a reader
+          // asking for bigger art in here got bigger cards in their deck, which they had not
+          // asked for and had no way to undo separately. `deckSearch` is this column's alone;
+          // the deck's two views share `deck`. See `CardGrid`'s `zoomSection`.
+          zoomSection="deckSearch"
           minTileWidth={TILE_FLOOR}
           selectedId={selectedCardId}
           onSelect={selectCard}

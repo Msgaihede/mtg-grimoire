@@ -111,11 +111,15 @@ export default function App() {
             positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
             Nothing between here and the root transforms.
 
-            One instance for the whole app, because there is one zoom: the wheel gesture is
-            attached per card section (the search and collection walls, the deck editor's stack
-            and grid), but they all step the same `cardZoom`, so a reader who zooms the search
-            wall and switches to Decks finds the cards there already at the size they asked for.
-            A badge per section would be four clocks racing to describe one number. */}
+            One instance for the whole app, because a reader makes one gesture at a time. Each
+            card section now keeps its **own** zoom — the search and collection walls, the deck
+            editor's docked search column, and its desk — so the figure is never about "the
+            zoom"; it is about the one section the last ctrl+wheel landed in, and it is drawn in
+            that section's top-right corner (`zoomSection` names it, `anchorFor` measures it).
+            That is what makes a single badge right rather than a compromise: four badges would
+            be three of them describing a gesture nobody just made, and the one that mattered
+            would be no easier to find. It is mounted *here* and drawn *there*, which is the
+            whole trick — the corner comes from a measurement, not from where this line sits. */}
         <CardZoomIndicator />
       </QueryClientProvider>
     </MotionConfig>

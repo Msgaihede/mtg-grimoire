@@ -388,6 +388,10 @@ function Results({ search }: { search: CardSearch }) {
           <CardGrid
             rows={rows}
             listKey={searchKey}
+            // Which zoom is this wall's. The search is its own section, so a reader who sizes
+            // the results up here has not touched the collection or the deck editor's column —
+            // see `CardGrid`'s `zoomSection` for why it is required rather than defaulted.
+            zoomSection="search"
             selectedId={selectedCardId}
             onSelect={selectCard}
             // Spec §1's first drag source: a tile is a printing the reader can carry to a

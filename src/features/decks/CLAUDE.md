@@ -374,8 +374,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
   `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
   history and reallocates nothing — looking at a deck is not editing it. It is deliberately
-  **not** `useAppStore`: `cardZoom`, `searchView` and `collectionView` are one session-wide
-  answer, and which list of a _particular_ deck the reader was reading is a fact about that deck.
+  **not** `useAppStore`: `searchView` and `collectionView` are one session-wide answer about the
+  _app_, and which list of a _particular_ deck the reader was reading is a fact about that deck.
+  `cardZoom` used to be named in that pair and no longer belongs there — since 2026-08-14 it is one
+  number **per card section** (`ZoomSection`) rather than one for the app, so the deck desk and the
+  docked search column zoom apart. It lands between the two poles and on neither: session-scoped
+  like the view toggles, but keyed by which _wall_ the reader is looking at, and still not a fact
+  about a particular deck — every deck's desk shares the one `deck` entry, so it cannot answer what
+  `lastVariant`/`lastGroupBy`/`lastSortBy` are asked. The two view toggles are what the argument
+  above rests on, and they are unchanged.
 - **The narrowing is TypeScript's, and that is the boundary rather than a missing constraint.**
   `ALTER TABLE ADD COLUMN` cannot add a CHECK, so Rust validates only `last_variant`, whose
   vocabulary the crate owns, and stores the other two verbatim as facts. `GroupBy` and `SortBy`
@@ -653,12 +660,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   vertical column in the card's right margin now — `DeckCardControls layout="card-column"`, which
   is also the only layout whose buttons carry a backing, because it is the only one drawn on art.
 - **Every number in the two bullets above is the value at zoom 1×, which is where the reader starts
-  and no longer where they stay.** Ctrl+wheel over a card section steps `useAppStore`'s `cardZoom`
-  along a ten-stop ladder from 0.5× to 2× (`src/lib/cardZoom.ts`), so each of those constants now
+  and no longer where they stay.** Ctrl+wheel over the desk steps **the desk's own zoom** —
+  `useAppStore`'s `cardZoom.deck`, one entry of a record keyed by card section
+  (`src/lib/cardZoom.ts`), shared by the Stacks and Grid views because they draw the same pile —
+  along a ten-stop ladder from 0.5× to 2×, so each of those constants now
   has a function beside it — `stackCardWidth`, `stackImageHeight`, `stackDataHeight`,
   `stackCardHeight`, `stackAdvance`, `stackCollapsedMargin`, `stackHeight(n, zoom)`, and
   `stackColumnWidth(zoom)` in `StackView` — and the bare constant survives as that function's
-  documented base. **Two of them are floors rather than proportions and they are the ones to know**:
+  documented base. **The desk's zoom is independent of the docked card search column beside it**:
+  that column is its own section (`deckSearch`), so sizing the wall a reader is browsing no longer
+  resizes the deck they are building, which is the whole reason the zoom stopped being one number
+  on 2026-08-14. **Two of them are floors rather than proportions and they are the ones to know**:
   `stackAdvance` is `max(34, scaled(34, zoom))` and `stackDataHeight` is `max(28, scaled(28, zoom))`,
   so both grow going up and **hold at their base going down**. Each measures something laid over or
   inside the card — the quantity tag on the reveal strip, the type in the data line — and type does

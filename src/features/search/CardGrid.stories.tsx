@@ -54,8 +54,7 @@ const GAME_CHANGER_IDS = new Set(CARDS.filter((c) => c.gameChanger).map((c) => c
 const isGameChanger = (card: StoryCard) => GAME_CHANGER_IDS.has(card.id);
 
 /**
- * `SearchPage.tsx:144-148`'s payload, verbatim — **at module scope, because it has to hold
- * still**.
+ * `SearchPage`'s own `tileDrag`, verbatim — **at module scope, because it has to hold still**.
  *
  * React detaches and re-runs a callback ref whose identity changed, and this wall re-registers a
  * tile's drag from a `useCallback` that names `dragPayload` among its dependencies. A fresh
@@ -108,6 +107,17 @@ const meta = {
   args: {
     rows: ALL,
     listKey: "stories",
+    // Which of the four card sections this wall is standing in for. Required, and `CardGrid`'s
+    // own `zoomSection` doc says why there is no default: three surfaces are this component, and
+    // one that had not said which it is would silently share another's zoom. These stories are
+    // the **search** wall, so ctrl+wheel in the canvas steps `cardZoom.search` and leaves the
+    // collection, the deck editor's docked column and the deck itself alone.
+    //
+    // {@link InTheDockedPanel} inherits it rather than claiming `deckSearch`, and that is
+    // deliberate: it is a story about the tile *floor* at that panel's width, and one story on
+    // this page zooming out of step with the six above it would read as the wall rather than as
+    // the section.
+    zoomSection: "search",
     onSelect: fn(),
     onNeedNextPage: fn(),
   },
@@ -163,8 +173,8 @@ type Story = StoryObj<typeof meta>;
  * out, so `@tanstack/react-virtual` would measure the scroller at 0px and render no tiles at
  * all; `src/stories.test.tsx`'s `beforeAll` stubs `offsetHeight`/`offsetWidth`/`scrollTo` for
  * every play in the repository. But this wall does not ask the virtualiser how wide it is — it
- * measures its own rows container with `clientWidth` and a `ResizeObserver`
- * (`CardGrid.tsx:191-198`), and `src/test-setup.ts` stubs `ResizeObserver` to a no-op. So under
+ * measures its own rows container with `clientWidth` and a `ResizeObserver` (`CardGrid`'s effect
+ * over `rowsRef`), and `src/test-setup.ts` stubs `ResizeObserver` to a no-op. So under
  * Vitest the width stays 0, `columnsFor` floors at **one** column, and every tile is
  * `TILE_MIN_WIDTH` wide. Tiles exist to be asserted about; how many fit across is still a claim
  * only a browser can settle, which is why {@link InTheDockedPanel} — the one story on this page
@@ -356,13 +366,13 @@ export const Draggable: Story = {
  * The same wall with the prop left off — which is the collection's card mode, and **a product
  * call rather than a fact about the tiles**.
  *
- * `CardGrid.tsx:136-164` is where that decision is recorded. A collection tile is a *card* —
- * `CollectionPage` sums the entries behind one printing into a single tile, and breaking them
- * apart is the table's job — so a `{ kind: "card" }` payload would be as honest here as it is on
- * the collection *rows* that carry one. What decided it was the enumeration the feature was
- * built from: the drag sources outside the deck editor are the search's tiles, the collection's
- * **table rows**, the pinned wishes and the pane's printings. The day this wall should be one
- * too, it passes the prop and nothing else changes.
+ * `CardGrid`'s doc on the `dragPayload` prop is where that decision is recorded. A collection
+ * tile is a *card* — `CollectionPage` sums the entries behind one printing into a single tile,
+ * and breaking them apart is the table's job — so a `{ kind: "card" }` payload would be as
+ * honest here as it is on the collection *rows* that carry one. What decided it was the
+ * enumeration the feature was built from: the drag sources outside the deck editor are the
+ * search's tiles, the collection's **table rows**, the pinned wishes and the pane's printings.
+ * The day this wall should be one too, it passes the prop and nothing else changes.
  *
  * A wall given no payload registers no drag at all, so there is nothing to see here and that is
  * the point of putting it next to {@link Draggable}. Which also makes it the one state on this
@@ -463,8 +473,8 @@ export const LongNames: Story = {
  * 384px (`w-96`) is **331** by the time the panel's own left padding (12), the scrollbar (17)
  * and this wall's own padding (24) are off it — measured at 330 in the running window, and 23
  * short of two of the standard 170px tiles. At the standard floor the column drew one 330×490
- * card per row inside a wall 341px tall: less than a whole card, ever. `DeckSearchPanel.tsx:52`
- * drops the floor to **150**, at which the same 331 is two 159px tiles.
+ * card per row inside a wall 341px tall: less than a whole card, ever. `DeckSearchPanel`'s
+ * `TILE_FLOOR` drops the floor to **150**, at which the same 331 is two 159px tiles.
  *
  * A floor, not a width: tiles still share out the leftover, and the `grid` image is 488px wide,
  * so a smaller floor is a deeper downscale and never a blowup.

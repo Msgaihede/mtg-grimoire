@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { DEFAULT_ZOOM, stepZoom } from "./cardZoom";
+import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
 import type { DeckVariant } from "./ipc";
 
 /** The five top-level destinations in the sidebar. */
@@ -67,18 +67,22 @@ interface AppState {
   setCollectionView: (view: SearchView) => void;
   /**
    * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
-   * own — one of `ZOOM_STEPS`, starting at `DEFAULT_ZOOM`.
+   * own — one of `ZOOM_STEPS` per section, all starting at `DEFAULT_ZOOM`.
    *
-   * One number for every card section rather than one per view, because the reader is adjusting
-   * *how they are reading cards* and not how one list is configured: a zoom set while comparing
-   * art in the search and then lost on the way to the collection is a setting that has to be made
-   * twice for one intention. It sits beside the two layout toggles above, which are the opposite
-   * case and argue their own separateness there.
+   * **One number per card section rather than one for the app**, which is the reverse of what this
+   * comment used to argue, and the reversal was paid for on screen. The deck editor puts its
+   * docked card search column *beside* the deck, so a reader zooming the column to read the art in
+   * a search result was resizing the deck at the same time — and those are two different questions
+   * ("how big are the cards I am browsing" against "how big is my deck laid out") that a single
+   * number can only ever answer together. The old argument — that a zoom is a posture about
+   * reading cards rather than a per-list setting — is still true *within* a section, which is why
+   * the sections are the four walls of cards and not the five views: Stacks and Grid share `deck`,
+   * because they are one pile drawn two ways.
    *
    * Session-only and deliberately so — this store is UI state, and nothing here reaches SQLite or
    * `localStorage`. See `cardZoom.ts` for why restoring it on launch would be the wrong kindness.
    */
-  cardZoom: number;
+  cardZoom: Record<ZoomSection, number>;
   /**
    * A counter that ticks on **every** zoom gesture, including the ones that change nothing.
    *
@@ -93,18 +97,39 @@ interface AppState {
    * A monotonic counter rather than a timestamp or a boolean, because both of those have a
    * degenerate repeat — `Date.now()` twice inside one frame is one value, and a flag that is
    * already `true` is not a change anything re-renders on.
+   *
+   * **Still a single counter, and not one per section**, even though the zooms split. It is the
+   * badge's clock, and there is exactly one badge: a reader makes one gesture at a time, so a map
+   * of pulses would be four timers of which three are always idle, and the badge would still have
+   * to pick one to obey. {@link zoomSection} is what carries the *which* — the pulse says a
+   * gesture happened, that says where.
    */
   zoomPulse: number;
   /**
-   * Step the tiles one stop bigger (`1`) or smaller (`-1`), and pulse either way.
+   * Which section the last gesture landed in, or `null` before any gesture in this session.
+   *
+   * The badge draws itself over the top-right corner of the section that was zoomed rather than
+   * at a fixed spot in the window, so it needs a name for that section: this is how it knows both
+   * which box to measure (`zoomSectionElement`) and which of the four `cardZoom` numbers to print.
+   * `null` is the honest starting value — nothing has been zoomed, so there is nothing to draw and
+   * nowhere to draw it.
+   */
+  zoomSection: ZoomSection | null;
+  /**
+   * Step one section's tiles one stop bigger (`1`) or smaller (`-1`), and pulse either way.
+   *
+   * The section comes first because it is the subject: this is "zoom *the deck*, in", not "zoom
+   * in, on the deck". It is required rather than defaulted — a surface that has not decided which
+   * section it is must not silently share another surface's number, which is the defect this
+   * whole shape exists to fix.
    *
    * An action rather than a `setCardZoom`, because the ladder is the point: a setter would let a
    * caller write 1.37, and the exactness `stepZoom` buys — ten values, `=== 1` meaning something
-   * — survives only as long as this is the one door. It is also the only writer of `zoomPulse`,
-   * which is what keeps "every gesture pulses" true by construction instead of by every call site
-   * remembering to say so.
+   * — survives only as long as this is the one door. It is also the only writer of `zoomPulse`
+   * and `zoomSection`, which is what keeps "every gesture pulses, and the badge knows where"
+   * true by construction instead of by every call site remembering to say so.
    */
-  zoomCards: (direction: 1 | -1) => void;
+  zoomCards: (section: ZoomSection, direction: 1 | -1) => void;
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
@@ -194,14 +219,27 @@ export const useAppStore = create<AppState>((set) => ({
   // in it — counts, conditions, what it is worth — and forty tiles answer none of that.
   collectionView: "table",
   setCollectionView: (collectionView) => set({ collectionView }),
-  cardZoom: DEFAULT_ZOOM,
+  // A copy, not the constant itself. `Readonly<>` is a compile-time fence and nothing more, so an
+  // in-place `state.cardZoom.deck = …` would write *through* the initial state into the exported
+  // `DEFAULT_SECTION_ZOOMS` — and several suites reset this store from it, so the damage would
+  // surface as an unrelated test file going red long after the write. One spread buys that off.
+  cardZoom: { ...DEFAULT_SECTION_ZOOMS },
   zoomPulse: 0,
-  // The pulse is outside the `if` that the clamp would tempt you to write, and that is the
-  // whole reason it exists as a second field: `stepZoom` answers a gesture at 200% with 200%,
-  // so a badge keyed off `cardZoom` would go quiet exactly while the reader is still scrolling.
-  // Zustand notices this even when the zoom did not move, because the pulse did.
-  zoomCards: (direction) =>
-    set((s) => ({ cardZoom: stepZoom(s.cardZoom, direction), zoomPulse: s.zoomPulse + 1 })),
+  zoomSection: null,
+  // Only the named section's number moves; the other three are copied across untouched, which is
+  // the whole of "zooming the deck editor's search column leaves the deck alone".
+  //
+  // The pulse is outside the `if` that the clamp would tempt you to write, and that is the whole
+  // reason it exists as a second field: `stepZoom` answers a gesture at 200% with 200%, so a badge
+  // keyed off `cardZoom` would go quiet exactly while the reader is still scrolling. Zustand
+  // notices this even when the zoom did not move, because the pulse did — and `zoomSection` is
+  // written on every gesture for the same reason, so a clamped one still aims the badge.
+  zoomCards: (section, direction) =>
+    set((s) => ({
+      cardZoom: { ...s.cardZoom, [section]: stepZoom(s.cardZoom[section], direction) },
+      zoomPulse: s.zoomPulse + 1,
+      zoomSection: section,
+    })),
   selectedCardId: null,
   // **And forgets which deck row the last card came from.** Every surface in the app that
   // opens a card goes through here — search tiles, collection rows, wishlist rows, the docked
