@@ -498,6 +498,26 @@ const SEARCH_PRICE_SORT_COLLAPSED: &[crate::sorting::PricedSort] = &[crate::sort
 /// narrows the set (measured 2026-08-11).
 const REPRESENTATIVE_SORTS: [&str; 3] = ["set", "rarity", "type"];
 
+/// The denominator statement, for one `FROM` and one `WHERE`.
+///
+/// **A named function rather than two `format!`s inside [`run_search`], so a test can plan
+/// the statement this search really runs.** The query plan is the only thing anyone checks
+/// about the count — it is the half that walks to the cap on every keystroke — and a plan
+/// test that builds its own SQL is a test of SQLite, not of this crate: whatever
+/// `push_card_filters` starts emitting, a hand-written copy keeps planning the old string
+/// and stays green. See `the_oracle_id_filter_uses_its_index`.
+fn count_sql_for(from_sql: &str, where_sql: &str, collapse: bool) -> String {
+    let cap = TOTAL_CAP + 1;
+    if collapse {
+        format!(
+            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} \
+             GROUP BY {COLLAPSE_KEY} LIMIT {cap})"
+        )
+    } else {
+        format!("SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} LIMIT {cap})")
+    }
+}
+
 /// Search `cards`, newest schema assumed. Pure over the connection so it is testable
 /// without a Tauri app; [`search_cards`] is the only caller in production.
 ///
@@ -617,18 +637,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // Collapsed, the denominator is a count of **cards**: the pager divides by it and the
     // caption prints it, so counting printings over a list of cards would be a lie in both
     // places. The cap still bounds it — SQLite stops producing *groups* at 5 001.
-    let count_sql = if collapse {
-        format!(
-            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} \
-             GROUP BY {COLLAPSE_KEY} LIMIT {cap})",
-            cap = TOTAL_CAP + 1
-        )
-    } else {
-        format!(
-            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} LIMIT {cap})",
-            cap = TOTAL_CAP + 1
-        )
-    };
+    let count_sql = count_sql_for(from_sql, &where_sql, collapse);
     let counted: i64 = conn
         .query_row(
             &count_sql,
@@ -3853,24 +3862,59 @@ mod tests {
     /// reason this filter costs nothing to add — `idx_cards_oracle` has carried one since
     /// schema v1.
     ///
+    /// **Planned against the SQL this search really builds.** The predicate comes from
+    /// [`filters::push_card_filters`] over a real [`SearchRequest`] and the statement from
+    /// [`count_sql_for`] — the two pieces `run_search` itself puts together — because the
+    /// version of this test that shipped first planned a *literal string* that appeared
+    /// nowhere else in the crate, and so could not go red for any edit to this repo. It was
+    /// asserting a fact about SQLite. Changing `filters.rs` to
+    /// `lower({alias}.oracle_id) = ?` — a plausible "match the id case-insensitively" — costs
+    /// the index and full-scans ~116 k rows on every "View all printings" press; that mutation
+    /// is what this test now catches.
+    ///
     /// **Not pinned to `idx_cards_oracle` by name.** `id` is also the fourth column of
-    /// `idx_cards_collapse` ([`crate::schema::CARDS_INDEXES`]), so for this exact
-    /// `SELECT id … WHERE oracle_id = ?` the planner prefers that one instead — it is
-    /// *covering* (the row lookup `idx_cards_oracle` alone would still owe is already inside
-    /// the index), so it is the cheaper plan, not a worse one. What this pins is the fact
-    /// that would break either way: the plan is a `SEARCH` keyed on `oracle_id=?`, never a
-    /// `SCAN`.
+    /// `idx_cards_collapse` ([`crate::schema::CARDS_INDEXES`]), so the planner may prefer that
+    /// one instead — it is *covering* (the row lookup `idx_cards_oracle` alone would still owe
+    /// is already inside the index), which is the cheaper plan, not a worse one. What this
+    /// pins is the fact that would break either way: `cards` is reached by a `SEARCH` keyed on
+    /// `oracle_id=?`, never by a `SCAN`.
     #[test]
     fn the_oracle_id_filter_uses_its_index() {
         let conn = fixture_with_cards(&[("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161")]);
-        let plan: String = conn
-            .prepare("EXPLAIN QUERY PLAN SELECT id FROM cards c WHERE c.oracle_id = ?1")
+        let req = SearchRequest {
+            oracle_id: Some("o-bolt".into()),
+            limit: 50,
+            ..Default::default()
+        };
+        let mut p = filters::Predicates::default();
+        filters::push_card_filters(&mut p, &req.card_filters(), "c", None);
+        // `cards c`, uncollapsed — what `run_search` picks when no text is typed, which is
+        // exactly this filter's case: "View all printings" sends an oracle id and nothing else.
+        let sql = count_sql_for("cards c", &p.where_sql(), false);
+
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
             .unwrap()
-            .query_row(["o-bolt"], |r| r.get(3))
-            .unwrap();
+            // Bound even though nothing runs: the planner is asked about *this* statement, and
+            // rusqlite refuses a parameter count that does not match.
+            .query_map(
+                rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                |r| r.get::<_, String>(3),
+            )
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        // `oracle_id=?` unparenthesised: the paper filter rides the same covering index, so
+        // the planner prints `(oracle_id=? AND is_paper=?)` — the leading key is the claim.
         assert!(
-            plan.contains("SEARCH") && plan.contains("(oracle_id=?)"),
-            "the filter must ride an index keyed on oracle_id, not scan: {plan}"
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH c") && step.contains("oracle_id=?")),
+            "the filter must ride an index keyed on oracle_id: {plan:#?}\n{sql}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN c")),
+            "and `cards` must never be scanned for it: {plan:#?}\n{sql}"
         );
     }
 }
