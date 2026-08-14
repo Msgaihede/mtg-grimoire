@@ -22,6 +22,7 @@ import {
   deckCardMenuProps,
   deckCardProps,
   DeckCardControls,
+  FOCUS,
   FOCUS_INSET,
   revealedWhenOpen,
   useDeckCardDrag,
@@ -726,6 +727,14 @@ function StackedCard({
         open
           ? "shadow-[0_25px_50px_-12px_rgb(0_0_0/0.55)]"
           : "shadow-[0_10px_15px_-3px_rgb(0_0_0/0.45),0_4px_6px_-4px_rgb(0_0_0/0.45)]",
+        // The caret lands here when the menu this card opened is closed — see
+        // `deckCardMenuProps`, which is what makes the element focusable at all. An outline
+        // rather than nothing, because a hand-back the reader cannot see is half a hand-back;
+        // `focus-visible`, so a menu dismissed by clicking away draws none. It is outset where
+        // the button inside is inset, and that is right here: the button is the card *face* and
+        // this is the whole card, so the ring traces the object rather than the picture — and
+        // focusing this opens the card (`onFocus` above), which lifts it clear of its neighbour.
+        FOCUS,
         // A card that breaks a rule is outlined in the destructive colour — the loudest of the
         // three signals it can carry, and the only one that changes the card's own edge.
         //

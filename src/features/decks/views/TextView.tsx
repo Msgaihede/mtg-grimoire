@@ -250,7 +250,15 @@ function TextRow({
     // The whole line, the controls drawn over its tail included — a right-click anywhere on it
     // is a question about this card, and the keydown reaches here from the caret wherever it
     // sits inside the row.
-    <li ref={dragRef} {...deckCardMenuProps(card, actions)} className="group relative">
+    // `FOCUS` because this is where the caret lands when the line's menu closes —
+    // `deckCardMenuProps` is what makes the element focusable, and a hand-back the reader cannot
+    // see is half a hand-back. It traces the same box the button inside it fills, so the two
+    // rings are the same ring drawn from either side.
+    <li
+      ref={dragRef}
+      {...deckCardMenuProps(card, actions)}
+      className={cn("group relative rounded", FOCUS)}
+    >
       <button
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words

@@ -47,6 +47,9 @@ const deckTagSuggestions = vi.hoisted(() => vi.fn());
 // until that menu; this is its first caller.
 const deckCardSetTag = vi.hoisted(() => vi.fn());
 const deckTagCreate = vi.hoisted(() => vi.fn());
+// The one write a card's menu makes that is not a deck write at all — "Add to → Collection".
+// Its refusal is the editor's second banner, because the menu has closed by the time one lands.
+const collectionAdd = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
@@ -92,6 +95,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagSuggestions,
     deckCardSetTag,
     deckTagCreate,
+    collectionAdd,
     deckAuditList,
     deckTheoryDiff,
     deckFolderList,
@@ -463,6 +467,7 @@ beforeEach(() => {
   deckTagCreate
     .mockReset()
     .mockResolvedValue({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+  collectionAdd.mockReset().mockResolvedValue(undefined);
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
@@ -2865,6 +2870,42 @@ describe("DeckEditor — a card's menu", () => {
     expect(row).toHaveTextContent(/legendary/i);
   });
 
+  /**
+   * …and a card it *can* fill gets a live row, in the editor rather than only in the unit file.
+   *
+   * The second assertion is the one worth having here: the primitive omits `aria-disabled`
+   * **entirely** on a live row rather than writing `"false"`, so a test written against the
+   * string would pass on a row that had quietly become disabled and vice versa.
+   */
+  it("offers the commander row live for a card the rules allow", async () => {
+    const atraxa = card({
+      name: "Atraxa, Praetors' Voice",
+      typeLine: "Legendary Creature — Phyrexian Angel Horror",
+      power: "4",
+      toughness: "4",
+      quantity: 1,
+    });
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "commander", formatName: "Commander" }, [atraxa]),
+    );
+    await open();
+    await seeded("Modern");
+
+    await rightClickCard("Atraxa, Praetors' Voice");
+    const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
+    expect(row).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(row);
+    // Into the deck's own command zone — the write is a move, not a second kind of add.
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Atraxa, Praetors' Voice",
+      MAIN,
+      CATEGORIES[2].id,
+      "live",
+    );
+  });
+
   /** A deck card wears at most one tag, so the rows are radios and the card's own is ticked. */
   it("draws the tags as a radio group with the card's own ticked", async () => {
     deckGet.mockResolvedValue(
@@ -2897,12 +2938,14 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **"New tag…" is two writes, and the second one is why the field waits.**
+   * **"New tag…" is two writes, and the second one is the editor's rather than the menu's.**
    *
-   * `ctx.run` closes the panel before a *row's* handler runs, so a body that closed itself the
-   * moment it started an async write would unmount its own observer mid-flight and the card
-   * would never be tagged. This body only calls `onDone` once the create has landed — which is
-   * exactly what `onDone` is for, a body that finishes without a row being pressed.
+   * A `useMutation`'s callbacks belong to its observer, so a chain started inside the panel would
+   * lose its second half to any dismissal landing during the round trip — the label created and
+   * silently never attached. The mutation is mounted in `DeckEditor`, which is still on screen
+   * when the answer arrives, so the menu can close on the press and the chain still completes.
+   * That is what the second half of this case asserts: the panel is **already gone** before
+   * either command has answered.
    */
   it("makes a label from the menu's own field and puts it on the card", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt()]));
@@ -2913,14 +2956,113 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
 
+    // The press closes the menu; it does not wait for a network to answer first.
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
     // The default colour, silently — recolouring is what the Tags dialog is for.
     await waitFor(() => expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "gold"));
+    // …and the chain's second half runs with the panel long gone.
     await waitFor(() =>
       expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
     );
-    // And the panel is gone, because the chain finished.
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });
+
+  /**
+   * **The create outlives the menu, driven the hard way**: the reader presses Escape while the
+   * label is still being written.
+   *
+   * This is the case the `mutate`-scoped chain could not survive and the reason the write moved
+   * to the editor. The create is held open until after the dismissal, so the observer would be
+   * long gone by the time it answered if it belonged to the panel.
+   */
+  it("attaches a label whose create was still in flight when the menu was dismissed", async () => {
+    let landed: (tag: DeckTag) => void = () => {};
+    deckTagCreate.mockImplementation(
+      () =>
+        new Promise<DeckTag>((resolve) => {
+          landed = resolve;
+        }),
+    );
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(deckCardSetTag).not.toHaveBeenCalled();
+
+    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+
+    await waitFor(() =>
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
+    );
+  });
+
+  /**
+   * **A refused collection add from the menu has to be said somewhere, and this is the somewhere.**
+   *
+   * `useCardMenuDeps` states it plainly: a page that ignores that sentence is a page where a card
+   * silently fails to be added. The menu cannot draw it — `ctx.run` closes the panel before the
+   * row's handler even starts the write — so the editor draws it, in a banner of its own beside
+   * the one that speaks for writes to the deck.
+   */
+  it("says so when a card menu's collection add is refused", async () => {
+    collectionAdd.mockRejectedValue("The database is busy");
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Add to/);
+    // One finish on this printing, so `Collection` is a plain row rather than a submenu.
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Collection" }));
+
+    expect(await screen.findByText(/Could not add to your collection/)).toBeInTheDocument();
+  });
+
+  /**
+   * **Where the caret goes when the menu closes, in every view.**
+   *
+   * `useContextMenu` takes the element the handler is attached to as the panel's `opener`, and
+   * `ContextMenu` hands the caret back to it on Escape and on every chosen row. **`focus()` on an
+   * element with no `tabindex` is a no-op**, so without `deckCardMenuProps`' `tabIndex: -1` the
+   * hand-back lands nowhere and the next Tab restarts from the top of the document — invisible to
+   * a test that only asserts the menu closed, and worst on the one affordance this menu exists to
+   * restore, since Shift+F10 → `Move to` is the keyboard's only route to a move.
+   *
+   * Swept across all four because three of them hang the handlers on an `<li>` and the table hangs
+   * them on a row `VirtualTable` already made focusable — so the table passes either way, and a
+   * sweep is what stops that masking the other three.
+   */
+  it.each(["Stacks", "Table", "Text", "Grid"])(
+    "gives the caret back to the card when the menu closes in %s",
+    async (view) => {
+      await open();
+      await userEvent.click(screen.getByRole("button", { name: view }));
+
+      const marked = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt")}"]`,
+        );
+        expect(el).not.toBeNull();
+        return el as HTMLElement;
+      });
+      // The slot is stamped on the card's *button* in the three card views and on the row itself
+      // in the table — and the opener is whatever the handlers were spread onto, which is the
+      // `<li>` in the first three. `views.test.tsx`'s drag helper resolves it the same way.
+      const opener = marked.closest("li") ?? marked;
+
+      marked.focus();
+      fireEvent.keyDown(marked, { key: "F10", shiftKey: true });
+      await screen.findByRole("menu");
+
+      await userEvent.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      // The card, not `<body>` — and the *opener* rather than merely something inside the card,
+      // because the opener is what `focus()` is called on and what has to be able to take it.
+      expect(document.activeElement).toBe(opener);
+    },
+  );
 
   /**
    * The docked panel's tiles are cards too, and the menu they offer is the plain one — a search

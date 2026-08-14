@@ -27,6 +27,7 @@ import {
   deckCardProps,
   DeckCardControls,
   deckGroupProps,
+  FOCUS,
   FOCUS_INSET,
   REVEALED_ON_CARD,
   useCategoryDrop,
@@ -267,6 +268,11 @@ function GridCard({
       style={{ width: scaled(TILE_WIDTH, zoom) }}
       className={cn(
         "group relative overflow-hidden rounded-md border bg-surface",
+        // Where the caret lands when this tile's menu closes — `deckCardMenuProps` is what makes
+        // the tile focusable, and a hand-back the reader cannot see is half a hand-back. Outset
+        // where the button inside is inset, because the outline is drawn outside this box rather
+        // than in the region it clips.
+        FOCUS,
         ruleBreakText !== null ? "border-destructive" : "border-border",
       )}
     >

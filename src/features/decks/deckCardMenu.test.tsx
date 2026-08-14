@@ -1,3 +1,5 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
   MenuAction,
@@ -80,8 +82,7 @@ function deps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
     moveTo: vi.fn(),
     setTag: vi.fn(),
     tags: TAGS,
-    deckId: 4,
-    variant: "live",
+    createTag: vi.fn(),
     ...over,
   };
 }
@@ -263,6 +264,62 @@ describe("buildDeckCardMenu", () => {
   it("makes the tag list a lazy body rather than rows built on every right-click", () => {
     const row = find(buildDeckCardMenu(bolt(), deps()), "Tag card") as MenuLazy;
     expect(row.kind).toBe("lazy");
+  });
+});
+
+/**
+ * The one component in this file, rendered **with no provider and no query client at all** —
+ * which is the file's own stated contract and is checkable rather than aspirational here, the
+ * way `DeckSettingsForm.test.tsx` checks its own. A body that reached for a hook needing either
+ * would fail this render rather than a review.
+ */
+describe("the Tag card body", () => {
+  function mount(over: Partial<DeckCardMenuDeps> = {}) {
+    const card = bolt();
+    const onDone = vi.fn();
+    const wired = deps(over);
+    const row = find(buildDeckCardMenu(card, wired), "Tag card") as MenuLazy;
+    render(<row.Content onDone={onDone} />);
+    return { card, onDone, deps: wired };
+  }
+
+  it("draws the deck's labels as rows and a field for a new one", () => {
+    mount();
+    expect(screen.getByRole("menuitemradio", { name: "None" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: "Budget swap" })).toBeInTheDocument();
+    expect(screen.getByLabelText("New tag")).toBeInTheDocument();
+  });
+
+  /**
+   * **The press hands the write to the surface and closes, in that order and with no wait.**
+   *
+   * It used to wait for the create to land before calling `onDone`, which was the workaround for
+   * owning the write here — and the workaround did not hold: a dismissal arriving during the
+   * round trip unmounted the observer anyway, and the label was created and silently never
+   * attached. The write is the editor's now, so there is nothing here to keep alive.
+   */
+  it("hands a new label to the surface's write and closes on the press", async () => {
+    const { card, onDone, deps: wired } = mount();
+
+    await userEvent.type(screen.getByLabelText("New tag"), "  Cut candidate  ");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(wired.createTag).toHaveBeenCalledWith(card, "Cut candidate");
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  /** A blank field is nothing to write, and the row that says so stays in the tab order —
+   *  `aria-disabled`, never the attribute, because it is a state the reader types out of. */
+  it("writes nothing for an empty name, and greys the press without removing it", async () => {
+    const { onDone, deps: wired } = mount();
+    const add = screen.getByRole("button", { name: "Add" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).not.toBeDisabled();
+
+    await userEvent.click(add);
+
+    expect(wired.createTag).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
   });
 });
 

@@ -13,8 +13,18 @@
  *
  * **A pure builder whose dependencies are an argument**, exactly as `cardMenu`'s and
  * `categoryMenu`'s are: every write arrives as a callback, so this file is testable with no
- * provider, no query client and no window. The one component in it is the tag body, which is
- * `MenuLazy.Content` and therefore mounted on an expand rather than on a right-click.
+ * provider, no query client and no window — the one component in it, the tag body, holds that
+ * contract too and is `MenuLazy.Content`, mounted on an expand rather than on a right-click.
+ *
+ * **Two rows are stricter than the rest of this menu, and the asymmetry is deliberate rather
+ * than a drift.** `Move to ▸ Commander` is live for a card `Set as commander` greys two rows
+ * above it, and both answers are right. `Move to` is *filing*: it is built from every category
+ * the deck has and permits exactly what a drag onto the pile's heading permits, because the two
+ * are one gesture with two input devices and a menu that refused what a drop allows would be the
+ * odd one out. The zone rows are *claims* — "this card is the commander" — so they are fenced by
+ * the rule the validation panel judges the built deck by. The cost is the one place a reader can
+ * see this menu appear to contradict itself; the alternative costs either the keyboard's only
+ * route into the command zone or a claim the panel then refuses, and both are worse.
  *
  * **Built once by `DeckEditor` and handed to the four views as one function.** A view that
  * assembled its own would be four copies of one rule, and the rule reads the deck's categories,
@@ -25,18 +35,9 @@ import { Crown, FolderInput, Tag, UserRound } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
-import {
-  ipcError,
-  type DeckCard,
-  type DeckCategory,
-  type DeckTag,
-  type DeckVariant,
-  type FormatSpec,
-} from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckTag, FormatSpec } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
-import { DEFAULT_TAG_COLOR } from "./tagColors";
-import { useDeckMeta } from "./useDeckMeta";
 import { commanderIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 
@@ -100,9 +101,28 @@ export interface DeckCardMenuDeps {
   /** The deck's labels, already in hand from `deck_get` — the tag body draws these rather than
    *  reading `deck_tag_list` a second time. */
   tags: readonly DeckTag[];
-  /** Which deck and which of its two lists the "New tag…" field writes into. */
-  deckId: number;
-  variant: DeckVariant;
+  /**
+   * "New tag…" — make a label with `DEFAULT_TAG_COLOR` and put it on this card, as **one write
+   * the surface owns**.
+   *
+   * A callback rather than a hook mounted in the body below, and it is two decisions at once.
+   *
+   * **It keeps this file's purity contract**: every write arrives as an argument, so the builder
+   * *and* its one component are testable with no provider and no query client. The body used to
+   * mount `useDeckMeta` for the create, which is three reads — one of them a priced per-category
+   * aggregate — to draw a text field.
+   *
+   * **And it is what keeps the write alive.** A `mutate`-scoped `onSuccess` belongs to the
+   * *observer*, and TanStack drops it when the observer unmounts — so a create started here and
+   * chained to `setTag` in the body would lose its second half to an Escape or an outside press
+   * landing during the round trip: the label made and silently never attached. The surface's
+   * observer outlives the panel, so the chain does not depend on this component surviving its
+   * own press. It is `cardMenu.tsx`'s split, for `cardMenu.tsx`'s reason.
+   *
+   * Fire and forget: a refusal is the surface's to draw, because by the time one arrives there
+   * is no menu left to draw it in.
+   */
+  createTag: (card: DeckCard, name: string) => void;
 }
 
 export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
@@ -232,10 +252,19 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  * Why this card cannot be the deck's companion, in the validation panel's own words, or `null`.
  *
  * **Judged as one copy, and against the deck with this row taken out** — which is the deck the
- * reader would have if they pressed the row. The copy count matters because `companionIssues`
- * also counts the zone, and a four-of moved there is a *deck* problem the panel will report
- * rather than a reason this card cannot be a companion; the row's removal matters because a
- * companion is not part of the starting deck its own condition is checked against.
+ * reader would have if they pressed the row. The row's removal matters because a companion is
+ * not part of the starting deck its own condition is checked against. The copy count matters
+ * because `companionIssues` also counts the zone: a four-of judged as itself would be refused
+ * with "you have 4 companions", which is a reason the *deck* is wrong rather than a reason this
+ * card cannot be a companion, and greying the row on it would tell the reader that Lutri is not
+ * a companion.
+ *
+ * **The consequence is that a 4-of gets a live row whose press makes a deck the panel refuses**,
+ * with `companion-count`, the moment the four copies land in the zone. That is the right place
+ * for it — this menu answers "may this card be your companion" and the panel answers "is this
+ * deck legal", and the second question is not one a row can ask before it is pressed. It is also
+ * a state a reader reaches by every other route: dragging a 4-of onto the Companion pile does
+ * exactly the same thing.
  *
  * Inactive categories are filtered out for `engine.ts`' reason: a switched-off pile counts
  * toward nothing, so a condition judged against one would be judged against cards that are not
@@ -307,18 +336,18 @@ export function deckCardTagRows(
  * is a cut candidate should not have to open a dialog to say so. The mount is the expand, so
  * nothing here runs on a right-click.
  *
- * **It writes the tag itself and hands the card off.** `useDeckMeta` is the single definition of
- * this app's tag CRUD, and it is mounted here rather than in the editor precisely because it is
- * three reads the editor should not pay for on every deck opened; behind a lazy row they are the
- * deliberate act `MenuLazy` exists for, and they land in the same `["decks"]`-rooted cache the
- * Tags dialog reads from. The *second* write — putting the new label on the card — is
- * `DeckEditor`'s `setTag`, which outlives this panel.
+ * **It writes nothing itself, and that is not tidiness.** `deps.createTag` is the surface's, for
+ * two reasons stated in full on that field: this component keeps the file's no-provider,
+ * no-query-client contract, and — the one that is a defect rather than a preference — a write
+ * started *here* and chained here would lose its second half to an Escape or an outside press
+ * arriving during the round trip, because a `mutate`-scoped callback belongs to an observer this
+ * body takes with it when it goes. The label would be created and silently never attached.
  *
- * **`onDone` is called on success and never before it**, which is the whole of what keeps the
- * chain alive: `ctx.run` closes the menu before a *row's* handler runs, so a body that closed
- * itself the moment it started an async write would unmount its own observer mid-flight and the
- * second half of the chain would never happen. A body that finishes without a row being pressed
- * is exactly what `onDone` is for.
+ * So `onDone` is called **immediately**, on the press, where it used to wait for a round trip.
+ * The wait was the workaround for owning the write; with the write owned by the editor there is
+ * nothing left here to keep alive, and a menu that lingered after the reader had committed would
+ * be a menu waiting on a network for no reason. A refusal lands in the editor's banner, which is
+ * where every other refused deck write already speaks.
  */
 function DeckCardTags({
   card,
@@ -329,10 +358,8 @@ function DeckCardTags({
   deps: DeckCardMenuDeps;
   onDone: () => void;
 }) {
-  const meta = useDeckMeta(deps.deckId, deps.variant);
   const [name, setName] = useState("");
-  const create = meta.createTag;
-  const failure = create.isError ? ipcError(create.error) : null;
+  const ready = name.trim() !== "";
 
   return (
     <>
@@ -348,18 +375,12 @@ function DeckCardTags({
         onSubmit={(e) => {
           e.preventDefault();
           const trimmed = name.trim();
-          if (trimmed === "" || create.isPending) return;
-          create.mutate(
-            // The default colour, silently: recolouring a label is what `TagsDialog` is for,
-            // and a colour picker inside a context menu would make the fast path the slow one.
-            { name: trimmed, color: DEFAULT_TAG_COLOR.token },
-            {
-              onSuccess: (tag) => {
-                deps.setTag(card, tag.id);
-                onDone();
-              },
-            },
-          );
+          if (trimmed === "") return;
+          // The colour is `DEFAULT_TAG_COLOR`'s and is chosen by the write, not asked for here:
+          // recolouring a label is what `TagsDialog` is for, and a colour picker inside a
+          // context menu would make the fast path the slow one.
+          deps.createTag(card, trimmed);
+          onDone();
         }}
       >
         <input
@@ -372,26 +393,22 @@ function DeckCardTags({
             FOCUS,
           )}
         />
+        {/* `aria-disabled` rather than `disabled`, this file's rule everywhere else and the
+            app's: an empty field is a state the reader types out of, and a control that leaves
+            the tab order while they are deciding is one they cannot get back to. */}
         <button
           type="submit"
-          disabled={create.isPending || name.trim() === ""}
+          aria-disabled={ready ? undefined : true}
           className={cn(
-            "h-7 shrink-0 rounded-md border border-border px-2 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text disabled:opacity-50",
-            "motion-reduce:transition-none",
+            "h-7 shrink-0 rounded-md border border-border px-2 text-xs",
+            "transition-colors duration-150 motion-reduce:transition-none",
+            ready ? "text-dim hover:text-text" : "text-dim opacity-50",
             FOCUS,
           )}
         >
           Add
         </button>
       </form>
-      {failure && (
-        // Said here rather than nowhere: this body is still mounted, because it only closes the
-        // menu once the write has landed.
-        <p role="alert" className="max-w-56 px-2 pb-1 text-[0.7rem] text-destructive">
-          Could not add that tag — {failure}
-        </p>
-      )}
     </>
   );
 }

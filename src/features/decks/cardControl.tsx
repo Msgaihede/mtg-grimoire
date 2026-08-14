@@ -213,13 +213,38 @@ export interface DeckCardMenuHandlers {
   onKeyDown: (e: ReactKeyboardEvent) => void;
 }
 
-/** A card's menu handlers, or nothing at all — spread onto whichever element a view calls the
- *  card. `{}` rather than `undefined` so a view can spread it unconditionally. */
+/**
+ * A card's menu handlers **and the tab index that makes the caret's way back land** — spread
+ * onto whichever element a view calls the card. `{}` rather than `undefined`, so a view can
+ * spread it unconditionally and a view with no menu grows no attribute.
+ *
+ * ## `tabIndex: -1` is not tidiness, it is the other half of the menu
+ *
+ * `useContextMenu`'s `menu`/`menuKey` take the **element the handler is attached to** as the
+ * panel's `opener`, and `ContextMenu` hands the caret back to it twice: once when a row is
+ * chosen and once when Escape closes the menu. **`focus()` on an element with no `tabindex` is
+ * a no-op**, so without this the caret would land nowhere at all and the next Tab would restart
+ * from the top of the document — the failure `DecksPage.tsx` already writes down at its own
+ * `menu()` call site, arriving here by a different route.
+ *
+ * It bites hardest on the affordance this menu exists to restore. The per-card `Move…` select
+ * was removed on 2026-08-14 and took the only keyboard path to moving a card with it; Shift+F10
+ * → `Move to` is the replacement, and a route that ends with the reader's place lost is not one.
+ *
+ * **`-1`, so nothing becomes a tab stop.** A deck of a hundred cards must not grow a hundred
+ * presses on the way to anything, and every one of these elements already contains the card's
+ * own button, which is the real stop. It is the same arrangement `deckGroupProps` gives a pile:
+ * a place focus can be *put*, never one Tab travels through.
+ *
+ * The table needs none of this and is not a caller: `VirtualTable` gives its rows `tabIndex: 0`
+ * already, because there the row *is* the control.
+ */
 export function deckCardMenuProps(
   card: DeckCard,
   actions?: DeckCardActions,
-): Partial<DeckCardMenuHandlers> {
-  return actions?.menu?.(card) ?? {};
+): Partial<DeckCardMenuHandlers> & { tabIndex?: -1 } {
+  const handlers = actions?.menu?.(card);
+  return handlers === undefined ? {} : { ...handlers, tabIndex: -1 };
 }
 
 /**
