@@ -1,4 +1,9 @@
-import { useEffect, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 /**
  * Which rung of the dismissible stack a layer sits on.
@@ -21,14 +26,17 @@ export type DismissLayer = "inner" | "outer";
  * it wrong until now and the wrong version is the reassuring one. It did **not** close both:
  * the capture rung checks `defaultPrevented` as well, so the *first-registered* peer consumed
  * the press and the newer one — the thing the reader had just opened, the thing on top — was
- * starved. Measured on the pre-fix hook, 2026-08-14, dispatched both at `window` and at an
- * element so the listeners run in a true capture phase: `{ first: 1, second: 0 }` either way.
- * So a menu over a dialog would have closed the *dialog*, out from under the menu still on
- * screen.
+ * starved. Measured on the pre-fix hook, 2026-08-14, dispatching at `window` and at an element:
+ * `{ first: 1, second: 0 }` either way. So a menu over a dialog would have closed the *dialog*,
+ * out from under the menu still on screen.
  *
  * A token per registration rather than the callback itself: two layers may legitimately share
  * one `onDismiss` identity (a memoised close handed to a pair of popups), and a stack keyed on
  * the function would then pop the wrong one.
+ *
+ * **Mount order is the only thing that moves a layer on this stack**, which is what the stack
+ * has to mean for the top of it to be the innermost open thing. That is why `onDismiss` is
+ * latched in a ref below rather than depended on — see the hook's own doc.
  *
  * Module-level and therefore shared across a test file's renders — `captureStack.length = 0` is
  * not needed in a teardown, because every entry is removed by its own effect cleanup.
@@ -71,10 +79,15 @@ const captureStack: symbol[] = [];
  * outside-click deliberately does not, so that belongs to the caller and not here: the
  * reader who clicked elsewhere is already somewhere else.
  *
- * `onDismiss` is a dependency, so pass a stable function (`useCallback`) or the listener
- * re-registers on every render of the layer — and re-registering now also puts that layer
- * back on **top** of the capture stack, so an unstable callback on a layer something else
- * was opened over steals the next press from the thing above it.
+ * **`onDismiss` is latched in a ref rather than depended on, and that is a correctness fence
+ * rather than a saved re-registration.** While it was an effect dependency, a layer that
+ * re-rendered with a fresh callback popped its token and pushed a new one — landing on **top**
+ * of whatever had been opened over it, so the next press closed the wrong window. Nothing could
+ * see that: not lint, not the suite, and not the call site, because stability is transitive
+ * through props and a layer that memoises correctly is still unstable if its own `onDismiss`
+ * prop is. An inline arrow is therefore safe here, which is what Task 5's per-submenu layers
+ * need. `enabled` and `layer` stay dependencies on purpose — `enabled: false → true` is a layer
+ * *opening*, and re-pushing it to the top is exactly right.
  *
  * Pinned by `App.test.tsx`'s Escape-stack test and by this hook's own phase test. Every
  * new dismissible layer uses this, or it will close something it did not open.
@@ -89,6 +102,13 @@ export function useDismissOnEscape({
   /** Usually the layer's own "am I open" flag. An outer layer is open for as long as it exists. */
   enabled?: boolean;
 }): void {
+  // Latched every render, in a *layout* effect: the ref is current before the browser can paint,
+  // let alone deliver a key, so the listener never calls a callback a render behind.
+  const onDismissRef = useRef(onDismiss);
+  useLayoutEffect(() => {
+    onDismissRef.current = onDismiss;
+  });
+
   useEffect(() => {
     if (!enabled) return;
     const capture = layer === "inner";
@@ -103,7 +123,7 @@ export function useDismissOnEscape({
       // consult: `defaultPrevented` above is still what holds it off, exactly as before.
       if (capture && captureStack[captureStack.length - 1] !== token) return;
       e.preventDefault();
-      onDismiss();
+      onDismissRef.current();
     };
 
     // The third argument is the whole contract — passed to both calls, because a listener
@@ -114,7 +134,7 @@ export function useDismissOnEscape({
       const at = captureStack.lastIndexOf(token);
       if (at !== -1) captureStack.splice(at, 1);
     };
-  }, [enabled, layer, onDismiss]);
+  }, [enabled, layer]);
 }
 
 /**
