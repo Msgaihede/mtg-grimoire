@@ -89,6 +89,19 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // printings rows, which is a *different component*, and this file is where the two meet.
     deckSwapPrinting,
     formatSpecs: vi.fn().mockResolvedValue([]),
+    // And the format a new deck starts on, which the gallery resolves on the way up —
+    // `DecksPage` mounts `useNewDeckFormat`, so this is read on every route into Decks whether
+    // or not anybody presses New deck. `null` is the honest answer for a database no deck has
+    // ever been created in.
+    //
+    // **Left off, this one fails quietly rather than loudly**, which is why it is worth a
+    // comment of its own: the call sits inside a react-query `queryFn`, so the synchronous
+    // `TypeError` of calling `undefined` is caught and turned into a failing, retrying query
+    // instead of escaping a mount effect the way the listeners above would — and
+    // `newDeckFormat` answers Commander for a read that has not landed, so the dialog draws
+    // exactly what it draws when the read succeeds. Nothing would go red; the file would just
+    // run every test down a retry path.
+    deckLastFormat: vi.fn().mockResolvedValue(null),
     // `App` owns the update state for the ribbon's button and the Settings panel both, so
     // every test in this file mounts it. Both are mocked for `onSyncProgress`'s reason: the
     // listener registration is a bare call, and a `vi.fn()` that is not there is a
@@ -435,7 +448,7 @@ it("opens the deck gallery on the decks entry", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Decks" }));
 
   expect(await screen.findByRole("button", { name: "New deck" })).toBeInTheDocument();
-  expect(screen.getByText(/a deck is a list you build for a format/i)).toBeInTheDocument();
+  expect(screen.getByText("No decks")).toBeInTheDocument();
   expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
 });
 

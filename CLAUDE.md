@@ -51,8 +51,8 @@ on — do not work from this page alone.
 
 ## Project skills (`.claude/skills/`)
 
-Three skills carry the worktree workflow and are the authority on it — this file does not
-repeat them:
+These skills carry the worktree and shipping workflow and are the authority on it — this
+file does not repeat them:
 
 - **`worktree-setup`** — first thing in a fresh worktree. `npm install` inside it (without
   which three suites fail on Vite's `fs.allow` and it reads as your regression), the
@@ -65,6 +65,10 @@ repeat them:
   in tracked files and must not be remapped.
 - **`shipping-a-branch`** — `npm run verify` → PR → merge `main` in (never rebase) →
   wait for `ci-ok`. The agent does not press Merge.
+- **`auto-pr`** — the same trip when eight to ten agents are shipping at once and every
+  merge into main knocks the other PRs to `BEHIND`. Arms auto-merge, then watches for the
+  only two states GitHub abandons: a real conflict and a red `ci-ok`. Carries
+  `pr-auto.ps1`.
 
 ## Reference docs
 

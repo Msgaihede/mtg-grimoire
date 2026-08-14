@@ -82,6 +82,18 @@ export type ImportTarget =
 export interface ImportDeckDialogProps {
   target: ImportTarget;
   /**
+   * The format a **`new`** target starts on — the one the reader last created a deck in, else
+   * Commander — and **ignored entirely for a `deck` target**, which is judged by the deck's own
+   * `format_key` and has no select to seed.
+   *
+   * That is the whole reason it is optional: the editor mounts this dialog to paste into a deck
+   * that already exists, so it has nothing to say here and passes nothing. The gallery, which
+   * imports into a deck it is about to make, resolves the answer once for both of its create
+   * surfaces and hands it down — see `DecksPage`. Absent, the panel falls back to
+   * {@link DEFAULT_FORMAT}, which is what this select used to start on unconditionally.
+   */
+  defaultFormatKey?: string;
+  /**
    * **A mount, not a class**, exactly as `CreateDeckDialog`'s and `TheoryDiffDialog`'s are:
    * everything with state — the pasted text, the step, the commander picked, the caret — lives
    * one component down, so closing unmounts all of it and reopening starts a genuinely new
@@ -137,6 +149,7 @@ type Step = "source" | "preview";
  */
 export function ImportDeckDialog({
   target,
+  defaultFormatKey = DEFAULT_FORMAT,
   open,
   onDismiss,
   onClose,
@@ -153,6 +166,7 @@ export function ImportDeckDialog({
         <Panel
           key="import-deck"
           target={target}
+          defaultFormatKey={defaultFormatKey}
           onDismiss={onDismiss}
           onClose={onClose}
           onImported={onImported}
@@ -162,8 +176,19 @@ export function ImportDeckDialog({
   );
 }
 
-/** The dialog itself, mounted only while it is open — see {@link ImportDeckDialog}. */
-function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialogProps, "open">) {
+/**
+ * The dialog itself, mounted only while it is open — see {@link ImportDeckDialog}.
+ *
+ * `defaultFormatKey` is **not** optional in here: the wrapper above applies the fallback, so the
+ * default is written in one place and this half is handed a key it can seed state with.
+ */
+function Panel({
+  target,
+  defaultFormatKey,
+  onDismiss,
+  onClose,
+  onImported,
+}: Omit<ImportDeckDialogProps, "open" | "defaultFormatKey"> & { defaultFormatKey: string }) {
   const id = useId();
   /** False from the render that starts the fade out. */
   const present = useIsPresent();
@@ -179,7 +204,9 @@ function Panel({ target, onDismiss, onClose, onImported }: Omit<ImportDeckDialog
    * initial value cannot tell "they have not typed" from "they cleared it".
    */
   const [typedName, setTypedName] = useState<string | null>(null);
-  const [formatKey, setFormatKey] = useState(DEFAULT_FORMAT);
+  /** What the format select starts on for a `new` target, and dead state for a `deck` one —
+   *  seeded at mount, so nothing can land on top of a format the reader has picked. */
+  const [formatKey, setFormatKey] = useState(defaultFormatKey);
   const [mode, setMode] = useState<ImportMode>("merge");
   /** The commander the reader picked out of the candidates — plural, because a partner pair is
    *  two. Only ever read when the plan is asking. */

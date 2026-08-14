@@ -92,10 +92,10 @@ jobs:
               .release-please-manifest.json|release-please-config.json) ;;
               .github/workflows/release.yml) ;;
 
-              # PowerShell. `.claude/skills/running-the-app/lock.test.ps1` exercises the
-              # worktree lock tool, and nothing else in the repo consumes a `.ps1`: `eslint`
-              # does not lint one, `vitest` does not collect one, cargo does not read one.
-              # So a `.ps1` needs this job and only this job.
+              # PowerShell. The `powershell` job runs this repo's `.ps1` test files, and
+              # nothing else here consumes a `.ps1`: `eslint` does not lint one, `vitest`
+              # does not collect one, cargo does not read one. So a `.ps1` needs this job
+              # and only this job.
               #
               # **This arm must stay above `src-tauri/*` and `scripts/*`.** `case` is
               # first-match-wins, and `scripts/` is on the frontend list solely because
@@ -284,6 +284,14 @@ jobs:
       - name: Run the lock tool's tests
         shell: pwsh
         run: pwsh -NoProfile -File .claude/skills/running-the-app/lock.test.ps1
+
+      # The auto-PR guard: which pull requests a fan-out `-All` may touch. It needs no gh
+      # and no network — the guards are pure functions of a PR object and the test builds
+      # its own. Worth a gate because the failure it prevents is arming auto-merge on
+      # release-please's PR, which would cut a release nobody asked for.
+      - name: Run the auto-PR guard tests
+        shell: pwsh
+        run: pwsh -NoProfile -File .claude/skills/auto-pr/pr-auto.test.ps1
 
   ci-ok:
     name: ci-ok
