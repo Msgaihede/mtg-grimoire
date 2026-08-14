@@ -12,6 +12,10 @@ const search = (over: Record<string, unknown> = {}) =>
     setText: vi.fn(),
     format: "",
     setFormat: vi.fn(),
+    // The picker draws the search's own list, not the shared constant — see the seeded-format
+    // cases at the foot of this file. `FORMATS` is what the hook answers a caller that asked
+    // for no default, so it is what the stub carries and every case here reads as it always did.
+    formats: FORMATS,
     colors: [] as string[],
     toggleColor: vi.fn(),
     sets: [] as string[],
@@ -534,5 +538,100 @@ describe("FilterBar, its format options in order", () => {
     ]);
     expect(screen.getByRole("option", { name: "Any format" })).not.toBeDisabled();
     expect(screen.getByRole("option", { name: "Commander" })).toBeDisabled();
+  });
+
+  /** The deck editor's docked panel opens on the format of the deck being edited, and the hook
+   *  seeds its `formats` with that key when the shared list has never carried it. */
+  const seeded = (over: Record<string, unknown> = {}) =>
+    search({ formats: [...FORMATS, { value: "historic", label: "Historic" }], ...over });
+
+  /**
+   * The whole reason the list is the search's own. A `<select>` whose `value` matches no
+   * `<option>` draws **blank** — not the format, not `Any format`, nothing — while the filter
+   * it names goes on narrowing the results underneath. So the assertion is what the control
+   * *reads*, not merely that the row exists: a present-but-unselected option would pass
+   * `getByRole` and be exactly the bug this prevents.
+   */
+  it("draws a format the shared list does not carry, and shows it as picked", () => {
+    render(<FilterBar search={seeded({ format: "historic" })} />);
+
+    const select = screen.getByLabelText("Format") as HTMLSelectElement;
+    expect(select).toHaveValue("historic");
+    expect(select.selectedOptions[0]).toHaveTextContent("Historic");
+    expect(screen.getByRole("option", { name: "Historic" })).not.toBeDisabled();
+  });
+
+  /** It is a format like every other once it arrives, so it files under H rather than riding
+   *  the top as the newcomer — a reader hunting for it hunts where the alphabet says. */
+  it("sorts the seeded format into the alphabet rather than pinning it", () => {
+    render(<FilterBar search={seeded({ format: "historic" })} />);
+
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Commander",
+      "Historic",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Standard",
+      "Vintage",
+    ]);
+  });
+
+  /**
+   * The pin is outside the sort, and a seeded format is the first thing that can prove it:
+   * `Alchemy` collates *above* `Any format` (`Al` before `An`), so a list that sorted the
+   * pinned row in with the rest would file a format above the way out of the filter, where
+   * nothing else in this suite would notice. `Any format` is the answer "no filter" rather
+   * than a format, and it is first whatever the alphabet hands it.
+   */
+  it("keeps Any format first when a seeded format would collate above it", () => {
+    render(
+      <FilterBar
+        search={search({
+          format: "alchemy",
+          formats: [...FORMATS, { value: "alchemy", label: "Alchemy" }],
+        })}
+      />,
+    );
+
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Alchemy",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Standard",
+      "Vintage",
+    ]);
+    expect(screen.getByLabelText("Format")).toHaveValue("alchemy");
+  });
+
+  /** The seeded row greys by the rule every other row greys by — one `optionDisabled` answer,
+   *  and no arm of it that only the seven written-down keys reach. */
+  it("greys the seeded format when this search has nothing legal in it", () => {
+    render(
+      <FilterBar
+        search={seeded({ facets: facets({ formats: { ...facets().formats, historic: 0 } }) })}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Historic" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Modern" })).not.toBeDisabled();
+    // And it sinks below the pickable half rather than holding its slot under H.
+    expect(formatOrder()).toEqual([
+      "Any format",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Standard",
+      "Vintage",
+      "Historic",
+    ]);
   });
 });
