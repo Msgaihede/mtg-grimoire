@@ -832,6 +832,63 @@ describe("DecksPage", () => {
     expect(await screen.findByLabelText("Rename Burn")).toHaveValue("Burn");
   });
 
+  /**
+   * **A layer the menu raised hands the caret back to the tile the menu was opened on.**
+   *
+   * The menu focuses that tile as it closes — and that is *not* enough, which is the whole reason
+   * these three cases exist. Every layer on this screen moves the caret into itself on mount
+   * (`DeleteConfirm`'s effect, `RenameField`'s, `DeckDialog`'s panel), so the menu's hand-back is
+   * overwritten a moment later. `dismiss()` is then the only thing that can put it back, and it
+   * puts it back on `openerRef` — so a menu that passed no opener leaves the caret on the panel
+   * it is about to unmount, and this codebase's own rule says what happens next: an element that
+   * unmounts with the caret on it drops focus to `<body>`, after which the next Tab restarts from
+   * the top of the app.
+   *
+   * `document.activeElement`, never `toHaveFocus` on something the test pressed: `user.click`
+   * focuses what it is handed, so an assertion aimed at the control that was clicked would repair
+   * itself and prove nothing.
+   */
+  it.each([
+    ["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))],
+    ["Escape", async () => userEvent.keyboard("{Escape}")],
+  ])("hands the caret back to the tile when a menu-raised delete is dropped (%s)", async (_, go) => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+
+    await rightClick(tile);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    await screen.findByRole("dialog", { name: /delete burn/i });
+    await go();
+
+    expect(document.activeElement).toBe(tile);
+    expect(deckDelete).not.toHaveBeenCalled();
+  });
+
+  it("hands the caret back to the tile when a menu-raised rename is dropped", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+
+    await rightClick(tile);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+    await screen.findByLabelText("Rename Burn");
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(tile);
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  it("hands the caret back to the tile when the menu's settings dialog is dismissed", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+
+    await rightClick(tile);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Deck settings…" }));
+    await screen.findByRole("dialog", { name: "Deck settings" });
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(tile);
+  });
+
   /** Closed is nothing mounted — `DeckDialog`'s guarantee, and what makes hosting this on a
    *  wall of forty tiles free. */
   it("reads no deck at all until the settings dialog is opened", async () => {

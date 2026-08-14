@@ -195,6 +195,24 @@ export function DecksPage() {
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /**
+   * The tile a menu was opened on — the opener for every layer that menu's rows raise.
+   *
+   * **A menu row has no element of its own, which is the whole reason this exists.** A
+   * `MenuAction.onSelect` is a bare callback; the panel keeps the element that was right-clicked
+   * private to its own closures, so a row cannot pass an opener down and {@link deckMenuDeps}
+   * used to send `null`. That reads as safe — the panel focuses the tile as it closes — and is
+   * not, because **every layer on this screen then moves the caret into itself on mount**
+   * (`DeleteConfirm`'s effect, `RenameField`'s, `DeckDialog`'s panel). So the panel's hand-back
+   * is overwritten a moment later, and `dismiss`'s `openerRef.current?.focus()` — the one thing
+   * that puts the caret back on Escape or Cancel — did nothing at all. The panel then unmounted
+   * with the caret inside it, which by this file's own rule drops focus to `<body>` and makes the
+   * next Tab restart from the top of the app.
+   *
+   * Written by the tile as its menu is built, read by the deps when a row is chosen: the same
+   * shape as {@link openerRef} one level down, because the fact is the same fact.
+   */
+  const menuOpenerRef = useRef<HTMLButtonElement | null>(null);
+  /**
    * The folder row to put the caret back on once the field that replaced it has gone.
    *
    * The opener rule's *reason* rather than its letter. A rename field stands where the row
@@ -427,11 +445,14 @@ export function DecksPage() {
   /**
    * The tile's menu, as data — one object for the whole wall rather than one per tile.
    *
-   * **Every opener is `null`, and that is the menu's own contract rather than an omission.** A
-   * layer raised from a menu has no trigger of its own on screen; the panel hands the caret back
-   * to the element that was right-clicked before it runs the row's `onSelect`, so a second
-   * hand-back out of `openerRef` would fight it. `askDelete` is the confirmation and not the
-   * delete — see {@link DeckMenuDeps}, which carries no `remove` at all.
+   * **The opener is {@link menuOpenerRef}, read when the row is chosen rather than captured when
+   * this object is built** — that is what lets one object serve forty tiles and still hand the
+   * caret back to the right one. It is a ref for the same reason it is not a dependency: the
+   * value changes on a right-click, and rebuilding the deps then would be rebuilding them for
+   * every tile the reader ever right-clicks.
+   *
+   * `askDelete` is the confirmation and not the delete — see {@link DeckMenuDeps}, which carries
+   * no `remove` at all.
    *
    * The two mutations are taken as `mutate` rather than as the mutation objects: `useMutation`
    * answers a fresh object every render and a stable `mutate`, so this memo would otherwise be
@@ -442,11 +463,11 @@ export function DecksPage() {
   const deckMenuDeps = useMemo<DeckMenuDeps>(
     () => ({
       setOpenDeckId,
-      startRename: (deck) => startDeckRename(deck, null),
-      openSettings: (deckId) => openDeckSettings(deckId, null),
+      startRename: (deck) => startDeckRename(deck, menuOpenerRef.current),
+      openSettings: (deckId) => openDeckSettings(deckId, menuOpenerRef.current),
       moveToFolder: (deckId, folderId) => moveDeck({ id: deckId, folderId }),
       duplicate: duplicateDeck,
-      askDelete: (deck) => askDelete(deck, null),
+      askDelete: (deck) => askDelete(deck, menuOpenerRef.current),
     }),
     [setOpenDeckId, startDeckRename, openDeckSettings, moveDeck, duplicateDeck, askDelete],
   );
@@ -864,6 +885,7 @@ export function DecksPage() {
                   onStartRename={startDeckRename}
                   onRename={renameDeck}
                   menuDeps={deckMenuDeps}
+                  menuOpenerRef={menuOpenerRef}
                   onMove={(folderId) =>
                     setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                   }
@@ -924,6 +946,7 @@ export function DecksPage() {
                       onStartRename={startDeckRename}
                       onRename={renameDeck}
                       menuDeps={deckMenuDeps}
+                      menuOpenerRef={menuOpenerRef}
                       onMove={(folderId) =>
                         setFolder.mutate({ id: deck.id, folderId }, { onSuccess: dismiss })
                       }
@@ -1145,6 +1168,7 @@ function DeckTile({
   onStartRename,
   onRename,
   menuDeps,
+  menuOpenerRef,
   onMove,
   onConfirmDelete,
   onCancelPanel,
@@ -1168,6 +1192,9 @@ function DeckTile({
    *  wall, built by {@link DecksPage} — a menu is data, and `buildDeckMenu` is what turns this
    *  and the deck into rows. */
   menuDeps: DeckMenuDeps;
+  /** Where this tile writes itself when its menu opens, so that a layer the menu raises has an
+   *  opener to hand the caret back to. See {@link DecksPage}'s `menuOpenerRef`. */
+  menuOpenerRef: RefObject<HTMLButtonElement | null>;
   onMove: (folderId: number | null) => void;
   onConfirmDelete: (deck: DeckRow) => void;
   /** Cancel: a control *in* the layer, so the caret goes back to what opened it. */
@@ -1178,6 +1205,8 @@ function DeckTile({
   const ref = useRef<HTMLLIElement>(null);
   const { id, name } = deck;
   const { menu } = useContextMenu();
+  /** This tile's rows, built when the reader right-clicks it and never before. */
+  const openMenu = menu(() => buildDeckMenu(deck, menuDeps));
 
   // The gesture half of filing. The whole tile is the handle — the art is the deck — and the
   // controls in the corner mark themselves `data-no-drag` so a press on Delete is a press on
@@ -1212,7 +1241,18 @@ function DeckTile({
         // `build` is a thunk, so a wall of forty tiles builds no menu until one is right-clicked;
         // the handler stops the event itself, so an outer surface offering its own menu never
         // replaces these rows.
-        onContextMenu={menu(() => buildDeckMenu(deck, menuDeps))}
+        //
+        // **The stash is this handler's own line and `e.currentTarget` is this button.** It is
+        // written even for a press `menu` then declines (a right-click inside a text field), and
+        // that is harmless rather than sloppy: nothing reads the opener until a menu *row* is
+        // chosen, which can only follow a menu that opened. Writing it inside the `build` thunk
+        // would be exact, and `react-hooks/refs` rejects it — a ref read in a callback handed to
+        // a function during render is indistinguishable, to the rule, from a ref read *during*
+        // render.
+        onContextMenu={(e) => {
+          menuOpenerRef.current = e.currentTarget;
+          openMenu(e);
+        }}
         // **F2 renames the tile the caret is on** — the tree's own key, one floor along
         // (`FolderTree`'s row answers the same press), and the keyboard's route to the field
         // below. A shortcut rather than the only way in: the tile's context menu is the
