@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { card } from "./validation/fixtures";
-import { SORT_OPTIONS, sortCards } from "./sorting";
+import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, sortCards } from "./sorting";
 
 const names = (cards: readonly { name: string }[]) => cards.map((c) => c.name);
 
@@ -179,5 +179,35 @@ describe("sortCards", () => {
       "Price",
       "Type",
     ]);
+  });
+});
+
+/**
+ * `DeckRow.lastSortBy` arrives as a `string`, and an order this build does not have has to
+ * become one it does — the toolbar's select cannot draw a value that is in none of its options,
+ * and a reader stuck in one cannot press their way out.
+ */
+describe("asSortBy", () => {
+  it("keeps every order the toolbar offers", () => {
+    for (const option of SORT_OPTIONS) {
+      expect(asSortBy(option.value)).toBe(option.value);
+    }
+  });
+
+  it("falls back to the default for a word this build does not offer", () => {
+    expect(asSortBy("rarity")).toBe(DEFAULT_SORT_BY);
+    expect(asSortBy("")).toBe(DEFAULT_SORT_BY);
+    // The stored word is the union's own spelling — `manacost` is a word, not a near miss.
+    expect(asSortBy("manacost")).toBe(DEFAULT_SORT_BY);
+    expect(DEFAULT_SORT_BY).toBe("alphabetical");
+  });
+
+  /** Derived from {@link SORT_OPTIONS} rather than a second list, so a fifth order appended
+   *  there is accepted here in the same edit. */
+  it("accepts exactly what the toolbar offers and nothing else", () => {
+    const offered = SORT_OPTIONS.map((o) => o.value as string);
+    for (const word of [...offered, "name", "added", "category"]) {
+      expect(asSortBy(word) === word).toBe(offered.includes(word));
+    }
   });
 });

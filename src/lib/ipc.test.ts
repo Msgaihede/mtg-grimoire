@@ -404,6 +404,40 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The third deck write that is not a patch — and the one that is not about the deck's
+   * *contents* at all: which tab, which grouping, which sort the reader left it on.
+   *
+   * `viewState`, not `patch` or `state`: Tauri fills parameters by name, and this module now has
+   * three one-object payloads under three different words (`deck`, `patch`, `viewState`), so the
+   * one copied from a neighbour is the one that fails at runtime with no type error anywhere.
+   * An absent field means "leave it", so the editor sends the **one** control that moved.
+   */
+  it("sends the view state under its own parameter name, one field at a time", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.deckSetViewState(4, { variant: "theory" });
+    expect(invoke).toHaveBeenCalledWith("deck_set_view_state", {
+      deckId: 4,
+      viewState: { variant: "theory" },
+    });
+
+    // Only the field that moved travels: a press on Sort must not write back a grouping read
+    // out of a stale render.
+    await ipc.deckSetViewState(4, { sortBy: "price" });
+    expect(invoke).toHaveBeenCalledWith("deck_set_view_state", {
+      deckId: 4,
+      viewState: { sortBy: "price" },
+    });
+
+    // All three at once is legal and is what a caller with three fresh values sends.
+    await ipc.deckSetViewState(4, { variant: "live", groupBy: "manaValue", sortBy: "type" });
+    expect(invoke).toHaveBeenCalledWith("deck_set_view_state", {
+      deckId: 4,
+      viewState: { variant: "live", groupBy: "manaValue", sortBy: "type" },
+    });
+  });
+
+  /**
    * The six category commands.
    *
    * Three different first parameters between them — `deckId` on the two that are about a

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import {
   dropTargetForElements,
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronLeft, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
@@ -29,9 +28,16 @@ import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPane
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
-import { buildGroups, GROUP_BY_OPTIONS, type GroupBy } from "./grouping";
+import {
+  asGroupBy,
+  buildGroups,
+  DEFAULT_GROUP_BY,
+  GROUP_BY_OPTIONS,
+  type GroupBy,
+} from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
-import { SORT_OPTIONS, type SortBy } from "./sorting";
+import { QuickAdd } from "./QuickAdd";
+import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -87,26 +93,58 @@ const CONTROL =
  * | 1280 | open | 617 | 221 | open |
  * | 1440 | open | 777 | 381 | open |
  *
- * 208 is also the sidebar's width, which is the app's own evidence that a column this wide is
- * still a column.
+ * **192 rather than 208, and it is the same 16px correction a second time.** The editor became a
+ * scroller when the stats moved under the deck ({@link DECK_HEIGHT_FLOOR}), so the row now pays
+ * for *two* scrollbars rather than one: measured at 1280 with a card pane docked, it is **602**
+ * against the 617 in the table above, which leaves the deck **202** — and a 208 floor collapsed
+ * the panel at the app's default window size, which is precisely the failure the drop from 224
+ * to 208 existed to prevent. The reasoning is the earlier paragraph's, applied to the scrollbar
+ * the arithmetic did not count this time. `scrollbar-width: thin` was measured too and is not an
+ * answer: it costs 10px instead of 15 and lands on **207**, one pixel short of the old floor.
  *
- * **The stats aside is counted with the panel now**, which is the one thing about this that the
- * rebuild changed. The desk row holds three things where it used to hold two — the view, the
- * stats block and the search panel — and the stats block is a *reader's* toggle rather than a
- * measurement, so it is subtracted before the panel is asked whether it fits. Open Stats in a
- * 1280 window with a card pane docked and the panel goes to its rail; close either and it comes
- * back, because nothing here records an intention it cannot honour.
+ * 192 is the sidebar's 208 less that scrollbar — still a column by the app's own evidence, and
+ * still far from the 2px this constant exists to rule out.
+ *
+ * **The desk row holds two things, which is what the table above was measured against.** It
+ * briefly held three: the rebuild put a 280px stats aside between the view and the panel, and
+ * that width was subtracted here before the panel was asked whether it fit — so opening Stats
+ * at 1280 with a card pane docked cost the reader their search, and a toolbar toggle existed
+ * for no reason other than to give the width back. The stats are a band **under** the deck now
+ * (the section at the foot of this component), so the deck and the panel are measured against
+ * each other and against nothing else.
  */
-const DECK_FLOOR = 208;
+const DECK_FLOOR = 192;
 
-/** The `gap-4` between the three things on the desk, which each of their widths has to be
+/** The `gap-4` between the two things on the desk, which both of their widths have to be
  *  counted with. */
 const DESK_GAP = 16;
 
-/** How wide the stats aside is, off the design canvas: 280px, which fits the figure row two up
- *  and the curve's nine bars without any of them becoming a texture. */
-const STATS_WIDTH_PX = 280;
-const STATS_WIDTH = "w-70";
+/**
+ * The shortest the desk row may be squeezed to — `DECK_FLOOR`'s rule turned on its side, because
+ * the stats band is the first thing this editor has ever stacked *below* the deck rather than
+ * beside it.
+ *
+ * **384px, and it is a measurement rather than a taste**: a stack group holding one card is
+ * exactly that tall in the shipped window — 6px of column padding, a 43px group heading, the
+ * 319px card, `stackHeight`'s 8px tail and 6px more padding. One whole card is the floor because
+ * a deck view that cannot draw one has stopped being a deck view. Measured at 1280×800 with a
+ * content-height band and no floor at all, the row came out at **246px**: the commander was cut
+ * through the middle of its art, every column grew a scrollbar, and the docked panel's results
+ * spilled out from under it.
+ *
+ * **So the editor scrolls, and that is the trade this whole arrangement is.** Three things want
+ * the column's height — the deck, the price strip and the band — and at 1280×800 they come to
+ * **847px** in a **710px** editor. Rather than cut one of them, the section is
+ * `overflow-y-auto`: the deck holds 384, the band draws whole, and the last ~137px of it is one
+ * scroll away. At 1920×1080 nothing scrolls and the deck takes the surplus (**527px**). A band
+ * that shrank instead was measured at **92px** with 229px of charts inside it, which is a
+ * scrollbar over a chart nobody can read — the thing `DeckStats` refuses when it wraps rather
+ * than truncates.
+ *
+ * Written out whole rather than built from the number — Tailwind scans source text for class
+ * names, and one assembled at runtime emits no rule at all.
+ */
+const DECK_HEIGHT_FLOOR = "min-h-96";
 
 /** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
 const NO_TAGS: readonly number[] = [];
@@ -159,14 +197,17 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * `check` is the format check anchored to its chip; the other five are **full-window overlays**
  * on `LAYER.overlay` — which is one rung and not five for exactly this reason (see `layers.ts`).
  *
- * **There is a seventh `"inner"` peer on this screen, and it is not in this union**: the set
- * filter inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`). It is
- * a whole layer of somebody else's, so the union cannot model it — what keeps it apart is
- * **focus and click mechanics, not structure**. Opening it takes the caret out of whichever of
- * these is up, and every one of them closes on focus-out or on a press outside its own root;
- * opening any of these takes the caret out of the combobox, which closes on focus-out and on a
- * mousedown outside its root. Pinned both ways by `DeckEditor.test.tsx`'s "never has the set
- * filter and one of the editor's own layers open at once".
+ * **Two more `"inner"` peers sit on this screen and neither is in this union**: the set filter
+ * inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`), and the quick
+ * add's suggestion list (`QuickAdd.tsx`, in the toolbar above). Both are whole layers of
+ * somebody else's, so the union cannot model them — what keeps them apart is **focus and click
+ * mechanics, not structure**. Opening either takes the caret out of whichever of these is up,
+ * and every one of them closes on focus-out or on a press outside its own root; opening any of
+ * these takes the caret out of that combobox, which closes on focus-out and on a mousedown
+ * outside its root. The quick add narrows it further by registering **only while its list is
+ * actually up** (`enabled: listOpen`), so a field the reader is merely typing in owns no press
+ * at all. Pinned both ways by `DeckEditor.test.tsx`'s "never has the set filter and one of the
+ * editor's own layers open at once".
  *
  * **The card pane docked beside this view carries two more, and they are peers of these**: its
  * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
@@ -208,8 +249,17 @@ type Layer =
  * them, and which of six layers is open. It draws no card and no group heading itself —
  * `grouping.ts` says what the groups are and `views/` draw them, so four surfaces cannot answer
  * "how many cards are in the Ramp column" four ways.
+ *
+ * **Three of those decisions outlive the editor**: the variant, the grouping and the sort are
+ * columns on the deck row, restored on the way in and written on every press
+ * (`deck.rememberView`). The view, the filter, the tag chips and the stats block are not — they
+ * are how the reader is looking *now*, and a deck that reopened filtered would be a deck missing
+ * cards until somebody noticed the field.
  */
 export function DeckEditor({ deckId }: { deckId: number }) {
+  // Live until the deck row says otherwise, which it does on the first read — a deck nobody has
+  // switched remembers `"live"` too, so this is the same answer arriving twice rather than a
+  // guess the restore has to correct.
   const [variant, setVariant] = useState<DeckVariant>("live");
   // Every price on this screen — four views, every heading, the stats strip and the line under
   // the deck — is quoted from here. Read once at the top of the editor and threaded, so no two
@@ -242,15 +292,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const other = useDeck(theoryEnabled ? deckId : null, variant === "live" ? "theory" : "live");
 
   const [view, setView] = useState<DeckView>("stacks");
-  const [groupBy, setGroupBy] = useState<GroupBy>("category");
-  const [sortBy, setSortBy] = useState<SortBy>("alphabetical");
+  // The two the deck row remembers, seeded from the same constants a stored word this build
+  // cannot draw falls back to — so "never chosen" and "chosen and since dropped" are one state
+  // rather than two. The restore below overwrites both the moment the row lands.
+  const [groupBy, setGroupBy] = useState<GroupBy>(DEFAULT_GROUP_BY);
+  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_BY);
   const [filter, setFilter] = useState("");
   const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
-  const [statsOpen, setStatsOpen] = useState(true);
   const [layer, setLayer] = useState<Layer>(null);
-  /** What the quick-add field is holding, and what the last press could not find. */
-  const [quickText, setQuickText] = useState("");
-  const [quickMiss, setQuickMiss] = useState<string | null>(null);
 
   /**
    * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
@@ -280,6 +329,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
 
+  /**
+   * The remembered triple this editor has already put on screen, so the restore below honours a
+   * *value* rather than a deck — see it for why that is the difference that matters.
+   *
+   * State rather than a ref, and not a stylistic choice: this is React's own "adjusting state
+   * when a prop changes" pattern, where the previous value is held in state precisely so the
+   * comparison and the update are both part of the render the new value arrived in. A ref read
+   * during render is the thing `react-hooks/refs` forbids, and for the reason that would bite
+   * here — a ref written in a render React then discards would leave the editor believing it
+   * had honoured a triple it never drew.
+   */
+  const [honouredView, setHonouredView] = useState<string | null>(null);
+
   /** What is in the name field while it is being typed in, or `null` when the field is simply
    *  the deck's name (`QuantityStepper`'s draft, for its reason). */
   const [nameDraft, setNameDraft] = useState<string | null>(null);
@@ -301,8 +363,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
 
   const editorRef = useRef<HTMLElement>(null);
-  /** The row the deck, the stats block and the panel share, and the only width any of them can
-   *  be judged against — the window's own is three layouts away from it. */
+  /** The row the deck and the panel share, and the only width either of them can be judged
+   *  against — the window's own is three layouts away from it. */
   const deskRef = useRef<HTMLDivElement>(null);
   /** The box the current view draws into — the one scroller a drag may have to move inside to
    *  reach its target, and the height the two column-packing views are told to pack to. */
@@ -370,9 +432,76 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // one is open, and an `"inner"` layer nothing draws is a layer that eats the first Escape of
   // whatever the reader does next. Reset during render (`CardDetailPane`'s face, `Cover`'s art).
   if (gone && layer !== null) setLayer(null);
+
+  // Put the reader back where they left this deck: the tab, the grouping and the sort the row
+  // remembers. Another reset during render — React's own answer to state that has to follow a
+  // prop, and the pattern this file already uses twice (the `targetCategoryId` clamp above and
+  // the `variant` clamp below).
+  //
+  // **Honoured once per *triple*, not once per deck**, which is the whole of what makes it
+  // co-operate with the reader rather than fight them: `honouredView` holds the triple that was
+  // applied, so a row answering the same one again changes nothing, while a row answering a
+  // *new* one — the deck being opened, or `theoryEnabled` being switched on, which leaves
+  // `lastVariant` at `"theory"` because the cards moved there — moves the controls.
+  //
+  // **It cannot loop, and the reason is that `rememberView` does not invalidate.** A press
+  // writes the columns without re-reading the deck, so the triple on this row changes only when
+  // the deck is genuinely read again — opening it, or any card write's `["decks"]`
+  // invalidation — and by then it is the reader's own stored choice, which the three `!==`
+  // guards make a no-op. Restoring writes nothing back, deliberately: this is a read of what is
+  // already stored.
+  const remembered =
+    row === null ? null : `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`;
+  if (row !== null && honouredView !== remembered) {
+    setHonouredView(remembered);
+    // Narrowed rather than cast: a word a future build stops offering must land the editor on
+    // the default, not in a mode its own select cannot draw.
+    const storedGroupBy = asGroupBy(row.lastGroupBy);
+    const storedSortBy = asSortBy(row.lastSortBy);
+    // A remembered `"theory"` on a deck that keeps no plan is an ordinary state, not a corrupt
+    // one — switching the list off does not rewrite the column — and the clamp below would take
+    // it straight back. Asking for it anyway would cost a `deck_get` for a list the reader has
+    // no control to reach, fired and thrown away on the way in. So the restore asks for what
+    // this deck can actually show, and the clamp stays what it is: the guarantee rather than
+    // the mechanism.
+    const storedVariant = theoryEnabled ? row.lastVariant : "live";
+    if (storedVariant !== variant) setVariant(storedVariant);
+    if (storedGroupBy !== groupBy) setGroupBy(storedGroupBy);
+    if (storedSortBy !== sortBy) setSortBy(storedSortBy);
+  }
+
   // Same reason, one field along: a switch the header stops drawing must not leave the editor
   // reading a list nothing can get back to.
+  //
+  // **After the restore, and still the guarantee even though the restore no longer hands it a
+  // `"theory"` to take back.** A deck that kept a plan and no longer does can perfectly well
+  // remember `"theory"`, since switching the list off does not rewrite the column; the restore
+  // reads that as Live rather than asking for a list the reader has no control to reach (its
+  // own comment says why). What is left for this line is the case the restore is not part of:
+  // the switch being turned off under an editor that is already reading the plan.
   if (row !== null && !theoryEnabled && variant !== "live") setVariant("live");
+
+  /**
+   * The three toolbar controls the deck remembers, each writing **only the field that moved**.
+   *
+   * The state is what the editor draws and the write is what makes it survive the deck being
+   * closed — in that order, and nothing waits on the answer: `rememberView` does not invalidate
+   * and fails silently, so a press lands exactly as fast as it did before anything was stored.
+   * Sending one field rather than three is `DeckViewState`'s absent-means-leave-it rule used
+   * for what it is for — pressing Sort cannot write back a grouping read out of a stale render.
+   */
+  const pickVariant = (next: DeckVariant) => {
+    setVariant(next);
+    deck.rememberView.mutate({ variant: next });
+  };
+  const pickGroupBy = (next: GroupBy) => {
+    setGroupBy(next);
+    deck.rememberView.mutate({ groupBy: next });
+  };
+  const pickSortBy = (next: SortBy) => {
+    setSortBy(next);
+    deck.rememberView.mutate({ sortBy: next });
+  };
 
   // The caret comes here on the way in, once the deck's name is known so the region announces
   // which deck it is. The gallery's New deck button had the caret and unmounts the moment this
@@ -430,9 +559,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * flash a rail, and the observer answers on the same frame.
    */
   const roomForPanel =
-    desk.width === 0 ||
-    desk.width - (statsOpen ? STATS_WIDTH_PX + DESK_GAP : 0) - (PANEL_WIDTH_PX + DESK_GAP) >=
-      DECK_FLOOR;
+    desk.width === 0 || desk.width - (PANEL_WIDTH_PX + DESK_GAP) >= DECK_FLOOR;
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -798,46 +925,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ? null
       : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
-  /**
-   * The quick add: a name, and the card it turns out to be.
-   *
-   * One search, `collapse: true` and `limit: 1` — the newest printing of the best match, which
-   * is the same printing the docked panel's wall offers first for the same query. It is a
-   * **shortcut over that wall**, not a second way of choosing a printing: a reader who cares
-   * which one they get has the panel open beside them.
-   *
-   * A miss is said in words rather than swallowed. The field keeps what was typed on a miss and
-   * is cleared on a hit, because the two are different next actions: correct it, or type the
-   * next card.
-   */
-  const quickAdd = useMutation({
-    mutationFn: (text: string) => ipc.searchCards({ text, collapse: true, limit: 1, offset: 0 }),
-    onSuccess: (found, text) => {
-      const card = found.items[0];
-      if (!card) {
-        setQuickMiss(text);
-        return;
-      }
-      setQuickMiss(null);
-      setQuickText("");
-      // The search answered a whole `CardSummary`, so the type line is already in hand and the
-      // auto arm costs nothing extra — which is the point of filing from a *found* card rather
-      // than from a typed name.
-      addTo(card.id, targetCategoryId, card.typeLine);
-    },
-  });
-  const quickAddFailure = quickAdd.isError ? ipcError(quickAdd.error) : null;
-  const submitQuickAdd = () => {
-    const text = quickText.trim();
-    // No `targetCategoryId === 0` guard any more: zero is `AUTO_CATEGORY` now, which is a
-    // perfectly good destination. The guard existed because zero meant "the deck has not loaded
-    // yet", and a load that has not happened is now covered by the field being in an editor that
-    // only mounts for an open deck.
-    if (!text) return;
-    setQuickMiss(null);
-    quickAdd.mutate(text);
-  };
-
   const viewProps = {
     groups,
     marketplace,
@@ -852,7 +939,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ref={editorRef}
       tabIndex={-1}
       aria-label={row ? `Deck editor: ${row.name}` : "Deck editor"}
-      className={cn("flex h-full min-h-0 flex-col gap-3", FOCUS)}
+      // **The one scroller in this view that is the *page*, and it is new** — see
+      // {@link DECK_HEIGHT_FLOOR}. The deck, the price strip and the stats band together want
+      // more height than a 1280×800 window has, and none of the three may be cut, so the column
+      // scrolls: the deck sits at its floor with the band's tail one scroll below it, and at a
+      // taller window nothing moves at all. The header and the toolbar scroll away with it,
+      // which is what makes this the page rather than a frame — the deck's own view keeps its
+      // scroller inside, and a wheel spent there is spent there first.
+      className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
         <button
@@ -953,16 +1047,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                         drawn and not what the control is *called*, so a `capitalize` switch is
                         one a reader sees as "Live" and voice control has to be asked for as
                         "live". */}
+                    {/* **Theory first, Live second.** The plan is the list a reader building a
+                        deck is in; the live list is what they come back to when they sleeve it
+                        up. It is also what makes turning the switch on land somewhere that reads
+                        right — the write *moves* the deck into theory and leaves `lastVariant`
+                        there, so the reader arrives on the tab their cards are now under, with
+                        the empty one beside it rather than under their pointer. */}
                     {(
                       [
-                        { id: "live", label: "Live" },
                         { id: "theory", label: "Theory" },
+                        { id: "live", label: "Live" },
                       ] as const
                     ).map(({ id, label }) => (
                       <button
                         key={id}
                         type="button"
-                        onClick={() => setVariant(id)}
+                        onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
                         className={cn(
                           "h-7 px-2.5 text-xs",
@@ -1099,39 +1199,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               select of the same categories two inches away. */}
           <div className="flex items-center gap-1.5">
             <span className="text-[0.6875rem] text-dim">Quick add</span>
-            <input
-              type="text"
-              // Named for where the card will land, and under `Auto` that is per card — so the
-              // name says only what it can promise. "Quick add a card to Auto (by card type)"
-              // would be a control named after a setting rather than after what pressing it does.
-              aria-label={
-                targetName === null ? "Quick add a card" : `Quick add a card to ${targetName}`
-              }
-              placeholder="Sol Ring…"
-              value={quickText}
-              onChange={(e) => setQuickText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                e.preventDefault();
-                submitQuickAdd();
-              }}
-              className={cn(
-                "h-8 w-52 rounded-md border border-border bg-bg px-2.5 text-[0.8125rem]",
-                FOCUS,
-              )}
+            {/* The field, its suggestions and its status line are one control and live in one
+                component. What stays here is the *decision* — which pile an add lands in, and
+                the write that puts it there — because that is the editor's, and because the
+                search answered a whole `CardSummary`: the type line is already in hand, so the
+                auto arm costs nothing extra, which is the point of filing from a *found* card
+                rather than from a typed name. */}
+            <QuickAdd
+              targetName={targetName}
+              onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
             />
-            {/* One live region, mounted for as long as the toolbar is: a region that appears
-                together with its text announces nothing, because there was no change to
-                notice. */}
-            <p role="status" className="min-w-0 text-[0.6875rem] text-dim">
-              {quickAddFailure
-                ? `Could not search — ${quickAddFailure}`
-                : quickAdd.isPending
-                  ? "Looking…"
-                  : quickMiss !== null
-                    ? `No card found for “${quickMiss}”.`
-                    : ""}
-            </p>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1169,7 +1246,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <select
               id="deck-group-by"
               value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+              onChange={(e) => pickGroupBy(e.target.value as GroupBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
               {GROUP_BY_PICKER.map((option) => (
@@ -1187,7 +1264,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <select
               id="deck-sort-by"
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortBy)}
+              onChange={(e) => pickSortBy(e.target.value as SortBy)}
               className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
               {SORT_BY_PICKER.map((option) => (
@@ -1239,8 +1316,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 })}
               </div>
             )}
-
-            <ToggleChip label="Stats" pressed={statsOpen} onClick={() => setStatsOpen((v) => !v)} />
           </div>
         </div>
       )}
@@ -1284,13 +1359,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {row && (
-        // The deck on the left, what it adds up to beside it, and the way cards get into it on
-        // the right (spec §7). One flex row, so all three are the full height of the editor —
-        // and `min-w-0` on the deck side, because a view that cannot shrink is the horizontal
-        // scrollbar the 1024px floor forbids. This element is also what `DECK_FLOOR` is measured
-        // against: it is the width the three of them actually have, after the sidebar, the page
-        // padding and the card pane have taken theirs.
-        <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
+        // The deck on the left and the way cards get into it on the right (spec §7). One flex
+        // row, so both are the full height of the editor — and `min-w-0` on the deck side,
+        // because a view that cannot shrink is the horizontal scrollbar the 1024px floor
+        // forbids. This element is also what `DECK_FLOOR` is measured against: it is the width
+        // the two of them actually have, after the sidebar, the page padding and the card pane
+        // have taken theirs. What the deck *adds up to* is no longer in this row; it is the band
+        // under it, which trades no width with either of these — and no height either, until the
+        // window is too short for both, where {@link DECK_HEIGHT_FLOOR} says which gives way.
+        <div ref={deskRef} className={cn("flex flex-1 gap-4", DECK_HEIGHT_FLOOR)}>
           <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
             {view === "stacks" && (
               <StackView {...viewProps} columnHeight={desk.height || undefined} />
@@ -1299,50 +1376,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             {view === "text" && <TextView {...viewProps} columnHeight={desk.height || undefined} />}
             {view === "grid" && <GridView {...viewProps} />}
           </div>
-
-          {statsOpen && (
-            // A block rather than a strip, and beside the deck rather than over it: four charts
-            // and a figure row do not fit on one line at the widths this editor is read at, and
-            // the direction's floor is a chart whose numbers are legible, not a chart that fits.
-            //
-            // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
-            // same measured reason: the card detail pane is the app's one complementary landmark,
-            // and a second one answers `getByRole("complementary")` too. Drawn as an aside, this
-            // block broke five of `App.test.tsx`'s pane assertions without touching the pane.
-            <section
-              aria-label="Deck stats"
-              className={cn(
-                "flex shrink-0 flex-col gap-3 overflow-y-auto rounded-lg border border-border",
-                "bg-surface p-3.5",
-                STATS_WIDTH,
-              )}
-            >
-              <div className="flex shrink-0 items-center justify-between">
-                <h3 className="font-heading text-lg leading-none">Deck stats</h3>
-                <button
-                  type="button"
-                  onClick={() => setStatsOpen(false)}
-                  aria-label="Hide deck stats"
-                  className={cn(
-                    "rounded-md p-0.5 text-dim",
-                    "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                    FOCUS,
-                  )}
-                >
-                  <ChevronRight className="size-4" aria-hidden="true" />
-                </button>
-              </div>
-              {/* Every number over the same rows the view is drawn from — one query, so a curve
-                  and a legality panel can never disagree. Unfiltered on purpose: the toolbar's
-                  filter narrows what is *shown*, and a deck's mana curve is a fact about the
-                  deck rather than about what is on screen. */}
-              <DeckStats
-                cards={deck.cards}
-                marketplace={marketplace}
-                send={deck.missingToWishlist}
-              />
-            </section>
-          )}
 
           <DeckSearchPanel
             add={deck.addCard}
@@ -1402,6 +1435,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           </div>
         )}
       </div>
+
+      {row && (
+        // What the deck adds up to — the foot of the page, and the last thing under the deck.
+        //
+        // **It was an aside on the desk row with a toggle in the toolbar, and both halves of
+        // that cost more than they bought.** The block took 280px off a row that already had to
+        // fit a deck and a search panel, so opening it at 1280 with a card pane docked pushed
+        // the panel to its rail — and the toggle beside the tag filters was a control whose only
+        // job was to give that width back. Full width under the deck, the four charts and the
+        // figure row lay themselves out across the page instead of stacking down a column, and
+        // no reader has to trade their search for their curve.
+        //
+        // **A band, not a card**: a rule and the content under it, the same grammar as the
+        // toolbar above, which is a rule and its controls. The surface, the border and the
+        // rounded corners it used to carry said *a panel you opened* — which is precisely what
+        // it has stopped being.
+        //
+        // **Below the price strip on purpose.** The strip is where the remove tray is drawn
+        // during a drag, exactly `-top-3` over the gap under the deck; putting the band between
+        // them would leave a reader dragging a card the height of four charts to reach the one
+        // drop that takes it out.
+        //
+        // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
+        // same measured reason: the card detail pane is the app's one complementary landmark,
+        // and a second one answers `getByRole("complementary")` too. Drawn as an aside, this
+        // block broke five of `App.test.tsx`'s pane assertions without touching the pane.
+        //
+        // Named by its `aria-label` and by nothing drawn: every figure in it carries its own
+        // label and every chart its own caption, so a heading over the top would be a fifth
+        // word for something already said four times — and a line of deck height for it.
+        //
+        // **`shrink-0`, and that is the whole of why this editor scrolls now** — see
+        // {@link DECK_HEIGHT_FLOOR}. The band is drawn whole or not at all: a curve with its
+        // last two buckets cut off and a legend with its last colour under the fold is a chart
+        // that has stopped being one, which is the same line `DeckStats` takes about wrapping
+        // rather than truncating.
+        <section aria-label="Deck stats" className="shrink-0 border-t border-border pt-3">
+          {/* Every number over the same rows the view is drawn from — one query, so a curve and
+              a legality panel can never disagree. Unfiltered on purpose: the toolbar's filter
+              narrows what is *shown*, and a deck's mana curve is a fact about the deck rather
+              than about what is on screen. */}
+          <DeckStats cards={deck.cards} marketplace={marketplace} send={deck.missingToWishlist} />
+        </section>
+      )}
 
       {/* The five overlays, mounted **at the editor's top level and as siblings of the layout
           above**, which is not a tidiness preference. Each is `fixed inset-0` and none is

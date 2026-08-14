@@ -94,6 +94,14 @@ const meta = {
           "rungs — so two of them open at once would both close on one press. A union rather " +
           "than five booleans is what makes “never two” structural; {@link NeverTwoLayers} is " +
           "that, pressed.\n\n" +
+          "**The first three toolbar controls are remembered on the deck row.** Which list, " +
+          "which grouping, which sort: each press writes its own field through " +
+          "`deck_set_view_state`, which moves no `updated_at`, records no history and " +
+          "reallocates nothing — looking at a tab is not editing a deck — and the editor reads " +
+          "the triple back when it opens. Deliberately **not** `useAppStore`: `cardZoom` and " +
+          "the two view preferences are one session-wide answer, while which list of a " +
+          "*particular* deck somebody was reading is a fact about that deck. " +
+          "{@link ReopensOnThePlan} is the deck that was left on its plan.\n\n" +
           "**An inactive category counts toward nothing at all** — not size, not copies, not " +
           "legality — and the allocator never claims a copy for one, so every card in it reads " +
           "`0` owned **by design** rather than for want of copies. That is `isActive` and never " +
@@ -167,7 +175,11 @@ type Story = StoryObj<typeof meta>;
  * is drawn, empty, saying "Nothing here yet."
  *
  * The order is the v8 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
- * — because a *seeded* deck comes out of that migration rather than out of `deck_create`.
+ * — because a *seeded* deck comes out of that migration rather than out of `deck_create`. That
+ * is the order the categories are **in**, and in Stacks it is no longer the order they are
+ * **drawn**: the Sideboard is pinned to the right of the desk and the other four pack in front
+ * of it, so the two differ by exactly that one pile. See `Decks/Views/StackView`'s
+ * `PinnedSideboard` for what the pin is for.
  *
  * The stats aside's headline figure is 60 with "+ 15 sideboard" under it, and that split is the
  * whole reason `DeckStats` imports `SIZE_KINDS` from the validation engine: the chip in the
@@ -305,6 +317,49 @@ export const GroupAndSort: Story = {
 
     await userEvent.selectOptions(canvas.getByLabelText("Sort"), "price");
     await expect(canvas.getByLabelText("Sort")).toHaveValue("price");
+  },
+};
+
+/**
+ * The deck that was left on its plan, reopening on it — the tab, the grouping and the sort all
+ * three.
+ *
+ * **The editor's opening state is a fact about the deck, not about the session.** `lastVariant`,
+ * `lastGroupBy` and `lastSortBy` are columns on the deck row, written by `deck_set_view_state`
+ * as the reader presses each control and read back here on the way in. Deck 4 is seeded on
+ * `theory`/`type`/`manaCost` for exactly this — the other three decks carry the defaults, and a
+ * seed where every deck read the same way could not show the memory at all.
+ *
+ * **Theory is the left-hand tab**, and that is the order the switch produces rather than a
+ * preference: turning the plan on *moves* the live list into it, so the tab holding the cards is
+ * the one a reader lands on and Live is the column that fills as they acquire them.
+ *
+ * Smuggler's Copter is the proof that the *list* changed and not just which button is lit — it is
+ * in this deck's plan and in no part of what is sleeved up. Pressing Live is what the memory is
+ * not: a starting point, never a lock.
+ */
+export const ReopensOnThePlan: Story = {
+  args: { deckId: 4 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tabs = within(await canvas.findByRole("group", { name: "Deck list" }));
+
+    // Theory first, Live second — read off the DOM order, because "on the left" is the claim.
+    const [theory, live] = tabs.getAllByRole("button");
+    await expect([theory.textContent, live.textContent]).toEqual(["Theory", "Live"]);
+    await expect(theory).toHaveAttribute("aria-pressed", "true");
+
+    await expect(canvas.getByLabelText("Group by")).toHaveValue("type");
+    await expect(canvas.getByLabelText("Sort")).toHaveValue("manaCost");
+
+    const copter = await canvas.findByRole("button", { name: /^Smuggler's Copter/ });
+    await expect(copter).toBeInTheDocument();
+
+    await userEvent.click(live);
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("button", { name: /^Smuggler's Copter/ })).toBeNull();
+    });
+    await expect(live).toHaveAttribute("aria-pressed", "true");
   },
 };
 
@@ -466,23 +521,27 @@ export const MoveBetweenPiles: Story = {
 };
 
 /**
- * The deck's own filter and the Stats toggle — the two toolbar controls that change what is on
- * screen rather than what is in the deck.
+ * The deck's own filter, and the stats band it deliberately does not reach.
  *
  * The filter narrows the cards **before** they are grouped, so every heading's count is a count
  * of what is under it. A heading reading 60 over four visible cards would be lying about the
  * only thing it is for.
  *
- * The stats block is the reader's to put away, and putting it away gives its width back: it is
- * counted against the same floor the docked search panel is measured by (`DECK_FLOOR`), so the
- * three things on the desk yield in order rather than all squeezing at once.
+ * The band at the foot of the page is unfiltered, and that is the pairing worth seeing in one
+ * story: the filter says what is *on screen*, and a deck's curve, colours and price are facts
+ * about the deck. It is also permanent — it was an aside on the desk row with a toggle in the
+ * toolbar, which existed only to give its 280px back to the docked search panel, and a band
+ * under the deck takes no width from anything.
  */
 export const FilterAndStats: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByRole("region", { name: "Main deck" });
-    await expect(canvas.getByRole("region", { name: "Deck stats" })).toBeVisible();
+    const stats = canvas.getByRole("region", { name: "Deck stats" });
+    await expect(stats).toBeVisible();
+    const cards = within(stats).getByText("Cards").nextElementSibling;
+    const whole = cards?.textContent;
 
     await userEvent.type(canvas.getByLabelText("Filter this deck"), "counterspell");
 
@@ -492,8 +551,10 @@ export const FilterAndStats: Story = {
       ).toBeInTheDocument();
     });
 
-    await userEvent.click(canvas.getByRole("button", { name: "Stats" }));
-    await expect(canvas.queryByRole("region", { name: "Deck stats" })).toBeNull();
+    // The whole deck, not the four rows the filter left on screen — and nothing offers to put
+    // the band away.
+    await expect(cards).toHaveTextContent(whole ?? "");
+    await expect(canvas.queryByRole("button", { name: "Stats" })).toBeNull();
   },
 };
 

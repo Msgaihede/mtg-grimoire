@@ -104,16 +104,16 @@ function FakeWorld({
  * render — `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Everything else on every other docs page is isolated in-process, which
- * is what keeps the catalogue readable: **42 of the 50 story files still render inline** —
- * re-derived 2026-08-14 from the built index *and* from source, both terms at once, which is the
- * only way this figure has ever been right. It had rotted twice before that: it read "30 of 34"
- * against 44 files, and then "40 of 47" against 48 files with **eight** opt-outs, naming five of
- * them.
- *
- * The other four are not about the store at all. `CreateDeckDialog`, `DeckSettingsDialog` and
- * `ImportDeckDialog` each draw a `fixed inset-0` scrim, which rendered inline would cover the
- * whole docs page rather than its own block; `CardZoomIndicator` takes a frame so that pressing
- * Zoom in on the docs page cannot leave a pulse behind in the page's own store.
+ * is what keeps the catalogue readable: **43 of the 51 story files still render inline** —
+ * re-derived 2026-08-14 on the merged tree, from the built index *and* from source, which is the
+ * only way this figure has ever been right. The count has now rotted three times over (it read
+ * "30 of 34" against 44 files, then "40 of 47" against 48 — where the 40 was right and only the
+ * total was stale, which is the harder kind to notice). **The other four non-inline
+ * files carry the same parameter for reasons of their own**: `DeckSettingsDialog`,
+ * `CreateDeckDialog` and `ImportDeckDialog` each have a `fixed inset-0` scrim that rendered
+ * inline would cover the whole docs page rather than its own block, and `CardZoomIndicator`
+ * declares it on **one story** rather than on the file, so that pressing Zoom in on the docs
+ * page cannot leave a pulse behind in the page's own store.
  */
 const withFake: Decorator = (Story, context) => {
   // **Here and not in `installWorld`, and not inside `FakeWorld`'s memo either.** A global is

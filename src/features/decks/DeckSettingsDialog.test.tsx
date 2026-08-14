@@ -48,6 +48,9 @@ const BURN: DeckRow = {
   folderId: null,
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];
@@ -453,15 +456,27 @@ describe("DeckSettingsDialog", () => {
     );
   });
 
-  /** The switch, and the sentence it owes the reader: turning it off is not a delete. */
-  it("switches the theory list on, and says what switching it off does", async () => {
+  /**
+   * The switch, and the two sentences it owes the reader — this is the control they decide by,
+   * and both halves of what it does are surprising if they are not said.
+   *
+   * **Turning it on moves the deck into the plan and leaves the live list empty.** It used to
+   * copy, and the description used to say so; a description that still promised a copy would be
+   * the app telling a reader their sleeved-up deck is safe as they press the thing that empties
+   * it. Turning it *off* is still not a delete.
+   */
+  it("switches the theory list on, and says what it does to the deck in both directions", async () => {
     open();
     await loaded();
 
     const toggle = screen.getByRole("switch", { name: /Theory deck/ });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/keeps every row/)).toBeInTheDocument();
-    expect(screen.getByText(/copies the live deck into an empty plan/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/makes the deck you have the plan and starts the live list empty/),
+    ).toBeInTheDocument();
+    // The sentence it must no longer make: nothing is copied any more.
+    expect(screen.queryByText(/copies the live deck/)).not.toBeInTheDocument();
 
     await userEvent.click(toggle);
 

@@ -662,6 +662,11 @@ list from live, so enabling the toggle does not start from nothing) ·
 **Rules:**
 1. Enabling `theoryEnabled` on a deck whose `theory` variant is empty **copies live into it**, in
    the same transaction. An empty theory list beside a full live one reads as data loss.
+   **Superseded** — the switch now _moves_ the live deck into the theory list and leaves `live`
+   empty, sets `last_variant = 'theory'` and reallocates in the same transaction. The guard
+   (transition only, empty theory list only) is unchanged, and `deck_theory_copy_from_live` still
+   copies. The rule as it stands, and why the direction flipped, is in
+   [decks-storage.md](../../reference/decks-storage.md).
 2. `theory_diff` sums by `oracle_id`, falling back to `card_id` when the row is an orphan.
 3. `owned_spare` is the collection's copies minus what **built** decks have allocated —
    `deck_allocations` joined through `decks.is_built`.

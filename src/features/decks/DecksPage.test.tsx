@@ -74,6 +74,11 @@ const BURN: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // How the editor was last read. The gallery draws none of the three — they are here because
+  // every real row carries them.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
 };
 
 /** No cover, so no art and — the plan's ruling — no credit line at all. */

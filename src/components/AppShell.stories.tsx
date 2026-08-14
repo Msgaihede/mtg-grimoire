@@ -267,7 +267,7 @@ const meta = {
        * same layout, and reading as a component that ignores its arguments.
        *
        * The fake **backend** needs none of this — a world is per story in-process now
-       * (`.storybook/fake/scope.ts`), and 42 of the 50 story files still render inline. This is
+       * (`.storybook/fake/scope.ts`), and 43 of the 51 story files still render inline. This is
        * the four that touch the one global left over.
        *
        * The height is the frame's, not a minimum: `inline: false` makes `height` the iframe's

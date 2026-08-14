@@ -73,7 +73,8 @@ just made; it now asks all of them.
   on an animation races the editor's teardown. The form is controlled and knows none of this.
 - **`deck_create` takes a whole deck now**, so the create dialog is one command and one
   transaction. Four of its rules are *not* `deck_update`'s — no `coalesce`, so an absent
-  `folderId` really is the top level; `coverKind` is not settable; theory seeds nothing; and a
+  `folderId` really is the top level; `coverKind` is not settable; theory **moves** nothing (the
+  patch route's `move_live_into_theory` has no live list to act on at birth); and a
   birth is **one** audit row however many fields it was born with. All four, and the reasons:
   [decks-storage.md](../../../docs/reference/decks-storage.md).
 - **The cover picker searches every printing, not just the deck's own cards**
@@ -99,8 +100,9 @@ just made; it now asks all of them.
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s
-  `newest([...])` counts **six** of them: update (rename, cover, Built toggle), add-card,
-  set-quantity, move, missing-to-wishlist, swap-printing.
+  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle),
+  add-card, set-quantity, move, missing-to-wishlist, swap-printing. The two outside it are
+  `setTag` and `rememberView`, each for its own reason stated on its definition.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
@@ -108,6 +110,16 @@ just made; it now asks all of them.
   (`useSwapFromPane`, `useSidebarDrops`) borrow a mutation whole and own only their own reporting.
 - The deck _row_ is a different hook: the gallery's `useDecks` owns create, update, remove and
   duplicate.
+- **Switching the theory list on _moves_ the live deck into it — it does not copy it.** What the
+  reader has built is the plan, so it becomes the theory list and `live` starts empty and fills as
+  they acquire cards; the same write sets `last_variant = 'theory'`, so the editor lands where
+  the deck now is instead of on a blank page nobody emptied. Only on the false→true transition,
+  and only when the theory list is empty. **The rule it replaces copied**, on the reasoning that
+  an empty theory list beside a full live one reads as data loss. Right danger, wrong half:
+  nothing is deleted either way — the two lists are the same table — and what the copy actually
+  handed the reader was two identical lists with no way to tell which one they were editing.
+  `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
+  plan".
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
@@ -202,7 +214,56 @@ panel, nothing written until Import). The Rust half and every measurement:
 
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
-price | type`). An **inactive category stays its own group in all three grouping modes**.
+price | type`). An **inactive category stays its own group in all three grouping modes**, and it
+  stays that group _whole_: `buildGroups` appends it carrying its own `kind`, so a switched-off
+  Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
+  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, `StackView`'s
+  pinned column — still sees a sideboard in the two modes that otherwise have no categories in
+  them, which is the right answer in both cases and is a special case in neither.
+- **The deck stats are a band at the foot of the editor, and there is no control that hides
+  them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
+  the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
+  panel was asked whether it fit — so opening Stats at 1280 with a card pane docked cost the
+  reader their search, and the toggle existed to give that width back. Full width under the deck
+  the four charts sit on one line and nothing on the desk is traded for them. Three consequences,
+  each measured in the shipped window and none of them visible to a test:
+  **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
+  drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
+  would put four charts between a card and the one drop that takes it out;
+  **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
+  to **847px** in the **710px** a 1280×800 window leaves, so the deck holds a `min-h-96` floor
+  (**384px** = one whole stack card and its group heading) and the band's last ~137px is one
+  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**612px**);
+  **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the
+  row's arithmetic did not count — the same 16px correction, for the same reason, as the drop from
+  224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
+  `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
+  pixel short.
+- **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
+  switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
+  one holding cards and `live` is the column that fills as the reader acquires them. Reading
+  left to right is then plan → reality, which is the direction the difference readout beside it
+  already counts in.
+- **The editor reopens on the view the reader left, and the deck row is where that is kept.**
+  `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
+  `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
+  history and reallocates nothing — looking at a deck is not editing it. It is deliberately
+  **not** `useAppStore`: `cardZoom`, `searchView` and `collectionView` are one session-wide
+  answer, and which list of a _particular_ deck the reader was reading is a fact about that deck.
+- **The narrowing is TypeScript's, and that is the boundary rather than a missing constraint.**
+  `ALTER TABLE ADD COLUMN` cannot add a CHECK, so Rust validates only `last_variant`, whose
+  vocabulary the crate owns, and stores the other two verbatim as facts. `GroupBy` and `SortBy`
+  are this layer's words, so `asGroupBy` (`grouping.ts`) and `asSortBy` (`sorting.ts`) narrow
+  them on read and fall back to the default — a stored word nothing offers reopens the editor on
+  `category`/`alphabetical` rather than in a state no control can draw.
+- **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
+  interesting part.** The editor is already showing what the reader picked; this write only makes
+  it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
+  back the three fields it *restores from* a beat after the press, which is how a second press
+  made inside that beat gets undone by the first one's echo. It is also outside `DeckEditor`'s
+  refused-write family on purpose — **that family is writes to what is _in_ the deck**, and this
+  one changes no card — so its failure is silent, the cost being a deck that reopens on its old
+  tab.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
@@ -232,12 +293,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
-- **`CardStack` is arithmetic, not taste.** The card's height is _derived_ — a Magic card's aspect
-  applied to the fixed column width, plus the data line less its rise, **319px** — and the
+- **`CardStack` is arithmetic, not taste.** The card's height is _derived_: a Magic card's aspect
+  applied to the card's own width gives **293** of image, its two hairlines make that **295**, and
+  the data line less its rise makes **319px**. The
   collapsed **−285px** margin leaves a **34px** reveal, a legibility floor for the overlaid tag
   rather than a fraction. The list gets a fixed `stackHeight(n) = 34(n−1) + 319 + 8`, and the open
   card's margin turns −285 into +8: a **293px** push-down of every later card, out of a box whose
-  height does not change.
+  height does not change. **Those two hairlines are the card's own and they still paint**:
+  `STACK_CARD_BORDER` is a length with two owners, and the pair that stopped painting on
+  2026-08-14 is the group `<section>`'s, one level up in `stackColumnWidth`.
 - **The stack's controls are revealed by the card being _open_, never by `group-hover:`**
   (`revealedWhenOpen`). A collapsed card's only hittable part is its 34px strip, so hovering it
   used to reveal a control bar hundreds of pixels below, behind three other cards. They are a
@@ -262,7 +326,69 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
-  of a card. Scaling the two independently agrees at 1× and drifts at every other stop.
+  of a card. Scaling the two independently agrees at 1× and drifts at every other stop. 210 + 12 +
+  2 = **224** at 1×, which is the `14rem` this replaced, exactly. **The `border` term is the
+  `<section>`'s own hairline and it is `border-transparent`** (see the next bullet): a border box
+  that paints nothing still occupies its 1px either side, so clearing the colour cost this sum
+  nothing — while **deleting the class** would draw every card 2px wider than `stackCardWidth()`
+  says it is, which is the one number the whole of `CardStack` is derived from.
+- **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
+  2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
+  a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
+  `border-dashed border-border bg-surface/40` inactive. A column of card faces is already a
+  rectangle with a hard edge, so an outline around it framed a frame, and fifteen of them read as a
+  form rather than as a deck. **The cost is the one signal that told the two states apart**, so an
+  inactive pile now says so three ways and an active pile says nothing at all: the wash, the dimmed
+  name beside `GroupHeader`'s `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`.
+  The drag marks needed no rework — `DROP_RING` is `ring-2`, and a ring is a box shadow **outside**
+  the border box, so the highlight never read the border it appears to sit on. One thing to know if
+  the lift ever regresses in switched-off piles only: **`opacity-60` makes that `<ul>` a stacking
+  context**, and the `<ul>` is what takes `LAYER.raised` when a card opens.
+  **Measured in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  1280×800): every `<section>` computed `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)` —
+  the box survives, the line does not — the inactive pile computed a `0.6`-alpha wash with its
+  `<ul>` at `opacity: 0.6` against an active pile's transparent and `1`, and during a drag every
+  eligible pile computed its ring while only the pile under the pointer added `DROP_OVER`'s gold
+  and the drag source added neither. Full figures:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **`opacity-60` cannot be checked on an _empty_ pile — `CardStack` returns null for a group with
+  no cards**, so a switched-off empty pile has no `<ul>` in the DOM at all and a probe reports it
+  absent rather than 0.6. Move a card in before reading that signal (this cost the 2026-08-14 pass
+  a read on the Maybeboard). An empty pile carries the other two signals only: the wash and the
+  `INACTIVE` marker.
+- **The sideboard is pinned to the right of the desk, and it is a column rather than a panel.**
+  `StackView` pulls every `kind === "side"` group out of what `packColumns` sees and draws them as
+  one extra column after the packed ones — `sticky right-0`, `LAYER.raised`, an opaque `bg-bg` so
+  the scrolling columns pass _under_ it, the same inline width and `flex` basis as every other
+  column, and a soft left shadow for the seam (a shadow, not a border: the borders had just gone,
+  and a hairline reinstated here would have been the only one left in the view). It carries
+  `STACK_COLUMN_ATTR` **and** `STACK_PINNED_ATTR`, because "is a column" and "is the pinned one"
+  are two claims and a sweep that counts columns has to go on counting this one. The failure it
+  prevents is a drag with no destination on screen: the Sideboard sorts last, so on a deck wide
+  enough to scroll it packs off the right edge, and a card dragged out of the main deck has nowhere
+  to be let go of. **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a
+  commander is one card and a companion is one card, and pinning either would spend a column on a
+  pile that is read at a glance. Two things then need no special case: a derived group is
+  `kind: null`, so `manaValue` and `type` pin nothing _unless_ the reader has switched the Sideboard
+  off (which appends the category itself, kind and all — the first bullet in this section); and the
+  column is rendered only when a `side` group exists. **That last condition is real for a story and
+  not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group
+  draws whether or not anything is in it, and a predefined pile cannot be deleted — so under
+  `category` the pinned column is there from the moment a deck is created, empty or not.
+  **It costs `stackColumnWidth(zoom)` permanently** — 224px at 1× (**measured** 2026-08-14) and
+  434px at 2× (**derived** from the same function; the live pass ran at 1× only) — which on a
+  1280px window at 2× is a third of the width parked on the sideboard before the deck has drawn a
+  card. **Measured in the shipped window 2026-08-14** (debug build, 1280×800): the column computed
+  `position: sticky`, `right: 0px`, `z-index: 10`, an opaque `bg-bg`, a `-8px 0 16px -4px` shadow
+  and `width: 224px`; it held its `left` at 325px across a full scroll of a 1424px desk in a 632px
+  scrollport, and `elementFromPoint` over a scrolled-under card returned the Sideboard's own text
+  rather than the card. Figures: [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **A card scrolled under the pinned column is not hittable there, and that is correct** — it
+  cannot be clicked, opened or dragged until it is scrolled clear, because an opaque sticky overlay
+  is over it and a hidden card should not be grabbable. **Know the symptom, because it presents as
+  a broken drag**: the first `cdp.mjs drag` of the 2026-08-14 pass failed with "the browser never
+  started a drag" purely because the source card's centre sat under the pinned column. Scroll the
+  source clear before pressing; suspect this before suspecting the harness or pdnd.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -285,6 +411,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   293px from where they are going: it reads as the card jumping in front and the stack catching
   up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
   this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+  **`LAYER.raised` has a second occupant in this view now, and the two are ordered by the JSX
+  rather than by a number**: the pinned sideboard column sits on the same rung as an open card's
+  list, and equal z-indexes resolve by document order, so the pinned column winning is a fact
+  about it being drawn last. That is the only reading an opaque pinned column can survive — a card
+  lifted out of a column scrolling past has to go _under_ the sideboard, not over it — and moving
+  the pinned column above the packed ones would invert it silently, with the suite still green.
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
   lift was observable from neither.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
@@ -318,7 +450,100 @@ price | type`). An **inactive category stays its own group in all three grouping
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
 - The editor's five full-window surfaces (Import, Categories & tags, History, Theory diff, Deck
   settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
-  rungs and two `"inner"` peers open at once are not ordered at all.
+  rungs and two `"inner"` peers open at once are not ordered at all. The format check rides in the
+  same union, so at most one of its six registrations is ever enabled.
+
+## The quick add
+
+`QuickAdd.tsx` — the toolbar field, its dropdown and its status line, one component. `DeckEditor`
+keeps only the *decision*: which pile the add lands in (`targetCategoryId`) and the write that
+puts it there. `QuickAdd.test.tsx` covers the field itself; the Escape hand-off below is pinned in
+`DeckEditor.test.tsx`, because that one is about the ladder rather than about this control. The
+longer-form record of the two hand-rolled comboboxes and their shared panel is
+[frontend-design.md](../../../docs/reference/frontend-design.md).
+
+- **It is a shortcut over the docked panel's wall, not a second way of choosing a printing.** The
+  search is `collapse: true`, so every suggestion is the newest printing of that name — the same
+  one the panel offers first for the same text. A reader who cares which printing they get has the
+  panel open beside them, so this field never grows a set column or a printing picker.
+  `MAX_SUGGESTIONS` is **five**, and the ceiling is the reader's rather than the backend's: a list
+  long enough to need a scrollbar has stopped being a shortcut and started being the wall again.
+- **Three routes reach one write, and the third is the one that looks removable.** Enter on the
+  highlighted suggestion, a click on a row, and — inside the debounce window, before any
+  suggestion exists — a one-shot `limit: 1` search. That third route is the field's **original**
+  behaviour and must not be deleted: the debounce is `DEBOUNCE_MS` (300ms, the same one the three
+  list views use), and a reader who types a whole name and presses Enter inside it has no row to
+  take. Losing it would make the dropdown a regression for exactly the readers who are fastest at
+  this. It is also where the miss comes from — “No card found for …”, said in words and with the
+  typed text kept, because the next action there is to correct it rather than to type the next
+  card. Both requests are the same search differing only in `limit`, which is what keeps the
+  top suggestion and the fallback's one hit the same card.
+- **Enter takes a row only while the rows answer what is in the field _now_.** `fresh` is
+  `debouncedText === text.trim() && !suggestions.isPlaceholderData`; when it is false Enter falls
+  through to the one-shot search, which asks about the text that is actually there. The bug this
+  prevents is adding the top hit for `sol r` while the field says `sol ring` — the debounce opens
+  that window on every keystroke, so it is a real case rather than a theoretical one.
+  `keepPreviousData` (there so the list does not blink empty between letters) is what makes the
+  second clause necessary, and it is also why the rows are read off `text` rather than
+  `debouncedText`: clearing the field changes the key to `""`, which the query is `enabled: false`
+  for, so the last five rows would hang under an empty box for the rest of the session.
+- **The Escape rung is `enabled: listOpen`, never `enabled: open`.** With the caret in a quick add
+  whose list is closed, the press belongs to the card detail pane, which listens on `window` in the
+  bubble phase — a capture-phase listener here would consume it and close nothing at all.
+  `DeckEditor.test.tsx`'s "lets Escape through to the card pane when no layer of its own is open"
+  focuses this very field and asserts the press arrives with `defaultPrevented` false. Escape here
+  closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
+  in the whole time, so the hook's focus-hand-back clause has nothing to do.
+- **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
+  above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
+  as the docked panel's set filter. Every one of the editor's five surfaces is opened by pressing a
+  toolbar button, pressing a button takes the focus out of this field, and the root's `onBlur`
+  closes the list on the way. **That is the whole of what makes a third rung unnecessary**, so a
+  future surface opened without moving the caret — a hotkey, an auto-open — breaks it, and the fix
+  is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope.
+- **The query carries no `marketplace`, and that is a documented exception** to the app's rule that
+  every price-bearing query carries it and has it in the key. A row draws a name, a mana cost and a
+  set code and no price at all, so a currency switch has nothing to change about it, and putting
+  the marketplace in the key would refetch five names for nothing every time one happened. The
+  exception is valid only for as long as the rows stay priceless.
+- **The caret never leaves the field, and two small things are what make that true**:
+  `aria-activedescendant` moves the highlight instead of the focus — which is why the dropdown is
+  a listbox and not a row of buttons, since a reader typing a name must not have to Tab into the
+  answers to take one — and a row's `onMouseDown` refuses the focus a click would otherwise take,
+  without which the click blurs the input, `onBlur` closes the list and the press lands on
+  nothing. The highlight then follows **both** `onPointerMove` and `onMouseMove`, because the
+  mouse and the keyboard must not disagree about which row Enter would take: React synthesises
+  enter/leave from over/out and never listens for `pointerenter` at all, so a move event is the
+  honest one.
+- **The field is named for where the add lands, and a row is named by its own content.** The
+  label is `Quick add a card to <pile>`, or bare `Quick add a card` under `AUTO_CATEGORY`, where
+  there is no one answer because the pile is per card, so the name says only what it can promise
+  — "Quick add a card to Auto (by card type)" would name a *setting* rather than what pressing it
+  does. `DeckEditor.test.tsx` addresses the field by both names, so a reworded label is a suite
+  failure. A row carries **no `aria-label`**: its name is the card's name, the cost's `sr-only`
+  tokens and the set code, and a label carrying only the card's name would make the row
+  indistinguishable from the docked panel's tile for the same card — an ambiguity that is real,
+  because both are on screen at once.
+- **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against the real 116 703-card corpus): `sol` drew **5** rows with row 0 `aria-selected` and
+  `aria-activedescendant` on it. The panel computes `z-index: 30` (`LAYER.popup`),
+  `position: absolute` and `transform-origin: 0px 0px`; its left edge is **285** against the
+  field's **285** and its top **199** against the field's bottom **195** — the `mt-1` — at 288px
+  wide, with no right overflow and `documentElement.scrollLeft` **0**. Two ArrowDowns moved the
+  highlight to index **2** with `document.activeElement` still the field, and Enter added *that*
+  row rather than the top one, filed under `Creature` by its type line. A click on the fourth row
+  added it, left the caret in the field, and drew the colour-identity rule break on the new card —
+  so the click goes the same write-and-validate route the rest of the editor does. The miss read
+  `No card found for “counterspellgoblin”.` with the field's text kept. **The Escape ladder holds
+  one press per layer**: with the card pane open, the first press closed the list and left the
+  pane, keeping the caret in the field, and the second closed the pane. At **1024** the field is
+  208px and neither it nor the status line clips (`body.scrollWidth` 1024). The console recorder
+  caught **5** entries and no error or warning.
+- **Two things the pass did not cover.** Reduced motion on this panel was not emulated — it is the
+  same `popup` preset inside the same `PopupPanel` as the set filter, whose reduction is already
+  measured, so this would be re-measuring a shared component rather than this one. And the
+  freshness guard is **unit-tested only**: reproducing a stale list live means winning a 300ms
+  race by hand, which is what a test with a controlled clock is for.
 
 ## Known open bugs
 

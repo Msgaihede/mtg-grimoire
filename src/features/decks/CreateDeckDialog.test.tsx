@@ -73,6 +73,9 @@ const MADE: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
   updatedAt: 1786266000,
 };
 

@@ -302,13 +302,25 @@ describe("DeckSettingsForm", () => {
     ).toEqual(["modern"]);
   });
 
-  /** A press, and the sentence the switch owes the reader: turning it off is not a delete. */
-  it("fires only onChange for the theory switch, and says what turning it off does", async () => {
+  /**
+   * A press, and the two sentences the switch owes the reader in both directions.
+   *
+   * **Turning it on moves the deck into the plan and leaves the live list empty.** It used to
+   * copy, and this description used to say so; a description still promising a copy would be the
+   * app telling a reader their sleeved-up deck is safe as they press the thing that empties it.
+   * Turning it *off* is still not a delete. `DeckSettingsDialog.test.tsx` pins the same pair
+   * through the host — the sentence lives here now, and both surfaces draw it.
+   */
+  it("fires only onChange for the theory switch, and says what it does in both directions", async () => {
     const { onChange, onCommit } = form();
 
     const toggle = screen.getByRole("switch", { name: "Theory deck Disabled" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(/copies the live deck into an empty plan/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/makes the deck you have the plan and starts the live list empty/),
+    ).toBeInTheDocument();
+    // The sentence it must no longer make: nothing is copied any more.
+    expect(screen.queryByText(/copies the live deck/)).not.toBeInTheDocument();
     expect(screen.getByText(/keeps every row/)).toBeInTheDocument();
 
     await userEvent.click(toggle);
