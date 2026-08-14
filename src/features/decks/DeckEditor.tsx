@@ -403,8 +403,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * reinstating anything here, because the change looks like a revert of that decision and is
    * not.** What the spec answers now is {@link emptyGroupRules}, which `buildGroups` consults
    * about a group holding **nothing**: a Modern deck draws no empty command zone. This array is
-   * untouched by it and is still every category of the deck. It is what the per-card "Move…"
-   * select, the toolbar's "Add to" select and `CategoriesPanel` are built from, so every pile
+   * untouched by it and is still every category of the deck. It is what the toolbar's "Add to"
+   * select and `CategoriesPanel` are built from, so every pile
    * stays reachable by name whether or not a heading is drawn for it — and a pile that *holds*
    * a card draws whatever the format says, because `drawsWhenEmpty` is never asked about a
    * group with cards in it. Nothing holding cardboard is hidden, and nothing at all is hidden

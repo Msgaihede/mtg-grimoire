@@ -217,7 +217,7 @@ type Story = StoryObj<typeof meta>;
  * {@link EmptyCommandZone} is the command zone drawn empty where the format wants one.
  *
  * **Neither category is gone, and neither is unreachable.** `deck.categories` is still all five —
- * the per-card "Move…" select, the toolbar's "Add to" select and `CategoriesPanel` are built from
+ * the toolbar's "Add to" select and `CategoriesPanel` are built from
  * that list and not from the drawn groups — and the moment a card is filed into the Commander
  * pile the heading arrives with it, because `drawsWhenEmpty` is never asked about a group holding
  * cards.
@@ -699,7 +699,7 @@ export const EmptyDeck: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("region", { name: "Sideboard" })).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
-    // Seeded, reachable by name from every "Move…" and "Add to" select, and not drawn: Modern
+    // Seeded, reachable by name from the "Add to" select, and not drawn: Modern
     // has no command zone, and an empty companion slot is drawn in no format.
     await expect(canvas.queryByRole("region", { name: "Commander" })).toBeNull();
     await expect(canvas.queryByRole("region", { name: "Companion" })).toBeNull();

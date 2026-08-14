@@ -590,8 +590,8 @@ describe("DeckEditor", () => {
    * test asserted until now.
    *
    * What replaced it reaches only the **empty** piles, and only through `buildGroups`' rules
-   * argument — `deck.categories` is untouched, which is why the "Move…" and "Add to" tests
-   * below still see all five and no pile is unreachable. This deck is Modern: no empty Commander
+   * argument — `deck.categories` is untouched, which is why the "Add to" tests below still see
+   * every pile and none is unreachable. This deck is Modern: no empty Commander
    * heading (the format needs none) and no empty Companion heading (a companion is nominated,
    * never handed out, so an empty slot says nothing). Everything else is drawn empty — the two
    * fixed zones Modern does use, and a pile the reader made and emptied, which is the reverse of
@@ -674,8 +674,8 @@ describe("DeckEditor", () => {
    * rule the whole editor used to run on, kept exactly where it was earned.
    *
    * It is a fact about the view and never about the deck: `deck.categories` does not change, so
-   * the card's "Move…" select goes on offering the pile by name throughout, and clearing the box
-   * brings the heading straight back.
+   * the toolbar's "Add to" select goes on offering the pile by name throughout, and clearing the
+   * box brings the heading straight back.
    */
   it("collapses the reader's own empty piles while a filter is running", async () => {
     const brew = category(6, "Sunday brew", "main");
@@ -691,12 +691,12 @@ describe("DeckEditor", () => {
     expect(group("Main deck")).toBeInTheDocument();
     expect(group("Sideboard")).toBeInTheDocument();
     expect(group("Maybeboard")).toBeInTheDocument();
-    // The pile is still a move target while it is not a heading — the whole reason hiding one is
-    // survivable is that no surface a reader files a card with is built from the drawn groups.
+    // The pile is still somewhere a card can be filed while it is not a heading — the whole
+    // reason hiding one is survivable is that no surface a reader files a card with is built
+    // from the drawn groups. The per-card "Move…" select made the same point and was removed on
+    // 2026-08-14, so the toolbar's "Add to" is what carries it now.
     expect(
-      within(screen.getByLabelText("Move Lightning Bolt out of Main deck")).getByRole("option", {
-        name: "Sunday brew",
-      }),
+      within(screen.getByLabelText("Add to")).getByRole("option", { name: "Sunday brew" }),
     ).toBeInTheDocument();
 
     await userEvent.clear(box);
