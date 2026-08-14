@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { SyncPhase, SyncProgressEvent } from "@/lib/ipc";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 import { SyncProgress } from "./SyncProgress";
@@ -45,8 +45,15 @@ const meta = {
         component:
           "The first run, and nothing else. 77 MB to download and ~117 k rows to import with " +
           "nothing usable behind them — taking the whole screen is honest about that, and the " +
-          "alternative is an empty app that looks broken. Every *other* sync is reported by the " +
-          "ribbon's mana line, which is why there is no second, slimmer bar here.\n\n" +
+          "alternative is an empty app that looks broken. It is also the first thing anyone ever " +
+          "sees of this app, which is why it opens with the name in full and then says, in one " +
+          "sentence, what the wait buys.\n\n" +
+          "**The progress element is the mana line itself**, not a bar of this component's own. " +
+          "That is not a repetition of the app's one signature — this surface covers the ribbon, " +
+          "so while it is up there is exactly one mana line on screen, and the reader who has " +
+          "just watched it fill finds it under the ribbon a second later. The sentence and the " +
+          "count come from `syncActivity`, the same fold that drives the ribbon's line, so the " +
+          "two surfaces cannot drift apart on the wording of a phase or the unit it counts.\n\n" +
           "`cardCount === 0` — and only `0` — means an empty database. `null` means the poll " +
           "could not read the count, which is the normal state during every sync, and treating " +
           "it as empty would black out a working 116 k-card app once a day.\n\n" +
@@ -74,21 +81,27 @@ type Story = StoryObj<typeof meta>;
  *
  * The gap this covers is real twice over: the run is a moment old, *or* its opening events were
  * emitted before the webview registered its listener and Tauri dropped them. Either way `busy`
- * is true and there is nothing to report, so the bar pulses at full width and the label says
- * "Starting…" rather than naming a phase that has not been announced.
+ * is true and there is nothing to report, so the line sweeps rather than fills and the sentence
+ * is the generic "Syncing card data" rather than a phase nobody has announced. Both come from
+ * `syncActivity`, the same fold that drives the ribbon's line, which is why the wording here is
+ * the wording there.
  *
- * A full-width bar with nothing moving would read as finished; the pulse is what says the length
- * is unknown. Under `prefers-reduced-motion` the pulse is dropped and the label is left to say
- * it instead.
+ * A line at full strength with nothing moving would read as finished; the sweep is what says the
+ * length is unknown. Under `prefers-reduced-motion` the sweep is dropped and the dimmed line
+ * alone is left to say it.
+ *
+ * **Retry is not on screen.** `sync_run` refuses a second concurrent run, so while one is in
+ * flight the button could not do anything — it comes back in the three states that need it,
+ * which are exactly the three where nothing is running.
  */
 export const Starting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // The bar carries no `aria-valuenow` — omitted rather than zeroed, because `0` would be a
+    // The line carries no `aria-valuenow` — omitted rather than zeroed, because `0` would be a
     // claim that no progress has been made rather than that none is measurable. Invisible.
-    const bar = canvas.getByRole("progressbar", { name: "Starting" });
+    const bar = canvas.getByRole("progressbar", { name: "Syncing card data" });
     await expect(bar).not.toHaveAttribute("aria-valuenow");
-    await expect(canvas.getByRole("button", { name: "Retry download" })).toBeDisabled();
+    await expect(canvas.queryByRole("button", { name: "Retry download" })).toBeNull();
   },
 };
 
@@ -146,9 +159,13 @@ export const Ingesting: Story = {
  * `reclaiming` — handing the pages the swap just freed back to the filesystem.
  *
  * Alone among the phases it reports a **true** fraction: the freelist is counted before the work
- * starts and only ever falls. The two numbers reach the bar and nothing else — `detail()` prints
- * a line for `downloading` and `ingesting` only — so they are written here as a plain
- * three-quarters rather than as a page count this file would be inventing.
+ * starts and only ever falls. So it is the one phase whose detail is a bare percentage —
+ * `syncActivity` prints bytes for the download and rows for the ingest, and neither unit means
+ * anything about freed database pages.
+ *
+ * A first run does not reach this phase — there is no old copy of the card table to free — and
+ * the story is here because the component takes the phase as an argument and would draw it if it
+ * ever arrived.
  */
 export const Reclaiming: Story = {
   args: { progress: event("reclaiming", { done: 3, total: 4 }) },
@@ -158,10 +175,7 @@ export const Reclaiming: Story = {
       "aria-valuenow",
       "75",
     );
-    // **No digit appears anywhere on this screen**, which is the rule rather than an omission:
-    // `detail()` writes a line for `downloading` and `ingesting` only, because those are the two
-    // units a reader recognises. Freed database pages are not one.
-    await expect(canvas.queryByText(/\d/)).toBeNull();
+    await expect(canvas.getByText("75%")).toBeInTheDocument();
   },
 };
 
@@ -242,6 +256,34 @@ export const Throttled: Story = {
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("progressbar")).toBeNull();
     await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();
+  },
+};
+
+/**
+ * {@link Error}, one press later — the same story with its Retry clicked.
+ *
+ * **A failure event is the last thing this window heard and stays the last thing** until a new
+ * run says something: Tauri is not going to send a retraction. So the press is remembered, and
+ * with the failure out of the way `busy` is enough to say a run is on — which is why the answer
+ * to the press arrives in the same frame the button was let go, sweeping, with no sentence
+ * invented for the occasion. `useSync.refresh` sets `refreshing` synchronously, so in the app
+ * this is what the reader sees rather than a screen that sits still.
+ *
+ * What is remembered is the **event**, not a "retrying" flag. A second failure is a second
+ * object, so it is never the dismissed one and the screen reports it; a flag would have to
+ * guess when to lower itself, and would swallow that failure for as long as it stood.
+ */
+export const Retrying: Story = {
+  args: { busy: true, progress: event("error", { message: "no internet connection" }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Retry download" }));
+
+    await expect(canvas.queryByText("no internet connection")).toBeNull();
+    await expect(
+      canvas.getByRole("progressbar", { name: "Syncing card data" }),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Retry download" })).toBeNull();
   },
 };
 
