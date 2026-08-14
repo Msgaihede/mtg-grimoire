@@ -486,7 +486,7 @@ export function DeckSearchPanel({
         {toggle}
         {/* The category choice sits above the results rather than on each of them: it is the
             click path's answer to "where does this go", and therefore the keyboard's — which is
-            what makes drag a shortcut in Task 14 rather than the only way in. */}
+            what makes the drag a shortcut rather than the only way in. */}
         {shown && (
           <>
             <label htmlFor={categoryFieldId} className="ml-auto shrink-0 text-xs text-dim">

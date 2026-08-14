@@ -3282,6 +3282,56 @@ describe("DeckEditor — a category's menu", () => {
     await waitFor(() => expect(deckCategoryDelete).toHaveBeenCalled());
   });
 
+  /**
+   * **A refused delete has to be visible, and the editor's own banner is behind the scrim.**
+   *
+   * `meta.deleteCategory` is in the refused-write family, but that banner draws in the editor
+   * body — under this dialog's `LAYER.overlay`. On refusal `onDeleted` never fires, so the dialog
+   * stays open with its button live and, without a sentence inside it, nothing on screen changes.
+   * Asserted **within the dialog**, because "somewhere on the page" is exactly what passes while
+   * the reader sees nothing.
+   */
+  it("says so inside the delete dialog when the delete is refused", async () => {
+    deckCategoryDelete.mockRejectedValue("The database is busy");
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Delete “Main deck”/ });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
+    );
+
+    expect(await within(dialog).findByText(/Could not delete that category/)).toBeInTheDocument();
+  });
+
+  /**
+   * **The caret goes back to the pile, for all three rows that open a full-window surface.**
+   *
+   * A menu row has no control to return to, and `DeckDialog` focuses its own panel and restores
+   * nothing — so a `null` hand-back leaves the caret on an unmounting panel and drops it on
+   * `<body>`, with the next Tab restarting from the top of the app. This is the third surface on
+   * this branch to have been wired that way; here the hand-back is a function, so the rows can
+   * answer with the pile rather than with nothing.
+   */
+  it.each([
+    ["Import cards…", /Import/],
+    ["Export cards…", /Main deck/],
+    ["Delete…", /Delete “Main deck”/],
+  ])("gives the caret back to the pile when %s is dismissed", async (row, dialogName) => {
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    await screen.findByRole("dialog", { name: dialogName });
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(
+      document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`),
+    );
+  });
+
   /** The two arms that were already built for this menu, wired to the rows that open them. */
   it("aims the importer at the pile that was right-clicked", async () => {
     await open();
