@@ -850,15 +850,22 @@ function Missing({
  * the toggle on and no X spells in the deck it draws at zero, which is the honest answer to
  * "where did my X spells go".
  *
- * **The tenth bar is why the cells narrow rather than the panel widening.** The stats block is
- * 280px (`DeckEditor`'s `STATS_WIDTH_PX`, measured against the deck column it leaves behind),
- * less `p-3.5` on both sides and a 1px border, is **250px** of content. Nine 20px cells with a
- * 4px gap are 212; ten would be 236, which leaves 14px for a scrollbar this block draws at
- * roughly 15 — so ten cells are 18px, `10 × 18 + 9 × 4 = 216`, and the 34px left over covers
- * the scrollbar at any width the platform picks. The **gap** is what stays put: 4px is the
- * whole of what makes two `bg-surface` tracks read as two bars, and closing it to buy width
- * would turn the chart into one block. 18px still holds the widest label (`8+`) and a two-digit
- * count at `text-[0.7rem]` monospace.
+ * **Every cell is 20px, including in the ten-bar arm, and it briefly was not.** While the stats
+ * block was a 280px aside beside the deck it had **250px** of content (280 less `p-3.5` both
+ * sides and a 1px border) and drew its own scrollbar: nine 20px cells at a 4px gap are 212, ten
+ * would be 236, and 14px is not enough for a scrollbar the platform draws at roughly 15 — so the
+ * ten-bar arm narrowed to 18px (`10 × 18 + 9 × 4 = 216`) rather than take 24px of width off the
+ * deck column, which `DECK_FLOOR`'s table measured against that 280.
+ *
+ * **That constraint is gone and so is the compromise.** The block is a full-width band below the
+ * deck now, and it no longer scrolls — `DeckEditor`'s section does. There is no 250px budget and
+ * no scrollbar to leave room for, so a tenth bar costs nothing anybody was spending and the
+ * chart goes back to one cell width in both arms. Kept here as history because the narrowing was
+ * deliberate and correct for one afternoon, and a reader finding `w-5` in a doc that once
+ * explained an 18px cell deserves to know which way it went.
+ *
+ * The **gap** is what has stayed put throughout: 4px is the whole of what makes two `bg-surface`
+ * tracks read as two bars, and closing it to buy width would turn the chart into one block.
  */
 function Curve({
   curve,
@@ -873,9 +880,9 @@ function Curve({
 }) {
   const id = useId();
   const max = Math.max(...curve, variable ?? 0, 1);
-  // Both spellings written out whole: Tailwind scans source text for class names, so a width
-  // assembled from a number would emit no rule at all.
-  const cell = variable === null ? "w-5" : "w-[1.125rem]";
+  // Written out whole rather than built from a number: Tailwind scans source text for class
+  // names, so a width assembled at runtime emits no rule at all.
+  const cell = "w-5";
   return (
     <div className="min-w-0">
       <p id={id} className="text-xs text-dim">

@@ -547,23 +547,27 @@ export const MoveBetweenPiles: Story = {
 };
 
 /**
- * The deck's own filter and the Stats toggle — the two toolbar controls that change what is on
- * screen rather than what is in the deck.
+ * The deck's own filter, and the stats band it deliberately does not reach.
  *
  * The filter narrows the cards **before** they are grouped, so every heading's count is a count
  * of what is under it. A heading reading 60 over four visible cards would be lying about the
  * only thing it is for.
  *
- * The stats block is the reader's to put away, and putting it away gives its width back: it is
- * counted against the same floor the docked search panel is measured by (`DECK_FLOOR`), so the
- * three things on the desk yield in order rather than all squeezing at once.
+ * The band at the foot of the page is unfiltered, and that is the pairing worth seeing in one
+ * story: the filter says what is *on screen*, and a deck's curve, colours and price are facts
+ * about the deck. It is also permanent — it was an aside on the desk row with a toggle in the
+ * toolbar, which existed only to give its 280px back to the docked search panel, and a band
+ * under the deck takes no width from anything.
  */
 export const FilterAndStats: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByRole("region", { name: "Main deck" });
-    await expect(canvas.getByRole("region", { name: "Deck stats" })).toBeVisible();
+    const stats = canvas.getByRole("region", { name: "Deck stats" });
+    await expect(stats).toBeVisible();
+    const cards = within(stats).getByText("Cards").nextElementSibling;
+    const whole = cards?.textContent;
 
     await userEvent.type(canvas.getByLabelText("Filter this deck"), "counterspell");
 
@@ -573,8 +577,10 @@ export const FilterAndStats: Story = {
       ).toBeInTheDocument();
     });
 
-    await userEvent.click(canvas.getByRole("button", { name: "Stats" }));
-    await expect(canvas.queryByRole("region", { name: "Deck stats" })).toBeNull();
+    // The whole deck, not the four rows the filter left on screen — and nothing offers to put
+    // the band away.
+    await expect(cards).toHaveTextContent(whole ?? "");
+    await expect(canvas.queryByRole("button", { name: "Stats" })).toBeNull();
   },
 };
 

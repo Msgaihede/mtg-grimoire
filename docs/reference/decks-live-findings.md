@@ -178,3 +178,44 @@ are all things no suite could have seen.
   is legible in a 34px reveal at 210px card width, and whether the quantity chip over the printed
   mana cost reads as a badge rather than as damage.
 - **Linux remains entirely unrun**, as everywhere else in this repo.
+
+## The stats band, driven 2026-08-14
+
+`npm run tauri dev`, a **debug** build, against the real 116 703-card corpus and a saved
+11-copy commander deck. The stats moved out of the collapsible aside on the desk row into a
+static band at the foot of the editor, and the toggle went with it. **Every number below is
+why the layout is shaped the way it is, and none of them could have come from the suite —
+jsdom measures every element at zero.**
+
+- **The band beside the deck cost the deck everything.** Drawn full width under the deck with
+  no other change, the desk row measured **246px** at 1280×800 against the band's **230px**:
+  the commander was cut through the middle of its art, every stack column grew a scrollbar of
+  its own, and the docked search panel's results **spilled out from under its own box** (its
+  card grid painted ~70px below the row's bottom edge). A stack group holding one card is
+  **384px** — 6px of column padding, a 43px group heading, the 319px card, `stackHeight`'s 8px
+  tail and 6px more padding — so the floor is one whole card, `min-h-96`, and it is a
+  measurement rather than a taste.
+- **Two arrangements were measured before the third was kept.** A band that *shrinks* (`min-h-0`
+  + `overflow-y-auto`) held the deck at 384 and took **92px** for **229px** of charts — a
+  scrollbar over a chart nobody can read. A band that is `shrink-0` inside an `overflow-y-auto`
+  editor draws whole: the column wants **847px** in the **710px** a 1280×800 window leaves, so
+  the deck holds 384, the band its full 230, and the last **138px** is one scroll away. At
+  1920×1080 the editor overflows by **0** and the deck takes the surplus (**612px**). All four
+  views agree to the pixel (Stacks, Table, Text, Grid: desk 384, band 230, band top 688,
+  `body.scrollWidth` 1265 — no horizontal scroll at any of them).
+- **`DECK_FLOOR` had to drop 208 → 192, and the pass is the only thing that could have found
+  it.** A page scroller is a second scrollbar, and the row pays for it: at 1280 with a card pane
+  docked the desk measured **602** against the **617** in `DECK_FLOOR`'s own table, leaving the
+  deck **202** — so a 208 floor railed the docked panel at the app's default window size, which
+  is the exact failure the earlier drop from 224 to 208 existed to prevent. `scrollbar-width:
+thin` was measured as an alternative and is not one: **10px instead of 15**, desk **607**, deck
+  **207**, one pixel short. At 192 the panel draws at its full **384px** there; at 1024 with the
+  pane docked the desk is **346** and the panel is correctly still a rail (`aria-disabled`).
+- **The remove tray did not move, which is the reason the band sits below the price strip.**
+  Probed mid-drag with `cdp.mjs drag --cancel --probe`: the tray spans **647 → 676**, and 647 is
+  the desk row's own bottom to the pixel, with the band beginning at **688**. A band between the
+  two would have put four charts between a card in the air and the one drop that takes it out of
+  the deck.
+- The console recorder caught **29** entries and the only four errors were mid-edit HMR states of
+  this pass's own work (a constant referenced before it was renamed); nothing after the layout
+  settled.

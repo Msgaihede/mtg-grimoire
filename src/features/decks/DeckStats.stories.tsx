@@ -214,8 +214,10 @@ export const ManaCurveWithX: Story = {
  * than a claim about the cardboard. It is the one thing on this strip that "X gets its own pile"
  * must not propagate to.
  *
- * The bar's cells are 18px rather than the nine-bar chart's 20 — ten of them have to fit the
- * 280px stats aside, and the panel does not widen for a bar. See `Curve` for that arithmetic.
+ * The cells are 20px in both arms. They were 18 in this one for an afternoon, while the stats
+ * block was a 280px aside that drew its own scrollbar and a tenth bar had to be bought out of
+ * the deck column's width; the block is a full-width band below the deck now and neither is
+ * true. See `Curve` for the arithmetic and for why the retired compromise is still written down.
  */
 export const ManaCurveSplitX: Story = {
   args: { cards: xCurveDeck(), separateXGroup: true },

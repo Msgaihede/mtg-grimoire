@@ -481,7 +481,13 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
     rendered `auditText`'s default arm — a plain "Changed the deck" — and gone unnoticed.
   - **The curve is the arithmetic, not an estimate.** Ten `<li>`s, the tenth reading *"1 card
     with X in their cost"*, the list **216px** wide at **18px** cells, and `scrollWidth ===
-    clientWidth` — so the tenth bar fits the 250px content box with no overflow, as derived.
+    clientWidth` — so the tenth bar fitted the 250px content box with no overflow, as derived.
+    **Those two numbers are history rather than the current build**: the pass was driven against
+    the 280px stats aside, and `main` moved the stats to a full-width band below the deck hours
+    later. The cells are 20px again — see the bullet on the curve's width below. What the pass
+    actually proved outlives the geometry: the derivation and the paint agreed to the pixel, and
+    `scrollWidth === clientWidth` is the assertion that says a bar *fits* rather than merely
+    computes.
   - **`Avg. mana value 2.67` with the switch on and off.** The one number the split does not
     reach, confirmed against a live deck rather than a fixture.
 - **`Split X` is a modifier of the mana-value grouping, and in a deck the rule for X is the
@@ -494,22 +500,25 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   sorts at 9, after `8 or more` and ahead of `unknown`, which moved to 10; the reasons, the
   `{Y}`/`{Z}` exclusion and the `useState`-versus-`deck.update` rule are the frontend's, in
   [src/features/decks/CLAUDE.md](../../src/features/decks/CLAUDE.md).
-- **The stats curve grew a tenth bar and the stats aside did not grow with it.** `STATS_WIDTH_PX`
-  stays **280** (`w-70`) because that constant is what the `DECK_FLOOR` table measures the deck
-  column against, so buying a bar with 24px of panel would narrow the deck at every window size in
-  that table — and the bar is cheaper than the deck. The cells gave way instead. 280 less `p-3.5`
-  on both sides and a 1px border is **250px** of content; nine 20px cells at `gap-1` were **212**,
-  ten would be **236** against a scrollbar this block draws at roughly **15**, so ten cells are
-  **18px**: `10 × 18 + 9 × 4 = 216`, leaving 34px clear at whatever width the platform picks.
-  **The 4px gap is what stays put** — it is the whole of what makes two `bg-surface` tracks read
-  as two bars, and closing it to buy width turns the chart into one block. 18px still holds the
-  widest label (`8+`) and a two-digit count at `text-[0.7rem]` monospace. Both cell widths are
-  written out whole (`w-5`, `w-[1.125rem]`) because Tailwind scans source text and a width
-  assembled from a number emits no rule at all. **The arithmetic was then confirmed in the
-  window**, which is the half it was written without: driven 2026-08-14 (`npm run tauri dev`, a
-  **debug** build at 1280×800), the curve measured ten `<li>`s, a list **216px** wide, an **18px**
-  first cell and `scrollWidth === clientWidth` — the derivation and the paint agreeing to the
-  pixel, and the last of those the one that says the tenth bar fits rather than merely computes.
+- **The curve's cells are 20px in both arms, and for one afternoon they were not.** The tenth bar
+  arrived while the stats block was a **280px** aside beside the deck (`STATS_WIDTH_PX`, `w-70`)
+  that drew its own scrollbar. 280 less `p-3.5` on both sides and a 1px border is **250px** of
+  content; nine 20px cells at `gap-1` are **212**, ten would be **236**, and 14px is not enough
+  for a scrollbar the platform draws at roughly **15**. Widening the panel was the wrong half to
+  give: that constant is what the `DECK_FLOOR` table measures the deck column against, so 24px of
+  panel is 24px off the deck at every window size in that table — and a bar is cheaper than a
+  deck. So the ten-bar arm narrowed to **18px** (`10 × 18 + 9 × 4 = 216`) and was measured in the
+  window at exactly that.
+  **Then `main` moved the stats into a full-width band below the deck and the constraint stopped
+  existing** — there is no 250px budget, and the block no longer scrolls (`DeckEditor`'s section
+  does), so there is no scrollbar to leave room for either. A tenth bar now costs nothing anybody
+  was spending, and the chart is back to one cell width in both arms. **The compromise was
+  correct and is gone**, which is worth having in writing: a number carried forward after its
+  reason has been deleted is indistinguishable from a number nobody understood.
+  **The 4px gap is what stayed put throughout** — it is the whole of what makes two `bg-surface`
+  tracks read as two bars, and closing it to buy width turns the chart into one block. The width
+  is written out whole (`w-5`) because Tailwind scans source text and one assembled from a number
+  emits no rule at all.
 - **A deck card is the whole card, and the app's marks are overlays on it.** Both picture views
   drew the 626×457 `art` crop inside three app-built bands until 2026-08-12, which showed the one
   part of a card that does not say what it is: no printed frame, no type line, no rules text, no
