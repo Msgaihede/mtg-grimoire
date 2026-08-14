@@ -1,16 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type ComponentProps,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { Figure, FigureRow } from "@/components/Figure";
 import { FILTER_CONTROL, FILTER_FOCUS, ResetAll, ToggleChip } from "@/components/FilterChips";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
-import { finishLabel } from "@/lib/finish";
+import { finishLabel, isFinish } from "@/lib/finish";
 import {
   ipc,
   ipcError,
@@ -65,6 +75,43 @@ function wishLabel(row: WishRow): string {
 /** Copies still to find. Never negative: a wish over-covered is covered, not owed. */
 function missingOf(row: WishRow): number {
   return Math.max(0, row.quantity - row.ownedQuantity);
+}
+
+/**
+ * The printing a right-click on a **pinned** wish is about.
+ *
+ * `cardId` is the caller's rather than the row's, and that is the whole of how this list's one
+ * peculiarity is enforced: a wish with no `card_id` is for the *card*, so there is no printing
+ * to copy a name from, link to, or record a copy of — and the menu is not offered at all. The
+ * same rule decides whether the row opens the card and whether it can be dragged.
+ *
+ * **The preferred finish travels, where there is one.** A wish *for the foil* is a different
+ * wish and is not filled by the nonfoil, so "Add to → Collection" records the finish the wish
+ * asked for rather than asking again. `isFinish` guards it because
+ * `wishlist_entries.preferred_finish` is TEXT with a CHECK rather than an enum this side knows.
+ *
+ * `finishes` is `null` — a wish carries no printing's finish list — so a wish with no
+ * preference falls to the menu's own rule for an unknown list, which is nonfoil.
+ */
+function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
+  const preferred = row.preferredFinish;
+  return {
+    cardId,
+    // Never null: a wish carries its own name, because it outlives the printing it was made
+    // from and may never have had one.
+    name: row.name,
+    // An *orphaned* pinned wish has neither — the join found no card — and the row already
+    // draws that as "— · —". The Scryfall link is a dead one for those, which is the same
+    // thing the row itself says about them.
+    setCode: row.setCode ?? "",
+    collectorNumber: row.collectorNumber ?? "",
+    oracleId: row.oracleId,
+    finishes: null,
+    finish: preferred !== null && isFinish(preferred) ? preferred : undefined,
+    // The one thing `WishRow` carries that this list never draws, carried for exactly this and
+    // for the drag beside it: a menu add is filed by what the card does.
+    typeLine: row.typeLine,
+  };
 }
 
 /**
@@ -260,6 +307,25 @@ export function WishlistPage() {
     return { total, unpriced };
   }, [rows]);
 
+  /**
+   * The right-click menu, as one object for the whole page — `CardMenuDeps` is built per
+   * surface, never per row.
+   *
+   * `rowMenu` answers `undefined` for a wish with no printing, which is what leaves those rows
+   * without a menu: an absent `onContextMenu` is the same thing to the list as a row that never
+   * asked for one, and the reader gets the app's plain suppression instead of a panel about a
+   * card this row cannot name.
+   */
+  const { menu } = useContextMenu();
+  const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  const rowMenu = useCallback(
+    (row: WishRow) =>
+      row.cardId === null
+        ? undefined
+        : menu(() => buildCardMenu(wishTarget(row, row.cardId!), menuDeps)),
+    [menu, menuDeps],
+  );
+
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write, not either of them: with `isError` on both, a refused stepper press
   // would leave "Could not change your wishlist" on screen while the reader went on to remove
@@ -340,6 +406,27 @@ export function WishlistPage() {
           )}
         </AnimatePresence>
 
+        {/* A write the right-click menu started and the backend refused. Its own banner rather
+            than a line in the one above: that one is about this list's own controls — a stepper
+            press, a removal — and this one is about a card the reader filed somewhere from a
+            menu that has already closed.
+
+            It has to be here at all because the menu cannot report it. `ctx.run` closes the
+            panel before a row's handler runs, so by the time an answer arrives there is no menu
+            left to put a sentence in. */}
+        <AnimatePresence initial={false}>
+          {menuFailure && (
+            <motion.div {...statusLine} className="overflow-hidden">
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                {menuFailure}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {!empty && (
           <WishlistTable
             rows={rows}
@@ -350,6 +437,7 @@ export function WishlistPage() {
             onNeedNextPage={onNeedNextPage}
             onSetQuantity={onSetQuantity}
             onRemove={onRemove}
+            rowMenu={rowMenu}
             marketplace={marketplace}
           />
         )}
@@ -694,6 +782,7 @@ function WishlistTable({
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  rowMenu,
   marketplace,
 }: {
   rows: WishRow[];
@@ -708,6 +797,12 @@ function WishlistTable({
   onNeedNextPage: () => void;
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
+  /**
+   * What a row offers on a right-click — a ready-made `onContextMenu` handler, or `undefined`
+   * for a row that has no menu. Per row rather than for the list, because on this list it is
+   * per row: an any-printing wish names no card to ask a question about.
+   */
+  rowMenu?: (row: WishRow) => ((e: ReactMouseEvent) => void) | undefined;
   /** Which marketplace the Cost column quotes. Passed rather than read here so the list and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
@@ -749,6 +844,11 @@ function WishlistTable({
             name={row.name}
             typeLine={row.typeLine}
             tabIndex={0}
+            // The menu goes on exactly the rows that open the card, and for the same reason:
+            // both need a printing. A right-click is not an activation — `onClick` below is a
+            // left click and `onKeyDown` is the two keys — so asking about the row does not
+            // also open it in the pane.
+            onContextMenu={rowMenu?.(row)}
             onClick={() => selectCard(row.cardId!)}
             onKeyDown={(e) => {
               if (e.key !== "Enter" && e.key !== " ") return;

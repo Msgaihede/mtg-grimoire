@@ -243,7 +243,9 @@ describe("CollectionPage", () => {
    * other currency is not on screen at all.
    */
   it("adds the collection up in the selected currency, and says whose prices they are", async () => {
-    collectionSummary.mockResolvedValue(summary({ totalCards: 1240, uniqueCards: 812, value: 9876.5 }));
+    collectionSummary.mockResolvedValue(
+      summary({ totalCards: 1240, uniqueCards: 812, value: 9876.5 }),
+    );
     wrap(<CollectionPage />);
 
     expect(await screen.findByText("1,240")).toBeInTheDocument();
@@ -271,7 +273,9 @@ describe("CollectionPage", () => {
    */
   it("adds it up in euros when the marketplace is Cardmarket", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    collectionSummary.mockResolvedValue(summary({ totalCards: 1240, uniqueCards: 812, value: 8100 }));
+    collectionSummary.mockResolvedValue(
+      summary({ totalCards: 1240, uniqueCards: 812, value: 8100 }),
+    );
     wrap(<CollectionPage />);
 
     await waitFor(() => expect(screen.getByText("€8,100.00")).toBeInTheDocument());

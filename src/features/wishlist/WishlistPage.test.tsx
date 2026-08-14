@@ -16,12 +16,24 @@ const wishlistRemove = vi.hoisted(() => vi.fn());
 /** Which marketplace the Cost column and the header figure quote. An unmocked command is a
  *  rejected query that silently resolves to the default, so it is answered explicitly. */
 const getMarketplace = vi.hoisted(() => vi.fn());
+// What the row's own context menu writes. Both are real `invoke`s, so an unmocked one is a
+// rejection about a missing Tauri runtime rather than a call anything here could read.
+const collectionAdd = vi.hoisted(() => vi.fn());
+const wishlistAdd = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { wishlistList, wishlistSetQuantity, wishlistRemove, getMarketplace },
+  ipc: {
+    wishlistList,
+    wishlistSetQuantity,
+    wishlistRemove,
+    wishlistAdd,
+    collectionAdd,
+    getMarketplace,
+  },
 }));
 
 import { WishlistPage } from "./WishlistPage";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useAppStore } from "@/lib/store";
 
 /** A wish pinned to one printing, one copy of four already in the binder. */
@@ -95,12 +107,34 @@ const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 const total = async (currency: "USD" | "EUR" = "USD") =>
   (await screen.findByText(`Still to buy (${currency})`)).closest("div") as HTMLElement;
 
+/**
+ * The page, under the two providers `App` mounts above it.
+ *
+ * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
+ * is above it (so that thirteen surfaces stay renderable on their own), which means a page
+ * rendered bare would open nothing and pass every menu assertion below by never being asked.
+ */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return {
     client,
-    ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
+    ...render(
+      <QueryClientProvider client={client}>
+        <ContextMenuProvider>{ui}</ContextMenuProvider>
+      </QueryClientProvider>,
+    ),
   };
+}
+
+/**
+ * A right-click, and nothing awaited.
+ *
+ * A real `MouseEvent` rather than `fireEvent.contextMenu`, because the handler reads
+ * `clientX`/`clientY` to place the panel — and `bubbles`, because the surface's handler is on
+ * the row, never on the cell the pointer happened to be over.
+ */
+function rightClick(element: HTMLElement): void {
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
 /**
@@ -115,6 +149,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  collectionAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
+  wishlistAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   wishlistList.mockReset().mockResolvedValue(page([BOLT]));
   wishlistSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 5, removed: false });
   wishlistRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
@@ -605,5 +641,74 @@ describe("WishlistPage", () => {
     const again = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(again.started).toBe(true);
     await again.cancel();
+  });
+});
+
+/**
+ * The card menu, on the one list in this app whose rows may not name a card at all.
+ *
+ * The same rule that decides whether a row opens the card and whether it can be dragged
+ * decides this: a wish with no `card_id` is for the *card*, and there is no printing for a
+ * menu to copy a name from, link to, or add a copy of.
+ */
+describe("the card menu", () => {
+  it("opens on a right-click of a pinned wish, without opening the card", async () => {
+    wrap(<WishlistPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    rightClick(row);
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    // The pane belongs to a left click; a right-click asks a question about the row. `App`
+    // owns the pane, so the store is the whole of what opening the card means from here —
+    // asserting on a `complementary` this page never renders would be an assertion that
+    // cannot fail.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * A wish may prefer a finish, and a wish *for the foil* is not filled by the nonfoil — so
+   * the copy this menu records is the one the wish was for, and the reader is not asked.
+   */
+  it("records the wish's preferred finish without asking", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    // An action, not a submenu: the surface named the finish.
+    expect(collection).not.toHaveAttribute("aria-haspopup", "menu");
+
+    await user.click(collection);
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "c1",
+        finish: "foil",
+        condition: "NM",
+        quantity: 1,
+      }),
+    );
+  });
+
+  /**
+   * The negative half, and it is the reason this suite renders both rows: an absence proves
+   * nothing unless the same gesture on the row beside it produces the menu.
+   */
+  it("offers no menu on a wish for any printing, which names no card to ask about", async () => {
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+    const any = await screen.findByRole("row", { name: /Ancestral Recall/ });
+
+    rightClick(any);
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // The same press one row up, so the absence above is about the wish rather than about
+    // the harness.
+    rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
   });
 });

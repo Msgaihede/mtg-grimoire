@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  type ComponentProps,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useEffect, useRef, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";

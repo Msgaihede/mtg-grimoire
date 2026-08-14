@@ -1073,9 +1073,7 @@ describe("the result layout toggle", () => {
 
     await screen.findByAltText("Lightning Bolt");
 
-    expect(
-      screen.getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true })).toBeInTheDocument();
     expect(screen.getByText(`, ${GAME_CHANGER_LABEL}`)).toHaveClass("sr-only");
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAccessibleName(
       "Lightning Bolt",
