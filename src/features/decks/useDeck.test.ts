@@ -59,6 +59,11 @@ const DECK: DeckRow = {
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
+  // v13's, and off for the same reason `theoryEnabled` is: the plain curve until the reader
+  // asks for the split. This hook never reads it — it is a `DeckPatch` field like any other and
+  // rides through `update` untouched — so it is here to satisfy the row's shape, not to be
+  // asserted on.
+  separateXGroup: false,
 };
 
 /**

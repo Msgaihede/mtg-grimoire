@@ -39,6 +39,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     facetCards: vi.fn().mockResolvedValue({
       colors: {},
       manaValues: {},
+      manaX: 0,
       formats: {},
       sets: {},
       owned: { owned: 0, missing: 0 },

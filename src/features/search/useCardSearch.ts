@@ -88,6 +88,9 @@ export interface FilterState {
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
+  /** The X chip — "also the cards with `{X}` in their printed cost". The other half of the
+   *  same question `manaValues` asks, which is why the two are counted as one kind below. */
+  manaX: boolean;
   /** `false` is a filter too — "the cards I do *not* have" — so this is compared against
    *  `undefined` rather than tested for truthiness. */
   owned: boolean | undefined;
@@ -106,7 +109,11 @@ export function activeFilterCount(f: FilterState): number {
     f.format.length > 0,
     f.colors.length > 0,
     f.sets.length > 0,
-    f.manaValues.length > 0,
+    // One term, not two: the X chip rides *inside* the mana-value group and is OR'd with the
+    // numerals, so "3 and X" is one thing that is on for the same reason three colours are.
+    // It has to be in here at all, though — an X-only search with no term for it would count
+    // zero, hide Reset all, and leave a reader who filtered into nothing with no way out.
+    f.manaValues.length > 0 || f.manaX,
     f.owned !== undefined,
   ].filter(Boolean).length;
 }
@@ -199,6 +206,11 @@ export function useCardSearch() {
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  // The other half of the mana-value question, and **additive rather than exclusive**:
+  // Scryfall's `cmc` already counts `{X}` as zero, so `{X}{B}{B}{B}` answers the `3` chip and
+  // this one both, and a reader who presses both finds it once. Its own state and not a
+  // sentinel inside `manaValues`, because it is not a mana value.
+  const [manaX, setManaX] = useState(false);
   const [owned, setOwned] = useState<boolean | undefined>(undefined);
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
   // should not also throw away the order you chose to read it in.
@@ -243,6 +255,11 @@ export function useCardSearch() {
     colorsParam ?? "",
     setsParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
+    // **A segment of its own, and the whole feature turns on it being here.** X is a second
+    // axis over the same chips, so a key that carried only the numerals would answer "3, and
+    // also X" out of the cached pages of plain "3" — instantly, from local SQLite, with no
+    // spinner and nothing to notice. Spelled rather than stringified, like its neighbours.
+    manaX ? "x" : "",
     // Three states in one segment, spelled rather than stringified: `String(undefined)` and
     // `String(false)` are both truthy strings, and a key that cannot tell "off" from "the
     // ones I do not own" answers one with the other's cached pages.
@@ -276,6 +293,11 @@ export function useCardSearch() {
         colors: colorsParam,
         sets: setsParam,
         manaValues: manaParam,
+        // Absent rather than `false`, which is the backend's own default: an off chip is not
+        // a filter, and sending one would make the payload lie about intent the way an empty
+        // `text` would. `true` *widens* — it adds the `{X}` cards to whatever the numerals
+        // matched — so it is only ever a statement, never a narrowing nobody asked for.
+        manaX: manaX || undefined,
         // Sent only when it is set, so an untouched filter row produces exactly the payload
         // it always did. `false` is meaningful here and `undefined` is not sent at all.
         owned,
@@ -326,6 +348,10 @@ export function useCardSearch() {
     colors: colorsParam,
     sets: setsParam,
     manaValues: manaParam,
+    // Spelled exactly as the page's payload spells it — `|| undefined` and not `manaX` —
+    // because React Query hashes this object with its `undefined` values dropped: a bare
+    // `false` would mint a second key for the search an untouched row has always had.
+    manaX: manaX || undefined,
     owned,
     // A filter the facet counts must carry, unlike `collapse`: it decides which printings
     // exist for this search, so a count taken without it would offer a set or a mana value
@@ -345,6 +371,16 @@ export function useCardSearch() {
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    /**
+     * Also match the cards whose printed cost contains `{X}`.
+     *
+     * **Additive, never exclusive.** It is OR'd with the numeral chips exactly as they are
+     * OR'd with each other, so pressing `3` and `X` asks for "costs 3, or has an X" and finds
+     * `{X}{B}{B}{B}` once rather than twice. A filter for the purposes of `activeFilterCount`
+     * and `resetAll`, and counted with `manaValues` as the one question the group asks.
+     */
+    manaX,
+    toggleManaX: () => setManaX((on) => !on),
     /**
      * `true` narrows to printings the collection has an entry for, `false` to those it does
      * not, `undefined` asks nothing. **An entry, not a copy**: a row emptied to zero passes
@@ -372,7 +408,7 @@ export function useCardSearch() {
     unplayable,
     toggleUnplayable: () => setUnplayable((on) => !on),
     /** How many kinds of filter are on — the number on the Reset all badge. */
-    activeCount: activeFilterCount({ text, format, colors, sets, manaValues, owned }),
+    activeCount: activeFilterCount({ text, format, colors, sets, manaValues, manaX, owned }),
     /**
      * The columns this list is ordered by, first one deciding. Empty is the view's own
      * default: relevance when there is a query, name order when there is not.
@@ -393,6 +429,7 @@ export function useCardSearch() {
       setColors([]);
       setSets([]);
       setManaValues([]);
+      setManaX(false);
       setOwned(undefined);
     },
     /**
@@ -435,7 +472,13 @@ export function useCardSearch() {
      * and "try another word".
      */
     unfiltered:
-      !debouncedText && !format && !colorsParam && !setsParam && !manaParam && owned === undefined,
+      !debouncedText &&
+      !format &&
+      !colorsParam &&
+      !setsParam &&
+      !manaParam &&
+      !manaX &&
+      owned === undefined,
   };
 }
 

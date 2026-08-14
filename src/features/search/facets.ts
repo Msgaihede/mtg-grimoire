@@ -10,31 +10,47 @@ import type { FacetResponse } from "@/lib/ipc";
  */
 
 /**
+ * The greying rule itself, over the one count a control was given.
+ *
+ * **Two arms, and the order matters.** A *selected* option is never greyed — the way out of a
+ * dead end has to stay open, and if a search matches nothing at all then every unselected
+ * option greys and `Reset all` is the escape. **An absent count fails open**, because
+ * not-greyed means "we don't know" while greyed means "this is empty", and only one of those
+ * is safe to guess.
+ *
+ * Split out from {@link optionDisabled} for the X chip, whose count is a *field* of the facet
+ * response rather than a key in a map of them — `manaX` sits beside `manaValues` because X is
+ * not a mana value. Two shapes of answer, and one rule: a second copy of these two lines next
+ * to the map lookup is how a row ends up greying by two rules that agree until they don't.
+ */
+export function countDisabled(count: number | undefined, selected: boolean): boolean {
+  if (selected || count === undefined) return false;
+  return count === 0;
+}
+
+/**
  * Whether a filter option should be drawn as unavailable.
  *
- * **Three rules, and the order matters.** A *selected* option is never greyed — the way out
- * of a dead end has to stay open, and if a search matches nothing at all then every
- * unselected option greys and `Reset all` is the escape. **An absent answer fails open**,
- * because not-greyed means "we don't know" while greyed means "this is empty", and only one
- * of those is safe to guess. And a *key* that is absent from a present answer is treated the
- * same way, for the same reason: `FacetResponse` promises every key on a **ready** response
- * (`sets` sends the whole corpus, zeros included), so a missing one is either a broken
- * contract or two sources disagreeing — the set picker's options come from a session-cached
- * `list_sets()` while its counts come from the index, so a set the corpus has since lost is
- * a code the picker still offers and the counts have never heard of. Both readings are
- * "unknown", and neither is an empty option.
+ * A lookup in front of {@link countDisabled}, and the lookup is where the third rule lives: a
+ * *key* that is absent from a present answer is treated as an absent count, for the reason an
+ * absent answer is. `FacetResponse` promises every key on a **ready** response (`sets` sends
+ * the whole corpus, zeros included), so a missing one is either a broken contract or two
+ * sources disagreeing — the set picker's options come from a session-cached `list_sets()`
+ * while its counts come from the index, so a set the corpus has since lost is a code the
+ * picker still offers and the counts have never heard of. Both readings are "unknown", and
+ * neither is an empty option.
  *
- * That last arm is also what makes a cold response harmless if one ever reaches here without
- * going through {@link facetsOrUndefined}: its maps are empty rather than zeroed, so every
- * lookup misses and every control stays live.
+ * `counts?.[key]` collapses "no answer" and "no such key" into the one `undefined` the rule
+ * already fails open on. That is also what makes a cold response harmless if one ever reaches
+ * here without going through {@link facetsOrUndefined}: its maps are empty rather than zeroed,
+ * so every lookup misses and every control stays live.
  */
 export function optionDisabled(
   counts: Record<string, number> | undefined,
   key: string,
   selected: boolean,
 ): boolean {
-  if (selected || !counts) return false;
-  return counts[key] === 0;
+  return countDisabled(counts?.[key], selected);
 }
 
 /**

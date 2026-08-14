@@ -65,7 +65,16 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
           ))}
         </div>
 
-        <ManaValueChips selected={collection.manaValues} onToggle={collection.toggleManaValue} />
+        {/* No facet props on either axis: this bar wires no counts at all (see the format
+            select below), so every chip here keeps the plain label it has always had and
+            nothing greys. The X chip is the same chip the search's row draws, minus the
+            sentence a count would add to it. */}
+        <ManaValueChips
+          selected={collection.manaValues}
+          onToggle={collection.toggleManaValue}
+          xSelected={collection.manaX}
+          onToggleX={collection.toggleManaX}
+        />
 
         <SetCombobox selected={collection.sets} onToggle={collection.toggleSet} />
       </div>

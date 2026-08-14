@@ -18,6 +18,8 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleSet: vi.fn(),
     manaValues: [] as number[],
     toggleManaValue: vi.fn(),
+    manaX: false,
+    toggleManaX: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
     ...over,
@@ -71,6 +73,33 @@ describe("FilterBar", () => {
     await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
 
     expect(toggleManaValue).toHaveBeenCalledWith(3);
+  });
+
+  /**
+   * X is the tenth chip of the same group, and it is a *second axis* over it rather than a
+   * tenth value: `cmc` counts `{X}` as zero, so `{X}{B}{B}{B}` sits in the 3 bucket and
+   * answers this chip as well. The two are OR'd, so both being on is a real state and the row
+   * has to show it — a chip that cleared its neighbours would be a different filter.
+   */
+  it("offers X at the end of the mana values, additively", async () => {
+    const toggleManaX = vi.fn();
+    const toggleManaValue = vi.fn();
+    render(
+      <FilterBar search={search({ manaValues: [3], manaX: true, toggleManaX, toggleManaValue })} />,
+    );
+
+    const chip = screen.getByRole("button", { name: "Cards with X in their mana cost" });
+    expect(chip).toHaveTextContent("X");
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Mana value 3" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(chip);
+
+    expect(toggleManaX).toHaveBeenCalled();
+    expect(toggleManaValue).not.toHaveBeenCalled();
   });
 
   /** Nothing to reset, nothing to say — an always-visible Reset is a control that is
@@ -140,6 +169,10 @@ describe("FilterBar", () => {
 const facets = (over: Partial<FacetResponse> = {}): FacetResponse => ({
   colors: { W: 10, U: 10, B: 10, R: 10, G: 10, C: 10 },
   manaValues: Object.fromEntries(MANA_VALUES.map((v) => [String(v), 5])),
+  // A field beside that map rather than a key inside it: X is not a mana value, and a
+  // sentinel key would be one the backend, the fake and this fixture all had to agree was
+  // not a number. Five, like the values, so the whole group starts live.
+  manaX: 5,
   formats: Object.fromEntries(FORMATS.map((f) => [f.value, 5])),
   sets: { lea: 5 },
   owned: { owned: 3, missing: 37 },
@@ -178,14 +211,76 @@ describe("FilterBar, greyed by its facets", () => {
   });
 
   /**
+   * The X chip greys by the rule its neighbours grey by and for the same reason: Rust counts
+   * it off the same `Skip::Mana` base the 0–8 counts come from, so a zero here means "nothing
+   * in this search has an X in its cost" exactly as a zero on `7` means nothing costs seven.
+   * The only difference is the shape of the answer — a field beside the map rather than a key
+   * in it — which is why `countDisabled` exists rather than a second rule written next to it.
+   */
+  it("greys X when nothing in this search has one, and keeps it reachable", async () => {
+    const toggleManaX = vi.fn();
+    render(<FilterBar search={search({ toggleManaX, facets: facets({ manaX: 0 }) })} />);
+
+    const chip = screen.getByRole("button", { name: /^Cards with X in their mana cost\b/ });
+    expect(chip).toHaveAttribute("aria-disabled", "true");
+    expect(chip).not.toBeDisabled();
+    // Its neighbours are untouched: one zero is one chip, never the group.
+    expect(screen.getByRole("button", { name: /^Mana value 3\b/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+
+    await userEvent.click(chip);
+
+    expect(toggleManaX).not.toHaveBeenCalled();
+  });
+
+  /** The way out of a dead end stays open here too: pressing an X chip that is already on is
+   *  how the reader gets rid of the filter that emptied their search. */
+  it("never greys X while it is switched on", () => {
+    render(<FilterBar search={search({ manaX: true, facets: facets({ manaX: 0 }) })} />);
+
+    expect(
+      screen.getByRole("button", { name: /^Cards with X in their mana cost\b/ }),
+    ).not.toHaveAttribute("aria-disabled");
+  });
+
+  /** One sentence in one voice: X's tooltip is built by the same `facetTitle` as every other
+   *  chip's, off the label the chip itself spells, so the greyed row reads as one row. */
+  it("captions X in the same sentence as its neighbours", () => {
+    const { rerender } = render(<FilterBar search={search({ facets: facets({ manaX: 812 }) })} />);
+
+    // **The count is part of the accessible name, not only the tooltip** — every colour and
+    // mana chip beside it spends one string as both (`aria-label="White — 10 printings"`), so
+    // a `title` a screen reader never reaches is not where this row keeps its numbers. X reads
+    // the same way or it is a tenth chip that says less than the nine.
+    const counted = screen.getByRole("button", {
+      name: "Cards with X in their mana cost — 812 printings",
+    });
+    expect(counted).toHaveAttribute("title", "Cards with X in their mana cost — 812 printings");
+    expect(counted).toHaveTextContent("X");
+
+    rerender(<FilterBar search={search({ facets: facets({ manaX: 0 }) })} />);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Cards with X in their mana cost — nothing in this search",
+      }),
+    ).toHaveTextContent("X");
+  });
+
+  /**
    * A cold index, a failed query and the first render all arrive here as no facets at all,
    * because `useCardSearch` collapses `ready: false` to `undefined` before the row ever sees
    * it (`facetsOrUndefined`). Not-greyed means "we don't know".
+   *
+   * X is in this list for a reason the others are not: its count is a number, so a cold
+   * response carries `0` where the maps carry an absent key, and it is the one chip that
+   * would grey if a raw response ever reached this row.
    */
   it("leaves every control live while the index is still building", () => {
     render(<FilterBar search={search()} />);
 
-    for (const name of [/^Mana value 7\b/, /^White\b/, /^Owned\b/]) {
+    for (const name of [/^Mana value 7\b/, /^Cards with X\b/, /^White\b/, /^Owned\b/]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("aria-disabled");
     }
     expect(screen.getByRole("option", { name: "Modern" })).not.toBeDisabled();
@@ -238,7 +333,9 @@ describe("FilterBar, greyed by its facets", () => {
   /** Native `<option disabled>` — the one place a real `disabled` is right, because a listbox
    *  option is not a tab stop to lose. */
   it("greys a format nothing in this search is legal in", () => {
-    render(<FilterBar search={search({ facets: facets({ formats: { modern: 0, legacy: 4 } }) })} />);
+    render(
+      <FilterBar search={search({ facets: facets({ formats: { modern: 0, legacy: 4 } }) })} />,
+    );
 
     expect(screen.getByRole("option", { name: "Modern" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Legacy" })).not.toBeDisabled();
@@ -288,9 +385,9 @@ describe("FilterBar, greyed by its facets", () => {
         search={search({ owned: false, facets: facets({ owned: { owned: 3, missing: 37 } }) })}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: "Missing — 37 printings" }),
-    ).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "Missing — 37 printings" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 });
 

@@ -51,6 +51,7 @@ const BURN: DeckRow = {
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
+  separateXGroup: false,
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];
