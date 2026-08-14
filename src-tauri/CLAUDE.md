@@ -316,18 +316,19 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   plugin is initialised. The app's own questions are drawn in the page instead, which is
   deliberate rather than an oversight: a native message box cannot be styled, driven over CDP or
   read by the story runner.
-- **Both dialog verbs answer a _path_, and a path is not permission to write at it — which is why
-  each one has a Rust command behind it.** `deck_set_cover_image` takes the path `open()` gave and
-  Rust reads the file; `export_write_file` (`export.rs`) takes the path `save()` gave and Rust
-  writes the text. Doing either from the page would need an `fs:` permission, and **no `fs:`
-  permission is granted anywhere**. The export command is therefore the **second** command that
-  keeps that sentence true rather than the first crack in it, and it is the shape to copy: the day
-  one of these is "simplified" into a `writeTextFile` from the page, the answer is another
-  twelve-line command, not a wider capability. **`tauri-plugin-fs` and `rfd` entered `Cargo.lock`
-  transitively** as the dialog plugin's own dependencies and are **unreachable**:
-  `tauri_plugin_fs::init()` is never called — the registrations in `lib.rs` are single-instance,
-  opener, dialog and clipboard-manager — and the ACL would deny them even if it were. Adding a
-  plugin means adding its narrowest permission, never its `:default`.
+- **A dialog verb answers a _path_, and a path is not permission to touch what is at it — which is
+  why every one of them has a Rust command behind it.** `deck_set_cover_image` takes the path
+  `open()` gave and Rust reads the image; `deck_import_read_file` (`deck_import.rs`) takes a path
+  from the same picker and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
+  path `save()` gave and Rust writes the text. Doing any of that from the page would need an `fs:`
+  permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
+  rather than one precedent, and it is the shape to copy: the day one of these is "simplified"
+  into a `readTextFile`/`writeTextFile` from the page, the answer is another twelve-line command,
+  never a wider capability. **`tauri-plugin-fs` and `rfd` entered `Cargo.lock` transitively** as
+  the dialog plugin's own dependencies and are **unreachable**: `tauri_plugin_fs::init()` is never
+  called — `lib.rs` registers single-instance, opener, dialog, clipboard-manager, and the MCP
+  bridge in a debug build only — and the ACL would deny them even if it were. Adding a plugin
+  means adding its narrowest permission, never its `:default`.
 - **`tauri-plugin-clipboard-manager` is granted `clipboard-manager:allow-write-text` and
   deliberately not the read half.** Nothing in this app reads the clipboard; `:default` grants
   both, and a page that can read the clipboard can read whatever the reader last copied out of

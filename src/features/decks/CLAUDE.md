@@ -334,10 +334,14 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   failure the harness contract warns about, reproduced exactly.
 - **An import can be aimed at one pile, and it is a new argument on the import path rather than a
   new import path** (2026-08-14). A category heading's right-click opens the same dialog carrying
-  `forcedCategoryName`, and every line of the paste lands in that pile — **overriding
-  `autoCategoryFor`**, which is consistent with the rule the importer already follows (an add that
-  names a category is left untouched) and is what right-clicking a specific pile means. It is
-  applied in `buildImportPlan` and nowhere else, because **`plan.ts` makes every deck decision**;
+  `forcedCategoryName`, and the paste lands in that pile — **overriding `autoCategoryFor` and a
+  section heading both**, which is consistent with the rule the importer already follows (an add
+  that names a category is left untouched) and is what right-clicking a specific pile means. A
+  heading is what somebody else's exporter wrote; the right-click is the reader pointing at a
+  column of their own a moment ago, so the later and more specific naming wins. **The command zone
+  still outranks it**, applied in `toImportItems` after the pile is chosen — a commander goes to
+  the command zone whichever heading was right-clicked. It is applied in `categoryFor` and nowhere
+  else, because **`plan.ts` makes every deck decision**;
   the dialog only reports it, in the step-two heading (`Into <pile> · <deck>`). The argument is
   **optional and defaults to today's behaviour**, so the toolbar's own Import passes nothing and is
   unchanged — which is what keeps a shared importer from being reshaped by one caller.

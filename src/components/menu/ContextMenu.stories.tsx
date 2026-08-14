@@ -190,9 +190,9 @@ const RAMP_PILE: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp",
  * the groups a view drew.
  *
  * `Move to` is built from this, and that is what lets it reach a pile with no heading on the desk.
- * There is no `sortOptions` call anywhere near it: deck categories are one of exactly two
- * documented exemptions from the app's option-list rule, and Ramp sitting last is the reader
- * having put it there.
+ * There is no `sortOptions` call anywhere near it: deck categories are a documented exemption from
+ * the app's option-list rule — an order the reader arranged themselves — and Ramp sitting last is
+ * the reader having put it there.
  */
 const CATEGORIES: DeckCategory[] = [
   COMMANDER_ZONE,
@@ -582,8 +582,8 @@ export const GreyedCommander: Story = {
  * Built from `DeckEditor`'s own `categories` array and never from the groups a view drew, which
  * is what lets it reach a pile with **no heading on the desk**: an `auto` pile that has gone empty
  * draws nothing, so it is not a drop target and a drag cannot reach it. There is no `sortOptions`
- * call here — deck categories are one of exactly two documented exemptions from the app's
- * option-list rule, being an order the reader arranged themselves.
+ * call here — deck categories are a documented exemption from the app's option-list rule, being
+ * an order the reader arranged themselves.
  *
  * The card's own pile is greyed rather than dropped: "every category" is what makes the list
  * findable by position, and a row writing a move from a pile to itself would mean nothing.

@@ -15,9 +15,10 @@
  * facts in whatever order the query happened to produce — `list_sets` is newest-first,
  * `format_specs_list` is a seeded `sort_order`, the deck's categories are the order the
  * reader dragged them into — and every one of those is still the right thing for the backend
- * to say. What a `<select>` does with it is this file's business. The exceptions are listed
- * in `src/CLAUDE.md`; they are lists whose order *is* the information (a condition grade
- * runs Near Mint to Damaged) or which the reader arranged themselves.
+ * to say. What a `<select>` does with it is this file's business. **The rule the exceptions are
+ * granted by is in `src/CLAUDE.md`**, which deliberately keeps no list of them: a list is exempt
+ * when its order *is* the information (a condition grade runs Near Mint to Damaged) or when the
+ * reader arranged it themselves. Each one carries a comment at its own site saying which.
  */
 
 /**

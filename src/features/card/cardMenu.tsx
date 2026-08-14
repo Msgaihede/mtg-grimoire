@@ -605,11 +605,11 @@ export function useCardToDeck(): CardToDeck {
  * `sortOrder`, then name, then id. A folder tree is an arrangement the reader made, which is one
  * of the two kinds of list `src/lib/options.ts` exempts — the other kind being a list whose order
  * *is* the information, like a grade scale — and it is the same argument deck categories are
- * exempt under: re-sorting it here
- * would list a reader's drawers in one order in the gallery and another in this picker, over
- * the same cabinet, which reads as a bug and is one. **Decks within a level still go through
- * `sortOptions`**: `deck_list` answers archived-last, most-recently-touched-first, which is a
- * gallery's order and not a list anybody looks a name up in.
+ * exempt under: re-sorting it here would list a reader's drawers in one order in the gallery and
+ * another in this picker, over the same cabinet, which reads as a bug and is one. **Decks within
+ * a level still go through `sortOptions`**: `deck_list` answers archived-last,
+ * most-recently-touched-first, which is a gallery's order and not a list anybody looks a name up
+ * in.
  *
  * A folder holding neither a deck nor a folder with a deck in it is dropped — an empty submenu
  * is a row that opens onto nothing.

@@ -134,9 +134,9 @@ describe("buildDeckCardMenu", () => {
   });
 
   /**
-   * **Deck categories are one of exactly two documented exemptions from `sortOptions`** — an
-   * order the reader arranged themselves — so the alphabet must not touch this list. Sorted, it
-   * would read Commander, Companion, Main deck, Recursion, Sideboard.
+   * **Deck categories are a documented exemption from `sortOptions`** — an order the reader
+   * arranged themselves — so the alphabet must not touch this list. Sorted, it would read
+   * Commander, Companion, Main deck, Recursion, Sideboard.
    */
   it("keeps the reader's own category order rather than sorting it", () => {
     const move = find(buildDeckCardMenu(bolt(), deps()), "Move to") as MenuSubmenu;
