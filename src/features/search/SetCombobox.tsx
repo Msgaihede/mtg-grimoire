@@ -2,25 +2,40 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
+import { FILTER_FOCUS, FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { PopupPanel } from "@/components/PopupListbox";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { LAYER } from "@/lib/layers";
+import { sortOptions } from "@/lib/options";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { facetTitle, optionDisabled } from "./facets";
 
 /**
- * Options rendered at once.
+ * Options rendered before the reader asks for more.
  *
  * There are ~1 050 sets and the list is filtered as the reader types, so anything past
  * the first screenful is scrolled past rather than read. Capping keeps the popup out of
  * the virtualiser's territory — a 1 050-row `<ul>` inside a dropdown is a jank source for
  * a control that is open for two seconds. The footer says when the cap is in force, so a
  * short list is never mistaken for the whole answer.
+ *
+ * **A first page and not a ceiling**: {@link MORE_STEP} reveals the next one, so the whole
+ * list is reachable by both the mouse and the arrow keys. Typing is still the fast way
+ * through 1 047 sets and the footer goes on saying so.
  */
-const MAX_OPTIONS = 50;
+const MAX_OPTIONS = 100;
+
+/**
+ * How many more rows one press of the footer's control reveals.
+ *
+ * Half a page rather than a whole one: a press is cheap and the reader is scanning, so the
+ * cost of asking again is a smaller cost than a repaint that lands them somewhere they did
+ * not recognise. The control is worded with the number it will *actually* add, which on the
+ * last press is whatever is left rather than this.
+ */
+const MORE_STEP = 50;
 
 /**
  * How many sets one search may name.
@@ -74,6 +89,32 @@ export function SetCombobox({
   const [query, setQuery] = useState("");
   /** Which option the keyboard is on. Focus stays in the box; this moves instead. */
   const [active, setActive] = useState(0);
+  /**
+   * How many rows are drawn. Reset to {@link MAX_OPTIONS} on a new query and on each open —
+   * beside the `setActive(0)` that resets the cursor for the same reason, rather than from an
+   * effect that would have to work out which change it was reacting to. A new query is a new
+   * list, and how deep the reader had paged into the old one means nothing in it.
+   */
+  const [shown, setShown] = useState(MAX_OPTIONS);
+  /**
+   * Which sets float to the top — **a snapshot taken when the popup opens, not `selected`.**
+   *
+   * The reason is the press itself. Ordering on the live `selected` would move a row to the
+   * top of the list *because the reader just clicked it*, so the second set they wanted is no
+   * longer under the cursor and the third click lands on whatever slid up — in a control whose
+   * whole purpose is picking several sets in a row, and whose own rows already go to the
+   * trouble of an `onMouseDown` preventDefault so the mouse cannot disturb the keyboard.
+   *
+   * Frozen for the length of one opening, it buys the thing the pinning was for — the sets
+   * already ticked are visible and un-tickable rather than stranded past the end of the page —
+   * without the list ever moving under a press. The other two levels cannot move a row on a
+   * pick either: `facets::compute` skips the dimension it counts, so ticking a set does not
+   * change a single set's count, and a rank is a fact about the typed needle.
+   *
+   * It also covers the case pinning exists for in reverse: un-ticking a set that this search
+   * has nothing in would otherwise sink it out of the page mid-gesture, leaving no way back.
+   */
+  const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set(selected));
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -92,6 +133,24 @@ export function SetCombobox({
     // for the rest of the session with no way to ask again.
     staleTime: (q) => (q.state.data?.length ? Infinity : 0),
   });
+
+  /**
+   * Everything that belongs to one *opening* rather than to the mount: the cursor, how far the
+   * reader has paged, and which sets are floated to the top.
+   *
+   * Deliberately not an effect on `open`. The two callers are the only two ways in, and doing
+   * it there keeps the state changes in the same batch as `setOpen` — an effect would take a
+   * snapshot one commit after the first render of the list it is meant to order. Note what is
+   * *not* here: the query, which survives an opening on purpose so reopening the picker shows
+   * the reader the list they left. (`setShown` is reset by the query's own `onChange` for the
+   * separate reason that a new query is a new list; `pinned` is not, because the sets already
+   * ticked are the same sets whatever has been typed.)
+   */
+  const startOpening = useCallback(() => {
+    setActive(0);
+    setShown(MAX_OPTIONS);
+    setPinned(new Set(selected));
+  }, [selected]);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -131,19 +190,60 @@ export function SetCombobox({
       // Name matches anywhere, code from the start: three letters inside a longer code
       // are a coincidence, three letters inside a set's name are usually what was meant.
       .filter((s) => !needle || s.name.toLowerCase().includes(needle) || s.code.startsWith(needle));
-    if (!needle) return found;
-    // Typing a whole set code is an unambiguous request for that set, and without this it
-    // is the one result you cannot reach: "lea" is Limited Edition Alpha, but it also
-    // appears in six League Tokens sets, nine Arena Leagues, Oversized League Prizes and
-    // M15 Pre**relea**se Challenge — seventeen name matches that the cap can push the
-    // exact one out of entirely. Sorted rather than filtered, because the rest are still
-    // real matches and the reader may have meant one of them.
+    // Three grouping levels, then the alphabet — `sortOptions` settles them in order and
+    // `list_sets`'s own newest-first order survives none of it. That order is still the
+    // right thing for the backend to answer; what the picker draws is a display decision.
     //
-    // `sort` is stable, so within each rank the backend's own order survives.
-    return found.sort((a, b) => rank(a.code, needle) - rank(b.code, needle));
-  }, [sets.data, query]);
+    // **1 — picked first.** The list is paged, and a set the reader has already ticked must
+    // never sit past the end of the page, where they can neither see it nor un-tick it.
+    // It beats the facet level deliberately: a picked row is drawn at the top even if it
+    // somehow greyed. (It cannot today — `optionDisabled`'s first rule is that a selected
+    // option is never greyed — but the order is written so the two could not fight.)
+    // Read off `pinned` and **not `selected`**, which is what keeps the list still under a
+    // press; see that state's own doc for the gesture it protects.
+    //
+    // **2 — then what this search has printings for**, greyed rows sinking rather than
+    // disappearing, for the same reason they are greyed and not filtered. The predicate is
+    // `optionDisabled` and **not `canToggle`**: the two differ by the `MAX_SETS` cap, and
+    // at the cap every unpicked row becomes untoggleable at once — so folding the cap in
+    // here would re-sort the whole list the instant the 64th set is ticked. The cap is a
+    // transient global state; the facet is a fact about this search, and only the fact gets
+    // to decide an order.
+    //
+    // **3 — then the code rank**, which is why `rank` exists at all: typing a whole set code
+    // is an unambiguous request for that set, and without this it is the one result you
+    // cannot reach. "lea" is Limited Edition Alpha, but it also appears in six League Tokens
+    // sets, nine Arena Leagues, Oversized League Prizes and M15 Pre**relea**se Challenge —
+    // seventeen name matches, enough to push the exact one past the page end entirely.
+    // Ranked rather than filtered, because the rest are still real matches and the reader
+    // may have meant one of them. With nothing typed every row scores 0, so the level costs
+    // nothing; it sits *below* the two above because a picked or available set the reader
+    // can act on beats a spelling coincidence.
+    //
+    // **4 — then the set's name**, which `sortOptions` does. This is where the old stable
+    // sort's "within each rank the backend's own order survives" stopped being true: the
+    // alphabet decides now, so `lea` is followed by Arena League 1999 and not by whichever
+    // League set shipped most recently.
+    return sortOptions(
+      found,
+      (s) => s.name,
+      (s) => [
+        pinned.has(s.code) ? 0 : 1,
+        optionDisabled(counts, s.code, selected.includes(s.code)) ? 1 : 0,
+        needle ? rank(s.code, needle) : 0,
+      ],
+    );
+  }, [sets.data, query, selected, counts, pinned]);
 
-  const options = matches.slice(0, MAX_OPTIONS);
+  const options = matches.slice(0, shown);
+  /**
+   * What the footer's control would add — the *honest* number, so the last press reads
+   * "Show 7 more" rather than promising fifty rows that are not there.
+   */
+  const moreCount = Math.min(MORE_STEP, matches.length - options.length);
+  // Counted from what is on screen rather than from `shown`, which can outrun the list when
+  // the query narrows under a reader who has already paged down.
+  const revealMore = () => setShown(options.length + MORE_STEP);
   // Clamped rather than reset from an effect: the list shortens under the cursor whenever
   // the query narrows or the set list finishes loading, and a stored index that outruns it
   // would point `aria-activedescendant` at an element that is not there any more.
@@ -174,7 +274,22 @@ export function SetCombobox({
     if (options.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive(Math.min(activeIndex + 1, options.length - 1));
+      // The bottom of a *page* is not the bottom of the list, so pressing past the last row
+      // reveals the next page and lands on its first entry. The old clamp survives only for
+      // the case where there genuinely is no more.
+      //
+      // Not because the footer's button is out of reach — it is inside the root, and the
+      // `onBlur` below only closes when focus leaves the root, so Tab does get there. It is
+      // that Tab is *also* how a reader leaves this control entirely, and the arrow key they
+      // are already holding is the one that meant "more of this list".
+      if (activeIndex >= options.length - 1) {
+        if (moreCount > 0) {
+          revealMore();
+          setActive(options.length);
+        }
+      } else {
+        setActive(activeIndex + 1);
+      }
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive(Math.max(activeIndex - 1, 0));
@@ -183,7 +298,15 @@ export function SetCombobox({
       setActive(0);
     } else if (e.key === "End") {
       e.preventDefault();
-      setActive(options.length - 1);
+      // End means "the end of what I can see"; pressing it again from there asks for the
+      // rest, the same bargain `ArrowDown` strikes at the bottom row. It does not leap to
+      // match 1 047 of 1 047 — one press, one page, and the reader can watch it arrive.
+      if (activeIndex === options.length - 1 && moreCount > 0) {
+        revealMore();
+        setActive(options.length + moreCount - 1);
+      } else {
+        setActive(options.length - 1);
+      }
     } else if (e.key === "Enter") {
       e.preventDefault();
       const code = options[activeIndex].code;
@@ -218,13 +341,13 @@ export function SetCombobox({
         aria-haspopup="listbox"
         onClick={() => {
           setOpen((v) => !v);
-          setActive(0);
+          startOpening();
         }}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown" && !open) {
             e.preventDefault();
             setOpen(true);
-            setActive(0);
+            startOpening();
           }
         }}
         className={cn(
@@ -276,8 +399,10 @@ export function SetCombobox({
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
-                // A new query is a new list, and the old cursor position means nothing in it.
+                // A new query is a new list, and neither the old cursor position nor how far
+                // the reader had paged into the old one means anything in it.
                 setActive(0);
+                setShown(MAX_OPTIONS);
               }}
               onKeyDown={onListKeyDown}
               placeholder="Name or code"
@@ -318,10 +443,34 @@ export function SetCombobox({
                 {MAX_SETS} sets is the most one search can name — remove one to add another.
               </p>
             )}
-            {matches.length > options.length && (
-              <p className="pt-2 text-center text-[0.7rem] text-dim">
-                Showing {options.length} of {matches.length} — keep typing to narrow it down.
-              </p>
+            {moreCount > 0 && (
+              <div className="pt-2 text-center text-[0.7rem] text-dim">
+                {/* The advice stays first and unchanged: at 1 047 sets, paging to the end is
+                    reachable but it is not the intended path, and the button below is the
+                    escape for the search that cannot be narrowed rather than the fast way. */}
+                <p>
+                  Showing {options.length} of {matches.length} — keep typing to narrow it down.
+                </p>
+                <button
+                  type="button"
+                  // Same reason as the rows above: a press here must not pull the caret out
+                  // of the search box, or the arrow keys stop working the moment the reader
+                  // reaches for more with the mouse. The root's `onBlur` only closes when
+                  // focus leaves the root, and this button is inside it — so Tabbing onto it
+                  // is safe either way, and this is about the mouse.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={revealMore}
+                  className={cn(
+                    FILTER_FOCUS,
+                    // A quiet footer control, not a primary action: it wears the footer's own
+                    // size and colour and is told apart from the sentence by the underline.
+                    "mt-1 rounded-md px-1.5 py-0.5 underline underline-offset-2",
+                    "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                  )}
+                >
+                  Show {moreCount} more
+                </button>
+              </div>
             )}
           </PopupPanel>
         )}

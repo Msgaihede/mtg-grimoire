@@ -19,6 +19,12 @@ export type WishlistSort = WishlistSortKey;
 /**
  * The orders the filter bar's select offers.
  *
+ * **This array's order is its declaration order and nothing else.** `WishlistPage`'s sort
+ * `<select>` draws it alphabetically by label through `sortOptions` (`lib/options.ts`), and
+ * the only other reader — `sortSelection` below — asks which keys are *in* it. So
+ * reordering these four lines changes nothing on screen; it only breaks the reasoning that
+ * follows, which pairs each order with the collection's twin. Add to the end.
+ *
  * Four where the collection has five, and one of them means something different: `quantity`
  * is "most wanted" here, not "most copies", because these are cards the reader does not have
  * yet. There is still no `set` order — an any-printing wish has no set to sort by, and a

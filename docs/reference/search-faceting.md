@@ -8,6 +8,17 @@ never greyed — that is the way out of a dead end — and every failure fails *
 not-greyed means "we don't know", greyed means "this is empty", and only one of those is safe
 to guess.
 
+**Greying decides the order as well as the paint.** A greyed option sinks below every
+pickable one, and each half is alphabetical by the words on screen — `sortOptions` in
+`src/lib/options.ts`, which every option list in the app is drawn through. It sinks rather
+than disappearing for the reason the picker greys rather than filters in the first place:
+dropping a row would make the list jump under the cursor on every keystroke, and the count
+behind it ("nothing in this search") is an answer worth showing. Two properties make this
+safe rather than jumpy, and both are the backend's doing — `facets::compute` skips the
+dimension it is counting, so **picking a format does not reorder the format list and picking
+a set does not reorder the set list**. A control never re-sorts under the press that is
+using it.
+
 - **`CardIndex` is an in-memory index over the corpus, in the shape a search engine uses**,
   and it exists because faceting needs a count per option per dimension on every keystroke.
   The three SQL shapes were measured 2026-08-11 (see the build note under `legal_mask`): a
@@ -108,7 +119,12 @@ Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing
   search", opacity 0.45); a `standard` format filter greys **26 of the 50 set rows on screen**
   out of 384–592 of the 1 047 codes the picker knows. (1 047 against the 986 quoted in
   `index/mod.rs`: that one is the **paper** corpus the index is built over, this one is every
-  code `list_sets` returns.) A facet pass costs **4.4–47.6 ms** end to end through `invoke` on
+  code `list_sets` returns.) **The "50 set rows on screen" is the cap as it stood that day and
+  not the cap now**: the picker's first page is 100, with a `Show 50 more` step
+  (`MAX_OPTIONS`/`MORE_STEP` in `SetCombobox.tsx`), and greyed rows now sink to the bottom of
+  the list — so a re-measure would count a different 26 in a different place. The 384–592 and
+  the 1 047 are untouched by either change; they are facts about the corpus, not about the
+  page. A facet pass costs **4.4–47.6 ms** end to end through `invoke` on
   a **debug** build (medians of five; worst is a colour dimension at 47.6 ms) and
   **4.7–6.0 ms** on a **release** one — so the design's 57 ms budget is cleared with the
   pessimistic figure. Name the build: the ~8× between those two lines is the whole reason

@@ -332,6 +332,16 @@ export interface FakeCard {
   fullArt: boolean;
   frameEffects: string | null;
   borderColor: string | null;
+  /**
+   * On the Commander Format Panel's **game changers** list. An **oracle**-level fact, like
+   * {@link FakeCard.everUncommon} below: every printing of a card agrees, so a collapsed
+   * search row takes the representative printing's and needs no aggregate.
+   *
+   * Read by three DTOs — the bracket chip on a \`DeckCard\`, the crown a \`CardSummary\` draws
+   * beside its finish marks, and an \`ImportMatch\`. A plain boolean though \`cards.game_changer\`
+   * is nullable: the column is only ever set for the cards Wizards named, so a NULL means *not
+   * on the list* and is flattened here rather than carried as a third state.
+   */
   gameChanger: boolean;
   /** Printed at uncommon on **some** printing of this oracle card — Pauper Commander
    *  eligibility, which is a fact about the card and never about the printing shown. */

@@ -2,35 +2,52 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **375 stories across 49 story files, 48 docs
+`npm run storybook` · `npm run build-storybook`. **381 stories across 49 story files, 48 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 50th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the quick-add-dropdown branch: 423
-entries, 375 `story`, 48 `docs`, 50 distinct `importPath`s.
+**Measured 2026-08-14** off a fresh `build-storybook` on the quick-add-dropdown branch **with
+`main` merged in**: 429 entries, 381 `story`, 48 `docs`, 50 distinct `importPath`s.
 
-The six over the 369 measured earlier the same day are all `Decks/QuickAdd`'s, a story file that
-did not exist before — so the file and the docs-page counts move with them, as they did the last
-time a whole file arrived. The 369 was measured off the printings-rework branch **after** merging
-`main`: 416 entries, 369 `story`, 47 `docs`, 49 distinct `importPath`s.
+The six over `main`'s 375 are all `Decks/QuickAdd`'s, a story file that did not exist before — so
+the file and the docs-page counts move with them, as they did the last time a whole file arrived.
 
-The eleven of that 369 over the 358 measured 2026-08-12 come from four branches that never saw
-each other's stories: five are `Card/DetailPane`'s, fifteen to twenty, when the printings list
-gained a group-by selector (a story per mode that renders differently, plus one that drives the
-select) and the card art gained a foil view; one is `Search/Page`'s `Unplayable`; and five are
-`Components/CardZoomIndicator`'s, **the one new story _file_ in the set** — which is why the
-file and docs-page counts moved here when they had held for four measurements.
+**That 375 was itself measured twice on 2026-08-14, on two trees, and meant two different
+things**: 375 across **48** files on the game-changer branch (422 entries, 47 docs, 49
+`importPath`s — five stories added to `CardArt`, `SearchPage` and `CardGrid`, no new file), and
+375 across **49** files on this one before the merge (423 entries, 48 docs, 50 `importPath`s —
+369 plus this file's six). Equal totals, different trees, and only the *file* count told them
+apart. It is the same trap the paragraph below records, one day later and one column over.
 
-**This figure was re-measured three times inside one branch, and each time the previous number
-had already stopped being true.** The branch measured 363 alone; `main` gained
-`hide-non-usable-cards` and this paragraph came back a conflict where neither 363 nor that
-branch's 359 was right for the merged tree; a re-measure gave 364; `main` then gained the zoom
-and cheapest-latest branches and 364 was stale before CI finished. None of the intermediate
-numbers was arrived at by arithmetic on two branch counts — each was a fresh
-`build-storybook`, which is the only thing this line has ever been able to trust.
+The seventeen of `main`'s 375 over the 358 measured 2026-08-12 come from six branches that never
+saw each other's stories: five are `Card/DetailPane`'s, when the printings list gained a group-by
+selector (a story per mode that renders differently, plus one that drives the select) and the card
+art gained a foil view; five are `Components/CardZoomIndicator`'s, **the one new story _file_ in
+that set**, which is why the file and docs-page counts moved when they had held for four
+measurements; one is `Search/Page`'s `Unplayable`; one is `Search/SetCombobox`'s `PickedFirst`,
+pinning the picked sets to the top of the paged list; and five are the game changer's. The 358
+were themselves five over `main`'s 353 — `Settings/MarketplacePanel` went from three stories to
+eight when Card Kingdom and Mana Pool became selectable and a feed gained a state to draw.
 
-The 358 were themselves five over `main`'s 353 — `Settings/MarketplacePanel` went from three
-stories to eight when Card Kingdom and Mana Pool became selectable and a feed gained a state to
-draw.
+**On 2026-08-14 two branches wrote `416 entries, 369 story, 47 docs, 49 importPath` into this
+paragraph within an hour of each other.** Both had rebuilt. Both were right about their own tree.
+They were different trees — one carried the crown's stories, the other the printings rework's —
+and because the *headline sentence* matched to the character, git merged that line clean and only
+the paragraph under it conflicted. **A story count can be stale without being different from the
+number you are merging into**, which is the one failure mode a conflict marker cannot warn you
+about.
+
+**An earlier draft of this paragraph claimed the total and the delta "do not reconcile by
+arithmetic". That was wrong, and how it was wrong is the useful part.** It read 369 + 6 = 375
+against a tree of 374 and called the missing one unknowable. The delta was simply miscounted: it
+came from `git diff | grep '^+export const .*: Story'`, and `OwnedBadge`'s `Both` had been
+**re-wrapped from one line to several**, so the same story appeared as one `+` and one `-`. Net of
+removals the branch adds five, and 370 + 5 = 375 exactly. **A diff counts lines, not stories** — so
+if you state a delta at all, count `+` minus `-`, and treat a figure that is off by one as a
+miscount to find rather than a mystery to write up.
+
+None of which changes the rule: **rebuild and read the index on the tree you are actually
+shipping**, which is the merge commit and not either parent. This branch re-measured four times
+(363 → 369 → 374 → 375) and every intermediate number was stale before CI finished.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
 own `CreateDeckDialog` commit counted from source without building and was one story file and
@@ -50,6 +67,8 @@ can go missing from the prose while the story total still looks plausible.
 **47 of the 49 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
+(Re-derived 2026-08-14 from the built index rather than carried forward: `46 + 1 mdx = 47` docs
+pages against 48 story files, and the two opting out are still the same two.)
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a
@@ -110,12 +129,19 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
   `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
-  `fixed inset-0`, so inline it would cover the docs page rather than its own block — and the
-  other **40 docs pages render inline** (47 autodocs pages less those seven, re-counted
-  2026-08-14 — the seven are found in source, not assumed, and `CardZoomIndicator` is **not**
-  among them because its frame is declared on **one story** rather than on the file). A new story
-  file that writes the store needs the same parameter or its docs page shows one story's view
-  under every heading.
+  `fixed inset-0`, so inline it would cover the docs page rather than its own block. **A third
+  kind arrived 2026-08-14 with the zoom work**: `CardZoomIndicator` sets the parameter on **one
+  story** rather than in its meta, because only that story writes `cardZoom` and the four beside
+  it take their figure as an argument — so what the frame buys there is that pressing Zoom in on
+  the docs page cannot leave a pulse behind in the page's own store. The other **39 docs pages
+  render inline** (47 autodocs pages less the seven framed wholesale and that one framed in
+  part). The arithmetic changed under this figure without moving it — it was `45 − 7` on
+  2026-08-12, `46 − 7 − 1` before this merge and is `47 − 7 − 1` after it, which is exactly the
+  way a derived count goes stale while still looking right. Re-derive it from `inline: false` in
+  source, as this was (re-checked 2026-08-14 on the merged tree: still the same **eight** files —
+  `Decks/QuickAdd` is a ninth story file and frames nothing, which is why only the total moved);
+  a new story file that writes the store needs the same parameter or its docs page shows one
+  story's view under every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance

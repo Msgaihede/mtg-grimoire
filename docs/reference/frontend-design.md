@@ -134,7 +134,38 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   finish somewhere else. The stack is its one caller: a `FinishMark` on the data line beside the
   price says the word better than a fourth badge in a corner the rule break and the quantity tag
   are already competing for. What must never happen is _neither_ — a sheen with nothing naming
-  it is decoration, which is the whole of why the chip existed.
+  it is decoration, which is the whole of why the chip existed. **It governs the crown too**,
+  since the chip is the only thing a crown can be drawn as and the stack has its banner instead.
+- **One game changer, three drawings, and the difference is room rather than meaning.** The deck
+  stack stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a
+  card is 295px tall; the other three deck views abbreviate to `GameChangerBadge`'s gold `GC`
+  where a cell has a column; and a search card gets `components/GameChangerMark`, **the banner's
+  crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
+  is a sticker over the picture the reader came to look at. `text-pie-gold` in all three: the spec
+  is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
+  must never be confusable, and the destructive colour belongs to the second. It shares the finish
+  chip rather than taking a corner of its own — **a card fact and a printing fact in one box**,
+  since a card can be either, both or neither. Nothing derives it: the backend flattens
+  `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
+  struct is a `bool`).
+- **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
+  tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
+  overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once
+  been shown over card art: a tooltip is drawn by the element the pointer _hits_, and nothing
+  in that subtree was hittable. The chip now takes `pointer-events-auto` on its own while the
+  full-bleed sheen keeps `none`; it sits _inside_ the enclosing button on all three surfaces
+  that have one, so a click on it bubbles and opens the card exactly as a click on the art
+  does. `data-card-marks` is the handle a test finds it by — a hit target is otherwise
+  invisible to the DOM, which is why this went unnoticed through a green suite.
+- **`CardGrid`'s two corner marks take their own clicks now, and that is the price of their
+  tooltips.** The owned badge (bottom-left) and the printing count (top-left) are _siblings_
+  of the tile's button, so `pointer-events-none` was what let a press fall through to the art
+  and kept the tile one click target. But they are abbreviations — `×3`, a filled heart —
+  whose plain-words tooltip is the whole point of hovering them, so each takes its own events
+  and calls `onSelect` itself: same behaviour, now hoverable. The drag is unaffected,
+  `cardDraggable` being registered on the tile's outer wrapper. No keyboard handler is owed —
+  a corner duplicates what the caption already states and opens what the button opens, and a
+  second tab stop per tile would be forty extra presses across a wall to reach nothing new.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
@@ -299,6 +330,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   replaces the sort with that one term, and the control reads `Custom…` once the sort starts
   somewhere it has no option for. The wishlist's Printing column is deliberately not
   sortable at all — an any-printing wish names no set.
+- **Every option list is drawn through `sortOptions` in `src/lib/options.ts`: alphabetical by
+  the display label, with a faceted control's greyed rows sunk below its pickable ones.** The
+  label is the words on screen, never the key — `standard` and `Standard Brawl` sort by what
+  the reader reads. One `Intl.Collator` pinned to `"en"`, `sensitivity: "base"` and
+  `numeric: true`: case is not a sort key ("The List" used to land above "the list" under a
+  bare `localeCompare`), an accent is a spelling, and "Arena League 1999" belongs above "Arena
+  League 2001" rather than wherever a code-unit read of `1` against `2` puts it. It **copies**
+  before sorting, because the arrays reaching it are React Query's session-cached
+  `list_sets()` and `formatSpecs()` and every other reader of that key shares them.
+  - **Ordering is a display decision and therefore lives in TS.** Rust answers in whatever
+    order the query produced — `list_sets` newest-first, `format_specs_list` by a seeded
+    `sort_order`, deck categories by the reader's own drag — and each of those is still the
+    right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
+  - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
+    `Custom…` a table-header sort leaves behind, `Auto (by card type)`, the permanent `Move…`
+    verb, `Top level`. `CategoriesPanel`'s `are deleted with it` is pinned **last** — the
+    destructive answer is not allowed to become the default by alphabet.
+  - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
+    Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
+    reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesPanel`
+    and rendered in that order by all four deck views, so an alphabetical dropdown would
+    disagree with the panel beside it. Both carry a comment at the site saying so, because
+    the next sweep for unsorted selects will otherwise "fix" them.
 
 ## Vendored components and tokens
 

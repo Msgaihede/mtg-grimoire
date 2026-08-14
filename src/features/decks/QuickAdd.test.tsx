@@ -40,6 +40,9 @@ function found(name: string): CardSummary {
     price: 1.5,
     layout: "normal",
     oracleId: `o-${name}`,
+    // A plain `boolean` on a search row, never `null`: a row that came back from `cards` is a
+    // card that is there. `false`, because nothing in this file is about the crown.
+    gameChanger: false,
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,

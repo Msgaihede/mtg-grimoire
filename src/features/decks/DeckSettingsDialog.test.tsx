@@ -481,6 +481,68 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
   });
 
+  /**
+   * **Alphabetically, not in the `sortOrder` the table answers in.** The mock keeps the seed's
+   * ranking (Modern 7, Commander 12, Casual 24), so the sequence below is this dialog's own
+   * sort — and it has to be the *same* sort the editor's header select does, or one deck has
+   * two format pickers that disagree about where Modern is.
+   */
+  it("offers the formats alphabetically", async () => {
+    open();
+    await loaded();
+
+    const format = screen.getByLabelText("Format");
+    await within(format).findByRole("option", { name: "Commander" });
+    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Modern",
+    ]);
+  });
+
+  /**
+   * A deck on a format the seed no longer offers keeps showing its own — `decks.format_key` is
+   * deliberately not a foreign key, so this state exists, and a select that could not show its
+   * value would re-format the deck the next time anything else here was saved.
+   *
+   * **Folded into the alphabet rather than pinned first.** Historic between Commander and
+   * Modern is the assertion: the select's own `value` already says which one is current, so
+   * putting it first would only cost the reader the place they would look for it.
+   */
+  it("folds the deck's own format into the list when the seed no longer offers it", async () => {
+    deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }));
+    open();
+    await loaded();
+
+    const format = screen.getByLabelText("Format");
+    await within(format).findByRole("option", { name: "Historic" });
+    expect(format).toHaveValue("historic");
+    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Historic",
+      "Modern",
+    ]);
+  });
+
+  /**
+   * The folders, by the path a reader would say — and **`Top level` stays first**, because it
+   * is not a folder at all: it is the answer meaning `folder_id IS NULL`, which is the one move
+   * `DeckPatch` cannot express. Alphabetising it in among the folders would file it under T.
+   */
+  it("keeps Top level first and the folders in path order", async () => {
+    open();
+    await loaded();
+    await screen.findByRole("option", { name: "Commander › Legends" });
+
+    const folder = screen.getByLabelText("Folder");
+    expect(within(folder).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Top level",
+      "Commander",
+      "Commander › Legends",
+    ]);
+  });
+
   /** A refused write says so, once, and it is the *newest* write that owns the line — a refused
    *  move must not leave its sentence up while the reader goes on to rename the deck. */
   it("reports a refused write in words", async () => {
@@ -566,6 +628,36 @@ describe("folderPaths", () => {
   it("leaves a root folder alone", () => {
     expect(folderPaths([{ id: 9, parentId: null, name: "Standard", sortOrder: 0 }])).toEqual([
       { id: 9, path: "Standard" },
+    ]);
+  });
+
+  /**
+   * Through the app's one collator, and not a bare `localeCompare`.
+   *
+   * **Numerals count as numbers**, which is the behaviour this changed: the bare
+   * `a.path.localeCompare(b.path)` this used to do puts `Cube 10` above `Cube 2`, because it
+   * is ranking the character `1` against the character `2` — and people number their folders.
+   * **Case does not split the list** either, so a reader's `brews` sits where a reader would
+   * look for it rather than after every capitalised name.
+   *
+   * And the locale is pinned to `"en"` rather than read off the host, for the reason
+   * `sorting.ts` gives: the collation is part of what the app *does*, and a list that reorders
+   * itself on a different machine is a list two readers cannot compare. That half cannot be
+   * asserted from inside one process, which is why it is written down here.
+   */
+  it("orders the paths by the app's collator, numerals and case included", () => {
+    const numbered: DeckFolder[] = [
+      { id: 1, parentId: null, name: "Cube 10", sortOrder: 0 },
+      { id: 2, parentId: null, name: "Cube 2", sortOrder: 0 },
+      { id: 3, parentId: null, name: "brews", sortOrder: 0 },
+      { id: 4, parentId: null, name: "Cube 1", sortOrder: 0 },
+    ];
+
+    expect(folderPaths(numbered).map((f) => f.path)).toEqual([
+      "brews",
+      "Cube 1",
+      "Cube 2",
+      "Cube 10",
     ]);
   });
 });

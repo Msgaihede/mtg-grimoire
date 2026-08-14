@@ -31,12 +31,22 @@ const meta = {
           "12,366 foil-only and 892 etched-only paper printings, measured 2026-08-11 over the " +
           "live corpus. The 53,224 printings that merely *have* a foil version are unmarked: a " +
           "sheen on 61% of every wall would be decoration rather than information.\n\n" +
-          "**The sheen tints and never covers.** A `linear-gradient` at 12% opacity in " +
-          "`mix-blend-mode: overlay`, because a real foil is a diffraction grating throwing a " +
-          "different hue at every angle and Scryfall's photography has none of it — the art of " +
-          "a foil-only printing is byte-identical to a nonfoil one. Legibility is a screenshot " +
-          "question rather than an assertion, so the live CDP pass is what proves it; what a " +
-          "story can prove is that the sheen is `aria-hidden` and the chip is not.\n\n" +
+          "**The sheen tints and never covers.** A `linear-gradient` in " +
+          "`mix-blend-mode: screen`, where the gradient's own alphas are the strength — 0.10 " +
+          "to 0.13 on the rainbow stops and 0.34 on the one bright band — because a real foil " +
+          "is a diffraction grating throwing a different hue at every angle and Scryfall's " +
+          "photography has none of it: the art of a foil-only printing is byte-identical to a " +
+          "nonfoil one. (`overlay` at 12% was the first attempt and it was *invisible*, " +
+          "measured over CDP 2026-08-11.) Legibility is a screenshot question rather than an " +
+          "assertion, so the live CDP pass is what proves it; what a story can prove is that " +
+          "the whole overlay is `aria-hidden` and that the chip is still hoverable.\n\n" +
+          "**The chip holds two facts, and they are different kinds of fact.** A finish " +
+          "belongs to the *printing*; a game changer belongs to the *card* — every printing of " +
+          "Rhystic Study is one — so a card carries either, both or neither, and both means one " +
+          "chip with two glyphs rather than two boxes over the same corner. The crown is the " +
+          "deck stack's `GameChangerBanner` glyph without its ribbon, and the same fact the " +
+          "other three deck views abbreviate as `GameChangerBadge`'s gold `GC` — one gold, " +
+          "three amounts of room.\n\n" +
           "**Art is synthetic here** unless the Live toolbar switch is on, so a checkout with " +
           "no network renders these exactly as one with it.",
       },
@@ -105,6 +115,66 @@ export const EtchedOnly: Story = {
     // than in the accessibility tree — and what matters is that it is *a different one*.
     await expect(canvasElement.querySelector("[data-foil-sheen]")).not.toBeNull();
     await expect(canvasElement.querySelector("svg")).not.toBeNull();
+  },
+};
+
+/**
+ * `pcy 45` — Rhystic Study, a game changer at rarity **common**: the bracket is a property of
+ * the card and never of its rarity or its price.
+ *
+ * The chip with no sheen, which is the point of the pair. A sheen is a photograph of what the
+ * cardboard does to light and this cardboard does nothing special — it is an ordinary common
+ * that the Commander bracket counts. Both `gameChanger` and `finish` are read off the fixture
+ * rather than written here, so the story is drawing what the corpus says: the printing exists
+ * in nonfoil *and* foil, which is exactly why `soleFinish` answers `null` for it.
+ *
+ * **Hover the crown.** That is the second half of this change: the chip re-enables
+ * `pointer-events` against the overlay's `none`, without which the `<title>` inside every glyph
+ * here had been unreachable since the day it was written.
+ */
+export const GameChanger: Story = {
+  args: {
+    cardId: printing("pcy", "45").id,
+    name: "Rhystic Study",
+    finish: soleFinish(printing("pcy", "45").finishes),
+    gameChanger: printing("pcy", "45").gameChanger,
+  },
+  play: async ({ canvasElement }) => {
+    const chip = canvasElement.querySelector("[data-card-marks]");
+    await expect(chip?.querySelector(".lucide-crown")).not.toBeNull();
+    await expect(chip).toHaveAttribute("title", "Game changer");
+    await expect(chip).toHaveClass("pointer-events-auto");
+    // No sheen: this printing is sold in both finishes, so there is nothing to photograph.
+    await expect(canvasElement.querySelector("[data-foil-sheen]")).toBeNull();
+  },
+};
+
+/**
+ * `mp2 8` again — Consecrated Sphinx is **both**, and the corpus is what says so: the same
+ * foil-only printing {@link FoilOnly} draws, now passed the `gameChanger` its row carries.
+ * (That story deliberately passes only the finish; it is the one about the sheen.)
+ *
+ * One chip, two glyphs, crown first. A tile's fourth corner is the only one left — bottom-left
+ * is the owned badge, top-left the printing count, and below the frame is the caption — so a
+ * second box beside this one would start a row of stickers over the art. The chip's own `title`
+ * joins the two words with the separator the app uses between card facts everywhere else.
+ */
+export const GameChangerFoil: Story = {
+  args: {
+    cardId: printing("mp2", "8").id,
+    name: "Consecrated Sphinx",
+    finish: soleFinish(printing("mp2", "8").finishes),
+    gameChanger: printing("mp2", "8").gameChanger,
+  },
+  play: async ({ canvasElement }) => {
+    const chips = canvasElement.querySelectorAll("[data-card-marks]");
+    await expect(chips).toHaveLength(1);
+    await expect(chips[0].querySelectorAll("svg")).toHaveLength(2);
+    await expect(chips[0]).toHaveAttribute("title", "Game changer · Foil");
+    await expect(canvasElement.querySelector("[data-foil-sheen]")).not.toBeNull();
+    // Two marks, and the art is still the only thing in the accessibility tree: `getByRole`
+    // skips a hidden subtree, so the one `img` it can see is the card.
+    await expect(within(canvasElement).getByRole("img")).toHaveAccessibleName("Consecrated Sphinx");
   },
 };
 

@@ -16,8 +16,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { useDecks } from "./useDecks";
 
-/** `format_specs` in `sort_order`, with the one row a picker must not offer: Future Standard
- *  is a format you can test a card against and cannot build for. */
+/** `format_specs` **as Rust answers it** — in `sort_order`, and out of alphabetical order on
+ *  purpose, so the test below is about the picker's sort rather than about the mock. The one
+ *  row a picker must not offer is in it too: Future Standard is a format you can test a card
+ *  against and cannot build for. */
 const PICKER: FormatSpec[] = [
   { ...spec("modern"), key: "standard", displayName: "Standard", sortOrder: 1 },
   {
@@ -265,16 +267,26 @@ describe("the create deck dialog", () => {
     expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual(["Casual"]);
   });
 
-  /** The picker is `sort_order`, filtered to `enabled_in_picker`. */
-  it("offers the seeded formats in their own order, without the one that is switched off", async () => {
+  /**
+   * **Alphabetically, and not in the seed's `sort_order`.** That ranking is a fact about
+   * `format_specs` — Standard first because Standard is the newest pool, not because a reader
+   * looking for Modern would ever start there; they look under M. The mock answers
+   * Standard → Future Standard → Modern → Casual, so the whole sequence below is the picker's
+   * doing, and asserting the sequence rather than one position is what makes a row appended to
+   * the seed unable to land in the wrong place quietly.
+   *
+   * `enabled_in_picker` still decides membership: Future Standard is a format you can test a
+   * card against and cannot build for, so it is absent rather than sorted.
+   */
+  it("offers the seeded formats alphabetically, without the one that is switched off", async () => {
     wrap(<Harness />);
 
     const format = await screen.findByLabelText("Format");
     await waitFor(() =>
       expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
-        "Standard",
-        "Modern",
         "Casual",
+        "Modern",
+        "Standard",
       ]),
     );
   });

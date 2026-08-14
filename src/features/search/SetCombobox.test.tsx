@@ -32,6 +32,23 @@ const sets: SetSummary[] = [
   { code: "tok", name: "Token Set", setType: "token", releasedAt: "2021-01-01", cardCount: 0 },
 ];
 
+/**
+ * `n` sets named and coded by index — the list the paging tests need and the one the fixture
+ * corpus cannot supply (31 sets, against a 100-row first page).
+ *
+ * The names double as an ordering assertion: the shared collator runs `numeric: true`, so the
+ * first page really is `Set 0` … `Set 99` rather than `Set 0, Set 1, Set 10, Set 100`, and an
+ * off-by-one in the slice shows up as a name rather than as a count.
+ */
+const manySets = (n: number): SetSummary[] =>
+  Array.from({ length: n }, (_, i) => ({
+    code: `s${i}`,
+    name: `Set ${i}`,
+    setType: "expansion",
+    releasedAt: "2020-01-01",
+    cardCount: 10,
+  }));
+
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
@@ -133,27 +150,99 @@ describe("SetCombobox", () => {
   });
 
   /**
-   * ~700 sets have printings and the popup renders 50 of them, so without this the reader
+   * ~700 sets have printings and the popup renders 100 of them, so without this the reader
    * is told there are two sets called "Commander" when there are twenty-five. The list is
    * the wrong place to fix that — a 700-row `<ul>` in a dropdown is a jank source — so the
-   * cap is stated instead.
+   * page is stated instead, and the control beside the sentence is how the rest is reached.
    */
   it("says so when it is showing only part of the matches", async () => {
-    listSets.mockResolvedValue(
-      Array.from({ length: 60 }, (_, i) => ({
-        code: `s${i}`,
-        name: `Set ${i}`,
-        setType: "expansion",
-        releasedAt: "2020-01-01",
-        cardCount: 10,
-      })),
-    );
+    listSets.mockResolvedValue(manySets(160));
     wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Set" }));
 
-    expect(await screen.findByText(/50 of 60/)).toBeInTheDocument();
-    expect(screen.getAllByRole("option")).toHaveLength(50);
+    expect(await screen.findByText(/100 of 160/)).toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(100);
+  });
+
+  /**
+   * The footer is a *page*, not a ceiling — and the button says the number it will really
+   * add. Fifty on the first press and ten on the last, because a control that promises fifty
+   * rows and delivers ten is a control the reader stops believing about anything else.
+   *
+   * The focus assertion is the other half: the caret has to stay in the search box or the
+   * arrow keys stop working the moment the reader reaches for more with the mouse. It holds
+   * because the button prevents its own `mousedown`, the same line every option row carries.
+   */
+  it("reveals the next page on request, and counts the last one honestly", async () => {
+    listSets.mockResolvedValue(manySets(160));
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show 50 more" }));
+
+    expect(screen.getAllByRole("option")).toHaveLength(150);
+    expect(screen.getByText(/150 of 160/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /search sets/i })).toHaveFocus();
+
+    // Ten left, so the button offers ten rather than another fifty.
+    await userEvent.click(screen.getByRole("button", { name: "Show 10 more" }));
+
+    expect(screen.getAllByRole("option")).toHaveLength(160);
+    // Nothing left to show, so the footer goes with it rather than saying "160 of 160".
+    expect(screen.queryByText(/of 160/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * A new query is a new list, and how deep the reader had paged into the old one means
+   * nothing in it — 150 rows of the *previous* answer's depth carried into a fresh search is
+   * 150 rows nobody asked for, and the reader has no way to tell they are looking at page
+   * three of something they just started.
+   */
+  it("goes back to the first page when the query changes", async () => {
+    listSets.mockResolvedValue(manySets(160));
+    wrap(<SetCombobox selected={[]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show 50 more" }));
+    expect(screen.getAllByRole("option")).toHaveLength(150);
+
+    // Every name contains an "s", so the match count is unchanged and only the paging moved.
+    await userEvent.type(screen.getByRole("combobox", { name: /search sets/i }), "s");
+
+    expect(screen.getAllByRole("option")).toHaveLength(100);
+    expect(screen.getByText(/100 of 160/)).toBeInTheDocument();
+  });
+
+  /**
+   * The mouse's way past the bottom is a button; the keyboard's is the arrow that was already
+   * pointing at it. Without this, a reader who never touches the mouse is capped at 100 sets
+   * with no sign that there are more — Tab would reach the button, but Tab out of the search
+   * field is also how this popup is dismissed everywhere else in the app.
+   *
+   * Driven with `user.keyboard` against the already-focused field rather than `user.type`,
+   * which focuses whatever it is handed and would pass whether or not the caret had stayed
+   * where the component put it.
+   */
+  it("walks the keyboard off the end of a page and onto the next one", async () => {
+    listSets.mockResolvedValue(manySets(105));
+    const onToggle = vi.fn();
+    wrap(<SetCombobox selected={[]} onToggle={onToggle} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(await screen.findAllByRole("option")).toHaveLength(100);
+    const box = screen.getByRole("combobox", { name: /search sets/i });
+
+    // End goes to the end of what is drawn; the arrow past it asks for the rest.
+    await userEvent.keyboard("{End}{ArrowDown}");
+
+    expect(screen.getAllByRole("option")).toHaveLength(105);
+    const active = document.getElementById(box.getAttribute("aria-activedescendant") ?? "");
+    expect(active).toHaveTextContent("Set 100");
+    // And the revealed row is a real option, not just a rendered one.
+    await userEvent.keyboard("{Enter}");
+    expect(onToggle).toHaveBeenCalledWith("s100");
   });
 
   /**
@@ -216,8 +305,14 @@ describe("SetCombobox", () => {
    *
    * Ranked rather than filtered: the League sets are still real matches for someone who
    * meant them, they just are not what "lea" was typed to find.
+   *
+   * The rank is the *third* key, under "picked" and "has printings in this search", and above
+   * the alphabet — so what follows the exact match is A, L, O and not the release order the
+   * backend answered in. That last clause is the part that changed: the old sort leaned on
+   * `Array#sort` being stable to keep `list_sets`'s newest-first order inside each rank, and
+   * nothing about the picker's order is decided by the backend any more.
    */
-  it("puts an exact code match first, ahead of the sets that merely contain it", async () => {
+  it("puts an exact code match first, then the rest alphabetically", async () => {
     listSets.mockResolvedValue([
       {
         code: "l12",
@@ -255,14 +350,186 @@ describe("SetCombobox", () => {
 
     const options = await screen.findAllByRole("option");
     expect(options[0]).toHaveTextContent("Limited Edition Alpha");
-    // The rest are still offered, and in the order they arrived: the sort is stable, so
-    // ranking never becomes a second, invisible re-ordering of everything else.
+    // The rest are still offered, alphabetically — which here is the exact reverse of the
+    // 2012/1999/1997 order they arrived in, so a sort that quietly stopped running would
+    // fail this rather than pass it by coincidence.
     expect(options.map((o) => o.textContent)).toEqual([
       expect.stringContaining("Limited Edition Alpha"),
-      expect.stringContaining("League Tokens 2012"),
       expect.stringContaining("Arena League 1999"),
+      expect.stringContaining("League Tokens 2012"),
       expect.stringContaining("Oversized League Prizes"),
     ]);
+  });
+
+  /**
+   * **Picked first, whatever the alphabet says.** The list is paged, and a set the reader has
+   * already ticked must never sit past the end of the page: they could neither see that it
+   * was on nor reach it to turn it off, and the button above would go on counting a filter
+   * with no visible source. Zendikar Rising is the worst case in one row — last alphabetically
+   * of the three, and first on screen because it is on.
+   */
+  it("keeps a picked set at the top even when it sorts last", async () => {
+    listSets.mockResolvedValue([
+      {
+        code: "afr",
+        name: "Adventures in the Forgotten Realms",
+        setType: "expansion",
+        releasedAt: "2021-07-23",
+        cardCount: 281,
+      },
+      {
+        code: "mid",
+        name: "Innistrad: Midnight Hunt",
+        setType: "expansion",
+        releasedAt: "2021-09-24",
+        cardCount: 277,
+      },
+      {
+        code: "znr",
+        name: "Zendikar Rising",
+        setType: "expansion",
+        releasedAt: "2020-09-25",
+        cardCount: 280,
+      },
+    ]);
+    wrap(<SetCombobox selected={["znr"]} onToggle={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Zendikar Rising"),
+      expect.stringContaining("Adventures in the Forgotten Realms"),
+      expect.stringContaining("Innistrad: Midnight Hunt"),
+    ]);
+  });
+
+  /**
+   * **The other half of that rule: the float is a snapshot, so the list never moves under the
+   * press that is using it.**
+   *
+   * Ordering on the live `selected` would send a row to the top *because it was just clicked*,
+   * and this is a multi-select the reader works down with the mouse — so the second set they
+   * wanted would no longer be where they were looking and the next click would land on
+   * whatever slid up. The rows already refuse to disturb the keyboard (`onMouseDown`
+   * preventDefault); refusing to disturb the mouse is the same promise.
+   *
+   * Nothing else can move a row on a pick either, which is what makes one snapshot enough:
+   * `facets::compute` skips the dimension it counts, so ticking a set changes no set's count.
+   */
+  it("does not move a set under the press that picks it", async () => {
+    listSets.mockResolvedValue([
+      {
+        code: "afr",
+        name: "Adventures in the Forgotten Realms",
+        setType: "expansion",
+        releasedAt: "2021-07-23",
+        cardCount: 281,
+      },
+      {
+        code: "mid",
+        name: "Innistrad: Midnight Hunt",
+        setType: "expansion",
+        releasedAt: "2021-09-24",
+        cardCount: 277,
+      },
+      {
+        code: "znr",
+        name: "Zendikar Rising",
+        setType: "expansion",
+        releasedAt: "2020-09-25",
+        cardCount: 280,
+      },
+    ]);
+    const onToggle = vi.fn();
+    const { rerender } = wrap(<SetCombobox selected={[]} onToggle={onToggle} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    const opened = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(opened).toEqual([
+      expect.stringContaining("Adventures in the Forgotten Realms"),
+      expect.stringContaining("Innistrad: Midnight Hunt"),
+      expect.stringContaining("Zendikar Rising"),
+    ]);
+
+    await userEvent.click(screen.getByRole("option", { name: /Zendikar/ }));
+    expect(onToggle).toHaveBeenCalledWith("znr");
+    // The control is controlled: the parent commits the pick while the popup is still open,
+    // which is the render the old ordering would have reshuffled.
+    rerender(<SetCombobox selected={["znr"]} onToggle={onToggle} />);
+
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(opened);
+    expect(screen.getByRole("option", { name: /Zendikar/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    // Re-opening is what re-takes the snapshot, and only then does it float.
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Zendikar Rising"),
+      expect.stringContaining("Adventures in the Forgotten Realms"),
+      expect.stringContaining("Innistrad: Midnight Hunt"),
+    ]);
+  });
+
+  /**
+   * **Greyed rows sink; the pickable ones above them stay alphabetical.** A row this search
+   * has nothing in is still worth offering — it says the search has nothing there, which is
+   * an answer — but it is not worth a place near the top of a paged list, and it is the last
+   * thing that should be pushing a live set off the end of a page.
+   *
+   * The four here interleave under a plain A-Z (Adventures, Dominaria, The Brothers' War,
+   * Zendikar), so a sort that dropped the facet level would fail this rather than tie with it.
+   */
+  it("sinks the sets this search has nothing in, alphabetical within each group", async () => {
+    listSets.mockResolvedValue([
+      {
+        code: "bro",
+        name: "The Brothers' War",
+        setType: "expansion",
+        releasedAt: "2022-11-18",
+        cardCount: 287,
+      },
+      {
+        code: "afr",
+        name: "Adventures in the Forgotten Realms",
+        setType: "expansion",
+        releasedAt: "2021-07-23",
+        cardCount: 281,
+      },
+      {
+        code: "znr",
+        name: "Zendikar Rising",
+        setType: "expansion",
+        releasedAt: "2020-09-25",
+        cardCount: 280,
+      },
+      {
+        code: "dmu",
+        name: "Dominaria United",
+        setType: "expansion",
+        releasedAt: "2022-09-09",
+        cardCount: 281,
+      },
+    ]);
+    wrap(
+      <SetCombobox selected={[]} onToggle={vi.fn()} counts={{ afr: 12, znr: 3, bro: 0, dmu: 0 }} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Adventures in the Forgotten Realms"),
+      expect.stringContaining("Zendikar Rising"),
+      expect.stringContaining("Dominaria United"),
+      expect.stringContaining("The Brothers' War"),
+    ]);
+    // Sunk, not dropped: they are still options, and still say why they cannot be pressed.
+    expect(options[3]).toHaveAttribute("aria-disabled", "true");
   });
 
   /**
@@ -333,11 +600,12 @@ describe("SetCombobox", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Set" }));
     await screen.findByRole("option", { name: /Alpha/ });
-    // The cursor opens on the first row, which is the greyed one.
-    await userEvent.keyboard("{Enter}");
+    // Greyed rows sink, so the greyed one is the *second* row here and not the first —
+    // Kamigawa opens under the cursor. One press down is the wall.
+    await userEvent.keyboard("{ArrowDown}{Enter}");
     expect(onToggle).not.toHaveBeenCalled();
 
-    await userEvent.keyboard("{ArrowDown}{Enter}");
+    await userEvent.keyboard("{ArrowUp}{Enter}");
     expect(onToggle).toHaveBeenCalledWith("neo");
   });
 
