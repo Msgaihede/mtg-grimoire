@@ -310,12 +310,12 @@ function DeckCardTags({
     <>
       <MenuRows items={deckCardTagRows(card, deps.tags, deps.setTag)} />
       <div role="separator" className="my-1 h-px bg-border" />
-      {/* `role="group"`, because a `role="menu"` may own only menu rows, a `group` or a
-          separator — and a field is none of those. The group is the honest wrapper: it names
-          what is inside it and keeps the panel's own structure legal. */}
+      {/* `role="none"`, because a `role="menu"` may own only menu rows, a `group` or a
+          separator — and a form is none of those. `Submenu`'s own box takes the same role for
+          the same reason: presentational is what makes a wrapper legal here without inventing a
+          second name for the field inside it, which is what a named `group` would be. */}
       <form
-        role="group"
-        aria-label="New tag"
+        role="none"
         className="flex items-center gap-1 px-2 py-1"
         onSubmit={(e) => {
           e.preventDefault();

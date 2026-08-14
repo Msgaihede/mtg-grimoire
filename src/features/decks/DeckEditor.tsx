@@ -12,6 +12,10 @@ import {
   filterChipState,
   ToggleChip,
 } from "@/components/FilterChips";
+import { useContextMenu } from "@/components/menu/useContextMenu";
+import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import type { CardSummary } from "@/lib/ipc";
 import { ipc, ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
@@ -23,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import { DECK_CARD_VARIANT, focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
 import { CategoriesDialog } from "./CategoriesDialog";
+import { buildDeckCardMenu } from "./deckCardMenu";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -261,6 +266,26 @@ export function categoryExport(
 }
 
 /**
+ * A tile in the docked search panel, as a card menu describes it.
+ *
+ * **No `finish`**, for the search wall's reason: a result is a *printing* and not a copy, so
+ * "Add to → Collection" offers the finishes this printing exists in rather than choosing one.
+ * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
+ * does — the same fact, off the same row, that this panel's drag payload already hands a drop.
+ */
+function searchCardTarget(card: CardSummary): CardMenuTarget {
+  return {
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    oracleId: card.oracleId,
+    finishes: card.finishes,
+    typeLine: card.typeLine,
+  };
+}
+
+/**
  * The narrowest the deck's name field may be squeezed to.
  *
  * 10rem, which at the field's `text-xl` is about thirteen characters — enough to tell two decks
@@ -417,6 +442,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const { marketplace } = useMarketplace();
   const deck = useDeck(deckId, variant);
   const { specs, formatSpecFor } = useFormatSpecs();
+  /**
+   * The right-click, and everything a card menu needs that is not the card.
+   *
+   * **One `CardMenuDeps` for this whole screen**, from the hook the other five surfaces use:
+   * the collection add's four invalidation keys and the wishlist add's two are written down once
+   * there, and a sixth page spelling them out again would be a sixth place for one rule to
+   * drift. What this editor answers differently is `viewPrintingsInPane`, which is a *per
+   * surface* answer — the deck's cards open as deck rows, the docked panel's tiles do not — so
+   * it is spread over at each of the two builders below rather than fixed here.
+   *
+   * `menu(build)` takes a **thunk**: a deck of a hundred cards builds no menu at all until a
+   * reader right-clicks one of them.
+   */
+  const { menu, menuKey } = useContextMenu();
+  const { deps: cardMenuDeps, error: menuFailure } = useCardMenuDeps();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -538,7 +578,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const chipRef = useRef<HTMLButtonElement>(null);
   const tookFocus = useRef(false);
 
-  // The three writes the editor's **own banner** speaks for. The *latest* of them owns it, not
+  // The four writes the editor's **own banner** speaks for. The *latest* of them owns it, not
   // whichever is still holding an error: a refused move used to leave its sentence up while the
   // reader went on to rename the deck successfully (the collection table's lesson). That rule
   // is `lib/writes.ts` now, shared with the gallery, the settings dialog and the categories
@@ -546,7 +586,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // had it backwards. The docked panel's add is deliberately not here — it says so in the
   // panel, beside the button that was pressed, and two banners for one refusal would be worse
   // than one in the wrong place.
-  const writes = [deck.setQuantity, deck.moveCard, deck.update] as const;
+  //
+  // **`setTag` joined them on 2026-08-14, when the card's right-click gave it its first
+  // control.** It was outside this family for as long as nothing in the app could reach it; a
+  // write a reader can now make from every one of the four views is a write whose refusal has
+  // to be said somewhere, and the menu that started it has closed by the time an answer
+  // arrives.
+  const writes = [deck.setQuantity, deck.moveCard, deck.update, deck.setTag] as const;
   const bannerFailure = writeFailure(writes);
 
   /**
@@ -854,6 +900,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writeQuantity = deck.setQuantity.mutate;
   const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
+  const writeTag = deck.setTag.mutate;
 
   /**
    * One copy into a category — the quick add's write, and a drop's.
@@ -963,9 +1010,121 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.categoryId, quantity),
     [setQuantityAt],
   );
+
+  /**
+   * Open a card **as a deck row** — the only write of `paneDeckContext` in the app, and the
+   * reason every view hands its whole `DeckCard` back rather than an id.
+   *
+   * What it buys is on the other side of the app: the pane's printings list gains "Use this
+   * printing", which rewrites *this* slot. Everything else that opens a card — the docked
+   * panel's tiles, the validation panel's names — goes through `setSelectedCardId`, which
+   * clears the context in the same write (see the store), so a card that is not a row of this
+   * deck can never be shown as one.
+   *
+   * The context carries the category's **name** as well as its id, because the pane is a
+   * sibling of this editor and has no category list to translate one with; and the **variant**,
+   * because a deck is two lists and a swap addressed to the wrong one either misses or rewrites
+   * a row the reader is not looking at.
+   */
+  const openCard = useCallback(
+    (card: DeckCard) =>
+      openCardFromDeck({
+        deckId,
+        categoryId: card.categoryId,
+        categoryName: card.categoryName,
+        cardId: card.cardId,
+        variant,
+      }),
+    [deckId, openCardFromDeck, variant],
+  );
+
+  /** The two deck writes the menu adds, each addressed by the **row** — a menu is opened on one
+   *  card, which is more than a drop carries and is why these are not `applyDrop`'s pair. */
+  const moveCardTo = useCallback(
+    (card: DeckCard, categoryId: number) => moveTo(card.cardId, card.categoryId, categoryId),
+    [moveTo],
+  );
+  const setCardTag = useCallback(
+    (card: DeckCard, tagId: number | null) =>
+      writeTag({ cardId: card.cardId, categoryId: card.categoryId, tagId }),
+    [writeTag],
+  );
+
+  /**
+   * One deck card's right-click, **built here and handed to the four views as one function**.
+   *
+   * A view that assembled its own would be four copies of one rule, and the rule reads three
+   * facts no view has: every category the deck holds (`categories`, in the reader's own order
+   * and deliberately not the drawn groups), the deck's format spec, and the deck's tags.
+   *
+   * The item list is a thunk inside `menu`, so a hundred-card deck pays for nothing until a
+   * reader right-clicks a card. The `viewPrintingsInPane` override is per **card** rather than
+   * per surface, and that is free for the same reason — this whole object is built on the press:
+   * inside the editor "View all printings" opens the pane, and it opens it *as a deck row*, so
+   * the pane's printings list can offer "Use this printing" on the slot that was right-clicked.
+   *
+   * **Both doors, from one thunk.** `menuKey` is Shift+F10 and the ContextMenu key, and it is
+   * not an extra here: the per-card `Move…` select was removed on 2026-08-14 and took the only
+   * keyboard path to moving a card with it (a caret cannot drag). This menu is that path, so a
+   * menu only a mouse could open would restore nothing.
+   */
+  const deckCardMenu = useCallback(
+    (card: DeckCard) => {
+      const build = () =>
+        buildDeckCardMenu(card, {
+          card: { ...cardMenuDeps, viewPrintingsInPane: () => openCard(card) },
+          categories,
+          cards: deck.cards,
+          spec,
+          moveTo: moveCardTo,
+          setTag: setCardTag,
+          tags: deck.tags,
+          deckId,
+          variant,
+        });
+      return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
+    },
+    [
+      menu,
+      menuKey,
+      cardMenuDeps,
+      openCard,
+      categories,
+      deck.cards,
+      deck.tags,
+      spec,
+      moveCardTo,
+      setCardTag,
+      deckId,
+      variant,
+    ],
+  );
+
   const actions = useMemo<DeckCardActions>(
-    () => ({ setQuantity, drop: applyDrop }),
-    [setQuantity, applyDrop],
+    () => ({ setQuantity, drop: applyDrop, menu: deckCardMenu }),
+    [setQuantity, applyDrop, deckCardMenu],
+  );
+
+  /**
+   * The docked panel's tiles, which are **not** deck cards: a search result is a printing the
+   * reader has not filed anywhere, so none of the four deck rows means anything about it and it
+   * gets the plain card menu every other wall in the app draws.
+   *
+   * Built here rather than in the panel so that one `useCardMenuDeps` serves both surfaces of
+   * this screen — two would be two collection-add observers and two sentences to draw for one
+   * refusal. `viewPrintingsInPane` is `setSelectedCardId` here and not `openCard`: the tile is
+   * not a row of this deck, and the store clears `paneDeckContext` in that same write precisely
+   * so it cannot be shown as one.
+   */
+  const panelCardMenu = useCallback(
+    (card: CardSummary) =>
+      menu(() =>
+        buildCardMenu(searchCardTarget(card), {
+          ...cardMenuDeps,
+          viewPrintingsInPane: setSelectedCardId,
+        }),
+      ),
+    [menu, cardMenuDeps, setSelectedCardId],
   );
 
   // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
@@ -1021,33 +1180,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (!element) return;
     return autoScrollForElements({ element });
   }, [hasRow]);
-
-  /**
-   * Open a card **as a deck row** — the only write of `paneDeckContext` in the app, and the
-   * reason every view hands its whole `DeckCard` back rather than an id.
-   *
-   * What it buys is on the other side of the app: the pane's printings list gains "Use this
-   * printing", which rewrites *this* slot. Everything else that opens a card — the docked
-   * panel's tiles, the validation panel's names — goes through `setSelectedCardId`, which
-   * clears the context in the same write (see the store), so a card that is not a row of this
-   * deck can never be shown as one.
-   *
-   * The context carries the category's **name** as well as its id, because the pane is a
-   * sibling of this editor and has no category list to translate one with; and the **variant**,
-   * because a deck is two lists and a swap addressed to the wrong one either misses or rewrites
-   * a row the reader is not looking at.
-   */
-  const openCard = useCallback(
-    (card: DeckCard) =>
-      openCardFromDeck({
-        deckId,
-        categoryId: card.categoryId,
-        categoryName: card.categoryName,
-        cardId: card.cardId,
-        variant,
-      }),
-    [deckId, openCardFromDeck, variant],
-  );
 
   /** Whatever is half-typed, the field goes back to standing for the deck's name. A blank is
    *  not a rename: the backend refuses it in words, and a name is not something a deck can lose
@@ -1705,6 +1837,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         )}
       </AnimatePresence>
 
+      {/* A collection or wishlist add the reader made from a card's right-click, refused.
+          Separate from the banner above because that one speaks for writes to **this deck** and
+          this one is about the binder — and it has to be drawn *somewhere*, because the menu
+          cannot draw it: `ctx.run` closes the panel before a row's handler runs, so by the time
+          an answer arrives there is no menu left to put a sentence in. The deck add is not here
+          and needs nothing from this file — it reaches the app's single `useCardToDeck` through
+          `CardToDeckProvider`, and that one mount draws its own sentence. Grown into place like
+          its neighbour: the animated element is the wrapper and carries only `overflow-hidden`,
+          because `statusLine` takes `height` to 0 and a box with its own padding can never be
+          shorter than that padding. */}
+      <AnimatePresence initial={false}>
+        {menuFailure && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              {menuFailure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">
           Opening your deck…
@@ -1750,6 +1905,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             targetCategoryId={targetCategoryId}
             onTargetCategoryChange={setTargetCategoryId}
             defaultFormat={searchFormatDefault}
+            cardMenu={panelCardMenu}
             roomy={roomForPanel}
             maxWidth={maxPanelWidth}
           />

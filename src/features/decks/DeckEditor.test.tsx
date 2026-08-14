@@ -15,8 +15,10 @@ import type {
   ImportMatch,
   SyncStatus,
 } from "@/lib/ipc";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { dragOnto, startDrag } from "@/test-drag";
 import { DECK_CARD_VARIANT } from "./cardControl";
+import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -40,6 +42,11 @@ const listSets = vi.hoisted(() => vi.fn());
 const deckCategoryList = vi.hoisted(() => vi.fn());
 const deckTagList = vi.hoisted(() => vi.fn());
 const deckTagSuggestions = vi.hoisted(() => vi.fn());
+// The two writes a card's own right-click reaches — the deck's label put on a row, and the
+// label made by the menu's own "New tag…" field. `setTag` had no control anywhere in the app
+// until that menu; this is its first caller.
+const deckCardSetTag = vi.hoisted(() => vi.fn());
+const deckTagCreate = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
@@ -83,6 +90,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCategoryList,
     deckTagList,
     deckTagSuggestions,
+    deckCardSetTag,
+    deckTagCreate,
     deckAuditList,
     deckTheoryDiff,
     deckFolderList,
@@ -268,11 +277,24 @@ const SYNCED: SyncStatus = {
   imageStoreFailures: 0,
 };
 
+/**
+ * The editor, under the two hosts the shipped app always puts above it.
+ *
+ * `ContextMenuProvider` is `App.tsx`'s and is what a right-click actually reaches:
+ * `useContextMenu` degrades to a **no-op** without one — deliberately, so an unwrapped story
+ * cannot redden the whole suite — which means a menu test that forgot it would pass by drawing
+ * nothing and asserting nothing. It costs the tests that are not about menus one `contextmenu`
+ * listener on `document` and no state at all: nothing else is registered until a menu opens.
+ */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <ContextMenuProvider>{ui}</ContextMenuProvider>
+    </QueryClientProvider>,
+  );
 }
 
 /** The editor, rendered and waited for — every test starts from a deck on screen. */
@@ -437,6 +459,10 @@ beforeEach(() => {
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckTagList.mockReset().mockResolvedValue([]);
   deckTagSuggestions.mockReset().mockResolvedValue([]);
+  deckCardSetTag.mockReset().mockResolvedValue(undefined);
+  deckTagCreate
+    .mockReset()
+    .mockResolvedValue({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
@@ -2678,6 +2704,206 @@ describe("categoryExport", () => {
     const renamed = { ...REMOVAL, name: "Interaction" };
 
     expect(categoryExport(REMOVAL.id, [renamed], CARDS, "Burn").subject).toBe("Interaction");
+  });
+});
+
+/**
+ * **The card's own right-click, driven through the real editor.**
+ *
+ * `deckCardMenu.test.tsx` owns what the rows *are*; this file owns that the editor builds them
+ * from the deck it has open and that a press reaches the write. The two halves are worth
+ * separating because the interesting failures live in the wiring: an editor building the menu
+ * from the drawn groups instead of its `categories` array would pass every unit test in that
+ * file and still be unable to reach the one pile this menu exists for.
+ */
+describe("DeckEditor — a card's menu", () => {
+  /**
+   * A pile the app made while filing a card, with nothing in it.
+   *
+   * `drawsWhenEmpty` keeps an empty `auto` pile off the desk entirely — nobody asked for it, and
+   * it comes back with the next card the rule files there — so it has **no heading**, and a
+   * heading that is not drawn is not a drop target. It is the one pile a drag cannot reach.
+   */
+  const RECURSION = category(7, "Recursion", "main", { origin: "auto", sortOrder: 5 });
+
+  const BUDGET: DeckTag = { id: 8, deckId: 4, name: "Budget swap", color: "moss", cardCount: 1 };
+
+  /** Right-click the card the editor drew, found by the slot every view stamps on it. */
+  async function rightClickCard(name: string) {
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, `c-${name}`)}"]`,
+    );
+    expect(el).not.toBeNull();
+    // A raw dispatch outside `act()` is not flushed synchronously, which is why every caller
+    // waits on the panel by role rather than reading it straight back.
+    fireEvent.contextMenu(el as HTMLElement);
+    return screen.findByRole("menu");
+  }
+
+  /** Open a submenu by pressing its row. Hover would do it too, after `SUBMENU_HOVER_MS` — a
+   *  press is the same code path with no timer in it. */
+  async function expand(name: RegExp) {
+    await userEvent.click(screen.getByRole("menuitem", { name }));
+  }
+
+  it("offers the deck's own rows under the card menu every other surface draws", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Tag card/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **The whole reason this menu exists.**
+   *
+   * The per-card `Move…` select was removed on 2026-08-14 and it was the one control built from
+   * the deck's `categories` rather than from the drawn groups — so it could reach a pile with no
+   * heading, which is the one thing a drag cannot do. This asserts both halves in one case: the
+   * pile draws no heading, and the menu moves a card into it anyway.
+   */
+  it("moves a card into a pile with no heading on screen", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
+    await open();
+    // Not drawn: an emptied auto pile is a heading about a card the deck does not contain.
+    expect(screen.queryByRole("region", { name: "Recursion" })).toBeNull();
+
+    await rightClickCard("Lightning Bolt");
+    await expand(/Move to/);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+  });
+
+  /**
+   * **Every category the deck has, in the reader's own `sortOrder`** — one of exactly two
+   * documented exemptions from `sortOptions`. Sorted, this list would read Commander, Companion,
+   * Main deck, Maybeboard, Recursion, Sideboard, which is a different order in the menu from the
+   * one the desk and the Categories dialog draw.
+   */
+  it("keeps the reader's own category order rather than sorting it", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Move to/);
+
+    const panel = (await screen.findAllByRole("menu"))[1];
+    const rows = within(panel).getAllByRole("menuitem");
+    // The pile the card is already in is drawn and greyed rather than dropped — "every
+    // category" is what makes the list findable by position — so its row carries its reason.
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Main deckalready here",
+      "Sideboard",
+      "Commander",
+      "Companion",
+      "Maybeboard",
+      "Recursion",
+    ]);
+    expect(rows[0]).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /** Modern has no command zone, so neither zone row is a thing this deck can be asked about. */
+  it("offers no commander row in a format with no command zone", async () => {
+    await open();
+    await seeded();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.queryByRole("menuitem", { name: /Set as commander/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * …and in a format that has one, an ineligible card is **greyed with its reason** rather than
+   * hidden — the reason being `commanderIneligibility`'s, the rule the validation panel judges
+   * the built deck by.
+   *
+   * `aria-disabled` and never the `disabled` attribute: the row exists to be read, so it has to
+   * stay in the tab order.
+   */
+  it("greys the commander row with its reason in Commander", async () => {
+    deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]));
+    await open();
+    await seeded("Modern");
+
+    await rightClickCard("Lightning Bolt");
+    const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveTextContent(/legendary/i);
+  });
+
+  /** A deck card wears at most one tag, so the rows are radios and the card's own is ticked. */
+  it("draws the tags as a radio group with the card's own ticked", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ tagId: 8, tagName: "Budget swap", tagColor: "moss" })], CATEGORIES, [
+        BUDGET,
+      ]),
+    );
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    expect(await screen.findByRole("menuitemradio", { name: "None" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(screen.getByRole("menuitemradio", { name: "Budget swap" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("puts the deck's label on the card that was right-clicked", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], CATEGORIES, [BUDGET]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: "Budget swap" }));
+
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 8);
+  });
+
+  /**
+   * **"New tag…" is two writes, and the second one is why the field waits.**
+   *
+   * `ctx.run` closes the panel before a *row's* handler runs, so a body that closed itself the
+   * moment it started an async write would unmount its own observer mid-flight and the card
+   * would never be tagged. This body only calls `onDone` once the create has landed — which is
+   * exactly what `onDone` is for, a body that finishes without a row being pressed.
+   */
+  it("makes a label from the menu's own field and puts it on the card", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    // The default colour, silently — recolouring is what the Tags dialog is for.
+    await waitFor(() => expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "gold"));
+    await waitFor(() =>
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
+    );
+    // And the panel is gone, because the chain finished.
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
+  /** The docked panel's tiles are cards too, and the menu they offer is the plain one — a
+   *  search result is not in the deck, so none of the four deck rows means anything about it. */
+  it("offers the card menu on the docked panel's tiles, without the deck's rows", async () => {
+    searchCards.mockResolvedValue({ items: [found("Goblin Guide")], total: 1, totalIsCapped: false });
+    await open();
+    await openSearchPanel();
+
+    // The tile's art button, whose name is the card and nothing else — the quick add beside it
+    // is called "Add Goblin Guide to …", which is why this one is matched exactly.
+    const tile = await screen.findByRole("button", { name: "Goblin Guide" });
+    fireEvent.contextMenu(tile);
+
+    await screen.findByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Move to/ })).not.toBeInTheDocument();
   });
 });
 

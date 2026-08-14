@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { Plus, Search } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
@@ -200,6 +207,18 @@ export interface DeckSearchPanelProps {
    */
   roomy?: boolean;
   /**
+   * What a tile offers on a right-click — **the handler already built**, from the editor.
+   *
+   * A tile here is a search result rather than a deck card, so it gets the plain card menu every
+   * other wall in the app draws: none of the deck editor's own rows (Move to, the two zones, Tag
+   * card) means anything about a printing that is in no deck. It is built by `DeckEditor` all the
+   * same, so that one `CardMenuDeps` serves both surfaces of that screen — two would be two
+   * collection-add observers and two places to draw one refusal.
+   *
+   * Absent is a panel with no menu, which is what a story or `DeckSearchPanel.test.tsx` mounts.
+   */
+  cardMenu?: (card: CardSummary) => (e: ReactMouseEvent) => void;
+  /**
    * The widest this panel may be drawn or dragged, in px — the editor's answer, because the
    * editor is what holds the two measurements it is made of.
    *
@@ -249,6 +268,7 @@ export function DeckSearchPanel({
   targetCategoryId,
   onTargetCategoryChange,
   defaultFormat,
+  cardMenu,
   roomy = true,
   maxWidth = Number.POSITIVE_INFINITY,
 }: DeckSearchPanelProps) {
@@ -520,6 +540,7 @@ export function DeckSearchPanel({
             categories={categories}
             targetCategoryId={targetCategoryId}
             defaultFormat={defaultFormat}
+            cardMenu={cardMenu}
           />
         </div>
       )}
@@ -684,7 +705,11 @@ function OpenPanel({
   categories,
   targetCategoryId,
   defaultFormat,
-}: Pick<DeckSearchPanelProps, "add" | "categories" | "targetCategoryId" | "defaultFormat">) {
+  cardMenu,
+}: Pick<
+  DeckSearchPanelProps,
+  "add" | "categories" | "targetCategoryId" | "defaultFormat" | "cardMenu"
+>) {
   // The deck's format seeds the Format select and nothing else — the hook owns what a default
   // does to filter state, this panel owns only handing it the deck's answer. See
   // {@link DeckSearchPanelProps.defaultFormat} for why that is a seed rather than a fence.
@@ -862,6 +887,10 @@ function OpenPanel({
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.
           gameChanger={tileGameChanger}
+          // The whole tile is the target — the art, its corner chip and the caption under it.
+          // The wall's own `cardMenu` slot, so this panel knows nothing about menus beyond
+          // where a right-click lands.
+          cardMenu={cardMenu}
           badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
           action={(card) => {
             // Where this card would land, named before the press rather than reported after it.
