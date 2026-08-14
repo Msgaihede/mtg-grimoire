@@ -198,8 +198,11 @@ export function FilterBar({
         onClick={search.toggleOwned}
       />
 
-      {/* Nothing is drawn until there is something to clear — the rule lives in the
-          control, so every view that offers a reset offers the same one. */}
+      {/* Always drawn, greyed when there is nothing to clear — the rule lives in the control,
+          so every view that offers a reset offers the same one. This row is the reason it is
+          that way round: the search box above is `flex-1`, so a Reset that appeared on the
+          first press would take its width out of the box and slide all nine colour chips left
+          under the finger that just pressed one. */}
       <ResetAll count={search.activeCount} onReset={search.resetAll} />
 
       {/* A view mode rather than a filter, so it sits past the reset with the layout pair

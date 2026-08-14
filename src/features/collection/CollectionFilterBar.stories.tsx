@@ -135,7 +135,12 @@ export const Default: Story = {
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
     // An empty sort spec reads as the default it is — name order — rather than as "Custom…".
     await expect(canvas.getByLabelText("Sort")).toHaveValue("name");
-    await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    // Drawn and dead rather than absent: a Reset that arrived on the first press would take
+    // its width out of the `flex-1` search box and slide the row being pressed.
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     // The condition grades are drawn as abbreviations and *spoken* as words: `DMG` is
     // vocabulary, and five spelled-out grades are 400px of chrome above the table they filter.
     await expect(canvas.getByRole("button", { name: "DMG, damaged" })).toHaveTextContent("DMG");
@@ -175,10 +180,12 @@ export const AllFiltersActive: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // `findBy` on the first query: the preset lands in an effect, so this waits for the render
-    // it caused. Matched on a prefix and asserted on the text, because the accessible name is
-    // `"Reset all8"` with no separator — see `FilterBar.stories.tsx`'s `AllFiltersActive`, where
-    // that is measured and explained.
-    await expect(await canvas.findByRole("button", { name: /^Reset all/ })).toHaveTextContent("8");
+    // it caused — **and it waits on the count**, because the button itself is drawn from the
+    // first render, so a bare `/^Reset all/` would resolve against the rows before the preset.
+    // The badge is drawn rather than spoken; the name carries the count in words.
+    await expect(
+      await canvas.findByRole("button", { name: "Reset all — 8 filters active" }),
+    ).toHaveTextContent("8");
     for (const colour of ["White", "Blue", "Black"]) {
       await expect(canvas.getByRole("button", { name: colour })).toHaveAttribute(
         "aria-pressed",
@@ -215,9 +222,11 @@ export const Cleared: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByLabelText("Sort")).toHaveValue("price");
 
-    await userEvent.click(canvas.getByRole("button", { name: /^Reset all/ }));
+    const reset = canvas.getByRole("button", { name: /^Reset all/ });
+    await userEvent.click(reset);
 
-    await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    // Still under the cursor that pressed it, greyed rather than gone.
+    await expect(reset).toHaveAttribute("aria-disabled", "true");
     await expect(canvas.getByLabelText("Search your collection")).toHaveValue("");
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
     await expect(canvas.getByRole("button", { name: "Foil" })).toHaveAttribute(

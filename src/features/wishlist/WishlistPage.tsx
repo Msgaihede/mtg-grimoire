@@ -417,7 +417,7 @@ function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
         />
       )}
 
-      {/* Nothing is drawn until there is something to clear — the rule lives in the control,
+      {/* Always drawn, greyed when there is nothing to clear — the rule lives in the control,
           so every view that offers a reset offers the same one. */}
       <ResetAll count={wishlist.activeCount} onReset={wishlist.resetAll} />
 
