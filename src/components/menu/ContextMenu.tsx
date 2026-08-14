@@ -31,6 +31,7 @@ import {
   placeMenu,
   rowButtonOf,
 } from "./panel";
+import { isTextField } from "./useContextMenu";
 import type { MenuAction, MenuItem, MenuPosition, MenuRadio } from "./types";
 
 /**
@@ -459,6 +460,21 @@ export function ContextMenu({
   const onKeyDown = (e: ReactKeyboardEvent) => {
     const root = panelRef.current;
     if (!root) return;
+    // **A text field inside a panel is a mode, and while the caret is in one every key below
+    // belongs to it.** A panel that owns the arrows, Home and End is right for a list of rows and
+    // wrong for a caret in a field: typing works and *editing* does not, which is how this arrived
+    // — the deck editor's "Tag card ▸ New tag…" drew the first input any panel has ever held.
+    //
+    // All of them yield, including `ArrowUp`/`ArrowDown`, which have no caret meaning in a
+    // single-line input and could defensibly have stayed the menu's. They do not, because the two
+    // failure modes are not comparable: keeping them takes focus out of the field mid-word and the
+    // next characters land on a row, while yielding them costs a reader one Escape to get back to
+    // the menu. A rule that yields some keys and not others is also one nobody can learn.
+    //
+    // Escape is untouched by this and must stay so — it is `useDismissOnEscape` on `window`, not
+    // this handler — which is what makes the yield safe: the way out of the field still works.
+    // `isTextField` is the same predicate that decides a right-click belongs to the browser.
+    if (isTextField(e.target)) return;
     const active = document.activeElement as HTMLElement | null;
     // Which panel the press belongs to is a question about where the caret is, not about where
     // the listener is: a submenu is a DOM descendant of this element, so its presses arrive here.

@@ -563,6 +563,100 @@ describe("ContextMenu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  /**
+   * A text field inside a panel — "Tag card ▸ New tag…" — and the keys it has to be given back.
+   *
+   * The panel owns `ArrowUp`/`ArrowDown`/`Home`/`End`/`ArrowLeft`/`ArrowRight` and `preventDefault`s
+   * every one of them, which is right for a list of rows and wrong for a caret in a field: typing
+   * works and *editing* does not. Nothing surfaced it until a body rendered the first input.
+   */
+  function tagField() {
+    function Content() {
+      return (
+        <>
+          <input aria-label="New tag" defaultValue="" />
+          <MenuRows
+            items={[{ kind: "action", id: "burn", label: "Existing tag", onSelect: vi.fn() }]}
+          />
+        </>
+      );
+    }
+    open([{ kind: "lazy", id: "tag", label: "Tag card", Content }]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    return Content;
+  }
+
+  it("gives the caret keys to a text field inside a panel", async () => {
+    const user = userEvent.setup();
+    tagField();
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+
+    const field = screen.getByLabelText<HTMLInputElement>("New tag");
+    await user.click(field);
+    await user.keyboard("burn");
+    expect(field).toHaveValue("burn");
+    expect(field.selectionStart).toBe(4);
+
+    // Each of these moves the *caret*. With the panel consuming them, focus jumps to a row
+    // instead and the next character the reader types goes somewhere else entirely.
+    await user.keyboard("{Home}");
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(0);
+
+    await user.keyboard("{End}");
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(4);
+
+    await user.keyboard("{ArrowLeft}");
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(3);
+
+    await user.keyboard("{ArrowRight}");
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(4);
+  });
+
+  /**
+   * The pair with no caret meaning in a single-line input, and the one real decision here.
+   *
+   * They could have stayed the menu's — but the failure mode of keeping them is the worst one
+   * available: focus leaves the field mid-word and the following characters land on a row. The
+   * failure mode of yielding is "I press Escape to get back to the menu", which is recoverable and
+   * which Escape already does. So a field is a **mode**: while the caret is in one, every key this
+   * handler owns belongs to the field. Half-yielding would be a rule nobody can learn.
+   */
+  it("does not move the menu's caret out of a field on ArrowDown", async () => {
+    const user = userEvent.setup();
+    tagField();
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+
+    const field = screen.getByLabelText<HTMLInputElement>("New tag");
+    await user.click(field);
+    await user.keyboard("{ArrowDown}");
+    expect(field).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(field).toHaveFocus();
+  });
+
+  /**
+   * Escape is untouched by any of this and must stay so: it is `useDismissOnEscape` on `window`,
+   * not the panel's `onKeyDown`, so yielding the caret keys cannot have taken it away. It is also
+   * the reader's way back out of the field — which is half the argument for yielding the rest.
+   */
+  it("still closes the panel a field is in, on Escape", async () => {
+    const user = userEvent.setup();
+    tagField();
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    await user.click(screen.getByLabelText("New tag"));
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByLabelText("New tag")).not.toBeInTheDocument();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
   it("runs a foreign row's action and closes the whole menu", async () => {
     const user = userEvent.setup();
     const pick = vi.fn();
