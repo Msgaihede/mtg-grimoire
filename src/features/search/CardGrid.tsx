@@ -201,9 +201,13 @@ export function CardGrid<T extends GridCard>({
    *
    * Its own slot rather than a second `badge`, because each corner of a tile has exactly one
    * owner and drift is what happens when they do not: bottom-left the owned/wishlist badge,
-   * top-right the finish chip and the game-changer crown, top-left this. It shares the badge's
-   * rules — the same backing, the same click of its own that opens the card (see the corners in
-   * {@link Tile}), and `empty:hidden` so a mark with nothing to say draws nothing.
+   * top-right the finish chip and the game-changer crown, top-left this.
+   *
+   * **This corner carries no backing, and that is the one way it differs from `badge`.** The
+   * mark here is `CountTag` — a filled banner that is already legible on a photograph — so the
+   * wall's `bg-bg/85` under it would be a chip inside a chip. The rest of the corner's rules are
+   * the badge's: the click of its own that opens the card (see the corners in {@link Tile}), and
+   * `empty:hidden` so a mark with nothing to say draws nothing.
    */
   topLeft?: (card: T) => ReactNode;
   /**
@@ -607,9 +611,17 @@ function Tile<T extends GridCard>({
           // The opposite corner, under the same rules as the badge above — see `topLeft`
           // for why each corner has exactly one owner, and the badge's comment for why both
           // take their own clicks now.
+          //
+          // **No backing and no type of its own, unlike the badge.** This slot's one caller
+          // hands over a `CountTag`, which is a filled banner that carries its own fill, its own
+          // face and its own slanted edge — the wall's `bg-bg/85` chip behind it would frame a
+          // frame. So the wall still decides the *corner*, which is the thing two views could
+          // drift on, and decides nothing about the paint. It stays inset by the same 4px rather
+          // than going flush: the corner is a sibling of the button, so the art's `rounded-lg`
+          // does not clip it, and a square-cornered banner at 0,0 would hang off the picture.
           <span
             onClick={() => onSelect(card.id)}
-            className="pointer-events-auto absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 font-mono text-[0.7rem] text-dim empty:hidden"
+            className="pointer-events-auto absolute top-1 left-1 empty:hidden"
           >
             {corner}
           </span>

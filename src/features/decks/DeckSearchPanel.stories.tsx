@@ -100,7 +100,8 @@ const meta = {
           "tile.\n\n" +
           "**The format filter opens on the open deck's format** ({@link DeckFormat}), because " +
           "a deck is built out of what is legal in it. It is a *default* and not a " +
-          "constraint — the select is live, `Any format` stays first in it, and a card the " +
+          "constraint — the select is live, `Any format` stays in it under the wider " +
+          "`Any card`, and a card the " +
           "format does not allow is the validation panel's `RULE BREAK` to draw rather than " +
           "something this search hides.\n\n" +
           "**A fixture of the editor, not a dismissible layer.** Escape pressed in here belongs " +
@@ -228,8 +229,9 @@ export const DeckFormat: Story = {
 
     // The value is what the request carries; the option's own text is the whole of what the
     // reader can see. A select holding a key none of its options carries reports the first one
-    // instead — `Any format` — so `value` reads back `""` and the line below catches it, while
-    // only the line after that says which word the reader is actually looking at.
+    // instead — `Any card`, the widest row there is since the `Unplayable` chip was merged into
+    // this list — so `value` reads back `"any-card"` and the line below catches it, while only
+    // the line after that says which word the reader is actually looking at.
     await expect(format).toHaveValue("modern");
     await expect(format.selectedOptions[0]).toHaveTextContent("Modern");
 

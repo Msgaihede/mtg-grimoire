@@ -386,7 +386,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   than a constraint.** `DeckEditor` derives `DeckSearchPanel`'s `defaultFormat` from the loaded row
   and that row's `FormatSpec`, and `useCardSearch` seeds its `format` state from it, so the first
   request the panel makes is already the filtered one rather than a wall of illegal cards replaced
-  a round trip later. The reader may move it to any format or back to `Any format`, the panel adds
+  a round trip later. The select's two pinned rows are `Any card` and `Any format`, widest first —
+  the `Unplayable` chip that used to ride this row became the former on 2026-08-14, so the panel
+  can be widened past legality without a second control. The reader may move it to any format or
+  back to either of those, the panel adds
   whatever is pressed, and an illegal card is `validation/engine.ts`'s `RULE BREAK` on the card in
   the deck — **nothing about legality moved into the search**, and a wall that refused to offer a
   card would be this editor answering a rules question in the one place with no business answering
@@ -409,8 +412,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   reader cleared it. **An unlisted key is folded into the picker the way `pickerFormats`' `keep`
   is**, and for the same reason: the deck's own picker offers `format_specs` rows while this filter
   offers `FORMATS`, so a Brawl or an Oathbreaker deck's key is one no `<option>` holds — and a
-  `<select>` whose `value` matches no option does not draw blank, it silently reports the first one,
-  putting `Any format` over a filtered wall. **It counts as a filter and does not count as the
+  `<select>` whose `value` matches no option does not draw blank, it silently reports the first one
+  — which since the `Unplayable` chip was merged into this select (2026-08-14) is **`Any card`**,
+  the widest row it has, so the control would read "every card, art cards included" over a filtered
+  wall rather than merely the wrong filter. **It counts as a filter and does not count as the
   reader having asked**: `activeFilterCount` includes it, so the panel opens showing `Reset all 1`
   and what is narrowing the wall is always visible and clearable, while `unfiltered` — which
   captions the empty result area and is the difference between "the database is still syncing" and
@@ -728,10 +733,16 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
   about the _deck_ — the quantity tag, the Game Changer banner, `RULE BREAK`. Under it goes the
   data line with facts about the _printing_. `QuantityTag` merges the tag and the copy count into
-  one mark: the count printed on the tag's own colour, grey (`UNTAGGED_COLOR`) when there is no
-  tag, so gold stays something a tag says. `TagDot` is unchanged on the other three views. It
-  costs ~34px of printed name, knowingly; the app-drawn frame insets its own name band by
-  exactly that width so a name _this app_ wrote is never clipped.
+  one mark: the count printed on the tag's own colour, grey when there is no tag, so gold stays
+  something a tag says. `TagDot` is unchanged on the other three views. It costs ~34px of printed
+  name, knowingly; the app-drawn frame insets its own name band by exactly that width so a name
+  _this app_ wrote is never clipped.
+  **The box that mark is drawn in is `components/CountTag.tsx` and no longer this folder's**
+  (2026-08-14): the slant, the 22px height, the mono face, the `aria-hidden` and the bare number.
+  The search wall counts printings with the same object, so the grey moved with it —
+  `NEUTRAL_COUNT_PAINT` is what `UNTAGGED_COLOR` became, and `QuantityTag` now passes `paint` for
+  a tagged card and nothing at all for an untagged one. What stayed here is what makes this one a
+  _tag_: the colour, the two-fact sentence in its `title`, and `LAYER.overlappingMark`.
 - **The data line is a sibling of the button, not a child** — so unlike every mark over the art
   its text is genuinely announced rather than swallowed by the button's `aria-label`. It is the
   card's foot: a 28px bar under the face, ridden **4px** up so the face's clipped corners cover

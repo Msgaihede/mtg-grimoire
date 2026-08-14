@@ -263,9 +263,10 @@ const categoryOptions = (): string[] => {
  * The filter row's Format select, reached by its label the way "Add to" is above.
  *
  * `FilterBar`'s own, drawn inside this panel and named by an `sr-only` "Format" — the row's
- * other controls are deliberately worded to keep clear of that word (`FilterBar.tsx`'s
- * "Unplayable" says "legal nowhere" for exactly this reason), so the exact string matches one
- * control here.
+ * other controls are deliberately worded to keep clear of that word, so the exact string matches
+ * one control here. An `Unplayable` chip beside it used to be the one at risk of colliding, and
+ * it is a row *inside* this select now (`Any card`): an `<option>` carries no label, so the
+ * widest thing this control offers can be worded plainly.
  */
 const formatSelect = (): HTMLSelectElement => screen.getByLabelText("Format") as HTMLSelectElement;
 

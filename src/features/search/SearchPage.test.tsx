@@ -1059,17 +1059,28 @@ describe("the result layout toggle", () => {
   });
 
   /**
-   * The tile's top-left corner is hoverable now, so the abbreviation it draws has plain words
-   * to offer — and they say **matched**, because that is what the number counts: a collapsed
-   * row groups the printings that got past the filters, not the card's whole print run.
+   * The tile's top-left corner is hoverable, so the bare number it draws has plain words to
+   * offer — and they say **matched**, because that is what the number counts: a collapsed row
+   * groups the printings that got past the filters, not the card's whole print run. The words
+   * are the whole of what a pointer user gets here, since `CountTag` is `aria-hidden`.
+   *
+   * **The `×` is gone and the exact text is what pins that.** `toHaveTextContent` is a substring
+   * match, so `"132"` passes against `"×132"` too — the `not` is the half of this that would
+   * fail if the sign came back. The mark is the deck editor's `CountTag` now, whose slanted
+   * banner says "this many" by its shape.
    */
-  it("spells out what a tile's ×N printings corner abbreviates", async () => {
+  it("spells out what a tile's printings corner counts, without an ×", async () => {
     searchCards.mockResolvedValue(page([{ ...BOLT, printings: 132 }]));
     wrap(<SearchPage />);
 
     await screen.findByAltText("Lightning Bolt");
 
-    expect(screen.getByTitle("132 printings matched these filters")).toHaveTextContent("×132");
+    const corner = screen.getByTitle("132 printings matched these filters");
+    expect(corner).toHaveTextContent("132");
+    expect(corner).not.toHaveTextContent("×");
+    // Grey, and grey specifically: a printing count has no tag to take a colour from, so it
+    // draws in `CountTag`'s neutral fill rather than in the gold a tag means.
+    expect(corner.style.backgroundColor).toBe("var(--color-pie-c)");
   });
 
   /**

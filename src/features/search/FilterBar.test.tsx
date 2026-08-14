@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
 import type { FacetResponse } from "@/lib/ipc";
 import { FilterBar } from "./FilterBar";
-import { FORMATS } from "./useCardSearch";
+import { ANY_CARD, FORMATS } from "./useCardSearch";
 
 const search = (over: Record<string, unknown> = {}) =>
   ({
@@ -121,39 +121,41 @@ describe("FilterBar", () => {
   });
 
   /**
-   * The chip is off by default and off means *hidden*, which is the one thing about it a
-   * reader cannot see. So the tooltip — which is the accessible name too — has to name the
-   * cards rather than restate the label: "unplayable" reads to a player as "banned in my
-   * format", which is a different and much larger set of cards.
+   * The printings no format allows are a **row of the format select**, not a chip beside it —
+   * and the row that reaches them is the one the select does *not* open on, which is the one
+   * thing about this control a reader cannot see. So the assertion is the pair together: what
+   * is drawn as picked, and what asking for the wider corpus actually sends.
+   *
+   * There is deliberately no `Unplayable` button left to find. The chip and this select were
+   * moving one axis in opposite directions, and their one combined state — "Modern, and also
+   * the art cards" — was a filter contradicting itself.
    */
-  it("offers the printings no format allows, switched off", async () => {
-    const toggleUnplayable = vi.fn();
-    render(<FilterBar search={search({ unplayable: false, toggleUnplayable })} />);
+  it("offers the printings no format allows as a row of the format select", async () => {
+    const setFormat = vi.fn();
+    render(<FilterBar search={search({ setFormat })} />);
 
-    const chip = screen.getByRole("button", { name: /^Unplayable/ });
-    expect(chip).toHaveTextContent("Unplayable");
-    expect(chip).toHaveAttribute("aria-pressed", "false");
-    expect(chip).toHaveAccessibleName(
-      "Unplayable — art cards, tokens and other printings that are legal nowhere",
-    );
-    // And it does **not** carry the word `format`, which names the select five controls to
-    // its left: `SearchPage.test.tsx` reaches that select by `getByLabelText(/format/i)`, and
-    // a second accessible name containing it makes four tests there ambiguous rather than
-    // wrong — the failure that reads as somebody else's regression.
-    expect(chip).not.toHaveAccessibleName(/format/i);
+    const select = screen.getByLabelText("Format") as HTMLSelectElement;
+    expect(select).toHaveValue("");
+    expect(select.selectedOptions[0]).toHaveTextContent("Any format");
+    expect(screen.queryByRole("button", { name: /unplayable/i })).toBeNull();
 
-    await userEvent.click(chip);
+    await userEvent.selectOptions(select, ANY_CARD);
 
-    expect(toggleUnplayable).toHaveBeenCalled();
+    expect(setFormat).toHaveBeenCalledWith(ANY_CARD);
   });
 
-  it("shows the unplayable printings as on once they are", () => {
-    render(<FilterBar search={search({ unplayable: true })} />);
+  /**
+   * A controlled `<select>` never has its `value` assigned by React — `react-dom` walks the
+   * options setting `selected`, and on no match it silently picks the first row that is not
+   * disabled. Both halves are asserted because they fail differently, and `getByRole` would
+   * catch neither: a present-but-unselected option passes it.
+   */
+  it("shows Any card as picked when it is", () => {
+    render(<FilterBar search={search({ format: ANY_CARD })} />);
 
-    expect(screen.getByRole("button", { name: /^Unplayable/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const select = screen.getByLabelText("Format") as HTMLSelectElement;
+    expect(select).toHaveValue(ANY_CARD);
+    expect(select.selectedOptions[0]).toHaveTextContent("Any card");
   });
 
   it("counts what Reset all would clear, and clears it", async () => {
@@ -350,8 +352,10 @@ describe("FilterBar, greyed by its facets", () => {
 
     expect(screen.getByRole("option", { name: "Modern" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Legacy" })).not.toBeDisabled();
-    // Never: it is how you get back to no format at all.
+    // Never, either of them: they are how you get back to no format at all, and `Any card` is
+    // the only row that can *widen* a search that has greyed itself into nothing.
     expect(screen.getByRole("option", { name: "Any format" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Any card" })).not.toBeDisabled();
   });
 
   /**
@@ -419,6 +423,7 @@ describe("FilterBar, its format options in order", () => {
     render(<FilterBar search={search()} />);
 
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Commander",
       "Legacy",
@@ -428,6 +433,20 @@ describe("FilterBar, its format options in order", () => {
       "Standard",
       "Vintage",
     ]);
+  });
+
+  /**
+   * The two pinned rows are a **ladder, widest first**, and it is the one ordering in this list
+   * that is not alphabetical and not faceted: every card, every card legal *somewhere*, then one
+   * named format. `Any card` collates above `Any format` by accident of the alphabet, which is
+   * exactly why this is asserted rather than left to fall out — a reader predicts the ladder,
+   * and the alphabet agreeing with it here is not what puts it in that order.
+   */
+  it("opens on Any format with Any card above it", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(formatOrder().slice(0, 2)).toEqual(["Any card", "Any format"]);
+    expect(screen.getByLabelText("Format")).toHaveValue("");
   });
 
   /**
@@ -456,6 +475,7 @@ describe("FilterBar, its format options in order", () => {
     );
 
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Commander",
       "Modern",
@@ -498,6 +518,7 @@ describe("FilterBar, its format options in order", () => {
     );
 
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Standard",
       "Vintage",
@@ -512,12 +533,11 @@ describe("FilterBar, its format options in order", () => {
 
   /**
    * The dead end — a search so narrow that every format greys at once, which one card and a
-   * text filter is enough to reach. "Any format" is pinned outside the sorted list, so it is
-   * first and pickable here exactly as it is everywhere else: it is the answer "no filter"
-   * rather than a format, and it is how a reader who has filtered themselves into nothing
-   * gets out.
+   * text filter is enough to reach. Both pinned rows are outside the sorted list, so they are
+   * first and pickable here exactly as they are everywhere else: neither is a format, and they
+   * are how a reader who has filtered themselves into nothing gets out.
    */
-  it("pins Any format first even when nothing at all is legal", () => {
+  it("pins both non-format rows first even when nothing at all is legal", () => {
     render(
       <FilterBar
         search={search({
@@ -527,6 +547,7 @@ describe("FilterBar, its format options in order", () => {
     );
 
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Commander",
       "Legacy",
@@ -537,6 +558,7 @@ describe("FilterBar, its format options in order", () => {
       "Vintage",
     ]);
     expect(screen.getByRole("option", { name: "Any format" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Any card" })).not.toBeDisabled();
     expect(screen.getByRole("option", { name: "Commander" })).toBeDisabled();
   });
 
@@ -569,6 +591,7 @@ describe("FilterBar, its format options in order", () => {
     render(<FilterBar search={seeded({ format: "historic" })} />);
 
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Commander",
       "Historic",
@@ -583,12 +606,12 @@ describe("FilterBar, its format options in order", () => {
 
   /**
    * The pin is outside the sort, and a seeded format is the first thing that can prove it:
-   * `Alchemy` collates *above* `Any format` (`Al` before `An`), so a list that sorted the
-   * pinned row in with the rest would file a format above the way out of the filter, where
-   * nothing else in this suite would notice. `Any format` is the answer "no filter" rather
-   * than a format, and it is first whatever the alphabet hands it.
+   * `Alchemy` collates *above* both pinned rows (`Al` before `An`), so a list that sorted them
+   * in with the rest would file a format above the way out of the filter, where nothing else in
+   * this suite would notice. Neither pinned row is a format, and both are first whatever the
+   * alphabet hands them.
    */
-  it("keeps Any format first when a seeded format would collate above it", () => {
+  it("keeps both pinned rows first when a seeded format would collate above them", () => {
     render(
       <FilterBar
         search={search({
@@ -599,6 +622,7 @@ describe("FilterBar, its format options in order", () => {
     );
 
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Alchemy",
       "Commander",
@@ -625,6 +649,7 @@ describe("FilterBar, its format options in order", () => {
     expect(screen.getByRole("option", { name: "Modern" })).not.toBeDisabled();
     // And it sinks below the pickable half rather than holding its slot under H.
     expect(formatOrder()).toEqual([
+      "Any card",
       "Any format",
       "Commander",
       "Legacy",

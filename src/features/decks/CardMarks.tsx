@@ -25,9 +25,10 @@
  * Adding a mark here means asking which of those two says it in words.
  */
 import { Crown } from "lucide-react";
+import { CountTag } from "@/components/CountTag";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { tagColorCss, tagFgCss, UNTAGGED_COLOR } from "./tagColors";
+import { tagColorCss, tagFgCss } from "./tagColors";
 
 /**
  * The one tag a card wears, as an 8px chip in its own colour with the name one hover away.
@@ -67,13 +68,16 @@ export function TagDot({
  * So the count is *printed on* the tag: one object, one glance, and the strip keeps room for
  * the printed name underneath it.
  *
- * **An untagged card is grey**, {@link UNTAGGED_COLOR}, never the gold a missing token falls
- * to. A filled mark has to be some colour, and if the untagged one were gold then gold would
- * stop being something a tag says. This is the one caller that draws the distinction, which is
- * why the constant lives beside the palette rather than here.
+ * **An untagged card is grey** — {@link CountTag}'s own `NEUTRAL_COUNT_PAINT`, never the gold a
+ * missing token falls to. A filled mark has to be some colour, and if the untagged one were gold
+ * then gold would stop being something a tag says. This is the one caller that draws the
+ * distinction, which is why it passes `paint` for a tag and nothing at all without one.
  *
- * The slanted right edge is what keeps it from reading as a button: a printed card has no
- * rectangles in that corner, and a square chip on the art looks like something to press.
+ * **The box is {@link CountTag}'s and no longer this file's** — the slant, the height, the mono
+ * face, the `aria-hidden` and the number-with-no-`×`. The search wall makes the same statement
+ * about a different quantity (how many printings a collapsed tile stands for) and the two have to
+ * be one object. What stays here is what makes this one a *tag*: the colour it is filled with,
+ * the sentence naming both facts, and the z-index below.
  *
  * {@link TagDot} is untouched and is still what the table, the text columns and the categories
  * panel draw — a row has a column for the count and does not need the two folded together.
@@ -92,33 +96,26 @@ export function QuantityTag({
   color: string | null;
   className?: string;
 }) {
-  const paint = name === null ? UNTAGGED_COLOR : { css: tagColorCss(color), fg: tagFgCss(color) };
   return (
-    <span
-      aria-hidden="true"
+    <CountTag
+      count={quantity}
       // Both facts, because the count alone would make the colour a riddle and the name alone
       // would make the number one. The words themselves are in `deckCardName`, which is the
       // only text inside a labelled button anyone hears.
       title={name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`}
-      style={{
-        backgroundColor: paint.css,
-        color: paint.fg,
-        clipPath: "polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%)",
-      }}
+      // Nothing for an untagged card, which is how it lands on the neutral grey — see above.
+      paint={name === null ? undefined : { css: tagColorCss(color), fg: tagFgCss(color) }}
       className={cn(
         // **The z-index is load-bearing and `relative` alone was not enough.** This tag has to
         // cover the Game Changer banner tucked 10px under its slanted tail, and the obvious
         // trick — leave the banner static and make this positioned — does not work on flex
         // items: they paint in order-modified document order, so the later sibling won. The
         // lowest rung on the scale, and `layers.ts` has the measurement.
-        "relative flex h-[22px] shrink-0 items-center pr-3 pl-1.5",
+        "relative",
         LAYER.overlappingMark,
-        "font-mono text-xs leading-none tabular-nums",
         className,
       )}
-    >
-      {quantity}
-    </span>
+    />
   );
 }
 
