@@ -817,3 +817,36 @@ describe("categories", () => {
     expect(screen.queryByText(/^Filed /)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * **No row in this dialog offers a context menu, and that is a layer rule rather than a gap.**
+ *
+ * A category heading on the *desk* does offer one — Rename, Import, Export, the switch, Delete —
+ * and it is wired onto the **view's own group element**, never onto `GroupHeader`, which is the
+ * component this dialog draws in every one of its rows. Wired one level up it would open here
+ * too: inside a `DeckDialog` on `LAYER.overlay` (`z-45`) while `ContextMenu` draws at
+ * `LAYER.popup` (`z-30`) — **behind this dialog's own scrim**. Invisible, unreachable, and
+ * silent, because jsdom has no opinion about a z-index and every assertion about that menu would
+ * go on passing. `layers.ts` names the overlap as the one that must not exist.
+ *
+ * **This is the check from the side that would actually break.** The wiring site carries a
+ * comment saying not to move the handler, and a comment cannot fail; the editor's own "no menu on
+ * a derived heading" case keeps passing under exactly this mistake, because the `null`-id guard
+ * survives it. A right-click on a row *here* is the thing that changes.
+ */
+describe("the category rows and the app's context menu", () => {
+  it("attaches no menu handler to a row, because a menu here would paint behind the scrim", async () => {
+    mount();
+    await screen.findByText("Ramp");
+
+    // No `ContextMenuProvider` is mounted in this file, so this asserts the absence of a
+    // **handler** rather than of a panel — which is the honest question: `useContextMenu`
+    // degrades to a no-op without a provider, so a menu wired onto `GroupHeader` would draw
+    // nothing here either way. What it *would* do is call `preventDefault()`, which is
+    // `useContextMenu`'s first act on any surface that offers rows.
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    screen.getByText("Ramp").dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+});

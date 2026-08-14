@@ -2522,8 +2522,11 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * One of the family's six writes has no control in this view — the printing swap is pressed
-   * on the **card pane**, which is a sibling of this editor rather than part of it.
+   * One member of the refused-write family has no control in this view — the printing swap is
+   * pressed on the **card pane**, which is a sibling of this editor rather than part of it.
+   * (No count: read `DeckEditor`'s `writes` array and the `newestWrite` call beside it. A
+   * number stood here, went stale twice in one day as the two menus landed, and is not coming
+   * back.)
    *
    * It cannot honestly be tested from here, and it is tested where the two components meet:
    * `App.test.tsx`'s "says a refused swap in the pane, and the deck behind it goes with it".
@@ -2678,11 +2681,17 @@ describe("DeckEditor drag and drop", () => {
  * The pure half of the export layer, asserted **directly** rather than through the rendered
  * dialog.
  *
- * That is a stated compromise and not the usual preference: the export dialog is the one editor
- * surface with no control in this view — it is opened from a category heading's right-click,
- * which `views/` wires — so there is nothing here to press and no rendered path to reach it
- * through. Both functions are exported for that reason, and when the heading is wired the
- * integration assertion belongs beside it rather than replacing these.
+ * That is a stated compromise and not the usual preference: the export dialog is **one of the
+ * two editor surfaces with no control in this view** — the delete-category confirmation is the
+ * other, and both are opened from a category heading's right-click — so when this was written
+ * there was nothing here to press and no rendered path to reach it through. Both functions are
+ * exported for that reason.
+ *
+ * **The heading is wired now**, so the rendered path exists: `DeckEditor — a category's menu`
+ * presses `Export cards…` and asserts the dialog opens on the pile that was right-clicked.
+ * These stay all the same, because they pin the *pure* answers — the file name's punctuation
+ * rules, the deleted-category title — which an integration case would only reach through a
+ * dialog that draws one of them and not the other.
  */
 describe("categoryExport", () => {
   const REMOVAL = category(11, "Removal", "main");
@@ -2836,8 +2845,11 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **Every category the deck has, in the reader's own `sortOrder`** — one of exactly two
-   * documented exemptions from `sortOptions`. Sorted, this list would read Commander, Companion,
+   * **Every category the deck has, in the reader's own `sortOrder`** — a documented exemption
+   * from `sortOptions`, of the kind whose order the reader arranged themselves. (No count and
+   * no ordinal: `src/CLAUDE.md` keeps no list of the exemptions any more, precisely because
+   * "exactly two" was false within a day of being written. The comment at each site is the
+   * record.) Sorted, this list would read Commander, Companion,
    * Main deck, Maybeboard, Recursion, Sideboard, which is a different order in the menu from the
    * one the desk and the Categories dialog draw.
    */

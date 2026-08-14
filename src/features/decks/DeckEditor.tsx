@@ -1218,6 +1218,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: DeckCard) => {
       const build = () =>
         buildDeckCardMenu(card, {
+          // **No `paneCardId`, deliberately.** That field greys "View all printings" on the
+          // card the pane is already showing, because there the row would do nothing. Here it
+          // would not: this hand-off is `openCardFromDeck` — the app's only write of
+          // `paneDeckContext` — so pressing it on the card already open **re-anchors the pane
+          // onto this deck row**, which is what puts "Use this printing" on its printings list.
+          // Greying it would take a working affordance away. It is optional for this reason.
           card: { ...cardMenuDeps, viewPrintingsInPane: () => openCard(card) },
           categories,
           cards: deck.cards,
@@ -1356,6 +1362,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: CardSummary) => () =>
       buildCardMenu(searchCardTarget(card), {
         ...cardMenuDeps,
+        // No `paneCardId` here either, and for the other half of the same reason: a tile is
+        // not a row of this deck, so `setSelectedCardId` clears `paneDeckContext` in the same
+        // write. Pressing it on the card the pane is showing therefore *un*-anchors a pane that
+        // was opened from a deck row, which is a state change rather than a no-op.
         viewPrintingsInPane: setSelectedCardId,
       }),
     [cardMenuDeps, setSelectedCardId],
