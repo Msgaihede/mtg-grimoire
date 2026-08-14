@@ -151,9 +151,11 @@ const meta = {
           "here as a decision rather than found later as a gap. The `empty` seed reaches " +
           "{@link NoMatch}'s sentence instead, and for a different reason: a database that has " +
           "not finished its first sync answers every name with nothing.\n\n" +
-          "**Nothing about this field has been driven in the shipped window yet** — the panel's " +
-          "anchoring, its layer over the deck's own groups and the Escape ladder out of this " +
-          "field are all unverified live. A green story here is not that pass.",
+          "**A green story here is not the live pass**, and never was — jsdom paints nothing " +
+          "and Storybook is not the shipped window. That pass was driven separately on " +
+          "2026-08-14 and its figures live in `src/features/decks/CLAUDE.md`: the panel's " +
+          "anchoring and layer, the arrows moving the highlight without the caret leaving the " +
+          "field, and Escape closing this list while leaving the card pane open.",
       },
     },
   },

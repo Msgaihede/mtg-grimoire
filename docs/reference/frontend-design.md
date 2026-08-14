@@ -270,8 +270,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   flag, because a toolbar field with no list under it owes the press to the card detail
   pane, which listens on `window` in the bubble phase. Its deck-side rules — the three
   routes to one write, the freshness guard, the missing `marketplace` — are in
-  `src/features/decks/CLAUDE.md`. **None of it has been driven in the shipped window yet;
-  that pass is outstanding.**
+  `src/features/decks/CLAUDE.md`. **Driven in the shipped window 2026-08-14** (`tauri dev`,
+  debug, 1280×800): the panel computes `z-index: 30` and `transform-origin: 0px 0px`, its
+  left edge sits on the field's to the pixel (285/285), nothing overflowed right and
+  `scrollLeft` stayed 0 — and Escape closed the list while leaving the card pane open, then
+  closed the pane on the second press. Every figure is in
+  `src/features/decks/CLAUDE.md`.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

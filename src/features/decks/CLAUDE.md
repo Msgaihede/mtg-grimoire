@@ -344,9 +344,26 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   tokens and the set code, and a label carrying only the card's name would make the row
   indistinguishable from the docked panel's tile for the same card — an ambiguity that is real,
   because both are on screen at once.
-- **Nothing here has been driven in the shipped window** — the anchoring, the panel's layer over
-  the deck's own groups and the Escape ladder from this field are all unverified live. That pass
-  is outstanding.
+- **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against the real 116 703-card corpus): `sol` drew **5** rows with row 0 `aria-selected` and
+  `aria-activedescendant` on it. The panel computes `z-index: 30` (`LAYER.popup`),
+  `position: absolute` and `transform-origin: 0px 0px`; its left edge is **285** against the
+  field's **285** and its top **199** against the field's bottom **195** — the `mt-1` — at 288px
+  wide, with no right overflow and `documentElement.scrollLeft` **0**. Two ArrowDowns moved the
+  highlight to index **2** with `document.activeElement` still the field, and Enter added *that*
+  row rather than the top one, filed under `Creature` by its type line. A click on the fourth row
+  added it, left the caret in the field, and drew the colour-identity rule break on the new card —
+  so the click goes the same write-and-validate route the rest of the editor does. The miss read
+  `No card found for “counterspellgoblin”.` with the field's text kept. **The Escape ladder holds
+  one press per layer**: with the card pane open, the first press closed the list and left the
+  pane, keeping the caret in the field, and the second closed the pane. At **1024** the field is
+  208px and neither it nor the status line clips (`body.scrollWidth` 1024). The console recorder
+  caught **5** entries and no error or warning.
+- **Two things the pass did not cover.** Reduced motion on this panel was not emulated — it is the
+  same `popup` preset inside the same `PopupPanel` as the set filter, whose reduction is already
+  measured, so this would be re-measuring a shared component rather than this one. And the
+  freshness guard is **unit-tested only**: reproducing a stale list live means winning a 300ms
+  race by hand, which is what a test with a controlled clock is for.
 
 ## Known open bugs
 
