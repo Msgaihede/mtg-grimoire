@@ -156,6 +156,38 @@ describe("FilterBar", () => {
     );
   });
 
+  /**
+   * A wall narrowed to one card, with the card's name on the row saying so.
+   *
+   * The filter arrives from somewhere else entirely — a right-click on a card in any of ten
+   * surfaces — so it is the one filter on this row the reader did not set here, and the only
+   * one they could not otherwise account for. It is drawn as the same `ToggleChip` its
+   * neighbours are, switched on, and clearing it is the press every other on-chip here answers.
+   */
+  it("names the card the wall is narrowed to, and clears it on a press", async () => {
+    const setOracleId = vi.fn();
+    render(
+      <FilterBar
+        search={search({ oracleId: "o-bolt", oracleName: "Lightning Bolt", setOracleId })}
+      />,
+    );
+
+    const chip = screen.getByRole("button", { name: /^Lightning Bolt/ });
+    expect(chip).toHaveTextContent("Lightning Bolt");
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(chip);
+
+    expect(setOracleId).toHaveBeenCalledWith("");
+  });
+
+  /** No card, no chip: an empty chip captioned with nothing is a control about nothing. */
+  it("draws no card chip when the search is not narrowed to one", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).toBeNull();
+  });
+
   it("counts what Reset all would clear, and clears it", async () => {
     const resetAll = vi.fn();
     render(<FilterBar search={search({ activeCount: 3, colors: ["W"], resetAll })} />);
