@@ -25,7 +25,14 @@ import { Crown, FolderInput, Tag, UserRound } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
-import { ipcError, type DeckCard, type DeckCategory, type DeckTag, type DeckVariant, type FormatSpec } from "@/lib/ipc";
+import {
+  ipcError,
+  type DeckCard,
+  type DeckCategory,
+  type DeckTag,
+  type DeckVariant,
+  type FormatSpec,
+} from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { DEFAULT_TAG_COLOR } from "./tagColors";
