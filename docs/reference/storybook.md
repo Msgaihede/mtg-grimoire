@@ -2,11 +2,30 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **385 stories across 49 story files, 48 docs
+`npm run storybook` · `npm run build-storybook`. **398 stories across 51 story files, 50 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the last `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the merge of the X-mana-category branch
-and `origin/main`: **433 entries, 385 `story`, 48 `docs`, 50 distinct `importPath`s.**
+(`Object.values(index.entries)`, grouped by `type`; the 52nd `importPath` is the `.mdx`).
+**Measured 2026-08-14** off a fresh `build-storybook` on the deck-creation-overhaul branch **with
+`main` merged in**: 448 entries, 398 `story`, 50 `docs`, 52 distinct `importPath`s. That branch
+adds two story files — `Decks/Cover picker` and `Decks/Settings form` — and one story to
+`CreateDeckDialog`.
+
+**This headline has now conflicted on four consecutive merges of `main`, and one of them is the
+first the arithmetic would have got wrong.** That was the merge immediately before this one: the
+two sides read 388 (this branch over a 375 base) and 382 (`main`, `Decks/QuickAdd`'s six plus
+`Decks/Editor`'s `ReopensOnThePlan`). 375 + 13 + 7 is **395**; the merged tree built **396**. One
+story existed that neither branch could see in its own index and no addition would have found. So
+the rule below is not a counsel of tidiness, it is the only method that produces the right
+number: **rebuild and read the index on the tree you are shipping**, which is the merge commit
+and not either parent.
+
+**This branch then measured three times in one session — 388, 396, 398 — and added no story of
+its own between the last two.** The 396 → 398 is `main`'s X-mana-category pair arriving in a file
+that already existed, which is why the file and docs-page counts did not move with it: the same
+shape as the 384 → 385 recorded below, two merges apart.
+
+The paragraphs under this one are a branch that trusted the arithmetic and was wrong, and two
+branches that were each right about a tree nobody was shipping.
 
 **This figure was measured twice in one hour and moved between them**, which is the strongest
 form of the lesson below: the first build of the merged tree answered **384** (432 entries), and
@@ -97,17 +116,17 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**47 of the 49 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is
+**49 of the 51 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is
 declared per file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those
 two have stories and no docs page. A new story file gets neither unless it says
 `tags: ["autodocs"]`.
 (Re-derived on the merged tree 2026-08-14, from source and from the built index rather than from
-either side of the merge: **47 autodocs + 1 `.mdx` = 48 docs pages**, against 49 story files, and
+either side of the merge: **49 autodocs + 1 `.mdx` = 50 docs pages**, against 51 story files, and
 the two opting out are still `CategoriesPanel` and `TheoryDiffDialog` — checked by grepping the
-tag, not by subtracting. **The line above it and this parenthetical disagreed for one merge** —
-the headline had been updated to 47-of-49 while the arithmetic under it still read 46-of-48,
-which is a derived count going stale inside the very sentence that says not to carry one
-forward.)
+tag, not by subtracting. Both story files this branch adds carry it. **The line above it and this
+parenthetical disagreed for one merge** — the headline had been updated to 47-of-49 while the
+arithmetic under it still read 46-of-48, which is a derived count going stale inside the very
+sentence that says not to carry one forward.)
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a

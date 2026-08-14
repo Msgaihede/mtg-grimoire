@@ -29,7 +29,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const pickFile = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
-import { coverChoices, DeckSettingsDialog, folderPaths } from "./DeckSettingsDialog";
+import { DeckSettingsDialog } from "./DeckSettingsDialog";
 
 /** A deck with a cover whose artist is known, which is the only kind that is drawn at all. */
 const BURN: DeckRow = {
@@ -509,11 +509,11 @@ describe("DeckSettingsDialog", () => {
 
     const format = screen.getByLabelText("Format");
     await within(format).findByRole("option", { name: "Commander" });
-    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Casual",
-      "Commander",
-      "Modern",
-    ]);
+    expect(
+      within(format)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Casual", "Commander", "Modern"]);
   });
 
   /**
@@ -533,12 +533,11 @@ describe("DeckSettingsDialog", () => {
     const format = screen.getByLabelText("Format");
     await within(format).findByRole("option", { name: "Historic" });
     expect(format).toHaveValue("historic");
-    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Casual",
-      "Commander",
-      "Historic",
-      "Modern",
-    ]);
+    expect(
+      within(format)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Casual", "Commander", "Historic", "Modern"]);
   });
 
   /**
@@ -552,11 +551,11 @@ describe("DeckSettingsDialog", () => {
     await screen.findByRole("option", { name: "Commander › Legends" });
 
     const folder = screen.getByLabelText("Folder");
-    expect(within(folder).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Top level",
-      "Commander",
-      "Commander › Legends",
-    ]);
+    expect(
+      within(folder)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Top level", "Commander", "Commander › Legends"]);
   });
 
   /** A refused write says so, once, and it is the *newest* write that owns the line — a refused
@@ -584,96 +583,9 @@ describe("DeckSettingsDialog", () => {
   });
 });
 
-describe("coverChoices", () => {
-  /** A commander deck's cover is almost always its commander, and `categoryKind` is what
-   *  answers that — the category's *name* is the reader's and may be anything. */
-  it("puts the commander first and keeps the read's order otherwise", () => {
-    const choices = coverChoices([
-      card({ name: "Sol Ring" }),
-      card({ name: "Atraxa", categoryKind: "commander" }),
-      card({ name: "Swords to Plowshares" }),
-    ]);
-
-    expect(choices.map((c) => c.name)).toEqual(["Atraxa", "Sol Ring", "Swords to Plowshares"]);
-  });
-
-  /** One printing in two categories is one choice: the picker offers pictures, not rows. */
-  it("offers each printing once", () => {
-    const choices = coverChoices([
-      card({ name: "Sol Ring" }),
-      card({ name: "Sol Ring", categoryKind: "side" }),
-    ]);
-
-    expect(choices).toHaveLength(1);
-  });
-
-  /** An orphan's printing has left `cards`: no art to fetch, no artist to credit, and a cover
-   *  the gallery would decline to draw. */
-  it("leaves out a row whose printing is gone", () => {
-    const choices = coverChoices([
-      card({ name: "Sol Ring" }),
-      card({ name: "Ghost", needsReview: "This printing left the card database." }),
-    ]);
-
-    expect(choices.map((c) => c.name)).toEqual(["Sol Ring"]);
-  });
-});
-
-describe("folderPaths", () => {
-  /** `deck_folders` is flat; a select of bare names would list two "Legends" with nothing to
-   *  tell them apart. */
-  it("writes each folder as the path a reader would say", () => {
-    expect(folderPaths(FOLDERS)).toEqual([
-      { id: 1, path: "Commander" },
-      { id: 2, path: "Commander › Legends" },
-    ]);
-  });
-
-  /** The backend refuses a move that would make a cycle — but a read is a read, and a walk
-   *  with no fence is an infinite loop in the one case nobody can reproduce. */
-  it("stops walking a cycle instead of hanging", () => {
-    const cyclic: DeckFolder[] = [
-      { id: 1, parentId: 2, name: "A", sortOrder: 0 },
-      { id: 2, parentId: 1, name: "B", sortOrder: 0 },
-    ];
-
-    expect(folderPaths(cyclic)).toHaveLength(2);
-  });
-
-  /** A folder at the root is its own whole path. */
-  it("leaves a root folder alone", () => {
-    expect(folderPaths([{ id: 9, parentId: null, name: "Standard", sortOrder: 0 }])).toEqual([
-      { id: 9, path: "Standard" },
-    ]);
-  });
-
-  /**
-   * Through the app's one collator, and not a bare `localeCompare`.
-   *
-   * **Numerals count as numbers**, which is the behaviour this changed: the bare
-   * `a.path.localeCompare(b.path)` this used to do puts `Cube 10` above `Cube 2`, because it
-   * is ranking the character `1` against the character `2` — and people number their folders.
-   * **Case does not split the list** either, so a reader's `brews` sits where a reader would
-   * look for it rather than after every capitalised name.
-   *
-   * And the locale is pinned to `"en"` rather than read off the host, for the reason
-   * `sorting.ts` gives: the collation is part of what the app *does*, and a list that reorders
-   * itself on a different machine is a list two readers cannot compare. That half cannot be
-   * asserted from inside one process, which is why it is written down here.
-   */
-  it("orders the paths by the app's collator, numerals and case included", () => {
-    const numbered: DeckFolder[] = [
-      { id: 1, parentId: null, name: "Cube 10", sortOrder: 0 },
-      { id: 2, parentId: null, name: "Cube 2", sortOrder: 0 },
-      { id: 3, parentId: null, name: "brews", sortOrder: 0 },
-      { id: 4, parentId: null, name: "Cube 1", sortOrder: 0 },
-    ];
-
-    expect(folderPaths(numbered).map((f) => f.path)).toEqual([
-      "brews",
-      "Cube 1",
-      "Cube 2",
-      "Cube 10",
-    ]);
-  });
-});
+/*
+ * `coverChoices` and `folderPaths` were tested here and are not any more: the first belongs to
+ * `DeckCoverPicker` and the second to `DeckSettingsForm`, so their cases moved to those two
+ * files' suites. This dialog is now the host — what it owns is which command each answer writes,
+ * which is what every case above is about.
+ */

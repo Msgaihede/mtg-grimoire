@@ -187,6 +187,33 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
   per deck it un-filed.
+- **`deck_create` makes a whole deck in one INSERT, not a name to be configured afterwards**
+  (changed 2026-08-14). `DeckInput` carries `name`, `formatKey`, `description`, `notes`,
+  `coverCardId`, `folderId` and `theoryEnabled`, because the "New deck" dialog now hosts the same
+  settings form the settings dialog does and would otherwise be create-then-patch-then-setFolder:
+  three transactions, and a half-made deck to roll back by hand the way
+  `useDeckImport.importIntoNewDeck` has to. Four things about it that are **not** `deck_update`'s
+  rules, each of which a reader who knows the patch will get wrong:
+  **(1)** nothing here is written with `coalesce(?n, column)` — this is an INSERT, so an absent
+  `folderId` genuinely is the top level and means it, where `DeckPatch.folderId` cannot un-file a
+  deck at all (`deck_set_folder` is still the only command that reaches the root of an existing
+  deck's tree). **(2)** `cover_kind` is not settable and keeps its DDL default `card_art`; a
+  custom picture is `deck_set_cover_image`, which takes a **path** and a **deck id**, so it can
+  only ever be a follow-up call. **(3)** `theoryEnabled` at create sets the column and **moves**
+  nothing, there being no live cards to move — `update_deck`'s route runs
+  `deck_theory::move_live_into_theory`, making the deck the reader already has into the plan and
+  leaving live empty, and it does so only on the off → on _transition_. So a deck **born** with
+  theory on has made that transition at birth, no later patch will ever move anything for it, and
+  the reader's route is `deck_theory_copy_from_live`, which is unchanged. The two routes differ in
+  what they *do* and agree exactly on what a new deck ends up with. **(4)** a deck's birth stays
+  **one** audit row, `{field:"name", from:null, to:name}`, however many fields it was born with:
+  `deck_update` records one row per changed field because each of those is an event, and being
+  born is one event. `folderId` is fenced by the real foreign key rather than by Rust — which is
+  invisible to a test whose fixture forgets `PRAGMA foreign_keys=ON`, since `db::open` always
+  sets it and `seeded()` does not. The Storybook fake's `deck_create` was **missing that audit
+  row entirely** until this change and now writes it. **`separate_x_group` (the bullet below) is
+  deliberately not on `DeckInput`**: it is a reading preference, and a deck being born has not
+  been read yet, so it takes its DDL default like the three view-state columns beside it.
 - **`decks.separate_x_group` is a stored _reading_ preference, and `deck_update` is the whole of
   how it is written.** `INTEGER NOT NULL DEFAULT 0`, **schema v13** — whether this deck gathers
   the cards printing `{X}` under a heading of their own. Per deck rather than per user for

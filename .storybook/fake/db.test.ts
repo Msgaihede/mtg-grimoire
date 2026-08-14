@@ -2091,6 +2091,73 @@ describe("the deck row itself", () => {
     ]);
   });
 
+  /**
+   * The whole deck in one INSERT, which is what the "New deck" dialog sends now that it hosts
+   * every deck-level field: create-then-patch-then-file would be three writes and a half-made
+   * deck to unwind by hand when the second one failed.
+   */
+  it("writes every field of a create, keeps card_art, and records one audit row", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const folder = w.deck_folder_create({ parentId: null, name: "Ideas" });
+    const row = w.deck_create({
+      deck: {
+        name: "  Burn  ",
+        formatKey: "modern",
+        description: "fast red",
+        notes: "the sideboard plan lives here",
+        coverCardId: BOLT.id,
+        folderId: folder.id,
+        theoryEnabled: true,
+      },
+    });
+    expect(row).toMatchObject({
+      name: "Burn",
+      formatKey: "modern",
+      description: "fast red",
+      notes: "the sideboard plan lives here",
+      coverCardId: BOLT.id,
+      folderId: folder.id,
+      theoryEnabled: true,
+      // A create never sets a *custom* cover: that one needs a path on disk and a deck id, so
+      // it can only be `deck_set_cover_image` afterwards.
+      coverKind: "card_art",
+    });
+    // Joined from `cards` rather than echoed back, which is the half a store of DTOs would get
+    // right by accident.
+    expect(row.coverArtist).toBe("Christopher Rush");
+    // Theory on at birth seeds nothing — the patch copies the live list across on off → on,
+    // and a deck being born has no live cards to copy.
+    expect(db.deckCards).toHaveLength(0);
+    // One event, however many fields it was born with. `deck_update` writes a row per changed
+    // field because each of those is an event; this is the one with a null `from`.
+    expect(db.deckAudit).toHaveLength(1);
+    expect(db.deckAudit[0]).toMatchObject({ deckId: row.id, kind: "deck", delta: 0 });
+    expect(JSON.parse(db.deckAudit[0].payload)).toEqual({ field: "name", from: null, to: "Burn" });
+  });
+
+  it("reads an absent folderId as the top level, not as 'leave it'", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.deck_folder_create({ parentId: null, name: "Ideas" });
+    const row = w.deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    // `DeckPatch.folderId` cannot un-file a deck, because `coalesce(?n, folder_id)` reads a
+    // bound NULL as "leave it" — and a reader who knows that rule will assume it holds here.
+    // It does not: an INSERT has nothing to leave, so an omitted field is the column's own
+    // default and an omitted folder is the root.
+    expect(row).toMatchObject({
+      folderId: null,
+      description: null,
+      notes: null,
+      coverCardId: null,
+      coverKind: "card_art",
+      theoryEnabled: false,
+      isBuilt: false,
+      archived: false,
+    });
+    expect(row.coverArtist).toBeNull();
+  });
+
   it("deletes the deck's cards, categories and tags with it", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 }), deck({ id: 2 })],
