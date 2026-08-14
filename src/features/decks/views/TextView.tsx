@@ -16,7 +16,9 @@ import {
   deckCardMenuProps,
   deckCardProps,
   DeckCardControls,
+  deckGroupMenuProps,
   deckGroupProps,
+  deckGroupRename,
   FOCUS,
   REVEALED_ON_CARD,
   useCategoryDrop,
@@ -191,9 +193,16 @@ function TextGroup({
     <section
       ref={attach}
       aria-labelledby={`text-group-${group.key}`}
+      // **The pile's own menu, on this element rather than on `GroupHeader`** - see
+      // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
+      // scrim. A card inside stops the event, so the innermost surface still wins.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       {...deckGroupProps(group.categoryId)}
       // `AppShell`'s pair, as in the other three views: one vocabulary for a drop target.
-      className={cn("relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
+      // `FOCUS` because this is where the caret comes back to when the pile's menu closes; the
+      // tab index is already here from `deckGroupProps`.
+      className={cn("relative rounded-md", FOCUS, eligible && DROP_RING, over && DROP_OVER)}
     >
       {over && <DropIndicator />}
       <GroupHeader
@@ -202,6 +211,7 @@ function TextGroup({
         id={`text-group-${group.key}`}
         className="border-b border-border px-1 pb-1"
       />
+      {deckGroupRename(group.categoryId, actions)}
       {group.cards.length === 0 ? (
         <p className="px-1 pt-1 text-xs text-dim">Nothing here yet.</p>
       ) : (

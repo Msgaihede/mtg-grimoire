@@ -31,7 +31,9 @@ import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
   deckCardProps,
   DeckCardControls,
+  deckGroupMenuProps,
   deckGroupProps,
+  deckGroupRename,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
@@ -342,7 +344,7 @@ function DeckTableRow({
   );
 
   if (row.kind === "group")
-    return bandRow(props, row.group, columns, marketplace, ref, over, eligible);
+    return bandRow(props, row.group, columns, marketplace, ref, over, eligible, actions);
 
   // A band has no card, so it has no card menu — the *heading's* menu is a different question
   // and a different builder. Read after the band's early return for that reason.
@@ -408,6 +410,7 @@ function bandRow(
   ref: (element: HTMLDivElement | null) => void,
   over: boolean,
   eligible: boolean,
+  actions?: DeckCardActions,
 ) {
   return (
     <div
@@ -416,6 +419,12 @@ function bandRow(
       tabIndex={undefined}
       onClick={undefined}
       onKeyDown={undefined}
+      // **The pile's own menu, and this band is where it belongs in this view** — the band *is*
+      // the group here, and it is emphatically not `GroupHeader`, which is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog as well; `deckGroupMenuProps` carries the reason.
+      // Spread rather than chained, unlike a card row: the three props above have just been
+      // cleared, because a heading is not something Enter opens.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       // The caret lands here when a card leaves this pile under it, exactly as it lands on a
       // group's section in the other three views — the band *is* the group here.
       {...deckGroupProps(group.categoryId)}
@@ -431,8 +440,9 @@ function bandRow(
         over && DROP_OVER,
       )}
     >
-      <span role="cell" aria-colspan={columns} className="flex min-w-0 items-center">
+      <span role="cell" aria-colspan={columns} className="flex min-w-0 flex-wrap items-center">
         <GroupHeader group={group} marketplace={marketplace} className="w-full" />
+        {deckGroupRename(group.categoryId, actions)}
       </span>
       {over && <DropIndicator />}
     </div>

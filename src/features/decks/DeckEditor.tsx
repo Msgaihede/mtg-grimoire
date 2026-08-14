@@ -33,7 +33,10 @@ import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import { DECK_CARD_VARIANT, focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
 import { CategoriesDialog } from "./CategoriesDialog";
+import { buildCategoryMenu } from "./categoryMenu";
+import { DeleteCategory } from "./CategoriesDialog";
 import { buildDeckCardMenu } from "./deckCardMenu";
+import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -48,6 +51,7 @@ import {
   type GroupBy,
 } from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
+import { RenameField } from "./metaRows";
 import { QuickAdd } from "./QuickAdd";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { DEFAULT_TAG_COLOR } from "./tagColors";
@@ -412,6 +416,16 @@ type Layer =
    * rather than from an array frozen at the moment a menu row was pressed.
    */
   | { kind: "export"; categoryId: number }
+  /**
+   * The pile a `Delete…` was pressed on. The **id**, like `export` and for the same reason: the
+   * deck is re-read after every write, so the question is asked about the live row rather than
+   * about a category frozen when a menu row was pressed.
+   *
+   * It exists because the confirmation is not optional — `deck_category_delete` takes the cards
+   * with the pile unless the reader says where they go — and `CategoryMenuDeps` carries no delete
+   * mutation at all, so the menu structurally cannot reach the write without passing through here.
+   */
+  | { kind: "deleteCategory"; categoryId: number }
   | null;
 
 /**
@@ -498,6 +512,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [filter, setFilter] = useState("");
   const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
   const [layer, setLayer] = useState<Layer>(null);
+  /**
+   * The pile whose heading is showing its rename field, or `null`.
+   *
+   * **Not a `Layer` arm**, and the difference is what a `Layer` means: those are full-window
+   * surfaces of which at most one may be up, and this is an inline field on the desk that the
+   * reader can have open *while* a card's menu is open over it. It is also the one editor state
+   * a view draws rather than the editor — the field is built here and handed down as a node,
+   * because four views must not each own a draft.
+   */
+  const [renamingCategoryId, setRenamingCategoryId] = useState<number | null>(null);
 
   /**
    * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
@@ -629,6 +653,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const startTagCreate = meta.createTag.mutate;
   const setTagOnSlot = deck.setTag.mutate;
+  // The category menu's two direct writes, taken as `mutate` for the reason every other write
+  // here is: TanStack hands back a fresh result object each render, and these end up in
+  // `useCallback` dependency lists that the four views' group elements are built from.
+  const setCategoryActive = meta.setCategoryActive.mutate;
+  const renameCategory = meta.renameCategory.mutate;
+  const renamePending = meta.renameCategory.isPending;
   const createTagFor = useCallback(
     (card: DeckCard, name: string) =>
       startTagCreate(
@@ -708,6 +738,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /** What the export dialog draws, for the pile the layer names — {@link categoryExport}, which
    *  is pure and carries the whole of the reasoning. */
+  /** The pile the delete confirmation is about, read from the **live** list — a rename made
+   *  under the open question retitles it, and a delete from another surface empties it. */
+  const deletedCategory =
+    layer?.kind === "deleteCategory"
+      ? (categories.find((c) => c.id === layer.categoryId) ?? null)
+      : null;
+
   const exportedId = layer?.kind === "export" ? layer.categoryId : null;
   const exported = useMemo(
     () => categoryExport(exportedId, categories, deck.cards, row?.name ?? ""),
@@ -1182,9 +1219,84 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     ],
   );
 
+  /**
+   * One **pile's** right-click, built here and handed to the four views as one function.
+   *
+   * `buildCategoryMenu` is `categoryMenu.tsx`'s, and every one of its six dependencies is a
+   * decision this editor already owns: the deck's unfiltered rows, the two `Layer` arms that
+   * were built for exactly this (`import` aimed at one pile, `export` of one pile), the rename
+   * field's flag, `useDeckMeta`'s switch, and the confirmation a delete owes. **That last one is
+   * why `CategoryMenuDeps` carries no delete mutation** — a menu opens by accident, and deleting
+   * a pile takes its cards with it.
+   *
+   * `undefined` for a category this deck does not have, which a derived heading never reaches
+   * (`deckGroupMenuProps` refuses a `null` id first) but a pile deleted under an open menu could.
+   */
+  const categoryMenu = useCallback(
+    (categoryId: number) => {
+      const category = categories.find((c) => c.id === categoryId);
+      if (category === undefined) return undefined;
+      const build = () =>
+        buildCategoryMenu(category, {
+          // The deck's own rows, never `shown`: exporting "Removal" means the pile rather than
+          // the four of it the toolbar's filter happens to be showing.
+          cards: deck.cards,
+          startRename: (pile) => setRenamingCategoryId(pile.id),
+          openImport: ({ forcedCategoryName }) =>
+            openLayer({ kind: "import", forcedCategoryName }, null),
+          openExport: ({ categoryId: id }) => openLayer({ kind: "export", categoryId: id }, null),
+          setActive: (pile, isActive) => setCategoryActive({ id: pile.id, isActive }),
+          askDelete: (pile) => openLayer({ kind: "deleteCategory", categoryId: pile.id }, null),
+        });
+      return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
+    },
+    [menu, menuKey, categories, deck.cards, openLayer, setCategoryActive],
+  );
+
+  /**
+   * The rename field for the pile that is being renamed, drawn in its own heading.
+   *
+   * Built here rather than in the views because the draft, the write and the caret's way home
+   * are one decision — `metaRows.tsx`'s `RenameField` is the same control both meta dialogs use,
+   * so a pile renamed from its heading and a pile renamed from the Categories dialog are the
+   * same field with the same rules.
+   *
+   * The caret goes back to the pile on both exits, which is where it came from: `focusDeckGroup`
+   * is the editor's existing hand-off and finds the group by attribute, so it works after the
+   * field has unmounted and after a rename has moved the pile in a packed column.
+   */
+  const renameCategoryField = useCallback(
+    (categoryId: number) => {
+      if (renamingCategoryId !== categoryId) return null;
+      const category = categories.find((c) => c.id === categoryId);
+      if (category === undefined) return null;
+      const done = () => {
+        setRenamingCategoryId(null);
+        focusDeckGroup(categoryId);
+      };
+      return (
+        <RenameField
+          label={`Rename ${category.name}`}
+          initial={category.name}
+          pending={renamePending}
+          onSave={(name) => renameCategory({ id: categoryId, name }, { onSuccess: done })}
+          onCancel={done}
+        />
+      );
+    },
+    [renamingCategoryId, categories, renameCategory, renamePending],
+  );
+
   const actions = useMemo<DeckCardActions>(
-    () => ({ setQuantity, drop: applyDrop, menu: deckCardMenu }),
-    [setQuantity, applyDrop, deckCardMenu],
+    () => ({
+      setQuantity,
+      drop: applyDrop,
+      menu: deckCardMenu,
+      categoryMenu,
+      renameCategory: (categoryId) =>
+        categoryId === null ? null : renameCategoryField(categoryId),
+    }),
+    [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField],
   );
 
   /**
@@ -2188,6 +2300,38 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           which is exactly what lets one pile be handed to a component a deck-level export will
           reuse whole — and it is derived from the deck's live list rather than from whatever the
           menu was holding. See {@link exported}. */}
+      {/* The confirmation a `Delete…` owes, and it is **`CategoriesDialog`'s own component**
+          rather than a second one written here. That dialog asks a careful question — the cards
+          go with the pile unless the reader names somewhere to move them, and the sentence
+          changes with the answer — and two confirmations for one command would be two chances to
+          word "this cannot be undone" differently. It takes `meta` and draws itself, so the only
+          thing this file decides is which pile and what "the others" are.
+
+          `others` is every category **but** this one, in the reader's own `sortOrder`: the list
+          the move picker offers, which must not include the pile being deleted. */}
+      <DeckDialog
+        open={layer?.kind === "deleteCategory"}
+        title={deletedCategory === null ? "Delete category" : `Delete “${deletedCategory.name}”`}
+        closeLabel="Close"
+        // Narrow, because the body is one question, one picker and two buttons — the width class
+        // is written out whole, since Tailwind emits no rule for a class built at runtime.
+        width="w-[28rem]"
+        onDismiss={dismiss}
+        onClose={close}
+      >
+        {deletedCategory && (
+          <div className="px-4 pb-4">
+            <DeleteCategory
+              category={deletedCategory}
+              others={categories.filter((c) => c.id !== deletedCategory.id)}
+              meta={meta}
+              onCancel={dismiss}
+              onDeleted={dismiss}
+            />
+          </div>
+        )}
+      </DeckDialog>
+
       <ExportDialog
         open={layer?.kind === "export"}
         subject={exported.subject}

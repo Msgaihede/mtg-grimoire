@@ -34,6 +34,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import {
   dropTargetForElements,
@@ -193,6 +194,37 @@ export interface DeckCardActions {
    * changes.
    */
   menu?: (card: DeckCard) => DeckCardMenuHandlers;
+  /**
+   * What a **pile** offers on a right-click, by category id — the heading's menu, where a card's
+   * is `menu` above.
+   *
+   * It is in this bag beside `drop`, which is also a pile's affordance rather than a card's, and
+   * for the same reason `drop` is: it travels view → group and a bag passed on whole cannot be
+   * passed on incompletely.
+   *
+   * **A derived group has none**, and the view says so by passing `null` — nothing can be
+   * renamed, switched off or deleted about "Mana value 3", and `categoryId` is `null` for
+   * exactly those groups.
+   */
+  categoryMenu?: (categoryId: number) => DeckCardMenuHandlers | undefined;
+  /**
+   * The inline rename field for the pile the reader is renaming, or `null` for every other pile.
+   *
+   * **A node rather than a callback**, because the field is one element with one piece of state
+   * and four views must not each build their own — the editor owns which pile is being renamed
+   * and what a save writes, and hands the whole control down. It is the same shape
+   * `GroupHeader`'s own `actions` prop takes and for the same reason.
+   */
+  renameCategory?: (categoryId: number | null) => ReactNode;
+}
+
+/** The rename field for this pile, or nothing — `null` is a derived heading, which is not a
+ *  category and cannot be renamed. Spelled once so four views do not each guard it. */
+export function deckGroupRename(
+  categoryId: number | null,
+  actions?: DeckCardActions,
+): ReactNode {
+  return categoryId === null ? null : actions?.renameCategory?.(categoryId);
 }
 
 /**
@@ -245,6 +277,32 @@ export function deckCardMenuProps(
 ): Partial<DeckCardMenuHandlers> & { tabIndex?: -1 } {
   const handlers = actions?.menu?.(card);
   return handlers === undefined ? {} : { ...handlers, tabIndex: -1 };
+}
+
+/**
+ * A **pile's** menu handlers, for the element a view calls the group — or nothing, for a derived
+ * heading and for a view that was given no menu.
+ *
+ * **The handlers go on the view's own group element and never on `GroupHeader`, and that is a
+ * layer decision rather than a preference.** `CategoriesDialog` draws that same component in
+ * every one of its rows, *inside* a `DeckDialog` — which is `LAYER.overlay`, `z-45`, over a
+ * scrim. `ContextMenu` draws at `LAYER.popup`, `z-30`. So a right-click wired onto the shared
+ * header would open a menu **behind the dialog's own scrim**: invisible, unreachable, and
+ * nothing would go red, because a z-index is not something jsdom has an opinion about.
+ * `layers.ts` names that exact overlap as the one that must not exist ("a right-clickable
+ * surface placed inside a scrimmed dialog would be the real overlap … and there is none
+ * today"), and this is what keeps that sentence true. **Do not tidy these onto `GroupHeader`.**
+ *
+ * No `tabIndex` here, unlike {@link deckCardMenuProps}: every group element already carries one
+ * from {@link deckGroupProps}, because the editor hands the caret to a pile when a card leaves
+ * it. The seam was prepared for a caret before it had a menu.
+ */
+export function deckGroupMenuProps(
+  categoryId: number | null,
+  actions?: DeckCardActions,
+): Partial<DeckCardMenuHandlers> {
+  if (categoryId === null) return {};
+  return actions?.categoryMenu?.(categoryId) ?? {};
 }
 
 /**

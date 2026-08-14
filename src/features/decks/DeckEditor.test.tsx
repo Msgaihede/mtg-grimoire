@@ -18,6 +18,7 @@ import type {
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { dragOnto, startDrag } from "@/test-drag";
 import { DECK_CARD_VARIANT } from "./cardControl";
+import { DECK_GROUP_ATTR } from "./cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
@@ -50,6 +51,10 @@ const deckTagCreate = vi.hoisted(() => vi.fn());
 // The one write a card's menu makes that is not a deck write at all — "Add to → Collection".
 // Its refusal is the editor's second banner, because the menu has closed by the time one lands.
 const collectionAdd = vi.hoisted(() => vi.fn());
+// The three category writes a pile's right-click reaches, through `useDeckMeta`.
+const deckCategoryRename = vi.hoisted(() => vi.fn());
+const deckCategorySetActive = vi.hoisted(() => vi.fn());
+const deckCategoryDelete = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
@@ -96,6 +101,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCardSetTag,
     deckTagCreate,
     collectionAdd,
+    deckCategoryRename,
+    deckCategorySetActive,
+    deckCategoryDelete,
     deckAuditList,
     deckTheoryDiff,
     deckFolderList,
@@ -468,6 +476,9 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
   collectionAdd.mockReset().mockResolvedValue(undefined);
+  deckCategoryRename.mockReset().mockResolvedValue(CATEGORIES[0]);
+  deckCategorySetActive.mockReset().mockResolvedValue(CATEGORIES[0]);
+  deckCategoryDelete.mockReset().mockResolvedValue(undefined);
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
@@ -3123,6 +3134,185 @@ describe("DeckEditor — a card's menu", () => {
 
     fireEvent.contextMenu(tile);
     expect(await screen.findByRole("menu")).toBeInTheDocument();
+  });
+});
+
+/**
+ * **A pile's right-click — the last surface on this branch, and the one with a layer hazard.**
+ *
+ * The handlers hang on the view's own group element and never on `GroupHeader`, because
+ * `CategoriesDialog` draws that same component inside a `DeckDialog` on `LAYER.overlay` (z-45)
+ * and `ContextMenu` draws at `LAYER.popup` (z-30) — so a menu wired onto the shared header would
+ * open **behind that dialog's scrim**, invisible and unreachable, with nothing going red because
+ * jsdom has no opinion about a z-index. The sweep below is over all four views for the reason the
+ * card menu's caret sweep is: four elements, one rule, and a single case would let three of them
+ * quietly lose it.
+ */
+describe("DeckEditor — a category's menu", () => {
+  /** Right-click a pile's heading, by the attribute every view's group element carries. */
+  async function rightClickGroup(categoryId: number) {
+    const el = document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${categoryId}"]`);
+    expect(el).not.toBeNull();
+    fireEvent.contextMenu(el as HTMLElement);
+    return screen.findByRole("menu");
+  }
+
+  it.each(["Stacks", "Table", "Text", "Grid"])("offers a pile its menu in %s", async (view) => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: view }));
+
+    await rightClickGroup(MAIN);
+
+    expect(screen.getByRole("menuitem", { name: "Rename…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Import cards…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export cards…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeInTheDocument();
+  });
+
+  /** The keyboard route, which is a requirement on every menu of this branch. The group element
+   *  is already focusable — `deckGroupProps` gives every pile `tabIndex: -1` so the editor can
+   *  hand it the caret when a card leaves — so the seam was prepared before it had a menu. */
+  it("opens a pile's menu from the keyboard, and hands the caret back on Escape", async () => {
+    await open();
+    const el = document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`) as HTMLElement;
+    el.focus();
+    fireEvent.keyDown(el, { key: "F10", shiftKey: true });
+    await screen.findByRole("menu");
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(el);
+  });
+
+  /**
+   * **Two rows are absent on a predefined zone rather than greyed, and the backend is what
+   * decides which two.** `rename_category` and `delete_category` both refuse a `kind` that is not
+   * `main`; `set_category_active` takes every kind, which is why Deactivate stays.
+   */
+  it("drops rename and delete on a predefined zone, and keeps the switch", async () => {
+    await open();
+    await rightClickGroup(CATEGORIES[1].id); // Sideboard, kind: "side"
+
+    expect(screen.queryByRole("menuitem", { name: "Rename…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Delete…" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
+  });
+
+  it("switches a pile off from its own heading", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Deactivate" }));
+
+    expect(deckCategorySetActive).toHaveBeenCalledWith(MAIN, false);
+  });
+
+  /** The row says what the write does rather than toggling a value read a moment earlier — a
+   *  menu built just before a change would otherwise write the opposite of what it drew. */
+  it("says Activate on a pile that is already off", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt()], [category(1, "Main deck", "main", { isActive: false }), ...CATEGORIES.slice(1)]),
+    );
+    await open();
+    await rightClickGroup(MAIN);
+
+    expect(screen.getByRole("menuitem", { name: "Activate" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Activate" }));
+    expect(deckCategorySetActive).toHaveBeenCalledWith(MAIN, true);
+  });
+
+  it("renames a pile in its own heading, and gives the caret back to it", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+    const field = await screen.findByLabelText("Rename Main deck");
+    await userEvent.clear(field);
+    await userEvent.type(field, "Spells");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(deckCategoryRename).toHaveBeenCalledWith(MAIN, "Spells");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)),
+    );
+  });
+
+  /**
+   * **The one text field on this surface, and the primitive is what keeps it native.**
+   * `menu()`/`menuKey()` test for a field before they build anything, so a right-click inside the
+   * rename field gets WebView2's own cut/copy/paste — even though the field sits *inside* the
+   * element carrying the pile's handler.
+   */
+  it("leaves the browser's own menu alone inside the rename field", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const field = await screen.findByLabelText("Rename Main deck");
+
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    field.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  /** `Delete…` **asks** rather than writing — `CategoryMenuDeps` carries no delete mutation at
+   *  all, so the menu structurally cannot reach the command without the confirmation. */
+  it("asks before deleting a pile, in the words the Categories dialog asks them in", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    expect(await screen.findByRole("dialog", { name: /Delete “Main deck”/ })).toBeInTheDocument();
+    expect(deckCategoryDelete).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }));
+    await waitFor(() => expect(deckCategoryDelete).toHaveBeenCalled());
+  });
+
+  /** The two arms that were already built for this menu, wired to the rows that open them. */
+  it("aims the importer at the pile that was right-clicked", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Import cards…" }));
+
+    expect(await screen.findByRole("dialog", { name: /Import/ })).toBeInTheDocument();
+  });
+
+  it("exports the pile that was right-clicked", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Export cards…" }));
+
+    expect(await screen.findByRole("dialog", { name: /Main deck/ })).toBeInTheDocument();
+  });
+
+  /**
+   * A derived heading is not a category: nothing about "Mana value 1" can be renamed, switched
+   * off or deleted, and `deckGroupMenuProps` refuses its `null` id before a builder is reached.
+   *
+   * **This is also the case that would catch the handler being tidied onto `GroupHeader`.** That
+   * component draws every heading, derived ones included — and it is the same component
+   * `CategoriesDialog` renders inside its scrimmed dialog, where a menu would open behind the
+   * scrim. A menu appearing here is the visible half of that mistake.
+   *
+   * No `defaultPrevented` assertion: `ContextMenuProvider` suppresses the native menu on
+   * `document` for everything that is not a text field, so the flag is true either way and
+   * would pin nothing. Whether a menu *opened* is the question.
+   */
+  it("offers no menu on a derived heading", async () => {
+    await open();
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+
+    const heading = await screen.findByText("Mana value 1");
+    fireEvent.contextMenu(heading);
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });
 

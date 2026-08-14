@@ -26,7 +26,9 @@ import {
   deckCardMenuProps,
   deckCardProps,
   DeckCardControls,
+  deckGroupMenuProps,
   deckGroupProps,
+  deckGroupRename,
   FOCUS,
   FOCUS_INSET,
   REVEALED_ON_CARD,
@@ -165,10 +167,17 @@ function GridGroup({
     <section
       ref={attach}
       aria-labelledby={`grid-group-${group.key}`}
+      // **The pile's own menu, on this element rather than on `GroupHeader`** - see
+      // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
+      // scrim. A card inside stops the event, so the innermost surface still wins.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       {...deckGroupProps(group.categoryId)}
       // The sidebar's pair, said here — one vocabulary for "this can take the card you are
       // holding" and "and it is this one" across the four views and the two screens.
-      className={cn("relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
+      // `FOCUS` because this is where the caret comes back to when the pile's menu closes; the
+      // tab index is already here from `deckGroupProps`.
+      className={cn("relative rounded-md", FOCUS, eligible && DROP_RING, over && DROP_OVER)}
     >
       {over && <DropIndicator />}
       {/* `tight`, because this section is as wide as the window: counts pushed to the far
@@ -180,6 +189,7 @@ function GridGroup({
         id={`grid-group-${group.key}`}
         className="px-0.5 pb-1.5"
       />
+      {deckGroupRename(group.categoryId, actions)}
       {/* The wall's gutter grows with the tiles and holds at 10px below 1× ({@link atLeast}):
           the same fixed `gap-2.5` around 300px cards reads as a wall with no seams, and a halved
           one around 75px cards reads as one sheet of card backs. Inline, because a scaled number
