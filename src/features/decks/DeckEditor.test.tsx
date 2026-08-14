@@ -3001,6 +3001,29 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
+   * …and a refused *create* is spoken for by the deck's own banner, which is why the mutation is
+   * in the editor's refused-write family rather than merely mounted in it.
+   *
+   * A label the reader typed and pressed Add on, that never appears and never says why, is the
+   * silent failure this family exists to prevent — and the menu it was typed in is gone by the
+   * time the answer arrives, so there is nowhere else it could be said.
+   */
+  it("says so when the menu's tag create is refused", async () => {
+    deckTagCreate.mockRejectedValue("The database is busy");
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(
+      await screen.findByText(/Could not change this deck — The database is busy/),
+    ).toBeInTheDocument();
+  });
+
+  /**
    * **A refused collection add from the menu has to be said somewhere, and this is the somewhere.**
    *
    * `useCardMenuDeps` states it plainly: a page that ignores that sentence is a page where a card
