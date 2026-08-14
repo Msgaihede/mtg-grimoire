@@ -9,6 +9,7 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
@@ -360,13 +361,19 @@ function Results({ search }: { search: CardSearch }) {
    * `CardMenuDeps` asks — the two views are the same list, and a menu whose writes differed
    * between them would be two answers to one question.
    */
-  const { menu } = useContextMenu();
+  const { menu, menuKey } = useContextMenu();
   const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
   /** One row's or one tile's handler. The item list is a **thunk** inside `menu`, so a wall of
    *  forty pays for nothing until a reader actually right-clicks one of them. */
   const cardMenu = useCallback(
     (card: CardSummary) => menu(() => buildCardMenu(cardTarget(card), menuDeps)),
     [menu, menuDeps],
+  );
+  /** The same menu on Shift+F10 and the ContextMenu key. Wired everywhere `cardMenu` is, because
+   *  a menu only a mouse can open is a menu half this app's readers do not have. */
+  const cardMenuKey = useCallback(
+    (card: CardSummary) => menuKey(() => buildCardMenu(cardTarget(card), menuDeps)),
+    [menuKey, menuDeps],
   );
 
   // query-core keeps `data` when a fetch fails, so `isError` arrives with every page that
@@ -425,28 +432,10 @@ function Results({ search }: { search: CardSearch }) {
         )}
       </AnimatePresence>
 
-      {/* A write the menu started and the backend refused, said where the reader made it. Its
-          own banner rather than a line in the one above: that one is about the *list* — a page
-          that failed to load — and this is about something the reader just did to a card in it.
-
-          It has to be here at all because the menu cannot report it. `ctx.run` closes the panel
-          before a row's handler runs, so by the time an answer arrives there is no menu left to
-          put a sentence in — which is the whole reason the write lives on the surface. Same
-          growth as its neighbour: the animated element is the wrapper and carries only
-          `overflow-hidden`, because `statusLine` takes `height` to 0 and a box with its own
-          padding can never be shorter than that padding. */}
-      <AnimatePresence initial={false}>
-        {menuFailure && (
-          <motion.div {...statusLine} className="overflow-hidden">
-            <p
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            >
-              {menuFailure}
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* A write the menu started and the backend refused, said where the reader made it —
+          beside the banner above rather than folded into it, because that one is about the
+          *list* and this is about a card in it. */}
+      <CardMenuRefusal error={menuFailure} />
 
       {!empty &&
         (view === "grid" ? (
@@ -498,6 +487,7 @@ function Results({ search }: { search: CardSearch }) {
             gameChanger={tileGameChanger}
             // The whole tile is the target: the art, its two corner marks and the caption.
             cardMenu={cardMenu}
+            cardMenuKey={cardMenuKey}
             // The tile's one control, built from the row it is about: the popup offers the
             // finishes this printing exists in — a foil-only card must not take a nonfoil
             // entry — and a wish made here can be for the card rather than for this piece of
@@ -545,7 +535,22 @@ function Results({ search }: { search: CardSearch }) {
             // The same menu the wall's tiles offer, on the row that stands for the same
             // printing. A right-click is not an activation: `onActivate` above is a left click
             // and the two keys, and neither of them fires for this one.
-            renderRow={(props, card) => <div {...props} onContextMenu={cardMenu(card)} />}
+            //
+            // The row's own `onKeyDown` runs first and is not replaced: it answers Enter and
+            // Space (opening the card), and `menuKey` answers Shift+F10 and the ContextMenu key.
+            // Two handlers for one event, because the row already had one — dropping `props`'
+            // would take the keyboard's route to the *card* away in the act of adding one to
+            // its menu.
+            renderRow={(props, card) => (
+              <div
+                {...props}
+                onContextMenu={cardMenu(card)}
+                onKeyDown={(e) => {
+                  props.onKeyDown?.(e);
+                  cardMenuKey(card)(e);
+                }}
+              />
+            )}
             onNeedNextPage={() => {
               // `isFetchNextPageError` is a stop, not a detail: a failed page leaves
               // `hasNextPage` true with the reader still at the bottom, so without it this

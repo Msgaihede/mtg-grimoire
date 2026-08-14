@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   type ComponentProps,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
@@ -17,6 +18,7 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
@@ -316,7 +318,7 @@ export function WishlistPage() {
    * asked for one, and the reader gets the app's plain suppression instead of a panel about a
    * card this row cannot name.
    */
-  const { menu } = useContextMenu();
+  const { menu, menuKey } = useContextMenu();
   const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
   const rowMenu = useCallback(
     (row: WishRow) =>
@@ -324,6 +326,15 @@ export function WishlistPage() {
         ? undefined
         : menu(() => buildCardMenu(wishTarget(row, row.cardId!), menuDeps)),
     [menu, menuDeps],
+  );
+  /** The same menu on Shift+F10 and the ContextMenu key, gated on the same `cardId`: a menu only
+   *  a mouse can open is a menu half this app's readers do not have. */
+  const rowMenuKey = useCallback(
+    (row: WishRow) =>
+      row.cardId === null
+        ? undefined
+        : menuKey(() => buildCardMenu(wishTarget(row, row.cardId!), menuDeps)),
+    [menuKey, menuDeps],
   );
 
   const failure = query.isError ? ipcError(query.error) : null;
@@ -406,26 +417,11 @@ export function WishlistPage() {
           )}
         </AnimatePresence>
 
-        {/* A write the right-click menu started and the backend refused. Its own banner rather
-            than a line in the one above: that one is about this list's own controls — a stepper
-            press, a removal — and this one is about a card the reader filed somewhere from a
-            menu that has already closed.
-
-            It has to be here at all because the menu cannot report it. `ctx.run` closes the
-            panel before a row's handler runs, so by the time an answer arrives there is no menu
-            left to put a sentence in. */}
-        <AnimatePresence initial={false}>
-          {menuFailure && (
-            <motion.div {...statusLine} className="overflow-hidden">
-              <p
-                role="alert"
-                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                {menuFailure}
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* A write the right-click menu started and the backend refused, beside the banner
+            above rather than folded into it: that one is about this list's own controls — a
+            stepper press, a removal — and this one is about a card the reader filed somewhere
+            from a menu that has already closed. */}
+        <CardMenuRefusal error={menuFailure} />
 
         {!empty && (
           <WishlistTable
@@ -438,6 +434,7 @@ export function WishlistPage() {
             onSetQuantity={onSetQuantity}
             onRemove={onRemove}
             rowMenu={rowMenu}
+            rowMenuKey={rowMenuKey}
             marketplace={marketplace}
           />
         )}
@@ -783,6 +780,7 @@ function WishlistTable({
   onSetQuantity,
   onRemove,
   rowMenu,
+  rowMenuKey,
   marketplace,
 }: {
   rows: WishRow[];
@@ -803,6 +801,11 @@ function WishlistTable({
    * per row: an any-printing wish names no card to ask a question about.
    */
   rowMenu?: (row: WishRow) => ((e: ReactMouseEvent) => void) | undefined;
+  /**
+   * The same menu from the keyboard — Shift+F10 and the ContextMenu key — and `undefined` on
+   * exactly the rows its pointer twin is: a wish for any printing names no card either way.
+   */
+  rowMenuKey?: (row: WishRow) => ((e: ReactKeyboardEvent) => void) | undefined;
   /** Which marketplace the Cost column quotes. Passed rather than read here so the list and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
@@ -851,6 +854,11 @@ function WishlistTable({
             onContextMenu={rowMenu?.(row)}
             onClick={() => selectCard(row.cardId!)}
             onKeyDown={(e) => {
+              // Shift+F10 and the ContextMenu key, on the same rows and about the same card.
+              // Before the activation test rather than after it, so the two cannot both act on
+              // one press; the primitive decides which presses are its own and leaves a field
+              // alone.
+              rowMenuKey?.(row)?.(e);
               if (e.key !== "Enter" && e.key !== " ") return;
               // Space scrolls the container it is pressed in, which would jump the list by a
               // screen at the same time as opening the card.

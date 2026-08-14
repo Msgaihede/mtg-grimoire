@@ -1339,6 +1339,51 @@ describe("the card menu", () => {
     );
   });
 
+  /**
+   * The keyboard's route to the same menu, which is a feature rather than a nicety: the reader
+   * was asked and chose a menu that opens by keyboard over a mouse-only one.
+   *
+   * Shift+F10 on the row itself. The other press the primitive answers is the dedicated
+   * ContextMenu key, and which presses count is its rule rather than this surface's.
+   */
+  it("opens from the keyboard on a result row, without opening the card", async () => {
+    wrap(<SearchPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * And the row's own keys still work, which is the half a single `onKeyDown` would have eaten:
+   * the menu's handler is added to the row's, never in place of it.
+   */
+  it("still opens the card on Enter, which the menu's handler sits beside", async () => {
+    wrap(<SearchPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "Enter" });
+
+    expect(useAppStore.getState().selectedCardId).toBe("1");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens from the keyboard on a tile of the art wall", async () => {
+    useAppStore.setState({ searchView: "grid" });
+    wrap(<SearchPage />);
+    // The press lands on the art button and bubbles to the tile, which is what carries the
+    // handler — the tile is the card, and the button inside it is what holds the caret.
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Lightning Bolt" }), {
+      key: "F10",
+      shiftKey: true,
+    });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
   it("opens on a tile of the art wall, about that tile's card", async () => {
     useAppStore.setState({ searchView: "grid" });
     const user = userEvent.setup();

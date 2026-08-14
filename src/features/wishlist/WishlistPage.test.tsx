@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -664,6 +664,52 @@ describe("the card menu", () => {
     // asserting on a `complementary` this page never renders would be an assertion that
     // cannot fail.
     expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * The keyboard's route to the same menu, which is a feature rather than a nicety: the reader
+   * was asked and chose a menu that opens by keyboard over a mouse-only one. Shift+F10 here;
+   * the dedicated ContextMenu key is the primitive's other arm and its rule, not this surface's.
+   */
+  it("opens from the keyboard on a pinned wish, without opening the card", async () => {
+    wrap(<WishlistPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /** And the row's own keys still work: this row's `onKeyDown` answers both questions, and the
+   *  menu's arm runs in front of the activation rather than instead of it. */
+  it("still opens the card on Enter, which the menu's handler sits beside", async () => {
+    wrap(<WishlistPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "Enter" });
+
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  /** The keyboard is gated on the same `cardId` the pointer is: a wish for any printing names
+   *  no card, from either input. */
+  it("offers no keyboard menu on a wish for any printing", async () => {
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+    const any = await screen.findByRole("row", { name: /Ancestral Recall/ });
+
+    // `fireEvent` is wrapped in `act`, so an opened menu would already be in the DOM here —
+    // the same flush the pointer case needs `act` by hand for.
+    fireEvent.keyDown(any, { key: "F10", shiftKey: true });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("row", { name: /Lightning Bolt/ }), {
+      key: "F10",
+      shiftKey: true,
+    });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   /**

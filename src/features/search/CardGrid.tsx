@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
@@ -165,6 +166,7 @@ export function CardGrid<T extends GridCard>({
   gameChanger,
   action,
   cardMenu,
+  cardMenuKey,
   tileRef,
   dragPayload,
   baseTileWidth = TILE_BASE_WIDTH,
@@ -268,6 +270,22 @@ export function CardGrid<T extends GridCard>({
    * render rather than registered, so nothing is torn down when it changes.
    */
   cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
+  /**
+   * The same menu, from the keyboard — `menuKey`'s handler, for Shift+F10 and the ContextMenu
+   * key.
+   *
+   * **Its own slot rather than something derived from {@link cardMenu}**, because it is a
+   * different event and a different anchor: a keypress has no coordinates, so the panel opens
+   * at the tile's own bottom-left instead of at a pointer that was never there. Passing one and
+   * not the other is a menu half the readers in this app cannot reach — mouse-only was the
+   * option that was explicitly turned down.
+   *
+   * It rides the tile rather than the art button so that its `currentTarget` is the whole card,
+   * which is the box the panel is anchored to; keydown bubbles up from whichever control inside
+   * the tile holds the caret. The primitive decides which presses count and leaves a text field
+   * alone.
+   */
+  cardMenuKey?: (card: T) => (e: ReactKeyboardEvent) => void;
   /**
    * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
    * draggable, since a drag library is handed elements and this wall builds its own.
@@ -494,6 +512,7 @@ export function CardGrid<T extends GridCard>({
                 gameChanger={gameChanger}
                 action={action}
                 cardMenu={cardMenu}
+                cardMenuKey={cardMenuKey}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
               />
@@ -523,6 +542,7 @@ function Tile<T extends GridCard>({
   gameChanger,
   action,
   cardMenu,
+  cardMenuKey,
   tileRef,
   dragPayload,
 }: {
@@ -536,6 +556,7 @@ function Tile<T extends GridCard>({
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
   cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
+  cardMenuKey?: (card: T) => (e: ReactKeyboardEvent) => void;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
 }) {
@@ -581,6 +602,10 @@ function Tile<T extends GridCard>({
       // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that
       // was given none attaches nothing at all.
       onContextMenu={cardMenu?.(card)}
+      // Shift+F10 and the ContextMenu key, on the same box and about the same card. No tab stop
+      // is added for it: the art is already a button, so the tile is reachable and the press
+      // arrives here by bubbling from whatever inside it holds the caret.
+      onKeyDown={cardMenuKey?.(card)}
       style={{ width }}
       className="group flex shrink-0 flex-col gap-1"
     >

@@ -70,8 +70,15 @@ export function useCardMenuDeps(): CardMenuWiring {
   const collectionAdd = useMutation({
     mutationFn: ({ cardId, finish }: { cardId: string; finish: Finish }) =>
       ipc.collectionAdd({ cardId, finish, condition: MENU_CONDITION, quantity: 1 }),
+    // **Cleared when the next add starts, not when one succeeds**, which is what every other
+    // banner on these three pages does — each is derived from the *latest* mutation's state, so
+    // a new write supersedes the last one's complaint. Cleared only on success, a refusal would
+    // stand on screen while the reader dealt with it some other way: `CollectionPage` carries a
+    // comment about exactly that bug being found live and fixed for the stepper and the removal.
+    // Both writes here clear the same one, so the sentence on screen always belongs to the last
+    // thing the reader asked for.
+    onMutate: () => setRefusal(null),
     onSuccess: () => {
-      setRefusal(null);
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
@@ -97,8 +104,9 @@ export function useCardMenuDeps(): CardMenuWiring {
         // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
         preferredFinish: target.finish,
       }),
+    // Superseded on the next add, exactly as the collection's is, and clearing the same one.
+    onMutate: () => setRefusal(null),
     onSuccess: () => {
-      setRefusal(null);
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },

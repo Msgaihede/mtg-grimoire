@@ -1,11 +1,11 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { readDragData } from "@/features/decks/dnd";
-import type { CollectionQuery, CollectionRow, CollectionSummary } from "@/lib/ipc";
+import type { CollectionQuery, CollectionRow, CollectionSummary, DeckRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
@@ -25,6 +25,16 @@ const getMarketplace = vi.hoisted(() => vi.fn());
 // rejection about a missing Tauri runtime rather than a call anything here could read.
 const collectionAdd = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+/**
+ * The deck end of the menu's "Add to → Deck", which the type-line case below drives all the way
+ * through. `deckList`/`deckFolderList` are answered as well as seeded, so a picker that stopped
+ * reading the cache says "Loading decks…" rather than hanging on an undefined command.
+ */
+const deckList = vi.hoisted(() => vi.fn());
+const deckFolderList = vi.hoisted(() => vi.fn());
+const deckGet = vi.hoisted(() => vi.fn());
+const deckAddCard = vi.hoisted(() => vi.fn());
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -37,6 +47,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     listSets,
     prewarmCollection,
     getMarketplace,
+    deckList,
+    deckFolderList,
+    deckGet,
+    deckAddCard,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -77,6 +92,29 @@ const BOLT: CollectionRow = {
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
+};
+
+/** One deck for the menu's "Add to → Deck" to reach. No theory list, so it is one row. */
+const BURN: DeckRow = {
+  id: 7,
+  name: "Burn",
+  formatKey: "commander",
+  formatName: "Commander",
+  description: null,
+  coverCardId: null,
+  coverKind: "card_art",
+  coverArtist: null,
+  isBuilt: false,
+  archived: false,
+  cardCount: 0,
+  updatedAt: 0,
+  folderId: null,
+  notes: null,
+  theoryEnabled: false,
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
+  separateXGroup: false,
 };
 
 const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({
@@ -160,6 +198,16 @@ beforeAll(() => {
 beforeEach(() => {
   collectionAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
+  // One deck, no folders — the shape the menu's deck picker draws as a single row. Answered
+  // rather than seeded into the cache: `useDecks` has no `staleTime`, so a seeded entry is
+  // refetched on mount and the command is what the picker ends up drawing either way.
+  deckList.mockReset().mockResolvedValue([BURN]);
+  deckFolderList.mockReset().mockResolvedValue([]);
+  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [], categories: [], tags: [] });
+  deckAddCard.mockReset().mockResolvedValue(undefined);
+  // No taxonomy downloaded is the floor rather than an error: `autoCategoryFor` then files by
+  // type line, which is exactly what the case below is about.
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   collectionList.mockReset().mockResolvedValue(page([BOLT]));
   collectionSummary.mockReset().mockResolvedValue(summary({ totalCards: 2, uniqueCards: 1 }));
   collectionSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 3, removed: false });
@@ -793,6 +841,33 @@ describe("the card menu", () => {
   });
 
   /**
+   * The keyboard's route to the same menu, which is a feature rather than a nicety: the reader
+   * was asked and chose a menu that opens by keyboard over a mouse-only one. Shift+F10 here;
+   * the dedicated ContextMenu key is the primitive's other arm and its rule, not this surface's.
+   */
+  it("opens from the keyboard on a row, without opening the card", async () => {
+    wrap(<CollectionPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /** And the row's own keys still work: the menu's handler is added to the row's, not put in
+   *  place of it. A single `onKeyDown` would have eaten this. */
+  it("still opens the card on Enter, which the menu's handler sits beside", async () => {
+    wrap(<CollectionPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "Enter" });
+
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  /**
    * A collection row *is* a finish — it is one of the ten columns its identity is made of — so
    * the menu does not ask. `BOLT` is the foil entry, and a nonfoil copy recorded from it would
    * be a different row in the same table.
@@ -821,58 +896,149 @@ describe("the card menu", () => {
   });
 
   /**
+   * "View all printings", live rather than greyed, reaching the oracle card the entry is of.
+   *
+   * This item is fenced on `oracleId`, and until `CollectionRow` carried one every row and tile
+   * of the reader's collection drew it greyed with the reason *"this printing has left the card
+   * database"* — a true sentence about a perfectly healthy card, which is a worse failure than
+   * no item at all. The column exists to make that reason fire only when it is true, so the
+   * assertion is on both halves: the row is pressable, and pressing it asks about **this**
+   * card's oracle id rather than some fallback.
+   *
+   * `requestAllPrintings` writes the intent and the navigation in one `set`, so the store is
+   * where the press is observed — `App` owns the view this page is drawn in.
+   */
+  it("offers View all printings, and asks about the entry's own oracle card", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+
+    const printings = screen.getByRole("menuitem", { name: /View all printings/ });
+    // `aria-disabled`, never the `disabled` attribute — the house rule, and what the menu's
+    // greyed rows are drawn with.
+    expect(printings).not.toHaveAttribute("aria-disabled", "true");
+
+    await user.click(printings);
+
+    expect(useAppStore.getState().pendingCardSearch).toEqual({
+      oracleId: "o1",
+      name: "Lightning Bolt",
+    });
+    expect(useAppStore.getState().activeView).toBe("search");
+  });
+
+  /**
+   * The other side of the same fence, and the reason the adapter passes the column through with
+   * no fallback: `cards.oracle_id` is null for 0 of 116 590 live rows, so a null here really is
+   * an entry whose printing has left the corpus — and the greyed row's sentence is then true.
+   */
+  it("greys View all printings for an orphaned entry, which is what a null oracle id means", async () => {
+    collectionList.mockResolvedValue(page([{ ...BOLT, oracleId: null }]));
+    wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+
+    expect(screen.getByRole("menuitem", { name: /View all printings/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  /**
+   * The rule the shared `useCardMenuDeps` exists to hold in one place, asserted rather than
+   * assumed: a menu's collection add re-reads **four** keys and a wish re-reads **two**.
+   *
+   * They differ because the writes differ. A copy recorded changes what every wish counts as
+   * owned (`ownedQuantity` is summed from `collection_entries`), what every search row is
+   * badged with, and what every deck reads as claimed. A wish is a copy the reader does *not*
+   * have, so it moves no collection figure and no deck's arithmetic — only the heart on a
+   * result row. Three pages writing that out again is three places for one rule to drift, and
+   * the drift is silent: a stale badge fails nothing.
+   */
+  it("re-reads what a menu add changed, and only that", async () => {
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+
+    // And the wish's two, which are a strict subset — so the assertion that matters is the one
+    // that must *not* fire: nothing a wishlist add did could have moved a deck's claims.
+    invalidate.mockClear();
+    rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["decks"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
+  });
+
+  /**
+   * The banner is superseded by the next add rather than standing until one succeeds — the same
+   * rule the stepper's and the removal's banner follow, and for the reason written beside them:
+   * an alert about something the reader has already dealt with is worse than no alert.
+   */
+  it("clears a refused add's sentence when the next add starts", async () => {
+    collectionAdd.mockRejectedValue("that card is not in the database");
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not add to your collection — that card is not in the database",
+    );
+
+    // A *wishlist* add, so the sentence that replaces it is not merely the same one written
+    // again — and this one is answered.
+    rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  /**
    * The one field on the target nothing else here can see, and the reason it is carried: a
    * deck add naming no category is filed by what the card *does*, and the type line is
    * `autoCategoryFor`'s fallback. A drag of the same row carries it; a menu add would be the
    * one path that did not.
    *
    * This is also the only test on these three surfaces that drives the deck picker, so it is
-   * what says the `lazy` row is reachable from a real page — the panel's own cascade is
-   * `cardMenu.test.tsx`'s subject.
+   * what says the `lazy` row is reachable from a real page and that the provider nesting the
+   * app uses is the one that works — the panel's own cascade is `cardMenu.test.tsx`'s subject.
    */
   it("carries the row's type line into a deck add, so the pile is chosen by what the card does", async () => {
     const user = userEvent.setup();
-    const addToDeck = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    // Seeded rather than answered through `ipc`: the picker's two reads are `useDecks` and
-    // `useDeckFolders`, and this test is about what the *adapter* carries. A first paint
-    // saying "Loading decks…" would make it about the read's timing instead.
-    client.setQueryData(
-      ["decks", "list"],
-      [
-        {
-          id: 7,
-          name: "Burn",
-          formatKey: "commander",
-          formatName: "Commander",
-          description: null,
-          coverCardId: null,
-          coverKind: "card_art",
-          coverArtist: null,
-          isBuilt: false,
-          archived: false,
-          cardCount: 0,
-          updatedAt: 0,
-          folderId: null,
-          notes: null,
-          theoryEnabled: false,
-          lastVariant: "live",
-          lastGroupBy: "category",
-          lastSortBy: "alphabetical",
-          separateXGroup: false,
-        },
-      ],
-    );
-    client.setQueryData(["decks", "folders"], []);
     render(
       <QueryClientProvider client={client}>
         {/* **Above `ContextMenuProvider`, and that nesting is the whole of what makes this
-            work.** The panel is a *sibling* of the provider's children, not a descendant of
-            them — `ContextMenuProvider` renders `{children}` and then the open menu beside it —
-            so a `CardToDeckProvider` mounted inside the surface is not above the picker, and
+            work** — it is the arrangement `App.tsx` uses, for the reason it documents. The
+            panel is a *sibling* of the menu provider's children, not a descendant of them, so a
+            `CardToDeckProvider` mounted inside the surface is not above the picker at all and
             `useAddCardToDeck` throws on expand. A page rendered on its own has to supply this,
-            because the picker throws without it rather than swallowing the add. */}
-        <CardToDeckProvider value={{ addToDeck, error: null, clearError: vi.fn() }}>
+            because the picker throws without it rather than swallowing the add.
+
+            No `value`: the provider mounts the real `useCardToDeck`, so the assertion below is
+            on `ipc.deckAddCard` — the write itself, which is stronger than a spy on the callback
+            that was supposed to reach it. */}
+        <CardToDeckProvider>
           <ContextMenuProvider>
             <CollectionPage />
           </ContextMenuProvider>
@@ -886,29 +1052,77 @@ describe("the card menu", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Deck" }));
     await user.click(await screen.findByRole("menuitem", { name: "Burn" }));
 
-    expect(addToDeck).toHaveBeenCalledWith(
-      expect.objectContaining({ cardId: "c1", typeLine: "Instant" }),
-      7,
-      "live",
+    // `deck_add_card(deckId, cardId, categoryId, typeLine, variant, quantity)` — no category,
+    // so the app's own `autoCategoryFor` files the card, and the type line is what it files it
+    // by. That is the arm a drag with no column under it and an imported line both take.
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "c1", null, "Instant", "live", 1),
     );
   });
 
   /**
    * The wall's tile is a *card* — `CollectionPage` sums the entries behind one printing into
-   * one piece of art — so unlike the row it names no finish, and the printing's own list is
-   * not on a collection row either. Nonfoil is what an unknown list means everywhere in this
-   * app, and it is what a tile adds.
+   * one piece of art — so unlike the row it cannot *be* one finish. What it offers instead is
+   * the finishes its own entries are in, and with one entry that is one finish and no question.
+   *
+   * The wrong answer here is not a hypothetical: a tile that said nothing about finishes fell
+   * to the menu's unknown-list rule and recorded a **nonfoil** copy for a reader whose only
+   * copy of this card is a foil.
    */
-  it("opens on a tile of the wall, which names no finish", async () => {
+  it("records the one finish the reader owns, from a tile that is a card rather than an entry", async () => {
     useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    // The default page is the foil entry and nothing else.
+    wrap(<CollectionPage />);
+    rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    expect(collection).not.toHaveAttribute("aria-haspopup", "menu");
+    await user.click(collection);
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "c1",
+        finish: "foil",
+        condition: "NM",
+        quantity: 1,
+      }),
+    );
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * The other arm, and the one that says the tile is a *card*: two entries for one printing are
+   * one piece of art, so the wall has two finishes behind it and has to ask which one the reader
+   * means. The same component asks the same question on the search wall for the same reason —
+   * one wall behaving two ways would be the bug.
+   *
+   * Offered in `FINISHES` order rather than in the order the entries arrived, which is why the
+   * fixtures below are deliberately foil-first.
+   */
+  it("asks which, when the reader owns the printing in two finishes", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([BOLT, { ...BOLT, id: 8, finish: "nonfoil", condition: "LP", quantity: 1 }]),
+    );
     const user = userEvent.setup();
     wrap(<CollectionPage />);
     rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
     await screen.findByRole("menu");
 
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
-    await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    expect(collection).toHaveAttribute("aria-haspopup", "menu");
 
+    await user.click(collection);
+    const offered = (await screen.findAllByRole("menuitem")).filter((item) =>
+      ["Nonfoil", "Foil", "Etched"].includes(item.textContent ?? ""),
+    );
+    expect(offered.map((item) => item.textContent)).toEqual(["Nonfoil", "Foil"]);
+
+    await user.click(screen.getByRole("menuitem", { name: "Nonfoil" }));
     await waitFor(() =>
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
@@ -917,6 +1131,5 @@ describe("the card menu", () => {
         quantity: 1,
       }),
     );
-    expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 });
