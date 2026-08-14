@@ -202,7 +202,92 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   legibility floor for the chip laid over it, not a fraction of the card. `GridView`'s caption and
   gutter are the same case (4.5px type at half size; tiles touching into one sheet of card backs).
   The stack's padding and border are the mirror rule — **added, never multiplied**, since chrome is
-  not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason.
+  not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason
+  (210 + 12 + 2 = 224 at 1×, which is the `14rem` it replaced, exactly). **That border term is the
+  group `<section>`'s own hairline and it has been `border-transparent` since 2026-08-14**: a
+  border box that paints nothing still occupies its 1px either side, so the sum did not move when
+  the outline went. The term now names a length nobody can see, which is worth stating plainly —
+  it is a _box_ rather than a decoration, clearing the colour is free, and deleting the class would
+  paint every card 2px wider than `stackCardWidth()` says it is. The card's **own** hairline is a
+  different edge and still paints; `STACK_CARD_BORDER` is one length with two owners.
+- **The deck's piles are drawn with no edge at all, and the switched-off one says so three ways
+  instead** (changed 2026-08-14). `StackGroup`'s `<section>` was `border-border` while the pile was
+  active and `border-dashed border-border bg-surface/40` while it was not; it is
+  `border border-transparent` in both states now, with the inactive wash deepened to
+  `bg-surface/60`. A stack of card faces is already a rectangle with a hard edge, so an outline
+  around it framed a frame — and this is a desk of nothing but card faces, which is where the
+  direction's rule about chrome never being the loudest thing on the screen bites hardest. What
+  the line was actually carrying was the active/inactive distinction, so that
+  moves onto three signals that were mostly there already: the wash, `GroupHeader`'s dimmed name
+  beside its `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`. An active pile is
+  drawn with no chrome whatever. Two things did **not** have to change and each is a rule worth
+  keeping: `DROP_RING`/`DROP_OVER` are `ring-2 ring-accent` and `bg-accent/10`, and a ring is a box
+  shadow **outside** the border box, so the drag highlight never read the border it appears to sit
+  on; and the border is transparent rather than absent, for the arithmetic above. `opacity-60` also
+  makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
+  opens — the first thing to check if the lift ever regresses in inactive piles alone.
+  **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
+  build at 1280×800**, driven over `scripts/cdp.mjs` against the deck "test (copy)" (Commander, 11
+  cards, 9 categories, 6 stack columns). Every `StackGroup` `<section>` computed
+  `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)`: the box survives and the line does
+  not, so `border-transparent` is measured rather than argued, and the 2px `stackColumnWidth`
+  spends on it is still being spent. The inactive Maybeboard computed
+  `background-color: oklab(0.21 1.43099e-10 -0.012 / 0.6)` with its `<ul>` at `opacity: 0.6`; an
+  active pile computed `rgba(0, 0, 0, 0)` and `opacity: 1`. The drag marks came through the same
+  pass and cost the borders nothing: during a drag **every** eligible pile computed a ring — the
+  pinned Sideboard included — the pile under the pointer additionally computed `DROP_OVER`'s gold
+  `oklab(0.75 0.0104587 0.119543 / 0.1)`, and the drag source's own pile computed neither. That is
+  now measured rather than reasoned from "a ring is a box shadow outside the border box". **The
+  harness caveat stands**: `cdp.mjs drag` intercepts, so a green pass proves nothing about a real
+  hand on a real mouse — [live-ui-verification.md](live-ui-verification.md) says why.
+  **The trap in checking any of this: `opacity-60` is unobservable on an _empty_ pile.**
+  `CardStack` returns null for a group with no cards, so a switched-off empty pile has no `<ul>` in
+  the DOM at all and a probe reports *absent* rather than 0.6. The Maybeboard read exactly that way
+  on the first pass and the figure above needed a card moved into it first. The wash and
+  `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
+  the argument for having three.
+- **The sideboard is a pinned column, not a packed one.** `StackView` splits `kind === "side"` out
+  of `groups` before `packColumns` sees them and draws them as one extra column after the packed
+  ones: `sticky right-0`, `LAYER.raised`, an opaque `bg-bg`, the same inline width and `flex` basis
+  as every other column, and a soft shadow down its left edge for the seam — a shadow because the
+  borders had just gone, and a hairline reinstated here would have been the only one left in the
+  view. The `bg-bg` is what makes pinning worth anything: the packed columns have to pass _under_
+  it, and a translucent surface over sliding card art is a smear rather than a rest. The failure it
+  prevents is a drag with no destination on screen — the Sideboard sorts last, so on a deck wide
+  enough to scroll it packs off the right edge, and a card dragged out of the main deck has nowhere
+  to be let go of. It carries `STACK_COLUMN_ATTR` and `STACK_PINNED_ATTR` both, so "every column"
+  and "the pinned column" stay two questions of one element rather than one question with a special
+  case in it; and it is rendered only when a `side` group exists, which is a real condition for a
+  story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES` seeds a Sideboard
+  into every deck, a category group is drawn whether or not anything is in it, and a predefined
+  pile cannot be deleted — so in `category` mode the pinned column is there from the moment a deck
+  is created. **Its z-index is the interesting part, because it is not a number.** An open card's
+  list takes `LAYER.raised` too, and equal z-indexes resolve by document order, so the pinned
+  column winning is a fact about it being drawn last. That is the only reading an opaque pinned
+  column can survive: a card lifted out of a column scrolling past has to pass under the sideboard,
+  not over it. **The cost is permanent, unconditional and paid at every zoom** —
+  `stackColumnWidth(zoom)`: **224px at 1×, measured** in the window on 2026-08-14, and 434px at 2×
+  **derived from the same function rather than measured** (the live pass ran at 1× only), which at
+  2× is a third of a 1280px window reserved for a pile that on a new deck holds nothing at all.
+  **Measured 2026-08-14** (debug build, 1280×800, the same deck as the bullet above): the pinned
+  column computed `position: sticky`, `right: 0px`, `z-index: 10`,
+  `background-color: oklch(0.16 0.01 270)` — opaque `--color-bg`, not a wash —
+  `box-shadow: rgba(0, 0, 0, 0.45) -8px 0px 16px -4px`, and `width: 224px`. It was the last of the
+  6 columns and held exactly one section, the Sideboard. **Sticky, proven rather than asserted**:
+  1424px of columns in a 632px scrollport (321px earlier, with the stats aside open), and the
+  column's viewport `left` stayed **325px** across `scrollLeft` 0 → 1103 → 0. **Occlusion, proven**:
+  with the desk scrolled, `document.elementFromPoint` at the centre of a card in the Instant column
+  returned the pinned Sideboard's own "Nothing here yet." paragraph rather than the card. The
+  packed columns really do pass _under_ it, with nothing showing through.
+- **A card scrolled under the pinned column is not hittable there — and that is the correct
+  behaviour, not a bug.** It cannot be clicked, opened or picked up until it is scrolled clear.
+  This is what the occlusion measured above _means_, and it is inherent to any opaque sticky
+  overlay: the card is hidden, so it should not be grabbable. It is also the thing that will read
+  as a bug to whoever meets it next, so **know the symptom** — it is what made the first
+  `cdp.mjs drag` of the 2026-08-14 pass fail with "the browser never started a drag": the source
+  card's centre was under the pinned column, so the press landed on the Sideboard instead. Scroll
+  the source clear of the pinned column before pressing, and suspect this before suspecting the
+  harness.
 - **The zoom badge is driven by a pulse counter, not by the zoom value** (`CardZoomIndicator`,
   `zoomPulse`). At either end of the ladder a gesture changes no number, and that is exactly when a
   reader needs an answer — they are still rolling the wheel and nothing is happening. Keyed off the
@@ -236,7 +321,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   The part a number cannot fix: a popup inside a virtualised row is capped by that row's
   layer whatever it asks for, because the row is `absolute` _and_ `transform`ed and is
   therefore its own stacking context. That is why the row lift exists and why it sits
-  _below_ the header — a row has to scroll under one. Variant spellings
+  _below_ the header — a row has to scroll under one. **Document order is load-bearing in the
+  other direction too, and there deliberately**: the deck stack's pinned sideboard column and an
+  open card's list are both `LAYER.raised`, and the pinned column is drawn last precisely so the
+  lifted card passes under it (the stack bullets above). Nothing but the JSX order enforces that,
+  and inverting it would go unnoticed by every test. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
 - **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and

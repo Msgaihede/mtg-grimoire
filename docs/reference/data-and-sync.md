@@ -254,7 +254,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v11.** v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
+- **Schema is v12.** v12 adds three columns to `decks` — `last_variant`, `last_group_by` and
+  `last_sort_by`, all `TEXT NOT NULL` with defaults `live`, `category` and `alphabetical` — so
+  the deck editor reopens on whatever the reader was last looking at, per deck. Like v8, v9 and
+  v11 it touches `cards` not at all, so it neither needs the `CARDS_INDEXES` replay nor takes it
+  from v11, and it owes no `cards_fts` rebuild. **`ALTER TABLE … ADD COLUMN` cannot add a CHECK**,
+  so none of the three is constrained in SQL and the fence sits where the vocabulary is owned:
+  `last_variant` against `schema::DECK_VARIANTS` in Rust, the other two narrowed in TypeScript on
+  read — [decks-storage.md](decks-storage.md) has the reasoning.
+  v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
   `PRIMARY KEY (marketplace, card_id, finish)`, `WITHOUT ROWID`) and `marketplace_feed_meta`
   (`marketplace, fetched_at, feed_built_at, row_count`) for the Card Kingdom and Mana Pool
   price feeds. **They are tables and not `cards` columns because `swap_staging` drops `cards`

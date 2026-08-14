@@ -26,6 +26,8 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+// Not a card write: the tab, the `Group by` and the `Sort` the reader leaves the deck on.
+const deckSetViewState = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 // The docked search panel is the editor's own filter bar, set picker and result wall — and the
 // toolbar's quick add resolves a typed name through the same command.
@@ -61,6 +63,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckAddCard,
     deckMissingToWishlist,
     deckSwapPrinting,
+    deckSetViewState,
     formatSpecs,
     searchCards,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
@@ -109,6 +112,12 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  // How the editor was last read. The defaults, so a test that says nothing about them opens on
+  // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
+  // one field it is about through `detail()`.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
 };
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */
@@ -331,6 +340,7 @@ beforeEach(() => {
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  deckSetViewState.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   // Nothing found by default: a result named after a card already in the deck would be a
   // second button by that name, and every test here addresses cards by name.
@@ -1654,6 +1664,162 @@ describe("DeckEditor", () => {
 
     expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument();
     expect(screen.queryByText(/cards differ/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * One of the two tabs, looked up **fresh every time**: switching variant puts the editor
+   * through a beat with no row, which takes the whole header down and back — so a node held
+   * from before a press is a node the assertion after it would be reading out of a detached
+   * tree.
+   */
+  const tab = (name: "Live" | "Theory") =>
+    within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", { name });
+
+  /** Both lists on screen at once, so the pair can be read in the order they are drawn. */
+  function withPlan(deck: Partial<DeckRow> = {}) {
+    const over = { theoryEnabled: true, ...deck };
+    const live = detail(over, [bolt({ quantity: 4 })]);
+    const theory = detail(over, [
+      bolt({ quantity: 2, variant: "theory" }),
+      card({ name: "Bear", variant: "theory" }),
+    ]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+  }
+
+  /** The two tabs, and which of them the reader's eye lands on first. **Theory before Live**:
+   *  the plan is the list a deck is built in, and it is where turning the switch on now puts
+   *  the cards. Asserted as a sequence, because both being present says nothing about that. */
+  it("draws the plan's tab before the deck's", async () => {
+    withPlan();
+    await open();
+
+    const tabs = within(await screen.findByRole("group", { name: "Deck list" })).getAllByRole(
+      "button",
+    );
+    expect(tabs.map((b) => b.textContent)).toEqual(["Theory", "Live"]);
+  });
+
+  /**
+   * A deck opens on the tab it was left on, which is the whole point of the three columns.
+   *
+   * Restoring writes **nothing** back: it is a read of what is already stored, and a restore
+   * that wrote would put a `deck_set_view_state` behind every deck anyone merely looked at.
+   */
+  it("opens on the list the deck remembers", async () => {
+    withPlan({ lastVariant: "theory" });
+    await open();
+
+    await screen.findByRole("group", { name: "Deck list" });
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+    // The plan's own cards are what is drawn — the tab is not just painted.
+    expect(await screen.findByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+    expect(deckSetViewState).not.toHaveBeenCalled();
+  });
+
+  /** The other half of the same rule, so neither word is being read as "not the other one". */
+  it("opens on the deck when that is what it remembers", async () => {
+    withPlan({ lastVariant: "live" });
+    await open();
+
+    await screen.findByRole("group", { name: "Deck list" });
+    expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Theory")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /**
+   * **A deck that no longer keeps a plan opens on Live, whatever it remembers.**
+   *
+   * Switching the theory list off does not rewrite `lastVariant`, so `"theory"` on a deck with
+   * no switch is an ordinary state rather than a corrupt one — and honouring it would leave the
+   * reader reading a list with no control to get back from. Two things hold it: the restore
+   * asks for Live on a deck that keeps no plan, and the clamp that has always run after the
+   * restore still catches the switch being turned off under an open editor.
+   */
+  it("opens on the deck when it keeps no plan, whatever tab it remembers", async () => {
+    deckGet.mockResolvedValue(
+      detail({ theoryEnabled: false, lastVariant: "theory" }, [bolt({ quantity: 4 })]),
+    );
+    await open();
+
+    expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument();
+    // Never even read: the editor asked for one list, and it was the live one.
+    expect(deckGet).not.toHaveBeenCalledWith(4, "theory", "tcgplayer");
+    expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
+  });
+
+  /** The other two remembered controls, restored the same way and from the same row. */
+  it("opens with the grouping and the sort the deck remembers", async () => {
+    deckGet.mockResolvedValue(
+      detail({ lastGroupBy: "manaValue", lastSortBy: "price" }, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+      ]),
+    );
+    await open();
+
+    expect(screen.getByLabelText("Group by")).toHaveValue("manaValue");
+    expect(screen.getByLabelText("Sort")).toHaveValue("price");
+    // And it is the list that was regrouped, not just the select.
+    expect(await screen.findByRole("list", { name: "Mana value 1" })).toBeInTheDocument();
+  });
+
+  /**
+   * A stored word this build does not offer lands on the default rather than sticking.
+   *
+   * The columns are `string` on the wire on purpose — a database outlives the app, and a mode
+   * a future build stops offering must not put the editor somewhere its own select cannot draw
+   * and the reader cannot press their way out of.
+   */
+  it("falls back to the defaults for a grouping or a sort it no longer offers", async () => {
+    deckGet.mockResolvedValue(
+      detail({ lastGroupBy: "colour", lastSortBy: "rarity" }, [bolt()]),
+    );
+    await open();
+
+    expect(screen.getByLabelText("Group by")).toHaveValue("category");
+    expect(screen.getByLabelText("Sort")).toHaveValue("alphabetical");
+    expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
+  });
+
+  /**
+   * Every press is stored, and **only the control that moved travels**: absent means "leave it",
+   * so a press on Sort cannot write back a grouping read out of a stale render.
+   */
+  it("remembers each control the reader presses, one field at a time", async () => {
+    withPlan({ lastVariant: "live" });
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Theory" }));
+    await waitFor(() => expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "theory" }));
+
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await waitFor(() =>
+      expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "manaValue" }),
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
+    await waitFor(() => expect(deckSetViewState).toHaveBeenLastCalledWith(4, { sortBy: "price" }));
+
+    expect(deckSetViewState).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * **The row does not fight the reader.** The restore is honoured once per stored *triple*, so
+   * a row still saying `"theory"` — `rememberView` does not invalidate, so it is not re-read
+   * after the press — cannot pull the reader back off the tab they just chose.
+   */
+  it("keeps the tab the reader pressed while the row still says the old one", async () => {
+    withPlan({ lastVariant: "theory" });
+    await open();
+    await screen.findByRole("group", { name: "Deck list" });
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+
+    await userEvent.click(tab("Live"));
+
+    await waitFor(() => expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "live" }));
+    expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
   });
 
   /** The one write on the stats aside, end to end: what the deck is short of becomes wishes,

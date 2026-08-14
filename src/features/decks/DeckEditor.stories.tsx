@@ -94,6 +94,14 @@ const meta = {
           "rungs — so two of them open at once would both close on one press. A union rather " +
           "than five booleans is what makes “never two” structural; {@link NeverTwoLayers} is " +
           "that, pressed.\n\n" +
+          "**The first three toolbar controls are remembered on the deck row.** Which list, " +
+          "which grouping, which sort: each press writes its own field through " +
+          "`deck_set_view_state`, which moves no `updated_at`, records no history and " +
+          "reallocates nothing — looking at a tab is not editing a deck — and the editor reads " +
+          "the triple back when it opens. Deliberately **not** `useAppStore`: `cardZoom` and " +
+          "the two view preferences are one session-wide answer, while which list of a " +
+          "*particular* deck somebody was reading is a fact about that deck. " +
+          "{@link ReopensOnThePlan} is the deck that was left on its plan.\n\n" +
           "**An inactive category counts toward nothing at all** — not size, not copies, not " +
           "legality — and the allocator never claims a copy for one, so every card in it reads " +
           "`0` owned **by design** rather than for want of copies. That is `isActive` and never " +
@@ -167,7 +175,11 @@ type Story = StoryObj<typeof meta>;
  * is drawn, empty, saying "Nothing here yet."
  *
  * The order is the v8 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
- * — because a *seeded* deck comes out of that migration rather than out of `deck_create`.
+ * — because a *seeded* deck comes out of that migration rather than out of `deck_create`. That
+ * is the order the categories are **in**, and in Stacks it is no longer the order they are
+ * **drawn**: the Sideboard is pinned to the right of the desk and the other four pack in front
+ * of it, so the two differ by exactly that one pile. See `Decks/Views/StackView`'s
+ * `PinnedSideboard` for what the pin is for.
  *
  * The stats aside's headline figure is 60 with "+ 15 sideboard" under it, and that split is the
  * whole reason `DeckStats` imports `SIZE_KINDS` from the validation engine: the chip in the
@@ -305,6 +317,49 @@ export const GroupAndSort: Story = {
 
     await userEvent.selectOptions(canvas.getByLabelText("Sort"), "price");
     await expect(canvas.getByLabelText("Sort")).toHaveValue("price");
+  },
+};
+
+/**
+ * The deck that was left on its plan, reopening on it — the tab, the grouping and the sort all
+ * three.
+ *
+ * **The editor's opening state is a fact about the deck, not about the session.** `lastVariant`,
+ * `lastGroupBy` and `lastSortBy` are columns on the deck row, written by `deck_set_view_state`
+ * as the reader presses each control and read back here on the way in. Deck 4 is seeded on
+ * `theory`/`type`/`manaCost` for exactly this — the other three decks carry the defaults, and a
+ * seed where every deck read the same way could not show the memory at all.
+ *
+ * **Theory is the left-hand tab**, and that is the order the switch produces rather than a
+ * preference: turning the plan on *moves* the live list into it, so the tab holding the cards is
+ * the one a reader lands on and Live is the column that fills as they acquire them.
+ *
+ * Smuggler's Copter is the proof that the *list* changed and not just which button is lit — it is
+ * in this deck's plan and in no part of what is sleeved up. Pressing Live is what the memory is
+ * not: a starting point, never a lock.
+ */
+export const ReopensOnThePlan: Story = {
+  args: { deckId: 4 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tabs = within(await canvas.findByRole("group", { name: "Deck list" }));
+
+    // Theory first, Live second — read off the DOM order, because "on the left" is the claim.
+    const [theory, live] = tabs.getAllByRole("button");
+    await expect([theory.textContent, live.textContent]).toEqual(["Theory", "Live"]);
+    await expect(theory).toHaveAttribute("aria-pressed", "true");
+
+    await expect(canvas.getByLabelText("Group by")).toHaveValue("type");
+    await expect(canvas.getByLabelText("Sort")).toHaveValue("manaCost");
+
+    const copter = await canvas.findByRole("button", { name: /^Smuggler's Copter/ });
+    await expect(copter).toBeInTheDocument();
+
+    await userEvent.click(live);
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("button", { name: /^Smuggler's Copter/ })).toBeNull();
+    });
+    await expect(live).toHaveAttribute("aria-pressed", "true");
   },
 };
 

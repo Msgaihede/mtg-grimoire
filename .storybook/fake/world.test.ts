@@ -19,11 +19,11 @@ import { emitFake, listen } from "./event";
 import { seed } from "./seeds";
 import { CARDS } from "./cards";
 import { CLOCK_BASE } from "./db";
-import type { FakeDb, FakeDeckCard, FakeEntry } from "./db";
+import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry } from "./db";
 import { useAppStore } from "@/lib/store";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import { validateDeck } from "@/features/decks/validation/engine";
-import type { CollectionPage, DeckDetail, EntryChange, SearchResponse } from "@/lib/ipc";
+import type { CollectionPage, DeckDetail, DeckRow, EntryChange, SearchResponse } from "@/lib/ipc";
 
 /** The one row every isolation test edits: `starter`'s first collection entry, four copies of
  *  Lightning Bolt `2x2 117`. */
@@ -355,6 +355,25 @@ describe("the seeds", () => {
     expect(db.decks.filter((d) => d.archived).map((d) => d.id)).toEqual([3]);
   });
 
+  /**
+   * One deck was left somewhere and three were not, which is the split a story needs: a deck
+   * whose three columns are all defaults is indistinguishable from a deck nobody has ever
+   * touched the toolbar on, so a seed where *every* deck read that way could not show the
+   * memory working at all.
+   */
+  it("starter leaves one deck where the reader was, and the rest where a deck opens", () => {
+    const db = seed("starter");
+    const memory = (d: FakeDeck) => [d.lastVariant, d.lastGroupBy, d.lastSortBy];
+    const untouched = ["live", "category", "alphabetical"];
+    expect(db.decks.filter((d) => d.id !== 4).map(memory)).toEqual([
+      untouched,
+      untouched,
+      untouched,
+    ]);
+    // The deck whose whole reason to exist is the plan beside it, reopening on the plan.
+    expect(memory(db.decks.find((d) => d.id === 4)!)).toEqual(["theory", "type", "manaCost"]);
+  });
+
   it("every seeded deck names a format the fake backend will accept", () => {
     // `deck_create`/`deck_update` validate against `SPECS`' 12 rows, not `format_specs`' 25.
     // A seeded deck in one of the other 13 formats would list and open and then refuse the
@@ -657,6 +676,35 @@ describe("a story can read the world it was given", () => {
     const detail = await invoke<DeckDetail>("deck_get", { id, variant: "live" });
     const issues = validateDeck(detail!.cards, SPECS[detail!.deck.formatKey]);
     expect(issues.map((i) => i.message)).toEqual(messages);
+  });
+
+  /**
+   * The tab memory through `invoke` rather than through the handler map — the path a component
+   * takes, so a command registered under a name `ipc.ts` does not send fails here.
+   *
+   * The second assertion is the one worth making twice: `updatedAt` is the gallery's sort key,
+   * so a view-state write that moved it would resort the wall every time somebody glanced at
+   * their plan.
+   */
+  it("remembers the view a story left a deck on, and leaves the gallery's sort key", async () => {
+    installWorld({ seed: "starter" });
+    const readDeck = async () => (await invoke<DeckRow[]>("deck_list")).find((d) => d.id === 1)!;
+    const before = await readDeck();
+    expect([before.lastVariant, before.lastGroupBy, before.lastSortBy]).toEqual([
+      "live",
+      "category",
+      "alphabetical",
+    ]);
+
+    await invoke("deck_set_view_state", { deckId: 1, viewState: { groupBy: "manaValue" } });
+
+    const after = await readDeck();
+    expect([after.lastVariant, after.lastGroupBy, after.lastSortBy]).toEqual([
+      "live",
+      "manaValue",
+      "alphabetical",
+    ]);
+    expect(after.updatedAt).toBe(before.updatedAt);
   });
 
   it("serves the empty world without a single handler falling over", async () => {
