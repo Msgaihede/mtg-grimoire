@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { fireEvent, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useDismissOnEscape } from "./useDismissOnEscape";
 
@@ -85,5 +85,59 @@ describe("useDismissOnEscape", () => {
 
     expect(pressEscape()).toBe(false);
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("gives the press to the most recently mounted capture layer, not the first", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: first }));
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: second }));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    // Two `"inner"` peers used to be ordered by registration alone, and this is the direction
+    // that got wrong: measured on the pre-fix hook, `first` was called and `second` was not —
+    // the newest layer, the one the reader had just opened, was the one starved. The stack
+    // orders them.
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("hands the press back down when the top layer unmounts", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: first }));
+    const top = renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: second }));
+
+    top.unmount();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(first).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lets an inner layer beat an outer one whatever the mount order", () => {
+    const outer = vi.fn();
+    const inner = vi.fn();
+    // The outer layer mounts *second* here — the pane-then-popup order is covered above; this
+    // is the reverse, which registration order alone would get wrong.
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: inner }));
+    renderHook(() => useDismissOnEscape({ layer: "outer", onDismiss: outer }));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+  });
+
+  it("a disabled layer is not on the stack", () => {
+    const enabled = vi.fn();
+    const disabled = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: enabled }));
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: disabled, enabled: false }));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(enabled).toHaveBeenCalledTimes(1);
+    expect(disabled).not.toHaveBeenCalled();
   });
 });
