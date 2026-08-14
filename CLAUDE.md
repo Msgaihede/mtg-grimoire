@@ -9,6 +9,11 @@ construction: nothing downloads until a reader selects that marketplace, and a f
 answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
 needs a per-user JWT and publishes no bulk download.
 
+**Scryfall's Oracle Tags are a second bulk download from the same source, and optional the same
+way.** They say what a card _does_ (`removal`, `ramp`, `recursion`), which is what a deck add is
+filed by; a database that has never fetched them files by card type instead, and that fallback is
+the floor rather than an error. Weekly, ~5.85 MB — [the research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md).
+
 ## Commands
 
 - `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only

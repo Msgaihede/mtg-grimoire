@@ -18,6 +18,7 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const deckCardSetTag = vi.hoisted(() => vi.fn());
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -28,6 +29,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMissingToWishlist,
     deckSwapPrinting,
     deckCardSetTag,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -157,6 +159,10 @@ beforeEach(() => {
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckCardSetTag.mockReset().mockResolvedValue(undefined);
+  // A database that has never fetched the taxonomy — every card answers "no tags", which is
+  // the state the app ships in and files every add by its type line. The tests that are about
+  // the tags say so themselves.
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
 describe("useDeck", () => {
@@ -317,10 +323,13 @@ describe("useDeck", () => {
    * cursor.
    *
    * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is
-   * `autoCategoryFor`'s: the card's type line and nothing else. The rule is applied here, on the
-   * one definition, and the *fact* it reads travels from the call site — which is what keeps
-   * `autoCategoryFor` a single rule in TypeScript without any add paying a round trip to
-   * discover what it is adding.
+   * `autoCategoryFor`'s. The rule is applied here, on the one definition, so a call site never
+   * computes a pile name of its own.
+   *
+   * This is the **untagged** floor and the default this file mocks: a card the taxonomy has
+   * nothing to say about — or an app whose taxonomy has never been downloaded — is filed by its
+   * type line exactly as every add was before the tags existed. The read still happens, because
+   * the only way to know there is nothing to say is to ask.
    */
   it("files an add that names no category by the card's type line", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
@@ -332,7 +341,101 @@ describe("useDeck", () => {
       quantity: 1,
     });
 
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Artifact", "live", 1);
+  });
+
+  /**
+   * **A decklist is written by function, so an add with no column asks what the card *does*.**
+   *
+   * Lightning Bolt's type line is `Instant`, and nobody has ever built a deck with a column
+   * called Instant — they build one with Removal in it. The tags are the fact
+   * (`oracle_tags_for_printings`, one printing id), `autoCategoryFor` is the conclusion, and the
+   * name is what `deck_add_card` finds or creates. `Instant` here would mean the fetch is not
+   * wired in at all, which is the regression this protects.
+   *
+   * **The decoy first entry is the second half of the test.** The command drops blank and
+   * duplicate ids, so its answer can be shorter than the request and in no promised order —
+   * `answers[0]` is a read that works until the day it silently files a card by another card's
+   * tags. A positional read gets `Ramp` here.
+   */
+  it("files an add that names no category by what the card does", async () => {
+    oracleTagsForPrintings.mockResolvedValue([
+      { cardId: "elsewhere", slugs: ["ramp"] },
+      { cardId: "p2", slugs: ["removal"] },
+    ]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Instant", quantity: 1 });
+
+    // One card, asked about by the printing id being added — not the whole deck, and not the
+    // oracle id, which no drag payload carries.
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Removal", "live", 1);
+  });
+
+  /**
+   * The same add against a card the taxonomy answers **empty** for — an untagged card, a
+   * printing whose `oracle_id` is NULL, or an id `cards` does not have, all of which come back
+   * `slugs: []` on purpose.
+   *
+   * The type line is the answer then, and that path is the floor rather than an error case: it
+   * is what this app does before the tag dataset has ever downloaded, and if it never does.
+   * Paired with the test above deliberately — one card id, one type line, two answers, and the
+   * pile follows the tags.
+   */
+  it("falls back to the type line when the card has no tags", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Instant", quantity: 1 });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", 1);
+  });
+
+  /**
+   * **Land is pinned by the type line before a single tag is consulted**, and this is the add
+   * path proving it end to end rather than `autoCategoryFor` proving it alone.
+   *
+   * 52% of lands carry a functional tag — Prismatic Vista is tagged `tutor` because it searches,
+   * Savai Triome `card-advantage` because it cycles — so a rule that read the tags first would
+   * scatter a deck's mana base across a dozen columns, with fetchlands under a Tutor heading. A
+   * mana base is the one pile every decklist draws whole.
+   */
+  it("files a land as a land whatever its tags say", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["tutor"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Land", quantity: 1 });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Land", "live", 1);
+  });
+
+  /**
+   * **A tag read that fails must not fail the add.** The card still lands — in its type-line
+   * pile, which is where every card landed before the taxonomy existed.
+   *
+   * Losing the taxonomy for one add costs the reader a worse pile, which they can drag; a
+   * refused add costs them a card they have to notice is missing. The catch in `oracleTagsFor`
+   * is the whole of this, and it is exactly the kind of thing a later reader tidies into a
+   * rethrow — so this test is what says no.
+   */
+  it("still adds the card when the tag read is refused", async () => {
+    oracleTagsForPrintings.mockRejectedValue(new Error("database is locked"));
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const change = await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Instant",
+      quantity: 1,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", 1);
+    expect(change).toEqual({ id: 9, quantity: 4, removed: false });
   });
 
   /**
@@ -340,9 +443,9 @@ describe("useDeck", () => {
    * whose printing has left `cards`, or a layout this app has no column for (a Dungeon, a Plane).
    *
    * Both answer `Uncategorised`, which is `autoCategoryFor`'s own answer and needs no second
-   * fallback here. The pile is a real category the reader can rename, reorder or switch off; what
-   * it may never be is `""`, which the backend's find-or-create would accept as a heading nobody
-   * can see.
+   * fallback here — with no tags to go on either, which is this file's default. The pile is a
+   * real category the reader can rename, reorder or switch off; what it may never be is `""`,
+   * which the backend's find-or-create would accept as a heading nobody can see.
    */
   it("files a card it cannot place under Uncategorised", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
@@ -362,6 +465,10 @@ describe("useDeck", () => {
    *
    * No surface in the app takes this arm today — every add either points at a column or carries a
    * type line — so it is a fence, and the test is what says the fence is where it was left.
+   *
+   * **And it asks the taxonomy nothing.** A caller that said nothing about the card is not asking
+   * to have it filed, so there is no rule to run and no fact to fetch: the default pile is the
+   * answer without a round trip.
    */
   it("files an add that says nothing at all under the default pile", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
@@ -370,11 +477,19 @@ describe("useDeck", () => {
     await result.current.addCard.mutateAsync({ cardId: "p2", quantity: 1 });
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Main deck", "live", 1);
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 
-  /** An explicit category wins outright, and no name is sent beside it — the drag path, and the
-   *  panel's under a pick. A type line handed in with an id is simply not read. */
-  it("ignores a type line when a category was named", async () => {
+  /**
+   * An explicit category wins outright, and no name is sent beside it — the drag path, and the
+   * panel's under a pick. A type line handed in with an id is simply not read.
+   *
+   * **And nothing is asked about the card at all.** Pointing at a column *is* naming a category,
+   * so no rule runs — and a drop that paid a tag read on the way to a pile the reader had already
+   * chosen would be a round trip bought for nothing, on the one interaction in this app where a
+   * gesture is being answered in place.
+   */
+  it("ignores a type line when a category was named, and asks nothing about the card", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
@@ -386,6 +501,7 @@ describe("useDeck", () => {
     });
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "live", 1);
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 
   /**

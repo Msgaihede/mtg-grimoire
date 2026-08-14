@@ -105,11 +105,11 @@ const CARDS_COLUMNS: &str = "
 /// rather than a rebuild. A step that *changes* a definition — as v10 changes this one —
 /// drops the old one first, or `IF NOT EXISTS` silently keeps what is already there.
 ///
-/// The rule is a *moving* one: a v12 that touches `cards` must take the replay from v10, and
+/// The rule is a *moving* one: a v13 that touches `cards` must take the replay from v10, and
 /// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what fails if it does not.
-/// A step that leaves `cards` alone entirely — v8, the deck tables, v9, the error log, and
-/// v11, the marketplace price tables — neither needs the list nor may replay it, and none of
-/// them takes the title of newest creator from v10.
+/// A step that leaves `cards` alone entirely — v8, the deck tables, v9, the error log, v11,
+/// the marketplace price tables, and v12, the oracle-tag tables — neither needs the list nor
+/// may replay it, and none of them takes the title of newest creator from v10.
 const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -953,10 +953,14 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         // One category per (deck, zone) that actually holds cards, named and flagged from
         // PREDEFINED_CATEGORIES — except 'main', whose legacy rows all land in one category
-        // called 'Main deck'. Splitting those by card type is the app's `autoCategoryFor`
-        // rule, which lives in TypeScript because it is domain logic; running a second copy of
-        // it here would be two rules to keep in step. The categories panel offers
-        // 'Auto-categorise from card types', which is that one rule, pressed once.
+        // called 'Main deck'. Splitting those is the app's `autoCategoryFor` rule, which lives
+        // in TypeScript because it is domain logic; running a second copy of it here would be
+        // two rules to keep in step. The categories panel offers 'File cards by what they do',
+        // which is that one rule, pressed once.
+        //
+        // That rule reads a card's Oracle tags now, not its type line (v12) — which is a second
+        // reason this migration must not copy it: the taxonomy those tags come from is a
+        // separate download that a database being migrated may not have yet.
         tx.execute_batch(
             "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order,
                                           created_at, updated_at)
@@ -1256,8 +1260,118 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA user_version = 11;")?;
         tx.commit()?;
     }
+    if v < 12 {
+        let tx = conn.unchecked_transaction()?;
+        // Scryfall's Oracle Tags, in four tables plus a watermark.
+        //
+        // **The key is the `slug`, not Scryfall's tag uuid.** The uuid is what
+        // `parent_ids`/`child_ids` reference *inside the file*, and it is resolved to a slug
+        // during the ingest and then thrown away: a slug is stable, readable, and the thing
+        // TypeScript matches on, while a uuid is a join key this database would carry for no
+        // reader. `oracle_id` is likewise a **soft** reference to `cards.oracle_id` with no
+        // foreign key — `swap_staging` drops `cards` on every sync, and this file names
+        // 35 969 oracle ids that were collected on a different day from the corpus.
+        //
+        // **`oracle_tag_cards` is the closure, and it is the only table the app reads at
+        // query time.** It holds one row per (card, tag) *including inherited tags*: if a
+        // card is tagged `tutor-battle` and `tutor-battle`'s parents are `tutor` and
+        // `battle-matters`, all three are rows. That is what lets the frontend answer "which
+        // of these categories does this card belong to" with one indexed prefix scan per
+        // card, instead of a recursive walk per lookup. The other three tables are the facts
+        // it was computed from, kept because a closure with no source is unauditable —
+        // `oracle_taggings` is what a card was *directly* tagged with, and
+        // `oracle_tag_parents` is the hierarchy that was walked.
+        //
+        // `WITHOUT ROWID` on all four data tables: each *is* its primary key plus at most two
+        // free-text columns, so an ordinary table's rowid b-tree would be a second copy of
+        // the key. It also makes the primary key the physical order, which is the whole read
+        // path — `WHERE oracle_id IN (…)` on `oracle_tag_cards` is a run of prefix scans over
+        // the table itself. No secondary index is created here and none is owed.
+        //
+        // **684 of the 4 521 tags have more than one parent**, which is why
+        // `oracle_tag_parents` is a table of edges with a composite key rather than a
+        // `parent_slug` column on `oracle_tags`. Measured live 2026-08-14 over the day's
+        // file: 926 roots, max depth 5, no cycles and no dangling parent ids — none of which
+        // the ingest assumes, because none of it is promised.
+        //
+        // `weight` is stored and nothing branches on it: 99.74 % of taggings are `median`, so
+        // it carries no signal today. It is kept because it is the file's own word about the
+        // tagging and inventing it back later would need a re-download.
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables),
+        // v9 (the error log) and v11 (the price tables) left it. Nothing here is FTS-indexed
+        // and no rowid is renumbered, so no `cards_fts` rebuild is owed: the reasoning
+        // `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(ORACLE_TAG_TABLES_SQL)?;
+        // Literal `12`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 12;")?;
+        tx.commit()?;
+    }
     Ok(())
 }
+
+/// The four oracle-tag tables and their watermark, as the v12 step creates them.
+///
+/// **A literal, and history from the day it shipped** — [`CARDS_COLUMNS`]'s rule. The
+/// staging copies in [`ORACLE_TAG_STAGING_SQL`] are a *second* literal rather than this one
+/// with the names rewritten, because a `_staging` table is renamed over the live one and the
+/// two must agree exactly; `the_oracle_tag_staging_tables_match_the_live_ones` is the fence
+/// that keeps them from drifting, and it compares columns, types, nullability and primary
+/// keys rather than trusting a string substitution.
+const ORACLE_TAG_TABLES_SQL: &str = "
+    CREATE TABLE IF NOT EXISTS oracle_tags (
+        -- Scryfall's `slug`. Stable, readable, and what TypeScript matches on.
+        slug TEXT PRIMARY KEY,
+        -- The file's `label`. Falls back to the slug when a line carries none, so this is
+        -- always something a person can be shown.
+        label TEXT NOT NULL,
+        description TEXT
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS oracle_tag_parents (
+        -- Child first: every read of this table asks 'what is above this tag'.
+        child_slug TEXT NOT NULL,
+        parent_slug TEXT NOT NULL,
+        PRIMARY KEY (child_slug, parent_slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS oracle_taggings (
+        -- A Scryfall oracle id. Soft: no FK, for the reason above.
+        oracle_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        -- The file's own word about the tagging (`median` on 99.74 % of them). Stored
+        -- because it is data we were given; read by nothing, and nothing may branch on it.
+        weight TEXT,
+        annotation TEXT,
+        PRIMARY KEY (oracle_id, slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS oracle_tag_cards (
+        oracle_id TEXT NOT NULL,
+        -- Every tag the card holds *and* every ancestor of those tags.
+        slug TEXT NOT NULL,
+        PRIMARY KEY (oracle_id, slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS oracle_tag_meta (
+        -- One row, ever. A key/value pair would have been `sync_meta`, and this is
+        -- deliberately not that: the card sync's watermark and this one describe different
+        -- files on different schedules, and a failed tag refresh must not read as a failed
+        -- card sync.
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        -- Replayed as `If-None-Match`, so a re-run costs zero bytes. NULL when the response
+        -- carried none.
+        etag TEXT,
+        -- Scryfall's `updated_at` for the file these rows came from, verbatim. The second
+        -- half of the short-circuit: a 200 with no ETag still names the file it is offering.
+        updated_at TEXT,
+        -- Unix seconds: when *we* built these rows.
+        ingested_at INTEGER NOT NULL,
+        -- Unix seconds: when we last **asked** whether the file had changed, which a 304
+        -- moves and an ingest does not. Separate from `ingested_at` for `sync_meta`'s
+        -- `last_check_at` reason — without it a taxonomy that is simply up to date reads as
+        -- due on every launch, and the throttle buys nothing but one API call per start.
+        checked_at INTEGER NOT NULL,
+        tag_count INTEGER NOT NULL,
+        tagging_count INTEGER NOT NULL
+    );";
 
 /// (Re)create the external-content FTS5 index over `cards` and populate it.
 ///
@@ -1441,6 +1555,99 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
     // the work that discharges it commit together or not at all.
     crate::sync::set_meta_opt(&tx, crate::maintenance::K_FTS_REBUILD_PENDING, None)?;
     tx.commit()
+}
+
+/// The four oracle-tag tables again, `_staging` and empty.
+///
+/// A second literal rather than [`ORACLE_TAG_TABLES_SQL`] with its names rewritten, for
+/// [`CARDS_COLUMNS`]'s reason: the live DDL is *history* the day it ships, while this one
+/// describes head and moves with it. `the_oracle_tag_staging_tables_match_the_live_ones` is
+/// what stops the two coming apart — it compares them column by column through
+/// `PRAGMA table_info`, so a type, a `NOT NULL` or a primary key that changes on one side
+/// and not the other fails there rather than at the rename.
+///
+/// No `oracle_tag_meta_staging`: the watermark is one row written *with* the swap, not a
+/// table that is rebuilt.
+const ORACLE_TAG_STAGING_SQL: &str = "
+    DROP TABLE IF EXISTS oracle_tags_staging;
+    DROP TABLE IF EXISTS oracle_tag_parents_staging;
+    DROP TABLE IF EXISTS oracle_taggings_staging;
+    DROP TABLE IF EXISTS oracle_tag_cards_staging;
+    CREATE TABLE oracle_tags_staging (
+        slug TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        description TEXT
+    ) WITHOUT ROWID;
+    CREATE TABLE oracle_tag_parents_staging (
+        child_slug TEXT NOT NULL,
+        parent_slug TEXT NOT NULL,
+        PRIMARY KEY (child_slug, parent_slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE oracle_taggings_staging (
+        oracle_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        weight TEXT,
+        annotation TEXT,
+        PRIMARY KEY (oracle_id, slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE oracle_tag_cards_staging (
+        oracle_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        PRIMARY KEY (oracle_id, slug)
+    ) WITHOUT ROWID;";
+
+/// The four live oracle-tag tables and their staging twins, paired. One list, because the
+/// swap, the cleanup and the test that compares the two shapes must all name the same four.
+pub const ORACLE_TAG_TABLES: [(&str, &str); 4] = [
+    ("oracle_tags", "oracle_tags_staging"),
+    ("oracle_tag_parents", "oracle_tag_parents_staging"),
+    ("oracle_taggings", "oracle_taggings_staging"),
+    ("oracle_tag_cards", "oracle_tag_cards_staging"),
+];
+
+/// Create the four empty `oracle_tag_*_staging` tables, dropping any an interrupted run
+/// left behind.
+///
+/// [`create_staging`]'s shape and its reason: the refresh writes here for the length of the
+/// ingest, so no reader ever sees a half-built closure — a card whose ancestors have been
+/// inserted and whose siblings have not is exactly the state a category list must never be
+/// drawn from.
+///
+/// Unlike `cards_staging` this layout is a literal rather than a read-back of the live
+/// table: these tables carry composite primary keys, which `PRAGMA table_info` describes but
+/// [`cards_column_defs`] does not reproduce.
+pub fn create_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(ORACLE_TAG_STAGING_SQL)
+}
+
+/// Drop the four `oracle_tag_*_staging` tables. What a refused or failed run leaves owing.
+pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    let batch: String = ORACLE_TAG_TABLES
+        .iter()
+        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {staging};"))
+        .collect();
+    conn.execute_batch(&batch)
+}
+
+/// Promote the four staging tables over the live ones.
+///
+/// **The caller supplies the transaction**, which is the difference between this and
+/// [`swap_staging`]: the watermark row that says which file these rows came from has to
+/// commit with them, and a swap that landed without its `oracle_tag_meta` update would make
+/// the next run re-download and re-ingest a file it already holds — or, worse the other way
+/// round, a meta row that landed without its rows would make it 304 past an empty closure
+/// forever.
+///
+/// No index replay, unlike [`swap_staging`]: every one of these tables is `WITHOUT ROWID`
+/// and carries no index but its own primary key, which the rename brings with it.
+pub fn swap_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    let batch: String = ORACLE_TAG_TABLES
+        .iter()
+        .map(|(live, staging)| {
+            format!("DROP TABLE IF EXISTS {live}; ALTER TABLE {staging} RENAME TO {live};")
+        })
+        .collect();
+    conn.execute_batch(&batch)
 }
 
 /// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
@@ -3954,12 +4161,17 @@ pub(crate) mod tests {
 
     // ---- v11: the marketplace price tables ------------------------------------------
 
-    /// A database one step below head: everything v10 left behind, and none of v11.
+    /// A database at v10: everything v10 left behind, and none of v11.
     ///
-    /// [`v9_database`]'s trick again — walk to head, undo exactly the newest step, renumber —
-    /// and for its reason: only version 1's DDL is frozen, so there is no way to *build* a v10
+    /// [`v9_database`]'s trick again — walk to head, undo exactly one step, renumber — and for
+    /// its reason: only version 1's DDL is frozen, so there is no way to *build* a v10
     /// database forwards. Two `DROP TABLE`s are the whole of what v11 did, which is what makes
     /// the rewind honest here where a rewind through v8's table rebuild would not be.
+    ///
+    /// **It was head minus one and is not any more** — v12 (the oracle-tag tables) sits above
+    /// v11 — and, exactly like [`v9_database`] before it, it keeps its number rather than
+    /// following the ladder: what it is for is proving the v11 step, and that claim is about
+    /// version 10 and no other. [`v11_database`] carries the "one step below head" claim now.
     fn v10_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -3972,17 +4184,17 @@ pub(crate) mod tests {
         conn
     }
 
-    /// [`v10_database`] must really sit one step below head, or the test below it is a fresh
-    /// install compared against itself. The next step added to the ladder renumbers this
-    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    /// [`v10_database`] must really be **at** version 10, which is the claim the v11 step test
+    /// below it rests on. Written as a literal, not `SCHEMA_VERSION - 2`: this fixture is
+    /// pinned to the version below the price tables, and it stops following the ladder here.
     #[test]
-    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+    fn the_pre_price_table_fixture_really_sits_at_version_ten() {
         let conn = v10_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(version, 10, "below the step that adds the price tables");
 
         let tables: i64 = conn
             .query_row(
@@ -4107,18 +4319,278 @@ pub(crate) mod tests {
         assert_eq!(violations, 0, "and no foreign key is violated by it");
     }
 
+    // ---- v12: the oracle-tag tables --------------------------------------------------
+
+    /// A database one step below head: everything v11 left behind, and none of v12.
+    ///
+    /// [`v10_database`]'s trick, one rung up, and honest for the same reason: five
+    /// `DROP TABLE`s are the whole of what v12 did, so undoing it leaves a database no
+    /// different from one that stopped at v11.
+    fn v11_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP TABLE oracle_tags;
+             DROP TABLE oracle_tag_parents;
+             DROP TABLE oracle_taggings;
+             DROP TABLE oracle_tag_cards;
+             DROP TABLE oracle_tag_meta;
+             PRAGMA user_version = 11;",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// [`v11_database`] must really sit one step below head, or the test below it is a fresh
+    /// install compared against itself. The next step added to the ladder renumbers this
+    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    #[test]
+    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+        let conn = v11_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+
+        let tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'
+                   AND name LIKE 'oracle_tag%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "the v12 tables must not be there yet");
+
+        // v11's own tables are standing, because this *is* a v11 database.
+        let prices: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'
+                   AND name IN ('marketplace_prices','marketplace_feed_meta')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(prices, 2);
+    }
+
+    /// The step itself, from the version below it: five tables arrive, keyed the way the read
+    /// path scans them, and a rerun is a no-op.
+    #[test]
+    fn the_v12_step_creates_the_oracle_tag_tables() {
+        let conn = v11_database();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 12);
+
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, label, description)
+                VALUES ('tutor-battle','tutor-battle','Cards that tutor battle cards.');
+             INSERT INTO oracle_tag_parents (child_slug, parent_slug)
+                VALUES ('tutor-battle','tutor'),('tutor-battle','battle-matters');
+             INSERT INTO oracle_taggings (oracle_id, slug, weight, annotation)
+                VALUES ('oid-1','tutor-battle','median',NULL);
+             INSERT INTO oracle_tag_cards (oracle_id, slug)
+                VALUES ('oid-1','tutor-battle'),('oid-1','tutor');",
+        )
+        .unwrap();
+
+        // Two parents under one child is the *expected* shape — 684 of 4 521 tags have
+        // several — so the key has to admit it while still refusing the same edge twice.
+        let dup_edge = conn.execute(
+            "INSERT INTO oracle_tag_parents (child_slug, parent_slug)
+             VALUES ('tutor-battle','tutor')",
+            [],
+        );
+        assert!(dup_edge.is_err(), "(child_slug, parent_slug) is unique");
+
+        let dup_closure = conn.execute(
+            "INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES ('oid-1','tutor')",
+            [],
+        );
+        assert!(dup_closure.is_err(), "(oracle_id, slug) is unique");
+
+        // One watermark row, ever: a second is refused by the CHECK rather than quietly
+        // giving the next run two answers about which file it holds.
+        conn.execute(
+            "INSERT INTO oracle_tag_meta (id, etag, updated_at, ingested_at, checked_at,
+                                          tag_count, tagging_count)
+             VALUES (1, 'W/\"abc\"', '2026-08-14T21:00:00Z', 1800000000, 1800000000,
+                     4521, 229633)",
+            [],
+        )
+        .unwrap();
+        let second = conn.execute(
+            "INSERT INTO oracle_tag_meta (id, etag, updated_at, ingested_at, checked_at,
+                                          tag_count, tagging_count)
+             VALUES (2, NULL, NULL, 1800000001, 1800000001, 1, 1)",
+            [],
+        );
+        assert!(second.is_err(), "the watermark is one row");
+    }
+
+    /// **No foreign key against `cards`, and that is a promise about the data.** The tag file
+    /// names 35 969 oracle ids and the corpus is collected on a different day; a tagging for a
+    /// card this database has never seen has to store. A declared reference would also abort
+    /// every sync, `swap_staging` dropping the table it names.
+    #[test]
+    fn a_tagging_for_a_card_the_corpus_does_not_have_is_storable() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        conn.execute(
+            "INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES ('not-in-the-corpus','ramp')",
+            [],
+        )
+        .expect("a tag for an unknown card is expected, not an error");
+
+        let violations = conn
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |_| Ok(()))
+            .unwrap()
+            .count();
+        assert_eq!(violations, 0);
+    }
+
+    /// The tags outlive a sync, which is the reason they are tables rather than anything
+    /// hanging off `cards`: `swap_staging` drops and recreates that table on every refresh.
+    #[test]
+    fn oracle_tags_survive_the_staging_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug,label,description) VALUES ('ramp','ramp',NULL);
+             INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES ('oid-1','ramp');
+             INSERT INTO oracle_tag_meta (id, etag, updated_at, ingested_at, checked_at,
+                                          tag_count, tagging_count)
+                VALUES (1, NULL, '2026-08-14T21:00:00Z', 1800000000, 1800000000, 1, 1);",
+        )
+        .unwrap();
+
+        create_staging(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards_staging (id,oracle_id,name,set_code,collector_number,lang,
+                                        layout,raw)
+             VALUES ('bolt','oid-1','Lightning Bolt','lea','161','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        swap_staging(&conn).unwrap();
+
+        let (slugs, tags): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT count(*) FROM oracle_tag_cards WHERE oracle_id='oid-1'),
+                        (SELECT tag_count FROM oracle_tag_meta WHERE id=1)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((slugs, tags), (1, 1), "a sync must not cost the tags");
+    }
+
+    /// **The staging tables are renamed *over* the live ones, so the two layouts must agree
+    /// exactly** — and they are two separate literals, one of them frozen history. This is the
+    /// fence: name, declared type, `NOT NULL` and primary-key position, column by column. A
+    /// `CREATE TABLE … AS SELECT` clone would drop all four, and a string substitution over
+    /// the live DDL would pass this test by construction while breaking the rule that a
+    /// migration step is history.
+    #[test]
+    fn the_oracle_tag_staging_tables_match_the_live_ones() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_oracle_tag_staging(&conn).unwrap();
+
+        // (name, type, notnull, pk-position) per column, in ordinal order.
+        let shape = |table: &str| -> Vec<(String, String, i64, i64)> {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(1)?, r.get(2)?, r.get(3)?, r.get(5)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows
+        };
+
+        for (live, staging) in ORACLE_TAG_TABLES {
+            let want = shape(live);
+            assert!(!want.is_empty(), "{live} must exist at head");
+            assert_eq!(shape(staging), want, "`{staging}` must match `{live}`");
+        }
+    }
+
+    /// The swap is a rename, so what the ingest filled has to *become* the live table —
+    /// rows, keys and all — and the previous contents have to be gone rather than merged
+    /// with. A refresh that appended would leave every tag a card has ever held, including
+    /// the ones Scryfall has since retired.
+    #[test]
+    fn the_oracle_tag_swap_replaces_rather_than_merges() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug,label,description) VALUES ('retired','retired',NULL);
+             INSERT INTO oracle_tag_cards (oracle_id,slug) VALUES ('oid-1','retired');",
+        )
+        .unwrap();
+
+        create_oracle_tag_staging(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO oracle_tags_staging (slug,label,description)
+                VALUES ('ramp','ramp','Cards that ramp.');
+             INSERT INTO oracle_tag_cards_staging (oracle_id,slug) VALUES ('oid-1','ramp');",
+        )
+        .unwrap();
+        swap_oracle_tag_staging(&conn).unwrap();
+
+        let slugs: Vec<String> = conn
+            .prepare("SELECT slug FROM oracle_tag_cards WHERE oracle_id='oid-1' ORDER BY slug")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(slugs, vec!["ramp".to_owned()], "the retired tag is gone");
+
+        // The renamed table keeps its primary key, which is the whole read path: a second
+        // copy of a row must still be refused after the swap.
+        let dup = conn.execute(
+            "INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES ('oid-1','ramp')",
+            [],
+        );
+        assert!(dup.is_err(), "the rename must carry the primary key over");
+
+        // And the staging tables are gone rather than left behind under their old names.
+        let leftovers: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name LIKE '%_staging'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftovers, 0);
+    }
+
     /// The ladder ends where the constant says it does. Written as a literal so that
     /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
     /// step and forgetting the constant — fails here rather than in the field.
     #[test]
-    fn the_schema_version_is_eleven() {
+    fn the_schema_version_is_twelve() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 11);
+        assert_eq!(SCHEMA_VERSION, 12);
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole

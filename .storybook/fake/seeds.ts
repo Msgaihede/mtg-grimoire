@@ -36,6 +36,8 @@ import {
   marketplaceFeedMeta,
   marketplaceFeedPrices,
   neverCheckedUpdate,
+  oracleTagCards,
+  oracleTagMeta,
 } from "./db";
 import type {
   FakeDb,
@@ -681,8 +683,7 @@ function testbedDeckCards(
     quantity: number,
     variant: DeckVariant,
     over: Partial<FakeDeckCard> = {},
-  ) =>
-    deckCard(id++, 4, card, categoryNamed(categories, 4, name), quantity, { variant, ...over });
+  ) => deckCard(id++, 4, card, categoryNamed(categories, 4, name), quantity, { variant, ...over });
 
   return [
     // --- live: what is sleeved up -------------------------------------------------------
@@ -833,8 +834,24 @@ function starterAudit(): FakeDeckAudit[] {
       daysAgo(0, 11, 20),
       '{"action":"rename","name":"Card advantage","previousName":"Value"}',
     ),
-    card(4, "remove", daysAgo(0, 13, 51), "mp2", "8", '{"category":"Draw","reason":"cut for the curve"}', -1),
-    card(4, "swap", daysAgo(0, 13, 58), "c21", "263", '{"fromSet":"c21","toSet":"sld","folded":true}', 0),
+    card(
+      4,
+      "remove",
+      daysAgo(0, 13, 51),
+      "mp2",
+      "8",
+      '{"category":"Draw","reason":"cut for the curve"}',
+      -1,
+    ),
+    card(
+      4,
+      "swap",
+      daysAgo(0, 13, 58),
+      "c21",
+      "263",
+      '{"fromSet":"c21","toSet":"sld","folded":true}',
+      0,
+    ),
     card(4, "move", daysAgo(0, 14, 9), "avr", "6", '{"from":"Creature","to":"Maybeboard"}', 0),
     card(4, "add", daysAgo(0, 14, 12), "kld", "235", '{"category":"Ramp","quantity":1}', 1),
 
@@ -863,12 +880,36 @@ function starterAudit(): FakeDeckAudit[] {
  */
 function starterFeeds(cards: readonly FakeCard[]) {
   const marketplacePrices = marketplaceFeedPrices(cards);
-  return { marketplacePrices, marketplaceFeeds: marketplaceFeedMeta(marketplacePrices, FETCHED_AT) };
+  return {
+    marketplacePrices,
+    marketplaceFeeds: marketplaceFeedMeta(marketplacePrices, FETCHED_AT),
+  };
 }
 
 /** When the seeded feeds were pulled: an hour before the seeded world's own clock, so a panel
  *  reads `fresh` rather than sitting on the 24 h staleness edge. */
 const FETCHED_AT = CLOCK_BASE - HOUR;
+
+/**
+ * The Oracle tag taxonomy, already ingested — which is the state a reader who has had the app
+ * open once is in, and the only one a deck story about *piles* can be written against. Without
+ * it every add files by card type, and a story showing "Creature", "Instant", "Land" would be
+ * showing the fallback rather than the feature.
+ *
+ * **`empty` and `large` deliberately go without**, exactly as they go without price feeds:
+ * `empty` is a first launch and has no cards to tag, and `large`'s 5 243 synthetic printings
+ * carry oracle ids the taxonomy has never heard of — they would all answer an empty list
+ * anyway, which is honest and is what a seed about virtualisation should show. The
+ * `oracleTagsMissing` fault is how a story stands in the never-ingested state on a *full*
+ * corpus.
+ *
+ * Ingested at the same instant the feeds were fetched, which is well inside the taxonomy's own
+ * seven-day window: `oracle_tags_status` answers `stale: false`, so nothing here is due for a
+ * refresh until a story forces one.
+ */
+function starterTaxonomy(cards: readonly FakeCard[]) {
+  return { oracleTags: oracleTagCards(cards), oracleTagMeta: oracleTagMeta(FETCHED_AT) };
+}
 
 function starterSeed(): FakeDb {
   const decks = starterDecks();
@@ -877,6 +918,7 @@ function starterSeed(): FakeDb {
   const migrated = starterDeckCards(deckCategories);
   return makeDb({
     ...starterFeeds(CARDS),
+    ...starterTaxonomy(CARDS),
     collectionEntries: starterEntries(),
     wishlistEntries: starterWishes(),
     decks,
@@ -885,10 +927,7 @@ function starterSeed(): FakeDb {
     deckTags,
     // One id sequence over both halves, `INTEGER PRIMARY KEY`'s own behaviour: deck 4's rows
     // continue where decks 1–3's stopped rather than starting again and colliding.
-    deckCards: [
-      ...migrated,
-      ...testbedDeckCards(deckCategories, deckTags, migrated.length + 1),
-    ],
+    deckCards: [...migrated, ...testbedDeckCards(deckCategories, deckTags, migrated.length + 1)],
     deckAudit: starterAudit(),
   });
 }

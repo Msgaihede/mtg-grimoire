@@ -16,6 +16,7 @@ pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
+pub mod oracle_tags;
 pub mod paths;
 pub mod reconcile;
 pub mod schema;
@@ -293,6 +294,10 @@ pub fn run() {
             marketplace::set_marketplace,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
+            oracle_tags::oracle_tags_refresh,
+            oracle_tags::oracle_tags_status,
+            oracle_tags::oracle_tags_for_cards,
+            oracle_tags::oracle_tags_for_printings,
             error_log_list,
             error_log_clear,
             update_status,
@@ -355,6 +360,20 @@ pub fn run() {
             let feed_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 marketplace_feed::refresh_selected_if_due(&feed_state, &feed_app).await;
+            });
+
+            // Scryfall's Oracle Tags, if the stored copy is due. Its own task for the same
+            // reason as the two above — a fourth service on a fourth schedule, and none of
+            // them may be the reason another stops running — and deliberately *after* the
+            // card sync is spawned rather than chained onto it: the two write different
+            // tables, both take the connection a batch at a time, and a tag file that never
+            // arrives must cost the corpus nothing. Silent and best-effort; a failure is
+            // already in `error_log` and the honest fallback is categorising by card type,
+            // which is what the app did before this existed.
+            let tags_state = state.clone();
+            let tags_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                oracle_tags::refresh_if_due(&tags_state, &tags_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:

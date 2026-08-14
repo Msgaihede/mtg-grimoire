@@ -7,8 +7,10 @@ import { CategoriesPanel } from "./CategoriesPanel";
  *
  * All eleven of this panel's commands are the fake's now (`deck_category_*`, `deck_tag_*` and
  * `deck_tag_suggestions`), so a rename here is a row changing in a table and a delete really
- * moves cards. `deck_get` comes with them, and only because one control needs it: "Auto-categorise
- * from card types" reads **type lines**, so `useDeckMeta` is handed cards rather than ids.
+ * moves cards. `deck_get` comes with them, and only because one control needs it: "File cards by
+ * what they do" reads a row's **type line** and its **card id**, so `useDeckMeta` is handed
+ * cards rather than ids. `oracle_tags_for_printings` is the read it makes with those ids — one
+ * call for the whole press, and the fake answers it like any other command.
  *
  * **Two seeded decks are two shapes of deck**, and which one a story opens is the story's whole
  * setup:
@@ -193,13 +195,20 @@ export const DeletingACategoryAndItsCards: Story = {
 };
 
 /**
- * "Auto-categorise from card types", pressed — the real `autoCategoryFor` over real type lines,
- * through the real orchestration in `useDeckMeta` and into the real backend.
+ * "File cards by what they do", pressed — the real `autoCategoryFor` over real type lines and
+ * the fake's real Oracle tags, through the real orchestration in `useDeckMeta` and into the real
+ * backend.
  *
  * **Deck 1, and it has to be**: the button only empties the loose piles (`Main deck` and
  * `Uncategorised`), and deck 4 has no `Main deck` at all — a deck made today files its first add
  * under that name and every pile after it is the reader's. Deck 1 is the deck the migration left
  * with sixty cards in one, which is exactly the pile this button exists for.
+ *
+ * **`Land` is the pile asserted, and it is the one that holds whatever the taxonomy says.** A
+ * land is pinned by its type line before a tag is consulted, so deck 1's twenty lands land there
+ * whether or not the fake has a slug for any of them — while which functional column the other
+ * forty end up in is the tag data's answer rather than this story's. The count is the other
+ * assertion for the same reason: it says the press did something without naming a bucket.
  *
  * The categories the reader made are left as they were, which is the rule that keeps this from
  * being a way to lose an evening's filing.
@@ -208,10 +217,10 @@ export const AutoCategorised: Story = {
   args: { deckId: 1 },
   play: async ({ canvas }) => {
     await canvas.findByText("Main deck");
-    await userEvent.click(canvas.getByRole("button", { name: "Auto-categorise from card types" }));
+    await userEvent.click(canvas.getByRole("button", { name: "File cards by what they do" }));
 
     await waitFor(async () => {
-      await expect(canvas.getByText("Creature")).toBeInTheDocument();
+      await expect(canvas.getByText(/^Filed \d+ cards\.$/)).toBeInTheDocument();
     });
     await expect(canvas.getByText("Land")).toBeInTheDocument();
   },

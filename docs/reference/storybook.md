@@ -6,7 +6,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
 **Measured 2026-08-12** off a fresh `build-storybook` on the price-feed branch merged with
-`main`: 404 entries, 358 `story`, 46 `docs`, 48 distinct `importPath`s. The five stories over
+`main`, and **re-measured unchanged 2026-08-14** on the oracle-tags branch — same 404/358/46/48,
+because that branch added five `play` functions to stories that already existed and no story of
+its own. Worth recording as the shape of a *true* negative: the plays count below moved and these
+did not, which is only visible if both are measured rather than one inferred from the other.
+404 entries, 358 `story`, 46 `docs`, 48 distinct `importPath`s. The five stories over
 `main`'s 353 are `Settings/MarketplacePanel`'s, which went from three to eight when Card Kingdom
 and Mana Pool became selectable and a feed gained a state to draw; no story *file* was added,
 which is why that count did not move.
@@ -47,12 +51,12 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **ten** faults — `busy`/`syncError`/
+  seeds `empty`/`starter`/`needsReview`/`large`, **twelve** faults — `busy`/`syncError`/
   `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/`errorLog`/
-  `feedFetchError`. Saying nothing gets `starter` with no
+  `feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`. Saying nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
-  refusal rather than what one mocked call returns. **`indexCold` is the one that is not a
-  failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
+  refusal rather than what one mocked call returns. **`indexCold` is one of the two that are not
+  a failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
   with every map **empty** rather than zeroed, and the filter row leaves every control live on
   it. The fake has no warm-up of its own, so it is the only way a story can stand there.
   Counting the list is worth doing when one is added: this line said _four_ for three faults'
@@ -69,6 +73,30 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   the state that has prices _and_ a failure, which is the one the panel's wording is hardest to
   get right in. The backend refuses a feed that parses to zero rows for the same reason, so an
   error page cannot wipe a working table.
+  **The last two arrived with the Oracle tags**, and they are the other pair that is not one
+  thing. **`oracleTagsMissing` is the second fault that is no failure at all**: the taxonomy has
+  never been ingested, which is every install's first launch and the permanent state of one that
+  cannot reach Scryfall Tagger. `oracle_tags_status` **resolves** — every field `null`,
+  `stale: true` — and both tag reads answer an empty slug list for every id, so `autoCategoryFor`
+  files by type line. It is applied by emptying the *rows* in `installWorld` (the `errorLog`
+  fault's shape, inverted) rather than by branching in the handlers, which is what lets a story
+  press Refresh in that state and watch the piles regroup. **`oracleTagsFetchError`** is
+  `feedFetchError` one dataset over: `oracle_tags_refresh` refuses, the taxonomy already ingested
+  **stays**, and the reason goes to `error_log` — a refusal a story has to be able to show
+  without the screen behind it changing at all, because nothing about categorising a card may
+  fail a deck add.
+- **`starter` seeds the taxonomy as well as both price feeds** — **32 oracle cards, covering 38
+  of the 43 printings**, closed over their ancestors exactly as `oracle_tag_cards` stores them,
+  so a deck story shows real piles rather than everything falling back to card type. Both counts
+  are measured by `db.test.ts` rather than asserted here, because every count on this page has
+  drifted at least once. Five printings are deliberately left untagged (both basic lands, Delver
+  of Secrets, Tarmogoyf, Little Girl) so a `starter` deck holds cards on both sides of the
+  fallback at once; `empty` and `large` go without a taxonomy entirely, `large` for the reason it
+  goes without price feeds. The one anchor slug the corpus cannot reach is `sacrifice-outlet`:
+  no card in these 43 printings is one, and tagging one that is not would be worse than the hole.
+  Both reads answer **one entry per requested id, in request order, deduped, `slugs: []` for
+  anything unknown** — a fake that answered only the matches, or that reordered, would look fine
+  in Storybook and break every caller that matches by id.
 - **A world belongs to a story, not to the module — because a docs page mounts every story on
   it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
   so a fake built on module globals looks right and answers all ten stories of a docs page as
@@ -115,9 +143,9 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**264** plays today, in a file of **267** tests — the other three are its own;
+  (**269** plays today, in a file of **272** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-12 after the merge), which is what puts a
+summary for the second, both re-measured 2026-08-14 on the oracle-tags branch), which is what puts a
   story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;

@@ -26,6 +26,25 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // would show a fetch nobody could see. Same reason it must be mocked rather than left off.
     onMarketplaceProgress: vi.fn().mockResolvedValue(() => {}),
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
+    // And for the Oracle tag taxonomy's progress, which is the **fourth** event this window
+    // subscribes to — the backend refreshes the taxonomy at start-up for the same reason it
+    // refreshes a feed, so the window has to be listening. Same failure mode as the three
+    // above and it is not a hypothetical: leaving this off failed all 18 tests in this file
+    // with `ipc.onOracleTagProgress is not a function`, thrown synchronously inside the
+    // shell's mount effect where no `.catch` can reach it.
+    onOracleTagProgress: vi.fn().mockResolvedValue(() => {}),
+    // The honest never-ingested row: every field null, so nothing in this file's cards is
+    // filed by tag and the routing these tests are about is what they measure.
+    oracleTagsStatus: vi.fn().mockResolvedValue({
+      updatedAt: null,
+      ingestedAt: null,
+      checkedAt: null,
+      tagCount: null,
+      taggingCount: null,
+      stale: true,
+      refreshing: false,
+    }),
+    oracleTagsForPrintings: vi.fn().mockResolvedValue([]),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,

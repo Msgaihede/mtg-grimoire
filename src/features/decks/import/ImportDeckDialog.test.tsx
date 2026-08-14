@@ -23,6 +23,7 @@ const deckDelete = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -34,6 +35,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     formatSpecs,
     syncStatus,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -92,6 +94,16 @@ const KENRITH = match({
   toughness: "5",
   colorIdentity: "BGRUW",
 });
+/** A legendary creature Scryfall tags `ramp` — so the auto rule files her by what she does, and
+ *  the command zone has to outrank that. Solemn Simulacrum, the card everyone reaches for here,
+ *  is not legendary. */
+const SELVALA = match({
+  name: "Selvala, Heart of the Wilds",
+  typeLine: "Legendary Creature — Elf Scout",
+  power: "2",
+  toughness: "3",
+  colorIdentity: "G",
+});
 
 /** Every printing this app has, for the mocked resolve. A name that is not here matches
  *  nothing, which is how an unmatched line is staged. */
@@ -103,6 +115,7 @@ const CARDS: Record<string, ImportMatch> = {
   "Path to Exile": PATH,
   "Captain Sisay": SISAY,
   "Kenrith, the Returned King": KENRITH,
+  "Selvala, Heart of the Wilds": SELVALA,
 };
 
 const DECK: DeckRow = {
@@ -245,6 +258,10 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([spec("commander"), spec("modern"), spec("casual")]);
   syncStatus.mockReset().mockResolvedValue(IDLE);
+  // **No tags by default, and that is the app before its first taxonomy download** — a
+  // supported way to run it, and the state every claim below about a type-line pile is made
+  // in. The tests that are about the tags stage their own answer.
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   pickFile.mockReset().mockResolvedValue(null);
   onDismiss.mockReset();
   onClose.mockReset();
@@ -404,6 +421,115 @@ describe("the import deck dialog", () => {
       ] satisfies ImportItem[]),
     );
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(4, OUTCOME));
+  });
+
+  /**
+   * **A decklist is written by function, so the preview files it by function** — and the piles
+   * it draws have to be the piles it sends. That is the whole job of a preview-then-commit
+   * screen, and the one thing this dialog has already got wrong once.
+   *
+   * The tag answers are staged out of order on purpose: they are matched back by `cardId`,
+   * because `oracle_tags_for_printings` drops duplicates and answers one entry per distinct id.
+   */
+  it("draws the piles the tags file, and sends exactly the piles it drew", async () => {
+    oracleTagsForPrintings.mockResolvedValue([
+      { cardId: SOL_RING.cardId, slugs: ["ramp", "mana-producer"] },
+      { cardId: BOLT.cardId, slugs: ["removal"] },
+    ]);
+    wrap(<Harness target={INTO_DECK} />);
+    const go = await preview("1 Lightning Bolt\n1 Sol Ring\n2 Llanowar Elves");
+
+    // One read for the whole list — an import is one round trip, and a lookup per line would
+    // put ~100 `invoke`s back into it.
+    await waitFor(() => expect(oracleTagsForPrintings).toHaveBeenCalledTimes(1));
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith([
+      BOLT.cardId,
+      SOL_RING.cardId,
+      ELVES.cardId,
+    ]);
+    const drawn = await piles();
+    // Llanowar Elves is untagged here, so she falls through to her type line — the floor.
+    expect(drawn).toEqual([
+      ["Removal", "1"],
+      ["Ramp", "1"],
+      ["Creature", "2"],
+    ]);
+
+    await userEvent.click(go);
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    const items = deckImportCommit.mock.calls[0][3] as ImportItem[];
+    const sent = new Map<string, number>();
+    for (const item of items) {
+      sent.set(item.categoryName, (sent.get(item.categoryName) ?? 0) + item.quantity);
+    }
+    // The screen and the wire, compared: what was previewed is what was written.
+    expect([...sent].map(([name, copies]) => [name, String(copies)]).sort()).toEqual(
+      [...drawn].sort(),
+    );
+  });
+
+  /**
+   * **A refused taxonomy read is not a refused import.** The reader pasted a list; losing it to
+   * a fetch of the tag table would be the worst trade this dialog could make. Every line lands,
+   * in the type-line pile this app filed it in before Oracle tags existed — and nothing on the
+   * step says a word about it, because nothing went wrong from where the reader is standing.
+   */
+  it("imports the whole list by type line when the tag read is refused", async () => {
+    oracleTagsForPrintings.mockRejectedValue("The card database is busy finishing a sync.");
+    wrap(<Harness target={INTO_DECK} />);
+    const go = await preview("1 Lightning Bolt\n1 Sol Ring\n2 Llanowar Elves");
+
+    expect(await piles()).toEqual([
+      ["Creature", "2"],
+      ["Artifact", "1"],
+      ["Instant", "1"],
+    ]);
+    expect(screen.getByText("4 cards")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await userEvent.click(go);
+
+    await waitFor(() =>
+      expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
+        { cardId: BOLT.cardId, quantity: 1, categoryName: "Instant" },
+        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact" },
+        { cardId: ELVES.cardId, quantity: 2, categoryName: "Creature" },
+      ] satisfies ImportItem[]),
+    );
+  });
+
+  /**
+   * The command zone outranks every functional pile. Selvala, Heart of the Wilds is tagged
+   * `ramp`, which is the right answer for a card in the 99 and the wrong one for the card the
+   * deck is built around — and this is the `automatic` arm, where the reader presses nothing,
+   * so the tally has to agree with the sentence printed directly above it.
+   */
+  it("puts an automatic commander in the command zone however her tags file her", async () => {
+    oracleTagsForPrintings.mockResolvedValue([
+      { cardId: SELVALA.cardId, slugs: ["ramp", "mana-producer"] },
+      { cardId: SOL_RING.cardId, slugs: ["ramp"] },
+    ]);
+    wrap(<Harness target={INTO_DECK} />);
+    const go = await preview("1 Selvala, Heart of the Wilds\n1 Sol Ring");
+
+    expect(
+      await screen.findByText("Selvala, Heart of the Wilds goes in the command zone."),
+    ).toBeInTheDocument();
+    expect(await piles()).toEqual([
+      ["Commander", "1"],
+      // Only the card the command zone claimed moves; Sol Ring is still ramp.
+      ["Ramp", "1"],
+    ]);
+
+    await userEvent.click(go);
+
+    await waitFor(() =>
+      expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
+        { cardId: SELVALA.cardId, quantity: 1, categoryName: "Commander" },
+        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Ramp" },
+      ] satisfies ImportItem[]),
+    );
   });
 
   /**

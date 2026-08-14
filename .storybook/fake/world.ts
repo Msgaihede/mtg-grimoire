@@ -189,10 +189,17 @@ export function installWorld(
   bindTimers();
   const db = seed(params?.seed ?? "starter");
   db.fault = params?.fault ?? null;
-  // The one fault that seeds *rows* rather than changing how a handler answers. It lands here
-  // and not in `makeDb`, because this is where a fault is applied at all — a seed is built
-  // before anyone has said what has gone wrong with it.
+  // The two faults that change *rows* rather than how a handler answers, and they are opposite
+  // halves of the same idea: `errorLog` fills a table, `oracleTagsMissing` empties one — the
+  // never-ingested taxonomy, on a seed that has one. Both land here and not in `makeDb`,
+  // because this is where a fault is applied at all: a seed is built before anyone has said
+  // what has gone wrong with it. Emptying the rows rather than branching in the handlers is
+  // what lets a story press Refresh in the first-launch state and watch the piles regroup.
   if (db.fault === "errorLog") db.errorLog = errorLogSeed();
+  if (db.fault === "oracleTagsMissing") {
+    db.oracleTags = [];
+    db.oracleTagMeta = null;
+  }
 
   const scope = createScope(allHandlers(db));
   activateScope(scope);

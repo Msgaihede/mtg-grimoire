@@ -20,14 +20,26 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **ten** faults
+  Four seeds (`empty`/`starter`/`needsReview`/`large`), **twelve** faults
   (`busy`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
-  `updateError`/`errorLog`/`feedFetchError`); saying nothing gets `starter` with no fault. A
+  `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`); saying
+  nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
-  what one mocked call returns.
+  what one mocked call returns. **Two of the twelve are not failures at all** — `indexCold` is
+  the search index mid-build, and `oracleTagsMissing` is the Oracle tag taxonomy having never
+  been ingested, which is every install's first launch and the state the type-line fallback
+  exists for.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
+- **`starter` seeds the Oracle tag taxonomy too**, derived from the corpus the same way — **32
+  oracle cards, covering 38 of the 43 printings** (measured by `db.test.ts`, which fails rather
+  than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so
+  a deck story shows real piles rather than everything falling back to card type. `empty` and
+  `large` deliberately go without, and `oracleTagsMissing` is how a story stands in the
+  never-ingested state on a *full* corpus. The two reads answer **one entry per requested id, in
+  request order, deduped, `slugs: []` for anything unknown** — a fake that answered only the
+  matches would look right in Storybook and break every caller that matches by id.
 - **`starter` seeds both price feeds**, derived from the corpus rather than written out:
   `marketplacePrices` is the fake's `marketplace_prices`, so a story can select Card Kingdom or
   Mana Pool and see *different numbers* rather than the same ones under a new label. Every

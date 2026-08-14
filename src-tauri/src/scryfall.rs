@@ -207,6 +207,17 @@ pub enum BulkCheck {
     Available(BulkInfo),
 }
 
+/// The card corpus: ~116 k printings, 77 MB gzipped. [`crate::ingest`] reads it.
+pub const BULK_DEFAULT_CARDS: &str = "default_cards";
+
+/// Scryfall's Oracle Tags: 4 521 tag objects, ~5.85 MB gzipped, each carrying its own
+/// `taggings` array of `oracle_id`s. [`crate::oracle_tags`] reads it.
+///
+/// Same document shape as [`BULK_DEFAULT_CARDS`] in the one way that matters here — it
+/// publishes `jsonl_download_uri` and `compressed_size` and neither of the pre-2026-07-20
+/// `download_uri`/`size` fields — which is why one [`BulkInfo`] describes both.
+pub const BULK_ORACLE_TAGS: &str = "oracle_tags";
+
 /// The bits of a `bulk_data` object this app needs. Note `jsonl_download_uri` and
 /// `compressed_size`: the pre-2026-07-20 `download_uri`/`size` fields are gone and
 /// the legacy `.json` URLs return 404.
@@ -447,10 +458,31 @@ impl Client {
 
     /// Ask whether the `default_cards` bulk file has changed since `etag`.
     ///
-    /// Uses the per-type endpoint rather than the `/bulk-data` collection, whose ETag
-    /// flips whenever any of the seven files rotate.
+    /// The card corpus's own name for [`check_bulk_dataset`](Client::check_bulk_dataset),
+    /// which is what every other dataset goes through. Kept as a call of its own because
+    /// the sync is the one caller that must never accidentally be pointed elsewhere: the
+    /// file it names is what `cards` is rebuilt from.
     pub async fn check_bulk_update(&self, etag: Option<&str>) -> Result<BulkCheck, ScryfallError> {
-        let url = format!("{}/bulk-data/default_cards", self.base_url);
+        self.check_bulk_dataset(BULK_DEFAULT_CARDS, etag).await
+    }
+
+    /// Ask whether one bulk dataset has changed since `etag`.
+    ///
+    /// Uses the per-type endpoint (`/bulk-data/<dataset>`) rather than the `/bulk-data`
+    /// collection, whose ETag flips whenever any of the seven files rotate — which for a
+    /// caller that only wants one of them means a 200 (and a re-download decision) every
+    /// time any of the others is regenerated.
+    ///
+    /// `dataset` is one of the [`BULK_DEFAULT_CARDS`]/[`BULK_ORACLE_TAGS`] constants. It goes
+    /// through [`api_send`](Client::api_send) like every other API call, so a second dataset
+    /// shares the one pacing gate and the one 429 lockout: two datasets are still one
+    /// application as far as Scryfall is concerned, and a second client would be two.
+    pub async fn check_bulk_dataset(
+        &self,
+        dataset: &str,
+        etag: Option<&str>,
+    ) -> Result<BulkCheck, ScryfallError> {
+        let url = format!("{}/bulk-data/{dataset}", self.base_url);
         let headers: Vec<(&str, &str)> =
             etag.map(|e| vec![("If-None-Match", e)]).unwrap_or_default();
         let resp = self.api_send(&url, &headers).await?;

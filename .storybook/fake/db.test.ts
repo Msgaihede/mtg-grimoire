@@ -7,7 +7,16 @@
  */
 import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
-import { allHandlers, makeDb, neverCheckedUpdate, readHandlers, writeHandlers } from "./db";
+import {
+  ORACLE_TAGGED_NAMES,
+  allHandlers,
+  makeDb,
+  neverCheckedUpdate,
+  oracleTagCards,
+  readHandlers,
+  writeHandlers,
+} from "./db";
+import { listen } from "./event";
 import type { FakeDb, FakeDeck, FakeDeckCard, FakeDeckCategory, FakeEntry, FakeWish } from "./db";
 import { DECK_CATEGORIES } from "./fixtures";
 import { seed } from "./seeds";
@@ -550,8 +559,7 @@ describe("prices", () => {
     });
     const handlers = readHandlers(db);
     const at = (marketplace: MarketplaceId) =>
-      handlers.collection_list({ query: { marketplace, limit: 10, offset: 0 } }).items[0]
-        .unitPrice;
+      handlers.collection_list({ query: { marketplace, limit: 10, offset: 0 } }).items[0].unitPrice;
 
     expect(at("cardkingdom")).toBe(19.64);
     // Listed by one feed and not by the other: unpriced at Mana Pool, and never filled in from
@@ -1197,8 +1205,7 @@ describe("the deck read", () => {
     // per-variant — a dialog reading `cardCount` would have promised 0 and taken 9.
     expect(detail.categories.map((c) => c.cardCountAllVariants)).toEqual([0, 3, 9, 0, 1]);
     expect(
-      readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2]
-        .cardCountAllVariants,
+      readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2].cardCountAllVariants,
     ).toBe(9);
     // No tag has been made, so the palette is empty — and it is a list, not a null.
     expect(detail.tags).toEqual([]);
@@ -2118,9 +2125,7 @@ describe("the decklist import", () => {
     expect(ramp[0]).toMatchObject({ kind: "main", isActive: true });
     // Two printings, so two rows — one pile.
     expect(db.deckCards.filter((dc) => dc.categoryId === ramp[0].id)).toHaveLength(2);
-    expect(
-      db.deckCards.filter((dc) => dc.categoryId === categoryId(1, "side")),
-    ).toHaveLength(1);
+    expect(db.deckCards.filter((dc) => dc.categoryId === categoryId(1, "side"))).toHaveLength(1);
   });
 
   it("refuses an empty item list", () => {
@@ -2201,6 +2206,10 @@ describe("the busy fault", () => {
       "update_download",
       "update_apply",
       "update_open_release_page",
+      // The sixth, and it is unlocked for a third reason again: `oracle_tags::refresh` opens
+      // with a read and a network call, and only its ingest reaches for `db::lock_for`. So a
+      // running sync delays a tag refresh rather than refusing it at the door.
+      "oracle_tags_refresh",
     ];
     const args: Record<string, unknown> = {
       id: 1,
@@ -2296,7 +2305,9 @@ describe("the whole command table", () => {
   it("falls back to the default marketplace on a missing or unknown row, and refuses a bad write", () => {
     expect(readHandlers(makeDb()).get_marketplace()).toBe("tcgplayer");
     expect(readHandlers(makeDb({ marketplace: "moxfield" })).get_marketplace()).toBe("tcgplayer");
-    expect(readHandlers(makeDb({ marketplace: "cardmarket" })).get_marketplace()).toBe("cardmarket");
+    expect(readHandlers(makeDb({ marketplace: "cardmarket" })).get_marketplace()).toBe(
+      "cardmarket",
+    );
 
     const db = makeDb();
     writeHandlers(db).set_marketplace({ id: "cardmarket" });
@@ -2385,6 +2396,211 @@ describe("the whole command table", () => {
       updatedAt: null,
     });
     expect(() => writeHandlers(makeDb({ fault: "syncError" })).sync_run()).toThrow(/rate limited/);
+  });
+});
+
+/**
+ * The Oracle tag taxonomy, whose whole contract is a **shape** rather than a set of values:
+ * one entry per requested id, in request order, deduped, empty for anything unknown.
+ *
+ * Every clause of that is a way a fixture can look perfectly fine in Storybook and break the
+ * real UI, because a component that matches by position instead of by id renders correctly
+ * against a fake that never reorders and never drops.
+ */
+describe("the Oracle tag taxonomy", () => {
+  const BOLT_ORACLE = BOLT.oracleId;
+
+  /** The seed's own state: ingested, fresh, and answering slugs. */
+  const tagged = () => seed("starter");
+
+  /**
+   * Subscribe to `oracle-tags:progress` the way a component does — through the fake's own
+   * `listen`, into whichever scope is active — so the phase order asserted below is the one a
+   * subscriber would really hear rather than one read off the handler's source.
+   */
+  async function watchPhases() {
+    const seen: string[] = [];
+    const stop = await listen<{ phase: string }>("oracle-tags:progress", (e) =>
+      seen.push(e.payload.phase),
+    );
+    return { seen, stop };
+  }
+
+  /**
+   * The names in `ORACLE_TAGGINGS` are resolved against `cards.ts`, which is generated
+   * wholesale — so a corpus refresh that renamed or dropped a card would silently shrink the
+   * taxonomy to nothing anybody noticed. This is what notices.
+   */
+  it("resolves every tagged name against the generated corpus", () => {
+    const names = new Set(CARDS.map((c) => c.name));
+    expect(ORACLE_TAGGED_NAMES.filter((n) => !names.has(n))).toEqual([]);
+  });
+
+  /**
+   * The counts `.storybook/CLAUDE.md` quotes, measured here rather than asserted in prose — a
+   * prose-only edit routes to neither CI job, and every count in that file has drifted at least
+   * once. **Both numbers, because they are two facts**: the taxonomy is keyed by oracle card
+   * and a story renders printings, so 32 tagged cards cover 38 of the 43 rows. The five left
+   * are both basic lands, Delver of Secrets, Tarmogoyf and Little Girl — deliberately untagged,
+   * so every `starter` deck holds cards on both sides of the type-line fallback.
+   */
+  it("covers 32 of the corpus's oracle cards and 38 of its printings", () => {
+    const tagged = new Set(oracleTagCards(CARDS).map((r) => r.oracleId));
+
+    expect(ORACLE_TAGGED_NAMES).toHaveLength(32);
+    expect(tagged.size).toBe(32);
+    expect(CARDS.filter((c) => tagged.has(c.oracleId))).toHaveLength(38);
+    expect(CARDS).toHaveLength(43);
+  });
+
+  /** Keyed by **oracle card**: all four Lightning Bolt printings share one set of rows, which
+   *  is what makes the printing-keyed read a join rather than a lookup. */
+  it("writes one set of rows per oracle card, not per printing", () => {
+    const rows = oracleTagCards(CARDS);
+    const bolts = rows.filter((r) => r.oracleId === BOLT_ORACLE);
+
+    expect(CARDS.filter((c) => c.oracleId === BOLT_ORACLE).length).toBeGreaterThan(1);
+    expect(bolts.map((r) => r.slug)).toEqual([
+      "burn",
+      "damage",
+      "removal",
+      "removal-creature",
+      "spot-removal",
+    ]);
+  });
+
+  /**
+   * **The status can never fail.** A store that has never ingested answers every field null
+   * with `stale: true` — a real state, not an error — which is what lets every caller read it
+   * with no guard, and what puts the app on the type-line fallback rather than on a banner.
+   */
+  it("answers a never-ingested store rather than refusing", () => {
+    const status = readHandlers(makeDb()).oracle_tags_status();
+
+    expect(status).toEqual({
+      updatedAt: null,
+      ingestedAt: null,
+      checkedAt: null,
+      tagCount: null,
+      taggingCount: null,
+      stale: true,
+      refreshing: false,
+    });
+  });
+
+  /** …and an ingested one carries the file's own figures, with `ingestedAt` and `checkedAt`
+   *  both inside the seven-day window, so nothing seeded is due for a refresh. */
+  it("answers an ingested store as fresh, with the file's counts", () => {
+    const status = readHandlers(tagged()).oracle_tags_status();
+
+    expect(status).toMatchObject({ tagCount: 4_521, taggingCount: 229_633, stale: false });
+    expect(status.ingestedAt).not.toBeNull();
+  });
+
+  /**
+   * The whole contract of both reads, in one assertion each: **order preserved, duplicates
+   * dropped, unknown ids answered rather than omitted.** A decklist with two printings of one
+   * card sends the same id twice, and a caller reading `result[i]` against `input[i]` works
+   * right up until it does.
+   */
+  it("answers one entry per distinct printing id, in request order, empty for the unknown", () => {
+    const db = tagged();
+    const asked = [BOLT.id, "not-a-card", BOLT_2X2.id, BOLT.id];
+
+    const answer = readHandlers(db).oracle_tags_for_printings({ cardIds: asked });
+
+    // Three, not four: the repeated Bolt is one entry. Shorter than the request, which is the
+    // property `ipc.ts` tells every caller to match by id for.
+    expect(answer.map((a) => a.cardId)).toEqual([BOLT.id, "not-a-card", BOLT_2X2.id]);
+    expect(answer[0].slugs).toContain("removal");
+    // An id the corpus does not have is an **answer**, not an absence — the caller's response
+    // to it is the same as to an untagged card, so telling them apart would help nobody.
+    expect(answer[1].slugs).toEqual([]);
+    // Two printings of one oracle card get identical slugs, because a tag is a fact about the
+    // oracle text.
+    expect(answer[2].slugs).toEqual(answer[0].slugs);
+  });
+
+  it("answers the oracle-keyed read under `oracleId`, by the same rules", () => {
+    const db = tagged();
+
+    const answer = readHandlers(db).oracle_tags_for_cards({
+      oracleIds: [BOLT_ORACLE, "  ", BOLT_ORACLE, "no-such-oracle"],
+    });
+
+    // The blank is dropped like a duplicate is — `read_tags_keyed` trims and skips empties —
+    // and the field is `oracleId`, never `cardId`.
+    expect(answer.map((a) => a.oracleId)).toEqual([BOLT_ORACLE, "no-such-oracle"]);
+    expect(answer[0].slugs).toContain("burn");
+    expect(answer[1].slugs).toEqual([]);
+  });
+
+  /** An empty request is answered without reading a row: Rust prepares no statement for one,
+   *  and a caller with nothing to categorise must not have to guard the call. */
+  it("answers an empty request with an empty list, on a store with no taxonomy at all", () => {
+    const empty = makeDb();
+    expect(readHandlers(empty).oracle_tags_for_printings({ cardIds: [] })).toEqual([]);
+    expect(readHandlers(empty).oracle_tags_for_cards({ oracleIds: [] })).toEqual([]);
+  });
+
+  /** Every id answers an empty list when there is no taxonomy — the first-launch state, and
+   *  the one the `oracleTagsMissing` fault stands a story in on a full corpus. */
+  it("answers every id emptily when nothing has been ingested", () => {
+    const answer = readHandlers(makeDb()).oracle_tags_for_printings({ cardIds: [BOLT.id] });
+    expect(answer).toEqual([{ cardId: BOLT.id, slugs: [] }]);
+  });
+
+  /** A forced refresh fills both tables and walks the five phases. `force` is what a story has
+   *  to send, because a taxonomy inside its weekly window is not due. */
+  it("ingests the taxonomy on a forced refresh, and emits every phase", async () => {
+    const db = seed("starter");
+    db.oracleTags = [];
+    db.oracleTagMeta = null;
+    const phases = await watchPhases();
+
+    const status = writeHandlers(db).oracle_tags_refresh({ force: true });
+
+    phases.stop();
+    expect(phases.seen).toEqual(["checking", "downloading", "downloading", "ingesting", "done"]);
+    expect(db.oracleTags.length).toBeGreaterThan(0);
+    expect(status.stale).toBe(false);
+    expect(readHandlers(db).oracle_tags_for_printings({ cardIds: [BOLT.id] })[0].slugs).toContain(
+      "removal",
+    );
+  });
+
+  /** Not due, not forced: the status it already had, and **not a single event** — which is why
+   *  a story that wants to watch the phases has to force one. */
+  it("emits nothing for a refresh that is not due", async () => {
+    const db = seed("starter");
+    const phases = await watchPhases();
+
+    writeHandlers(db).oracle_tags_refresh({ force: false });
+
+    phases.stop();
+    expect(phases.seen).toEqual([]);
+  });
+
+  /**
+   * **A failed fetch leaves the previous taxonomy exactly where it was.** Stale categories beat
+   * none, and nothing about categorising a card may fail a deck add — so the refusal is a
+   * sentence and a row in `error_log`, and the screen behind it does not change at all.
+   */
+  it("keeps the tags it already had when a fetch fails, and writes the reason down", () => {
+    const db = seed("starter");
+    const before = db.oracleTags.length;
+    db.fault = "oracleTagsFetchError";
+
+    expect(() => writeHandlers(db).oracle_tags_refresh({ force: true })).toThrow(
+      /could not be downloaded/,
+    );
+
+    expect(db.oracleTags).toHaveLength(before);
+    expect(db.oracleTagMeta).not.toBeNull();
+    expect(db.errorLog[db.errorLog.length - 1].operation).toBe("oracle_tags");
+    // The status still answers, and still says the taxonomy is there: a refusal here is never a
+    // reason to stop filing cards.
+    expect(readHandlers(db).oracle_tags_status().ingestedAt).not.toBeNull();
   });
 });
 

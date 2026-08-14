@@ -184,7 +184,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v11.** v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
+- **Schema is v12.** v12 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
+  description), `oracle_tag_parents` (`child_slug, parent_slug` — **many parents per child**,
+  684 of 4 521 tags have several), `oracle_taggings` (`oracle_id, slug, weight, annotation`)
+  and `oracle_tag_cards` (`oracle_id, slug`), all four `WITHOUT ROWID` with no index but their
+  own primary key, plus a one-row `oracle_tag_meta` watermark (`etag`, `updated_at`,
+  `ingested_at`, `checked_at`, `tag_count`, `tagging_count`). **`checked_at` is separate from
+  `ingested_at` for `sync_meta.last_check_at`'s reason**: a 304 leaves the rows alone, so only
+  the "when did we last ask" stamp may move — without it a taxonomy that is simply up to date
+  reads as due on every launch and spends one API call per start to learn nothing. `oracle_tag_cards` is the **closure** — every
+  tag a card holds *and* every ancestor of those tags, flattened once at ingest — and it is
+  the only one the app reads at query time, as a prefix scan per card. Measured live
+  2026-08-14 over that day's file: 4 521 tags · 926 roots · **684 with more than one parent** ·
+  max depth 5 · no cycles and no dangling parent ids (neither of which the ingest assumes) ·
+  229 633 taggings over 35 969 distinct oracle ids · `weight` is `median` on 99.74 % of them
+  and nothing branches on it. `oracle_id` is a **soft** reference like every other reference to
+  `cards` in this schema, and the step touches `cards` not at all — so, like v8, v9 and v11, it
+  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
+  rebuild. The four tables are filled through `oracle_tag_*_staging` and promoted by one rename
+  transaction that carries the watermark with it: a half-populated closure is the one state a
+  reader must never see, because a card whose ancestors landed and whose siblings did not
+  simply reads as not being in that category.
+  v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
   `PRIMARY KEY (marketplace, card_id, finish)`, `WITHOUT ROWID`) and `marketplace_feed_meta`
   (`marketplace, fetched_at, feed_built_at, row_count`) for the Card Kingdom and Mana Pool
   price feeds. **They are tables and not `cards` columns because `swap_staging` drops `cards`
@@ -244,11 +265,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
   what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
   `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
-  `idx_cards_collapse` share a name. **`v10_database` is "head minus one" and is renamed on
-  every renumber** — it means "the version below the newest step", never a fixed number, and
+  `idx_cards_collapse` share a name. **The head-minus-one fixture is `v11_database`, and a new
+  one is added on every renumber** — the *name* means "the version below the newest step",
+  never a fixed number, and
   `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
-  `SCHEMA_VERSION - 1` so the two cannot drift apart. `v9_database` is a *different* claim and
-  is pinned to the literal 9: it is the last version **below the `CARDS_INDEXES` replay**,
+  `SCHEMA_VERSION - 1` so the two cannot drift apart. Its predecessors stay where they are
+  rather than following the ladder, each pinned by a test to the literal version it claims:
+  `v10_database` (`the_pre_price_table_fixture_really_sits_at_version_ten`) is what proves the
+  v11 step, and `v9_database` (`the_pre_index_replay_fixture_really_sits_at_version_nine`) is a
+  *different* claim again — it is the last version **below the `CARDS_INDEXES` replay**,
   which is the only thing that can prove a machine entering the ladder under v10 still ends up
   with every index a fresh install has. It is also why a rewind fixture may only undo the steps
   _above_ where it claims to sit: `migrate` reads `user_version` once and walks every step

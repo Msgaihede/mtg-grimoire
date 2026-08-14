@@ -2,7 +2,14 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { DeckCategory, DeckDetail, DeckRow, DeckTag, TagSuggestion } from "@/lib/ipc";
+import type {
+  DeckCard,
+  DeckCategory,
+  DeckDetail,
+  DeckRow,
+  DeckTag,
+  TagSuggestion,
+} from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 
 const deckCategoryList = vi.hoisted(() => vi.fn());
@@ -18,6 +25,8 @@ const deckTagDelete = vi.hoisted(() => vi.fn());
 const deckTagSuggestions = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
+/** What the auto-filer files by: the one read behind "File cards by what they do". */
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 /** The history drawer's one read — this file mounts that drawer too, for the exit-window test
  *  at the bottom, which needs a *second* overlay to open under the first one's fade. */
 const deckAuditList = vi.hoisted(() => vi.fn());
@@ -43,6 +52,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckMoveCard,
     deckAuditList,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -123,6 +133,54 @@ const DECK_ROW: DeckRow = {
 
 const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };
 
+/**
+ * A row in the deck's loose pile — the only shape the auto-filer acts on, and the only reason
+ * this file needs a card fixture at all.
+ *
+ * Everything but the four fields it reads is filled so this is a real {@link DeckCard} rather
+ * than a cast: the pile's name, whether the pile counts, which list it is in, and the type line
+ * under the tags.
+ */
+function deckCard(over: Partial<DeckCard> & { cardId: string }): DeckCard {
+  return {
+    id: 1,
+    categoryId: 9,
+    categoryName: "Main deck",
+    categoryKind: "main",
+    categoryActive: true,
+    variant: "live",
+    tagId: null,
+    tagName: null,
+    tagColor: null,
+    quantity: 1,
+    name: "Swords to Plowshares",
+    setCode: "lea",
+    setName: "Limited Edition Alpha",
+    collectorNumber: "1",
+    lang: "en",
+    needsReview: null,
+    oracleId: "o1",
+    manaCost: null,
+    cmc: null,
+    typeLine: "Instant",
+    oracleText: null,
+    colors: null,
+    colorIdentity: null,
+    legalities: null,
+    power: null,
+    toughness: null,
+    layout: null,
+    rarity: null,
+    faces: null,
+    gameChanger: null,
+    finishes: null,
+    everUncommon: false,
+    unitPrice: null,
+    ownedQuantity: 0,
+    ...over,
+  };
+}
+
 function mount(props: Partial<Parameters<typeof CategoriesPanel>[0]> = {}) {
   const onDismiss = vi.fn();
   const onClose = vi.fn();
@@ -170,6 +228,9 @@ beforeEach(() => {
   deckTagUpdate.mockResolvedValue(TAGS[0]);
   deckTagDelete.mockResolvedValue(undefined);
   deckAuditList.mockResolvedValue([]);
+  // Nothing tagged: the shape of a database that has never ingested the taxonomy, which is a
+  // supported way to run this app and not a failure. The tests about tags say otherwise.
+  oracleTagsForPrintings.mockResolvedValue([]);
 });
 
 /* ------------------------------------------------------------------- the reorder ------- */
@@ -658,16 +719,57 @@ describe("categories", () => {
 
   /* ---------------------------------------------------------------- auto-file ------- */
 
-  it("hands the deck's own rows to the auto-categoriser and counts what moved", async () => {
+  /**
+   * The label is asserted rather than the control's position, because the label is the whole of
+   * what a reader has to go on before pressing: the rule files by what a card **does** now
+   * (Removal, Ramp, Draw and ten more) and falls back to its type, so "Auto-categorise from card
+   * types" described neither what happens nor what comes back.
+   */
+  it("hands the deck's own rows to the auto-filer and counts what moved", async () => {
     mount();
     await screen.findByText("Ramp");
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "Auto-categorise from card types" }));
+    await user.click(screen.getByRole("button", { name: "File cards by what they do" }));
     // An empty deck moves nothing, which is the sentence a reader needs — the drawer draws no
     // cards, so without a count there is no way to tell a no-op from a failure.
     expect(await screen.findByText(/Nothing to file/)).toBeInTheDocument();
     expect(deckGet).toHaveBeenCalledWith(1, "live", "tcgplayer");
+    // An empty deck is nothing to file, and nothing to ask about either.
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The press that cannot read what these cards do files nothing, and says so.**
+   *
+   * Falling through to the type line here would re-file every loose card in the deck by a rule
+   * the reader did not press — across every pile at once, with one manual move per card as the
+   * way back. Silence would be worse still: the drawer draws no cards, so a reader who pressed
+   * a button and saw the same screen would have no way to tell "nothing needed doing" from "the
+   * whole deck was just re-filed the other way".
+   *
+   * `role="alert"` rather than the status line under it: this is news the reader did not ask
+   * for. The backend's own words are kept after the app's, because only one of the two facts is
+   * guessable from the screen.
+   */
+  it("files nothing and says why when what the cards do cannot be read", async () => {
+    deckGet.mockResolvedValue({ ...DECK, cards: [deckCard({ cardId: "p1" })] });
+    oracleTagsForPrintings.mockRejectedValue("The database is busy.");
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "File cards by what they do" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/^Nothing was filed\./);
+    expect(alert).toHaveTextContent("The database is busy.");
+    // Not one card moved, and not one pile made: the refusal is the whole press.
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+    // And the count sentence claims nothing — "Filed 12 cards" beside that alert would be two
+    // answers to one press.
+    expect(screen.queryByText(/^Filed /)).not.toBeInTheDocument();
   });
 });
 
