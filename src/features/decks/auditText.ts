@@ -10,11 +10,11 @@
  *
  * **Nothing here throws.** A payload is a string the backend wrote and this build may be
  * older or newer than the one that wrote it, so every field is read defensively and a
- * sentence degrades to its shortest honest form rather than taking the drawer down.
+ * sentence degrades to its shortest honest form rather than taking the dialog down.
  */
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
 
-/** One line of the drawer: the sentence, and the quieter half under it. */
+/** One line of `DeckHistoryDialog`: the sentence, and the quieter half under it. */
 export interface AuditLine {
   text: string;
   /** `null` when there is nothing more to say — most reorders and most deck-field edits. */
@@ -162,7 +162,7 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
       return folderLine(p);
     case "deck":
       return deckLine(p);
-    // A kind this build has never heard of, written by a newer one. The drawer still lists
+    // A kind this build has never heard of, written by a newer one. The dialog still lists
     // it, with a date and a delta, which is more useful than a hole in the history.
     default:
       return { text: "Changed the deck", detail: null };
@@ -390,7 +390,7 @@ export interface AuditDay {
  * The local calendar day of a unix-second stamp.
  *
  * Built by hand rather than by slicing `toISOString()`, which is **UTC** — a change made at
- * 23:30 local would file itself under tomorrow for half the world, and the drawer would show
+ * 23:30 local would file itself under tomorrow for half the world, and the dialog would show
  * a "Today" section containing nothing that happened today.
  */
 function localDay(at: number): string {
@@ -412,7 +412,7 @@ function longDay(at: number, thisYear: number): string {
 }
 
 /**
- * A deck's history as the drawer draws it: day sections, newest first.
+ * A deck's history as `DeckHistoryDialog` draws it: day sections, newest first.
  *
  * Grouped by **local** calendar day, because "today" is a thing that happens where the
  * reader is. Inside a day the entries keep the order they arrived in — `deck_audit_list`

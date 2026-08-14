@@ -61,11 +61,20 @@ const TAG_READ_REFUSED =
  * A deck's **categories and tags as things in themselves** — the piles and the labels, rather
  * than the cards filed under them.
  *
- * This is the categories panel's and the tag editor's hook. `useDeck` already answers both
- * lists as part of `deck_get`; these are the same facts read through the two commands that
- * exist so a panel need not pull the whole card list to draw a column heading. They cannot
- * durably disagree because every write in the app invalidates the one `["decks"]` root, which
- * is a prefix of all three keys here and of the editor's detail key.
+ * **One hook, mounted by two dialogs** (changed 2026-08-14): `CategoriesDialog` and `TagsDialog`
+ * were two sections of one drawer and are two independent surfaces now, and each of them mounts
+ * the whole of this. So each fires the other's read — opening Categories asks for the deck's
+ * tags, opening Tags asks for its categories — and that is worth having written down rather than
+ * discovered from a log. It is cheap and it is not free: three local-SQLite reads either way,
+ * shared through one `["decks"]`-rooted cache, so the second dialog a reader opens in a sitting
+ * finds its own list already there. Splitting the hook to match the split of the drawer would
+ * buy two reads back and cost the two surfaces their one definition of what a deck's piles and
+ * labels are; that trade has not been worth making.
+ *
+ * `useDeck` already answers both lists as part of `deck_get`; these are the same facts read
+ * through the two commands that exist so a dialog need not pull the whole card list to draw a
+ * column heading. They cannot durably disagree because every write in the app invalidates the
+ * one `["decks"]` root, which is a prefix of all three keys here and of the editor's detail key.
  *
  * **`variant` scopes the two counts on each row and nothing else.** Which categories a deck
  * has, what they are called, what order they are in and whether they are switched on are facts

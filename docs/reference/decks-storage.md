@@ -177,7 +177,8 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   there is no tenth `AUDIT_KINDS` value and no migration. The only
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
-  It is append-only, never pruned and **not undoable**; `AuditDrawer.tsx` has no mutation in it.
+  It is append-only, never pruned and **not undoable**; `DeckHistoryDialog.tsx` has no mutation
+  in it.
   **Seven writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
   deck, so a row would be orphaned by its own event); **both** `missing_to_wishlist` commands,
   `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); `deck_set_view_state`
