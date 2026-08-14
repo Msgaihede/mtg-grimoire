@@ -41,6 +41,9 @@ pub struct SearchRequest {
     /// Colour identity filter, e.g. `"WU"`. `"C"` means colourless only.
     pub colors: Option<String>,
     pub set_code: Option<String>,
+    /// Every printing of one oracle card. Absent means unset, like every other filter here;
+    /// it ANDs with the rest. See [`crate::filters::CardFilters::oracle_id`].
+    pub oracle_id: Option<String>,
     /// Set codes to include. ORed with each other, ANDed with every other filter — two
     /// sets means "printed in either", which is what a multi-select means everywhere else.
     pub sets: Option<Vec<String>>,
@@ -111,6 +114,7 @@ impl SearchRequest {
             format: self.format.clone(),
             colors: self.colors.clone(),
             set_code: self.set_code.clone(),
+            oracle_id: self.oracle_id.clone(),
             sets: self.sets.clone(),
             mana_values: self.mana_values.clone(),
             mana_x: self.mana_x,
@@ -3765,5 +3769,79 @@ mod tests {
                 assert!(p.desc.contains(crate::sorting::PRICE_HOLE), "{}", p.desc);
             }
         }
+    }
+
+    /// Cards for the `oracleId` filter's own tests: `(id, oracle_id, name, set_code,
+    /// collector_number)`. A fixture of its own rather than [`seeded`]'s three pinned rows,
+    /// because those three do not repeat an oracle id and this filter's whole point is two
+    /// printings that share one.
+    #[rustfmt::skip]
+    fn fixture_with_cards(rows: &[(&str, &str, &str, &str, &str)]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        for (id, oracle_id, name, set_code, collector_number) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,is_paper,search_text,raw)
+                 VALUES (?1,?2,?3,?4,?5,'en','normal',1,?3,'{}')",
+                rusqlite::params![id, oracle_id, name, set_code, collector_number],
+            ).unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');").unwrap();
+        conn
+    }
+
+    #[test]
+    fn an_oracle_id_filter_answers_only_that_cards_printings() {
+        let conn = fixture_with_cards(&[
+            ("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161"),
+            ("bolt-4ed", "o-bolt", "Lightning Bolt", "4ed", "209"),
+            ("shock-m21", "o-shock", "Shock", "m21", "159"),
+        ]);
+        let req = SearchRequest {
+            oracle_id: Some("o-bolt".into()),
+            limit: 50,
+            ..Default::default()
+        };
+        let page = run_search(&conn, &req).unwrap();
+        assert_eq!(page.total, 2, "both Bolt printings, and no Shock");
+        assert!(page.items.iter().all(|c| c.name == "Lightning Bolt"));
+    }
+
+    #[test]
+    fn no_oracle_id_filter_is_no_filter() {
+        let conn = fixture_with_cards(&[
+            ("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161"),
+            ("shock-m21", "o-shock", "Shock", "m21", "159"),
+        ]);
+        let req = SearchRequest {
+            limit: 50,
+            ..Default::default()
+        };
+        assert_eq!(run_search(&conn, &req).unwrap().total, 2);
+    }
+
+    /// The filter has to ride an index on `oracle_id` rather than scan, which is the whole
+    /// reason this filter costs nothing to add — `idx_cards_oracle` has carried one since
+    /// schema v1.
+    ///
+    /// **Not pinned to `idx_cards_oracle` by name.** `id` is also the fourth column of
+    /// `idx_cards_collapse` ([`crate::schema::CARDS_INDEXES`]), so for this exact
+    /// `SELECT id … WHERE oracle_id = ?` the planner prefers that one instead — it is
+    /// *covering* (the row lookup `idx_cards_oracle` alone would still owe is already inside
+    /// the index), so it is the cheaper plan, not a worse one. What this pins is the fact
+    /// that would break either way: the plan is a `SEARCH` keyed on `oracle_id=?`, never a
+    /// `SCAN`.
+    #[test]
+    fn the_oracle_id_filter_uses_its_index() {
+        let conn = fixture_with_cards(&[("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161")]);
+        let plan: String = conn
+            .prepare("EXPLAIN QUERY PLAN SELECT id FROM cards c WHERE c.oracle_id = ?1")
+            .unwrap()
+            .query_row(["o-bolt"], |r| r.get(3))
+            .unwrap();
+        assert!(
+            plan.contains("SEARCH") && plan.contains("(oracle_id=?)"),
+            "the filter must ride an index keyed on oracle_id, not scan: {plan}"
+        );
     }
 }

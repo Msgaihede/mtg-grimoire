@@ -53,6 +53,14 @@ pub struct CardFilters {
     pub format: Option<String>,
     pub colors: Option<String>,
     pub set_code: Option<String>,
+    /// Narrow to every printing of one oracle card — the card, not the cardboard.
+    ///
+    /// The exact-card filter the search has never had: `text` is FTS **prefix** matching, so
+    /// a name query answers other cards too. Indexed for free by `idx_cards_oracle`, which
+    /// `CARDS_INDEXES` has carried since schema v1.
+    ///
+    /// `cards.oracle_id` is NULLABLE and no live row is null, so this needs no null branch.
+    pub oracle_id: Option<String>,
     pub sets: Option<Vec<String>>,
     pub mana_values: Option<Vec<u8>>,
     /// `Some(true)` also matches cards whose printed cost carries an `{X}`; `None` and
@@ -227,6 +235,17 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
 
     if let Some(s) = nonblank(&f.set_code) {
         p.push(format!("{set_code} = ?"), Box::new(s.to_owned()));
+    }
+
+    // `{alias}.oracle_id`, not a bare `c.`: this function is alias-parameterized for the
+    // collection's joined query too, and the id is a claim only a card row can answer — the
+    // same reasoning as the format, colour, rarity and mana-value arms, none of which fall
+    // back to `rows` either.
+    if let Some(oracle_id) = &f.oracle_id {
+        p.push(
+            format!("{alias}.oracle_id = ?"),
+            Box::new(oracle_id.clone()),
+        );
     }
 
     // OR within, AND without. Blank entries are dropped rather than matched: a picker's
