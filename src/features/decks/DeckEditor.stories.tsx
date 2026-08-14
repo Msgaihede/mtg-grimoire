@@ -167,7 +167,11 @@ type Story = StoryObj<typeof meta>;
  * is drawn, empty, saying "Nothing here yet."
  *
  * The order is the v8 migration's own — Commander, Main deck, Sideboard, Companion, Maybeboard
- * — because a *seeded* deck comes out of that migration rather than out of `deck_create`.
+ * — because a *seeded* deck comes out of that migration rather than out of `deck_create`. That
+ * is the order the categories are **in**, and in Stacks it is no longer the order they are
+ * **drawn**: the Sideboard is pinned to the right of the desk and the other four pack in front
+ * of it, so the two differ by exactly that one pile. See `Decks/Views/StackView`'s
+ * `PinnedSideboard` for what the pin is for.
  *
  * The stats aside's headline figure is 60 with "+ 15 sideboard" under it, and that split is the
  * whole reason `DeckStats` imports `SIZE_KINDS` from the validation engine: the chip in the

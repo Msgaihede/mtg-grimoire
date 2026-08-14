@@ -154,7 +154,12 @@ panel, nothing written until Import). The Rust half and every measurement:
 
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
-price | type`). An **inactive category stays its own group in all three grouping modes**.
+price | type`). An **inactive category stays its own group in all three grouping modes**, and it
+  stays that group _whole_: `buildGroups` appends it carrying its own `kind`, so a switched-off
+  Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
+  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, `StackView`'s
+  pinned column — still sees a sideboard in the two modes that otherwise have no categories in
+  them, which is the right answer in both cases and is a special case in neither.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
@@ -184,12 +189,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
-- **`CardStack` is arithmetic, not taste.** The card's height is _derived_ — a Magic card's aspect
-  applied to the fixed column width, plus the data line less its rise, **319px** — and the
+- **`CardStack` is arithmetic, not taste.** The card's height is _derived_: a Magic card's aspect
+  applied to the card's own width gives **293** of image, its two hairlines make that **295**, and
+  the data line less its rise makes **319px**. The
   collapsed **−285px** margin leaves a **34px** reveal, a legibility floor for the overlaid tag
   rather than a fraction. The list gets a fixed `stackHeight(n) = 34(n−1) + 319 + 8`, and the open
   card's margin turns −285 into +8: a **293px** push-down of every later card, out of a box whose
-  height does not change.
+  height does not change. **Those two hairlines are the card's own and they still paint**:
+  `STACK_CARD_BORDER` is a length with two owners, and the pair that stopped painting on
+  2026-08-14 is the group `<section>`'s, one level up in `stackColumnWidth`.
 - **The stack's controls are revealed by the card being _open_, never by `group-hover:`**
   (`revealedWhenOpen`). A collapsed card's only hittable part is its 34px strip, so hovering it
   used to reveal a control bar hundreds of pixels below, behind three other cards. They are a
@@ -214,7 +222,45 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
-  of a card. Scaling the two independently agrees at 1× and drifts at every other stop.
+  of a card. Scaling the two independently agrees at 1× and drifts at every other stop. 210 + 12 +
+  2 = **224** at 1×, which is the `14rem` this replaced, exactly. **The `border` term is the
+  `<section>`'s own hairline and it is `border-transparent`** (see the next bullet): a border box
+  that paints nothing still occupies its 1px either side, so clearing the colour cost this sum
+  nothing — while **deleting the class** would draw every card 2px wider than `stackCardWidth()`
+  says it is, which is the one number the whole of `CardStack` is derived from.
+- **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
+  2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
+  a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
+  `border-dashed border-border bg-surface/40` inactive. A column of card faces is already a
+  rectangle with a hard edge, so an outline around it framed a frame, and fifteen of them read as a
+  form rather than as a deck. **The cost is the one signal that told the two states apart**, so an
+  inactive pile now says so three ways and an active pile says nothing at all: the wash, the dimmed
+  name beside `GroupHeader`'s `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`.
+  The drag marks needed no rework — `DROP_RING` is `ring-2`, and a ring is a box shadow **outside**
+  the border box, so the highlight never read the border it appears to sit on. One thing to know if
+  the lift ever regresses in switched-off piles only: **`opacity-60` makes that `<ul>` a stacking
+  context**, and the `<ul>` is what takes `LAYER.raised` when a card opens.
+- **The sideboard is pinned to the right of the desk, and it is a column rather than a panel.**
+  `StackView` pulls every `kind === "side"` group out of what `packColumns` sees and draws them as
+  one extra column after the packed ones — `sticky right-0`, `LAYER.raised`, an opaque `bg-bg` so
+  the scrolling columns pass _under_ it, the same inline width and `flex` basis as every other
+  column, and a soft left shadow for the seam (a shadow, not a border: the borders had just gone,
+  and a hairline reinstated here would have been the only one left in the view). It carries
+  `STACK_COLUMN_ATTR` **and** `STACK_PINNED_ATTR`, because "is a column" and "is the pinned one"
+  are two claims and a sweep that counts columns has to go on counting this one. The failure it
+  prevents is a drag with no destination on screen: the Sideboard sorts last, so on a deck wide
+  enough to scroll it packs off the right edge, and a card dragged out of the main deck has nowhere
+  to be let go of. **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a
+  commander is one card and a companion is one card, and pinning either would spend a column on a
+  pile that is read at a glance. Two things then need no special case: a derived group is
+  `kind: null`, so `manaValue` and `type` pin nothing _unless_ the reader has switched the Sideboard
+  off (which appends the category itself, kind and all — the first bullet in this section); and the
+  column is rendered only when a `side` group exists. **That last condition is real for a story and
+  not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group
+  draws whether or not anything is in it, and a predefined pile cannot be deleted — so under
+  `category` the pinned column is there from the moment a deck is created, empty or not.
+  **It costs `stackColumnWidth(zoom)` permanently** — 224px at 1×, 434px at 2× — which on a 1280px
+  window at 2× is a third of the width parked on the sideboard before the deck has drawn a card.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -237,6 +283,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   293px from where they are going: it reads as the card jumping in front and the stack catching
   up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
   this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+  **`LAYER.raised` has a second occupant in this view now, and the two are ordered by the JSX
+  rather than by a number**: the pinned sideboard column sits on the same rung as an open card's
+  list, and equal z-indexes resolve by document order, so the pinned column winning is a fact
+  about it being drawn last. That is the only reading an opaque pinned column can survive — a card
+  lifted out of a column scrolling past has to go _under_ the sideboard, not over it — and moving
+  the pinned column above the packed ones would invert it silently, with the suite still green.
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
   lift was observable from neither.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
