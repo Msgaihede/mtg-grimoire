@@ -168,6 +168,46 @@ describe("buildCardMenu", () => {
     expect(item.reason).toBeTruthy();
   });
 
+  it("greys View all printings on the card the pane is already showing", () => {
+    // It shipped live and inert: `viewPrinting` sets `selectedCardId` to the value it already
+    // holds, so the press moved nothing and said nothing.
+    const viewPrintingsInPane = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ viewPrintingsInPane, paneCardId: "bolt-lea" }));
+    const item = find(items, "View all printings") as MenuAction;
+
+    expect(item.disabled).toBe(true);
+    // And **not** the orphan's sentence, which would be false of a perfectly healthy card.
+    expect(item.reason).toBe("this pane is already showing them");
+    item.onSelect();
+    expect(viewPrintingsInPane).not.toHaveBeenCalled();
+  });
+
+  it("leaves the row live for another printing of the card in the pane", () => {
+    // The printings list is the case: every row but the open one moves the pane somewhere.
+    const viewPrintingsInPane = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ viewPrintingsInPane, paneCardId: "bolt-2ed" }));
+    const item = find(items, "View all printings") as MenuAction;
+
+    expect(item.disabled).toBeUndefined();
+    item.onSelect();
+    expect(viewPrintingsInPane).toHaveBeenCalledWith("bolt-lea");
+  });
+
+  it("keeps the row live for the open card on a surface that navigates to Search", () => {
+    // A wall beside an open pane routes to Search, which always has somewhere to go — greying
+    // there would refuse a row that works.
+    const requestAllPrintings = vi.fn();
+    const items = buildCardMenu(
+      BOLT,
+      deps({ requestAllPrintings, viewPrintingsInPane: null, paneCardId: "bolt-lea" }),
+    );
+    const item = find(items, "View all printings") as MenuAction;
+
+    expect(item.disabled).toBeUndefined();
+    item.onSelect();
+    expect(requestAllPrintings).toHaveBeenCalled();
+  });
+
   it("adds one copy silently when the printing has one finish", () => {
     const addToCollection = vi.fn();
     const items = buildCardMenu(BOLT, deps({ addToCollection }));

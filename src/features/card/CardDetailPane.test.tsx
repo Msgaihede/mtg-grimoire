@@ -396,9 +396,7 @@ describe("CardDetailPane", () => {
     expect(foil).toHaveTextContent("$3.00");
     // TCGplayer, and it says so: a price is never shown without saying how old it is and whose
     // it is (spec §5).
-    expect(
-      screen.getByText("TCGplayer prices as of the last card-data sync."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("TCGplayer prices as of the last card-data sync.")).toBeInTheDocument();
   });
 
   /**
@@ -839,7 +837,10 @@ describe("grouping the printings list", () => {
       .map((ul) => ul.previousElementSibling?.firstElementChild?.textContent ?? null);
 
   /** Every row, in the order they are drawn. */
-  const rows = () => list().getAllByRole("listitem").map((li) => li.textContent);
+  const rows = () =>
+    list()
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
 
   async function openList() {
     cardDetail.mockResolvedValue(detail);
@@ -1591,15 +1592,17 @@ describe("the card menu", () => {
   });
 
   /**
-   * **Accepted, explicitly, in the name**: for the card the pane is already showing this item is
-   * a no-op, because the answer is the list directly below it.
+   * **Greyed, with a sentence of its own.** For the card the pane is already showing, this item
+   * has nowhere to go: `viewPrinting` would set `selectedCardId` to the value it already holds
+   * and nothing at all would happen — the answer is the list directly below it.
    *
-   * Greying it instead is not available from here — the reason a row is disabled is
-   * `buildCardMenu`'s to give, and it has one arm for it (a missing oracle id), which would be
-   * the wrong sentence. A row that does nothing was judged better than one that closes the
-   * reader's deck and their pane.
+   * This shipped as a live, silently inert row. Greying it was not available from this surface
+   * at the time, because the reason a row is disabled is `buildCardMenu`'s to give and its only
+   * arm said *this printing has left the card database*, which is flatly false of a card the
+   * pane is drawing. The builder has a second arm now and the pane hands it the one fact it
+   * cannot know — which card is open — so the rule stays in one place and the row says why.
    */
-  it("does nothing for the card the pane is already showing, inside the editor", async () => {
+  it("greys View all printings for the card the pane is already showing, inside the editor", async () => {
     const user = userEvent.setup();
     insideTheEditor();
     wrapWithMenu("p1");
@@ -1607,7 +1610,13 @@ describe("the card menu", () => {
 
     rightClick(art);
     await screen.findByRole("menu");
-    await viewAllPrintings(user);
+
+    // `aria-disabled` and never the `disabled` attribute: the greyed row exists to be read.
+    const row = screen.getByRole("menuitem", { name: /View all printings/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(within(row).getByText("this pane is already showing them")).toBeInTheDocument();
+
+    await user.click(row);
 
     expect(useAppStore.getState().selectedCardId).toBe("p1");
     expect(useAppStore.getState().openDeckId).toBe(4);

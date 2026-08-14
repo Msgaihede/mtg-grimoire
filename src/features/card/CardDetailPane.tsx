@@ -296,10 +296,21 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
    * Outside the editor there is no deck to close, and the search wall is a genuinely bigger
    * answer than this 384px column — every printing as art, uncapped, with the filters cleared —
    * so the item keeps the app's default and navigates.
+   *
+   * **`paneCardId` is the second half of that override and travels with it.** Handing over a way
+   * to move the pane is a claim that the row does something, and on this surface it is not always
+   * true: the card the pane is *already* on is exactly the card `viewPrinting` cannot move it to.
+   * The builder greys the row and says so; this is only the fact it needs, which no other surface
+   * can answer for the pane. It is passed unconditionally rather than only inside the editor,
+   * because a fact does not stop being true when the row happens to route elsewhere.
    */
   const menuDeps = useMemo<CardMenuDeps>(
-    () => ({ ...deps, viewPrintingsInPane: openDeckId === null ? null : viewPrinting }),
-    [deps, openDeckId, viewPrinting],
+    () => ({
+      ...deps,
+      viewPrintingsInPane: openDeckId === null ? null : viewPrinting,
+      paneCardId: cardId,
+    }),
+    [deps, openDeckId, viewPrinting, cardId],
   );
 
   /**
@@ -370,13 +381,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
           the reader was on. The deck add is not here and needs nothing: it reaches the app's
           single mount through `CardToDeckProvider`, which draws its own sentence. */}
       <CardMenuRefusal error={menuFailure} />
-      <Body
-        key={cardId}
-        cardId={cardId}
-        onClose={onClose}
-        paneRef={paneRef}
-        menuDeps={menuDeps}
-      />
+      <Body key={cardId} cardId={cardId} onClose={onClose} paneRef={paneRef} menuDeps={menuDeps} />
     </motion.aside>
   );
 }

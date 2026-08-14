@@ -95,6 +95,18 @@ export interface CardMenuDeps {
   addToWishlist: (target: CardMenuTarget) => void;
   /** Null outside the deck editor: inside it, the item opens the card pane instead. */
   viewPrintingsInPane: ((cardId: string) => void) | null;
+  /**
+   * The card the docked pane is **already** showing, for the surfaces that are the pane.
+   *
+   * Read only when {@link CardMenuDeps.viewPrintingsInPane} is set, and it is the second half of
+   * that field rather than an independent one: a surface that hands over a way to move the pane
+   * is claiming the row does something, and this is what makes the claim checkable. Left out, the
+   * row behaves exactly as it did before this field existed — it is a fact the builder can use,
+   * never one it can be wrong about, which is why it is optional rather than required.
+   *
+   * `null` is a pane that is closed, and never equal to a card id.
+   */
+  paneCardId?: string | null;
   requestAllPrintings: (t: { oracleId: string; name: string }) => void;
   DeckTargetSubmenu: ComponentType<{ target: CardMenuTarget; onDone: () => void }>;
 }
@@ -192,36 +204,67 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
 }
 
 /**
- * "View all printings", and the two places it can land.
+ * "View all printings" — the two places it can land, and the two it cannot.
  *
  * Inside the deck editor it opens the **card pane**, because `requestAllPrintings` moves
  * `activeView` in the same write and `setActiveView` clears `openDeckId` by design — routing
  * to Search there would close the deck the reader is building out from under them.
  *
- * `oracleId` is nullable on `CardSummary`, which is a fence around the type rather than a card
- * anyone can find (0 of 116 590 live rows are null, reversible printings included, because
- * `card_row` falls back to `card_faces[0]`). So the item is **drawn and disabled with a
- * reason** rather than hidden or crashed on: a greyed row that says why is the answer this
- * app's menus give everywhere else.
+ * **Both refusals are greyed with a reason rather than hidden, and that is a judgement about
+ * this row in particular.** The category menu leaves Delete *absent* on the four predefined
+ * zones on the grounds that "an item that exists only to be refused is worse than one that is
+ * not there" — but that item is refused on one kind of category and offered on every other,
+ * so its absence reads as a property of the row it is missing from. This row is on all ten card
+ * surfaces and on every other card of the surface it greys on, so removing it from one would
+ * read as a bug in the menu rather than as a fact about the card. Greyed, it teaches the rule;
+ * that is the commander row's argument and it is this one's.
+ *
+ * **The first refusal is a fact about the card.** `oracleId` is nullable on `CardSummary`, which
+ * is a fence around the type rather than a card anyone can find (0 of 116 590 live rows are null,
+ * reversible printings included, because `card_row` falls back to `card_faces[0]`).
+ *
+ * **The second is a fact about the situation, and it shipped as a silent no-op.** On the card
+ * pane's own card, inside the deck editor, `viewPrintingsInPane` is the write that moves the
+ * pane *to the card it is already on* — `viewPrinting` sets `selectedCardId` to the value it
+ * already holds, Zustand notifies nobody, and nothing whatever happens. The row looked live and
+ * pressing it did nothing. The one sentence this file had was no use for it: the card is present
+ * and perfectly healthy, so *this printing has left the card database* would have been flatly
+ * false, which is why the surface that found it correctly left the row alone rather than reuse
+ * the wrong words.
+ *
+ * The check lives here, with the label, the routing and both sentences, so that the rule is one
+ * thing in one place. What the surface supplies is a fact — {@link CardMenuDeps.paneCardId} —
+ * and never a decision.
  */
 function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
   const { oracleId } = target;
+  const row = {
+    kind: "action",
+    id: "printings",
+    label: "View all printings",
+    Icon: Images,
+  } as const;
+
   if (oracleId === null) {
     return {
-      kind: "action",
-      id: "printings",
-      label: "View all printings",
-      Icon: Images,
+      ...row,
       disabled: true,
       reason: "this printing has left the card database",
       onSelect: () => {},
     };
   }
+  // Only where the pane is the destination: a surface that navigates to Search always has
+  // somewhere to go, whatever card happens to be open beside it.
+  if (deps.viewPrintingsInPane !== null && deps.paneCardId === target.cardId) {
+    return {
+      ...row,
+      disabled: true,
+      reason: "this pane is already showing them",
+      onSelect: () => {},
+    };
+  }
   return {
-    kind: "action",
-    id: "printings",
-    label: "View all printings",
-    Icon: Images,
+    ...row,
     onSelect: () => {
       if (deps.viewPrintingsInPane !== null) deps.viewPrintingsInPane(target.cardId);
       else deps.requestAllPrintings({ oracleId, name: target.name });
