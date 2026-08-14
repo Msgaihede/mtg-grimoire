@@ -113,6 +113,12 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
  * is above it (so that thirteen surfaces stay renderable on their own), which means a page
  * rendered bare would open nothing and pass every menu assertion below by never being asked.
+ *
+ * **No `CardToDeckProvider`, and a test that expands "Add to → Deck" will need one** — the deck
+ * picker throws without it, deliberately, rather than swallowing the add. It goes **above**
+ * `ContextMenuProvider` and not inside it: the menu panel is drawn as a *sibling* of that
+ * provider's children, so a provider around this page is around none of the menu's rows.
+ * `CollectionPage.test.tsx` has the wiring, and `App.tsx` uses the same nesting.
  */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

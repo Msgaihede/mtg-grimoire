@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -989,9 +989,24 @@ describe("the card menu", () => {
    * The banner is superseded by the next add rather than standing until one succeeds — the same
    * rule the stepper's and the removal's banner follow, and for the reason written beside them:
    * an alert about something the reader has already dealt with is worse than no alert.
+   *
+   * **The assertion is made while the second add is still in flight, and that is the whole
+   * fence.** Cleared-on-start and cleared-on-success agree about every settled state: a second
+   * add that succeeds ends with no banner either way, and one that is refused ends with its own
+   * sentence either way. The single moment they differ is the one below — between the press and
+   * the answer — so the second write is held open deliberately rather than answered. (Written
+   * the obvious way first, this test passed against the un-fixed code.)
    */
-  it("clears a refused add's sentence when the next add starts", async () => {
+  it("clears a refused add's sentence when the next add starts, not when one answers", async () => {
     collectionAdd.mockRejectedValue("that card is not in the database");
+    // Held open: nothing resolves it until this test says so.
+    let refuseWish: (reason: unknown) => void = () => {};
+    wishlistAdd.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuseWish = reject;
+        }),
+    );
     const user = userEvent.setup();
     wrap(<CollectionPage />);
     rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
@@ -1003,14 +1018,21 @@ describe("the card menu", () => {
       "Could not add to your collection — that card is not in the database",
     );
 
-    // A *wishlist* add, so the sentence that replaces it is not merely the same one written
-    // again — and this one is answered.
+    // A *wishlist* add, so what follows cannot be the same sentence written again.
     rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
     await screen.findByRole("menu");
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
     await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
 
+    // Still pending — and the collection's complaint is already gone, because the reader has
+    // moved on from it. This is the assertion the finding was about.
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+
+    // And when this one is refused in its turn, its own sentence takes the place.
+    await act(async () => refuseWish("the wishlist is locked"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not add to your wishlist — the wishlist is locked",
+    );
   });
 
   /**
@@ -1090,6 +1112,25 @@ describe("the card menu", () => {
         quantity: 1,
       }),
     );
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * The wall's own keyboard route. `CardGrid`'s mechanism is covered by the search suite; what
+   * this pins is that this view passes it — `cardMenuKey` is a separate prop from `cardMenu`,
+   * so a wall can be given one and not the other and nothing says so.
+   */
+  it("opens from the keyboard on a tile of the wall", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    wrap(<CollectionPage />);
+    // The press lands on the art button and bubbles to the tile, which is what carries the
+    // handler — the tile is the card, and the button inside it is what holds the caret.
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Lightning Bolt" }), {
+      key: "F10",
+      shiftKey: true,
+    });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
     expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 
