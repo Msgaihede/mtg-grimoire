@@ -63,15 +63,24 @@ function ColourRow({ initial }: { initial: readonly ManaKey[] }) {
   );
 }
 
-/** `ManaValueChips` owns its own group, so this wrapper is state and nothing else. */
-function ManaValueRow({ initial }: { initial: readonly number[] }) {
+/**
+ * `ManaValueChips` owns its own group, so this wrapper is state and nothing else — two pieces
+ * of it, because the row has two axes. X is not a mana value: `cmc` counts `{X}` as zero, so
+ * `{X}{B}{B}{B}` sits in the `3` bucket *and* answers the X chip, and the two are OR'd exactly
+ * as the numerals are OR'd with each other. Both can be on, which is why they are two states
+ * here rather than a tenth entry in one list.
+ */
+function ManaValueRow({ initial, x = false }: { initial: readonly number[]; x?: boolean }) {
   const [on, setOn] = useState<readonly number[]>(initial);
+  const [onX, setOnX] = useState(x);
   return (
     <ManaValueChips
       selected={on}
       onToggle={(value) =>
         setOn((vs) => (vs.includes(value) ? vs.filter((v) => v !== value) : [...vs, value]))
       }
+      xSelected={onX}
+      onToggleX={() => setOnX((was) => !was)}
     />
   );
 }
@@ -231,10 +240,14 @@ export const ColoursSelected: Story = {
 };
 
 /**
- * Mana values, 0 through 8-or-more.
+ * Mana values, 0 through 8-or-more — and then X.
  *
- * `MANA_VALUES` is `0…8` and the last chip is open-ended: past Emrakul the tail is a handful of
- * cards nobody filters by exact cost, and the backend reads the chip the same way.
+ * `MANA_VALUES` is `0…8` and the last of those chips is open-ended: past Emrakul the tail is a
+ * handful of cards nobody filters by exact cost, and the backend reads the chip the same way.
+ *
+ * **X is not one of them.** It is a second axis over the same question, drawn as the last chip
+ * of the same group because it answers that question too: `cmc` counts `{X}` as zero, so a
+ * `{X}{B}{B}{B}` is a 3 *and* an X, and a reader who presses both chips finds it once.
  */
 export const ManaValues: Story = {
   args: { label: "Owned", pressed: false },
@@ -243,17 +256,20 @@ export const ManaValues: Story = {
 };
 
 /**
- * Three on, including the open-ended one.
+ * Four on, including the open-ended one and X.
  *
  * The `play` reads what the chips are *called* rather than what is written on them: the
  * open-ended one is drawn `8+` and named "Mana value 8 or more", so the sign is drawn and the
- * meaning is spoken. Every other chip is named after the exact cost it matches. An accessible
- * name is not something a screenshot can be read for.
+ * meaning is spoken. Every other numeral is named after the exact cost it matches. X is the one
+ * whose name is a whole sentence — a chip reading `X` beside one reading `8+` is a puzzle to
+ * anyone who cannot see the group heading, and the letter stays inside the sentence so the chip
+ * is still addressable by what is written on it (WCAG 2.5.3). An accessible name is not
+ * something a screenshot can be read for.
  */
 export const ManaValuesSelected: Story = {
   args: { label: "Owned", pressed: false },
   parameters: { controls: { disable: true } },
-  render: () => <ManaValueRow initial={[1, 2, 8]} />,
+  render: () => <ManaValueRow initial={[1, 2, 8]} x />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
@@ -270,6 +286,12 @@ export const ManaValuesSelected: Story = {
       "aria-pressed",
       "false",
     );
+
+    // One letter drawn, one sentence spoken — and on at the same time as three numerals,
+    // which is the state an exclusive tenth chip could not reach.
+    const x = canvas.getByRole("button", { name: "Cards with X in their mana cost" });
+    await expect(x).toHaveTextContent("X");
+    await expect(x).toHaveAttribute("aria-pressed", "true");
   },
 };
 

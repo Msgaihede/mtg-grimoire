@@ -31,6 +31,8 @@ const collection = (over: Record<string, unknown> = {}) =>
     toggleSet: vi.fn(),
     manaValues: [] as number[],
     toggleManaValue: vi.fn(),
+    manaX: false,
+    toggleManaX: vi.fn(),
     finishes: [] as string[],
     toggleFinish: vi.fn(),
     conditions: [] as string[],
@@ -73,6 +75,7 @@ describe("CollectionFilterBar", () => {
     await userEvent.selectOptions(screen.getByLabelText("Format"), "commander");
     await userEvent.click(screen.getByRole("button", { name: "Red" }));
     await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cards with X in their mana cost" }));
     await userEvent.click(screen.getByRole("button", { name: "Sets" }));
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
@@ -84,6 +87,10 @@ describe("CollectionFilterBar", () => {
     expect(c.setFormat).toHaveBeenCalledWith("commander");
     expect(c.toggleColor).toHaveBeenCalledWith("R");
     expect(c.toggleManaValue).toHaveBeenCalledWith(3);
+    // Its own field, not a tenth mana value — so the two presses above land on two different
+    // callbacks, and `toggleManaValue` heard exactly the one that was a numeral.
+    expect(c.toggleManaX).toHaveBeenCalled();
+    expect(c.toggleManaValue).toHaveBeenCalledTimes(1);
     expect(c.toggleSet).toHaveBeenCalledWith("lea");
     expect(c.toggleFinish).toHaveBeenCalledWith("foil");
     expect(c.toggleCondition).toHaveBeenCalledWith("LP");
@@ -123,6 +130,24 @@ describe("CollectionFilterBar", () => {
     rerender(<CollectionFilterBar collection={collection({ needsReview: false })} />);
     const complement = screen.getByRole("button", { name: "Not flagged" });
     expect(complement).toHaveAttribute("aria-pressed", "true");
+  });
+
+  /**
+   * The same chip the search's row draws, minus the sentence a count would add to it.
+   *
+   * **This bar is deliberately not facet-aware** — it wires no counts to any control — so the
+   * X chip keeps the plain label it was born with and nothing here ever greys. Worth asserting
+   * rather than assuming: the chip takes four props on the search's side, and a row that had
+   * quietly started passing a `xDisabled` it computed itself would grey a filter over counts
+   * this view has never asked for.
+   */
+  it("shows the X chip on, with no count and nothing greyed", () => {
+    render(<CollectionFilterBar collection={collection({ manaX: true })} />);
+
+    const chip = screen.getByRole("button", { name: "Cards with X in their mana cost" });
+    expect(chip).toHaveTextContent("X");
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(chip).not.toHaveAttribute("aria-disabled");
   });
 
   /** Every `<option>`'s text, in the order the reader scrolls past them. */

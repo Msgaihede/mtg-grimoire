@@ -93,6 +93,19 @@ export interface SearchRequest {
   sets?: string[];
   /** Mana-value chips: 0–7 match exactly, 8 means "8 or more". */
   manaValues?: number[];
+  /**
+   * Also match printings whose printed cost names `{X}`. Rust: `mana_x: Option<bool>`.
+   *
+   * **One more chip in the mana-value group, ORed with the numbers beside it** — pressing X
+   * alone asks for the X spells, pressing X and `3` asks for both piles at once. And it is
+   * **additive rather than a re-filing**: an X card still matches its own mana value (Fireball
+   * is `{X}{R}`, mana value 1, and answers the `1` chip), so a reader who names both chips gets
+   * that card once, in one row, rather than a duplicate. The deck editor's
+   * `separateXGroup` is the *other* shape of this idea and deliberately not this one — there a
+   * card is in the X pile **instead of** its bucket, because a heading that counted it twice
+   * would make the columns add up to more than the deck.
+   */
+  manaX?: boolean;
   rarity?: string;
   /** Omitted means true: digital-only printings are hidden unless asked for. */
   paperOnly?: boolean;
@@ -286,6 +299,19 @@ export interface FacetResponse {
   colors: Record<string, number>;
   /** Keyed `"0"`–`"8"`, `8` meaning eight-or-more. Plain counts. */
   manaValues: Record<string, number>;
+  /**
+   * How many printings name `{X}` in their printed cost — the X chip's count. Rust:
+   * `mana_x: i64`.
+   *
+   * **A field beside the map and not an `"x"` key inside it**, because that map is keyed *by
+   * mana value* and X is not one: every other key parses as a number and the chips above read
+   * it as one. A string key that only looks like the others is the kind of thing a
+   * `Number(key)` somewhere turns into `NaN` and files at the head of the curve. And it
+   * **overlaps** the map rather than carving a slice out of it: an X card is counted here *and*
+   * under its own mana value, matching {@link SearchRequest.manaX}'s additive semantics, so
+   * this number must never be added to the map's.
+   */
+  manaX: number;
   /** Keyed by `legalities` key. Plain counts. */
   formats: Record<string, number>;
   /**
@@ -461,6 +487,10 @@ export interface CardFilters {
   sets?: string[];
   /** 0–7 match exactly, 8 means "8 or more". */
   manaValues?: number[];
+  /** Also match printings whose printed cost names `{X}` — see
+   *  {@link SearchRequest.manaX}, which is the same field on the same chip group: ORed with
+   *  the numbers above and additive, never a re-filing. Rust: `mana_x: Option<bool>`. */
+  manaX?: boolean;
   rarity?: string;
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
@@ -1153,6 +1183,12 @@ export interface DeckPatch {
    * reader makes against it.
    */
   theoryEnabled?: boolean;
+  /**
+   * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
+   * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
+   * preference, so switching it writes one column and touches not one `deck_cards` row.
+   */
+  separateXGroup?: boolean;
 }
 
 /**
@@ -1266,6 +1302,25 @@ export interface DeckRow {
    * offer.
    */
   lastSortBy: string;
+  /**
+   * Whether this deck's curve gathers the `{X}` spells under a heading of their own.
+   *
+   * `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`, schema v13 — per **deck**, because it
+   * is an answer about a particular curve: a storm list where half the spells are `{X}` reads
+   * quite differently from an aggro deck with one Fireball in it, and a single app-wide setting
+   * would make the reader re-decide every time they opened a different deck.
+   *
+   * **It is a reading preference and changes nothing about what is in the deck.** It moves a
+   * card between two headings — `buildGroups`' `separateX` and the curve the stats strip counts
+   * — and reaches no rule: not size, not copies, not legality, not the allocator. Nothing in
+   * `validation/` has heard of it and nothing there should.
+   *
+   * It is not one of the three `last*` fields above, and the split is the point: those are how
+   * the reader was *looking* at this deck a moment ago, written by a command that moves no
+   * `updatedAt`, while this is an answer about the deck's own curve and rides the ordinary
+   * {@link ipc.deckUpdate} with the rename and the Built toggle.
+   */
+  separateXGroup: boolean;
 }
 
 /**

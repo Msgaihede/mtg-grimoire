@@ -47,13 +47,20 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   bug** — a deck's seeded categories are in `PREDEFINED_CATEGORIES` order, so a clamp to
   `categories[0]` put every quick add on a fresh deck into **Commander**. Zero now _means_ auto,
   nothing overwrites it, and an explicit pick **stays** picked.
+- **The X pile is a _heading_, not a category, and its key says so.** `X_GROUP_KEY` is `"mv-x"`
+  and shares the `mv-…` namespace deliberately: it is one more mana-value heading, so no
+  `deck_cards.category_id` points at it, nothing can be dropped into it, and it is gone the moment
+  the reader groups by something else. Exported beside `X_GROUP_NAME` (`"Mana value X"`) so that
+  no chart, story or test re-spells either one.
 
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s
-  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle),
-  add-card, set-quantity, move, missing-to-wishlist, swap-printing. The two outside it are
-  `setTag` and `rememberView`, each for its own reason stated on its definition.
+  `newestWrite([...])` counts **six** of the hook's eight: update (rename, cover, Built toggle,
+  the `Split X` chip), add-card, set-quantity, move, missing-to-wishlist, swap-printing. The X
+  chip is a **deck-row** write riding the same `update` as the other three, so it is not a seventh
+  mutation and it touches not one `deck_cards` row. The two outside the six are `setTag` and
+  `rememberView`, each for its own reason stated on its definition.
 - **There is no remove mutation.** The tray's drop and the stepper's zero are both
   `setQuantity(…, 0)`, because zero removes a deck row.
 - **The refusal rule lives on the single definition in `useDeck.ts`, never on a call site** — two
@@ -74,6 +81,13 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
+- **The audit field for the X split is `"xGroup"`, the one multi-word field name in that switch,
+  and the drift is silent.** Every other arm is a single lowercase word, so this is the first place
+  `deck.rs`'s spelling and `auditText.ts`'s can part company with nothing going red: the `default`
+  arm answers an unrecognised field with "Changed the deck", which is true of every deck edit and
+  therefore never fails. **Deriving it from the column gives `separateX`, which is wrong** — the
+  Storybook fake guessed exactly that before it was corrected — so `auditText.test.ts` pins the
+  right word _and_ the wrong-but-plausible one. Copy the word from `deck.rs`; never re-derive it.
 - **A deck card's unit price is that printing's nonfoil price at the selected marketplace** — a
   deck names a printing, not a finish. `cards.price_usd` is a fallback chain across finishes and
   is never summed. **One `unitPrice` per row, not a pair**: the marketplace is in `useDeck`'s
@@ -215,6 +229,65 @@ price | type`). An **inactive category stays its own group in all three grouping
   refused-write family on purpose — **that family is writes to what is _in_ the deck**, and this
   one changes no card — so its failure is silent, the cost being a deck that reopens on its old
   tab.
+- **`Split X` is a _modifier_ of the mana-value grouping and not a fourth mode.** The chip is
+  drawn only under `groupBy === "manaValue"`, and it lives inside that select's own `gap-1.5`
+  cluster rather than out in the toolbar's `gap-x-4`, because a control that persists across a
+  grouping it has no effect on is a control the reader has to remember the scope of. The
+  inertness is **structural, not a branch to keep in step**: `separateX` is passed to
+  `manaValueBucket`, which only the one `manaValue` arm of `buildGroups` calls.
+- **In a deck the X rule is _exclusive_; in search the same idea is _additive_, and the opposition
+  is deliberate on both sides.** Here a card printing `{X}` is in the X group **and nowhere
+  else** — a heading counts copies and sums prices, so a card in two groups makes the headings add
+  up to more than the deck and nothing on screen says which one lied. In search the chips are an
+  OR over rows, where finding a card twice is not a thing that can happen, so `{X}{B}{B}{B}`
+  answers the mana-value-3 chip **and** the X chip. **Do not "fix" either one into agreeing with
+  the other**; they are answering different questions about the same card.
+- **X sorts at 9, and `mv-unknown` moved 9 → 10 to let it.** Like `8 or more`, X is open-ended
+  rather than a number, so it belongs at the tail and not at the head where a reader counts their
+  cheapest spells; `unknown` stays behind it because it is the absence of an answer rather than an
+  answer. **The X test runs _before_ the `cmc === null` check**, which is the second half of the
+  same rule: an `{X}` in the printed cost is knowledge, so a row with a null `cmc` and an X in its
+  cost is X, never unknown.
+- **`{X}` only, never `{Y}` or `{Z}`** — `hasVariableCost` in `src/lib/mana.ts`, going through
+  that file's one `SYMBOL` regex rather than a second, looser spelling of what a symbol is.
+  `validation/engine.ts`'s `symbolValue` scores all three as 0 and is right to: it answers _what
+  is this cost worth_. A heading answers _what is this pile called_, and a `{Y}` un-card filed
+  under X is a heading telling the reader a lie about the cardboard in front of them.
+- **The switch is the _deck's_, not the editor's**: `decks.separate_x_group` (schema v13), read off
+  the loaded row as `separateXGroup` and written through `useDeck.update` — **never `useState`**,
+  and never `rememberView` either. Both halves of that matter. `groupBy` and `sortBy` are also
+  remembered per deck now (`lastGroupBy`/`lastSortBy`), but they are remembered as _where the
+  reader had got to_, which is why the command that stores them moves no `updated_at` and writes
+  no history. Splitting the X spells out is a **change to the deck**, rides the same `deck_update`
+  as the rename and the cover, and is audited as one. This one is an answer about a particular
+  curve: a storm list where half the spells are `{X}` reads quite differently from an aggro deck
+  with one Fireball in it. It reaches no rule — not size, not copies, not legality, not the
+  allocator — and nothing in `validation/` has heard of it or should.
+- **`DeckStats` honours the flag under _every_ grouping while the chip that sets it is drawn under
+  one, and that is a decision with a known cost rather than an oversight.** `DeckEditor` reads the
+  flag once and hands the same value to `buildGroups` and to `DeckStats`, because a curve counting
+  `{X}{B}{B}{B}` as 3 beside a column headed `Mana value X` is two surfaces answering one question
+  about one deck two ways — the failure this folder's rules keep naming. The deck's answer does
+  not stop being true because the reader went back to their categories. So a reader grouped by
+  `category` or `type` can see a split curve with **no control on screen to unsplit it**; the
+  pairing is what must hold, and this is what it costs.
+  **`lastGroupBy` narrows that cost to a session, and knowing which kind of gap it is decides
+  whether it is worth repairing.** The grouping is stored on the deck too, so a deck left under
+  `manaValue` reopens under `manaValue` and the chip comes back beside it — nobody _returns_ to a
+  split curve with no control for it, which was the version of this worth worrying about. What is
+  left takes a deliberate press in the same sitting: group by something else and the chip goes
+  with the mode it belongs to, while the curve keeps answering for the deck. One press back
+  brings it, and that press is now remembered.
+- **The average mana value does not move when the flag flips**, and it is the one number the
+  split deliberately does not reach. An `{X}` spell costs what it costs with X at zero
+  (CR 202.3b) — `{X}{B}{B}{B}` is 3 — and the toggle is a display choice about which bar a card is
+  drawn in, not a claim that the card stopped costing three. `DeckStatsSummary.variableCost` is
+  `null` rather than `0` when the deck is not splitting, for the reason `averageManaValue` is
+  `null` rather than `0` for a deck of nothing but lands: "there is no X bar" and "the X bar is
+  empty" are different sentences, and the second is worth drawing. The bars still sum —
+  `sum(curve) + (variableCost ?? 0) + unknownManaValue` is `nonlands` in both modes. The tenth
+  bar's width arithmetic, and why the 280px panel did not grow to hold it, are in
+  [decks-storage.md](../../../docs/reference/decks-storage.md).
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:

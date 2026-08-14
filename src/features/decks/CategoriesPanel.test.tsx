@@ -122,6 +122,7 @@ const DECK_ROW: DeckRow = {
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
+  separateXGroup: false,
 };
 
 const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };

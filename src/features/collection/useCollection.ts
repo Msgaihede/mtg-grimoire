@@ -74,6 +74,9 @@ export interface CollectionFilterState {
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
+  /** The X chip — "also the cards with `{X}` in their printed cost". The other half of the
+   *  question `manaValues` asks, and counted with it below for that reason. */
+  manaX: boolean;
   finishes: readonly Finish[];
   conditions: readonly Condition[];
   /** `true` is the rows a sync flagged, `false` everything it did not touch. Three-way like
@@ -95,7 +98,10 @@ export function activeFilterCount(f: CollectionFilterState): number {
     f.format.length > 0,
     f.colors.length > 0,
     f.sets.length > 0,
-    f.manaValues.length > 0,
+    // One term with the numerals, as the search counts it: the X chip is the last chip of
+    // that same group and is OR'd with them, so "3 and X" is one thing to clear. In here at
+    // all, though — an X-only filter that counted zero would hide the Reset all that clears it.
+    f.manaValues.length > 0 || f.manaX,
     f.finishes.length > 0,
     f.conditions.length > 0,
     // Compared against `undefined`, never tested for truthiness: `false` — "the rows nothing
@@ -149,6 +155,9 @@ export function useCollection() {
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  // Additive rather than exclusive, exactly as the search's is: `cmc` counts `{X}` as zero, so
+  // a `{X}{B}{B}{B}` in the collection answers the `3` chip and this one both.
+  const [manaX, setManaX] = useState(false);
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
@@ -182,6 +191,10 @@ export function useCollection() {
     colors: colorsParam,
     sets: setsParam,
     manaValues: manaParam,
+    // Absent rather than `false`, which is what the backend defaults to: an off chip is not a
+    // filter, and a payload that said so would be lying about intent the way a blank `text`
+    // would. `true` widens — it adds the `{X}` rows to whatever the numerals matched.
+    manaX: manaX || undefined,
     finishes: finishParam,
     conditions: conditionParam,
     // Sent only when it is set — and `false`, "everything the sync did not touch", is
@@ -219,6 +232,10 @@ export function useCollection() {
     colorsParam ?? "",
     setsParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
+    // Its own segment, and load-bearing: X is a second axis over the same chips, so a key
+    // built from the numerals alone would serve "3, and also X" out of the pages cached for
+    // plain "3" — against local SQLite, instantly, with nothing on screen to notice.
+    manaX ? "x" : "",
     finishParam?.join(",") ?? "",
     conditionParam?.join(",") ?? "",
     // Three terms, not two: the flagged rows and the rows nothing flagged are two different
@@ -267,6 +284,15 @@ export function useCollection() {
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    /**
+     * Also match the rows whose printed cost contains `{X}`.
+     *
+     * **Additive, never exclusive** — OR'd with the numeral chips as they are OR'd with each
+     * other, so `3` and `X` together ask for "costs 3, or has an X" and a `{X}{B}{B}{B}`
+     * appears once. Counted with `manaValues` as one kind, and cleared by `resetAll`.
+     */
+    manaX,
+    toggleManaX: () => setManaX((on) => !on),
     finishes,
     toggleFinish: (finish: Finish) => setFinishes((picked) => toggleIn(picked, finish)),
     conditions,
@@ -316,6 +342,7 @@ export function useCollection() {
       colors,
       sets,
       manaValues,
+      manaX,
       finishes,
       conditions,
       needsReview,
@@ -328,6 +355,7 @@ export function useCollection() {
       setColors([]);
       setSets([]);
       setManaValues([]);
+      setManaX(false);
       setFinishes([]);
       setConditions([]);
       setNeedsReview(undefined);

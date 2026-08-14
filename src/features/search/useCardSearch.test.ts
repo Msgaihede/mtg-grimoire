@@ -28,7 +28,15 @@ describe("toggleIn", () => {
 });
 
 describe("activeFilterCount", () => {
-  const none = { text: "", format: "", colors: [], sets: [], manaValues: [], owned: undefined };
+  const none = {
+    text: "",
+    format: "",
+    colors: [],
+    sets: [],
+    manaValues: [],
+    manaX: false,
+    owned: undefined,
+  };
 
   it("is zero when nothing is filtered", () => {
     expect(activeFilterCount(none)).toBe(0);
@@ -52,6 +60,18 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...none, colors: ["W", "U", "B"] })).toBe(1);
     expect(activeFilterCount({ ...none, sets: ["lea", "roe"] })).toBe(1);
     expect(activeFilterCount({ ...none, text: "bolt", format: "modern", manaValues: [1] })).toBe(3);
+  });
+
+  /**
+   * X rides *inside* the mana-value group and is OR'd with the numerals, so it is the same
+   * kind of filter rather than a ninth one — "1 and X" is one thing Reset all clears, exactly
+   * as three colours are. It still has to be seen: an X-only search that counted zero would
+   * hide the Reset all that is the way out of it.
+   */
+  it("counts the X chip with the mana values it sits among", () => {
+    expect(activeFilterCount({ ...none, manaX: true })).toBe(1);
+    expect(activeFilterCount({ ...none, manaValues: [1], manaX: true })).toBe(1);
+    expect(activeFilterCount({ ...none, manaValues: [1], manaX: true, text: "bolt" })).toBe(2);
   });
 
   /** Whitespace is not a search. */
@@ -97,6 +117,7 @@ function wrapper({ children }: { children: ReactNode }) {
 const READY: FacetResponse = {
   colors: { W: 1, U: 1, B: 1, R: 1, G: 1, C: 1 },
   manaValues: { "0": 1 },
+  manaX: 1,
   formats: { modern: 1 },
   sets: { lea: 1 },
   owned: { owned: 1, missing: 0 },
@@ -162,6 +183,89 @@ describe("the corpus useCardSearch searches over", () => {
 
     await waitFor(() => expect(result.current.activeCount).toBe(0));
     expect(result.current.unplayable).toBe(true);
+  });
+});
+
+/**
+ * The X chip, whose whole risk is the query key.
+ *
+ * "Costs 3" and "costs 3, or has an X in its cost" are two different sets of cards, and this
+ * query is against local SQLite: a key that could not tell them apart would answer the second
+ * out of the first's cached pages *instantly*, with no spinner, no error and nothing on screen
+ * to notice. Every test below would pass against a hook that dropped the flag from the payload
+ * as well — except that they read the payload too.
+ */
+describe("the X mana chip", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("is off, absent from the payload, and not counted", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.manaX).toBe(false);
+    // Absent rather than `false`: an off chip is not a filter, and the backend's default is
+    // the value it wants — the rule `paperOnly` follows two fields above it.
+    expect(lastSearchRequest().manaX).toBeUndefined();
+    expect(lastFacetRequest().manaX).toBeUndefined();
+    expect(result.current.activeCount).toBe(0);
+    expect(result.current.unfiltered).toBe(true);
+  });
+
+  /**
+   * **The key, which is the load-bearing half.** A new request having gone out at all is the
+   * assertion — the payload below it would be right and unsent if the key had not moved, and
+   * the reader would be looking at the previous search's rows.
+   */
+  it("mints a new key rather than answering out of the numerals' cache", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleManaValue(3));
+    await waitFor(() => expect(lastSearchRequest().manaValues).toEqual([3]));
+    const asked = searchCards.mock.calls.length;
+    const key = result.current.searchKey;
+
+    act(() => result.current.toggleManaX());
+
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.searchKey).not.toBe(key);
+    expect(lastSearchRequest().manaX).toBe(true);
+    // **Additive**: the numeral it was pressed beside is still on the wire. `cmc` counts `{X}`
+    // as zero, so `{X}{B}{B}{B}` is a 3 *and* an X, and the two chips are OR'd rather than
+    // replacing one another.
+    expect(lastSearchRequest().manaValues).toEqual([3]);
+    // The counts describe the same search the page does, or the row would grey by numbers
+    // taken over a different set of printings.
+    await waitFor(() => expect(lastFacetRequest().manaX).toBe(true));
+  });
+
+  /** A filter, so Reset all reaches it — and it is counted with the numerals it sits among,
+   *  which is why one chip and both together read as one thing to clear. */
+  it("is cleared by Reset all, counted as part of the mana-value question", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const fresh = result.current.searchKey;
+
+    act(() => result.current.toggleManaX());
+    expect(result.current.activeCount).toBe(1);
+    expect(result.current.unfiltered).toBe(false);
+
+    // Still one: the numeral and X are the same question, and the badge counts kinds.
+    act(() => result.current.toggleManaValue(3));
+    expect(result.current.activeCount).toBe(1);
+
+    act(() => result.current.resetAll());
+
+    expect(result.current.manaX).toBe(false);
+    expect(result.current.activeCount).toBe(0);
+    // Back to the key the row opened on. Asserted rather than read off the next request,
+    // because the key *is* the search — a filter that survived the reset would show here as a
+    // search that is not the one this view starts in.
+    expect(result.current.searchKey).toBe(fresh);
   });
 });
 
@@ -234,6 +338,10 @@ describe("the facet request useCardSearch builds", () => {
     facetCards.mockResolvedValue({
       colors: {},
       manaValues: {},
+      // Zero rather than an absent key, because it is a number: the X chip is the one control
+      // that would grey on a cold answer if the hook ever handed one on, which is what makes
+      // this the sharpest fixture for the collapse being tested here.
+      manaX: 0,
       formats: {},
       sets: {},
       owned: { owned: 0, missing: 0 },

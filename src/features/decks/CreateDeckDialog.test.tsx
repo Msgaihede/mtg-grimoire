@@ -51,6 +51,7 @@ const MADE: DeckRow = {
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
+  separateXGroup: false,
   updatedAt: 1786266000,
 };
 

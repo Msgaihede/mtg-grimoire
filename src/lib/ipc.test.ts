@@ -80,6 +80,7 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue({
       colors: {},
       manaValues: {},
+      manaX: 0,
       formats: {},
       sets: {},
       owned: { owned: 0, missing: 0 },
