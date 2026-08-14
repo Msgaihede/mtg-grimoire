@@ -1,74 +1,58 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { CategoriesPanel } from "./CategoriesPanel";
+import { CategoriesDialog } from "./CategoriesDialog";
 
 /**
- * The piles and the labels of one deck — **driven end to end by `.storybook/fake/`.**
+ * The piles of one deck — **driven end to end by `.storybook/fake/`.**
  *
- * All eleven of this panel's commands are the fake's now (`deck_category_*`, `deck_tag_*` and
- * `deck_tag_suggestions`), so a rename here is a row changing in a table and a delete really
- * moves cards. `deck_get` comes with them, and only because one control needs it: "File cards by
- * what they do" reads a row's **type line** and its **card id**, so `useDeckMeta` is handed
- * cards rather than ids. `oracle_tags_for_printings` is the read it makes with those ids — one
- * call for the whole press, and the fake answers it like any other command.
+ * Every one of this dialog's commands is the fake's (`deck_category_*`), so a rename here is a
+ * row changing in a table and a delete really moves cards. `deck_get` comes with them, and only
+ * because one control needs it: "File cards by what they do" reads a row's **type line** and its
+ * **card id**, so `useDeckMeta` is handed cards rather than ids. `oracle_tags_for_printings` is
+ * the read it makes with those ids — one call for the whole press, and the fake answers it like
+ * any other command.
+ *
+ * The deck's *labels* are `Decks/TagsDialog`, which is the other half of the drawer these two
+ * were split out of. Nothing is shared between them but a `useDeckMeta` and `metaRows.tsx`.
  *
  * **Two seeded decks are two shapes of deck**, and which one a story opens is the story's whole
  * setup:
  *
  * * **Deck 4, `Rhystic Testbed`** — the shape a deck the app makes *today* has: the four
- *   predefined piles, then three the reader named, one of which they switched off. Two labels,
- *   one of them worn by a card. This is the panel with something in it.
- * * **Deck 2, `Kenrith Two-Drops`** — the five rows schema v8's migration leaves an older deck,
- *   and no tags at all. This is the panel on the day it was opened for the first time.
+ *   predefined piles, then three the reader named, one of which they switched off. This is the
+ *   dialog with something in it.
+ * * **Deck 2, `Kenrith Two-Drops`** — the five rows schema v8's migration leaves an older deck.
+ *   This is the dialog on the day it was opened for the first time.
  */
 const meta = {
-  title: "Decks/CategoriesPanel",
-  component: CategoriesPanel,
+  title: "Decks/CategoriesDialog",
+  component: CategoriesDialog,
   args: { deckId: 4, variant: "live", open: true, onDismiss: fn(), onClose: fn() },
-  decorators: [
-    (Story) => (
-      // The drawer is `position: fixed`, so it covers whatever it is rendered into — including
-      // the docs page. A `relative` frame with its own height is what a docs page needs in
-      // order to show ten of these at once and still scroll.
-      <div className="relative h-[42rem] overflow-hidden border border-border bg-surface">
-        <Story />
-      </div>
-    ),
-  ],
   parameters: { layout: "fullscreen" },
-} satisfies Meta<typeof CategoriesPanel>;
+} satisfies Meta<typeof CategoriesDialog>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A deck a few evenings into being built: three piles the reader made, the four every deck
- *  starts with, and two labels — one of them on a card, one waiting to be used. */
+/** A deck a few evenings into being built: three piles the reader made and the four every deck
+ *  starts with. */
 export const Default: Story = {
   play: async ({ canvas }) => {
     await expect(await canvas.findByText("Ramp")).toBeVisible();
     await expect(canvas.getByText("Card advantage")).toBeVisible();
-    await expect(canvas.getByText("Cut candidate")).toBeVisible();
   },
 };
 
-/**
- * A deck nobody has filed yet — the migration's five piles and not one tag.
- *
- * The empty state is the one that has to invite: "No tags yet." over a field, and the names
- * other decks have used right under it.
- */
+/** A deck nobody has filed yet — the migration's five piles, and the loose one they all sit
+ *  beside. */
 export const FirstOpen: Story = {
   args: { deckId: 2 },
   play: async ({ canvas }) => {
     await expect(await canvas.findByText("Main deck")).toBeVisible();
-    await expect(canvas.getByText("No tags yet.")).toBeVisible();
-    // The palette is global, so a deck with no tags of its own is still offered every name the
-    // reader has typed into another one.
-    await expect(canvas.getByRole("button", { name: "Add tag Cut candidate" })).toBeVisible();
   },
 };
 
-/** Closed. The contract is `null` — no drawer, no scrim, and not one query fired. */
+/** Closed. The contract is `null` — no panel, no scrim, and not one query fired. */
 export const Closed: Story = {
   args: { open: false },
   play: async ({ canvasElement }) => {
@@ -149,13 +133,13 @@ export const ReorderedFromTheKeyboard: Story = {
 };
 
 /**
- * The one destructive control on the drawer, open on its safe answer.
+ * The one destructive control on this dialog, open on its safe answer.
  *
  * `deck_category_delete` takes `moveToCategoryId`, and `null` is the half that takes the cards
- * with the category by cascade — so the dialog defaults to a move, spells the outcome out in a
+ * with the category by cascade — so the question defaults to a move, spells the outcome out in a
  * sentence, and changes the confirm button's own words with the answer.
  *
- * **The numbers here are the bug this dialog was fixed for, drawn on the deck that had it.**
+ * **The numbers here are the bug this question was fixed for, drawn on the deck that had it.**
  * Deck 4's "Ramp" holds **2** copies in the live list and **5** in the theory list, and the row
  * above the dialog says 2 because 2 is what the reader is editing. The delete takes all **7** —
  * `deck_cards.category_id` is `ON DELETE CASCADE` and a category is not per-variant — so the
@@ -178,7 +162,7 @@ export const DeletingACategory: Story = {
   },
 };
 
-/** The same dialog after the reader has chosen the other outcome: red, and saying so — over the
+/** The same question after the reader has chosen the other outcome: red, and saying so — over the
  *  same seven copies, which is the arm where undercounting would have cost the most. */
 export const DeletingACategoryAndItsCards: Story = {
   play: async ({ canvas }) => {
@@ -226,45 +210,6 @@ export const AutoCategorised: Story = {
   },
 };
 
-/** A tag renamed and recoloured in one press — `deck_tag_update` has no patch shape, so the
- *  field sends both whichever one the reader touched. */
-export const RenamingATag: Story = {
-  play: async ({ canvas }) => {
-    const tag = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;
-    await userEvent.click(within(tag).getByRole("button", { name: "Rename" }));
-
-    const field = await within(tag).findByLabelText("Rename Cut candidate");
-    await userEvent.clear(field);
-    await userEvent.type(field, "On the block");
-    await userEvent.click(within(tag).getByRole("button", { name: "Slate" }));
-    await userEvent.click(within(tag).getByRole("button", { name: "Save" }));
-
-    await waitFor(async () => {
-      await expect(canvas.getByText("On the block")).toBeInTheDocument();
-    });
-  },
-};
-
-/**
- * A name typed into another deck, offered in this one.
- *
- * The palette is a property of the app's whole history rather than of the deck that happens to be
- * open — `deck_tag_suggestions` takes no deck id at all. Picking one makes a tag *of this deck*;
- * a suggestion this deck already has is not an offer, which is why "Cut candidate" is absent and
- * "Budget swap" is not.
- */
-export const TagFromASuggestion: Story = {
-  play: async ({ canvas }) => {
-    await canvas.findByText("Cut candidate");
-    await expect(canvas.queryByRole("button", { name: "Add tag Cut candidate" })).toBeNull();
-
-    await userEvent.click(canvas.getByRole("button", { name: "Add tag Budget swap" }));
-    await waitFor(async () => {
-      await expect(canvas.queryByRole("button", { name: "Add tag Budget swap" })).toBeNull();
-    });
-  },
-};
-
 /** A refusal, in the backend's own words: the grain is `(deckId, name)`, so a second "Ramp" is
  *  not a second pile. */
 export const RefusedByName: Story = {
@@ -282,12 +227,13 @@ export const RefusedByName: Story = {
 };
 
 /**
- * The categories and the tags refused, in the backend's own words.
+ * The categories refused, in the backend's own words.
  *
- * `deckMeta` is the fault for the reads a deck screen makes *beside* the deck. Two lists fail
- * independently here and the panel says so twice rather than blanking: which pile a card is in
- * and which label it wears are different facts, and a screen that reported one failure for both
- * would be claiming they came from one read.
+ * `deckMeta` is the fault for the reads a deck screen makes *beside* the deck, and it refuses
+ * the category list and the tag list **independently**. This dialog says so about its own read
+ * and only its own — which is what splitting the drawer bought: which pile a card is in and
+ * which label it wears are different facts, and a screen reporting one failure for both would be
+ * claiming they came from one read. `Decks/TagsDialog`'s `Refused` is the other sentence.
  */
 export const Refused: Story = {
   parameters: { fake: { fault: "deckMeta" } },
@@ -295,6 +241,5 @@ export const Refused: Story = {
     await expect(
       await canvas.findByText(/the deck's categories could not be read/),
     ).toBeInTheDocument();
-    await expect(canvas.getByText(/the deck's tags could not be read/)).toBeInTheDocument();
   },
 };
