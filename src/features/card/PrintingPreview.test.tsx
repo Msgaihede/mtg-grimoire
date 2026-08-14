@@ -133,8 +133,15 @@ afterEach(() => {
  * a regression here is a regression against something that was true on screen.
  */
 describe("previewBox", () => {
-  /** The pane at 1280 × 800: 710px of it, below the ribbon. */
-  const PANE = { top: 70, bottom: 780, left: 876, right: 1260, width: 384 };
+  /**
+   * The pane at 1280 × 800: 702px of it, below the ribbon.
+   *
+   * `top` is the only figure here that is not the 2026-08-06 measurement — the shell was
+   * enlarged on 2026-08-14 and the ribbon went 48 → 56px, so the pane starts 8px lower
+   * (56 + the 2px mana line + `main`'s 20px padding). Nothing this file asserts depends on
+   * the value; `top` is a floor two of the tests check the box stays inside.
+   */
+  const PANE = { top: 78, bottom: 780, left: 876, right: 1260, width: 384 };
   /** A printings row halfway down it, 335px of content between the pane's padding. */
   const ROW = { top: 409, bottom: 441, left: 893, right: 1228, width: 335 };
 

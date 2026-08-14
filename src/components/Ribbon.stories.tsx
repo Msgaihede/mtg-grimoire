@@ -62,7 +62,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The global ribbon: one 48px row owning every action that is not about the view " +
+          "The global ribbon: one 56px row owning every action that is not about the view " +
           "below it. Refresh and the sync status used to live in a per-view header, which made " +
           "them look like properties of whatever was on screen; they are properties of the " +
           "*app*, so they live in one place that never changes.\n\n" +
@@ -94,7 +94,7 @@ type Story = StoryObj<typeof meta>;
  * Nothing running: a wordmark, the view's name, what is in the database, and Refresh.
  *
  * `MTG` is the mark rather than the product name — the window title bar already says that in
- * full, and 48px of vertical space is not where a five-word name earns its keep. It is dim
+ * full, and 56px of vertical space is not where a five-word name earns its keep. It is dim
  * rather than gold, because gold means "you can act on this, or this is where you are", and a
  * wordmark is neither.
  *

@@ -18,6 +18,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   invent their own. Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages,
   never a CDN.
 - Global actions (Refresh, sync status, future settings) live in the top ribbon, not in views.
+- **The shell's scale is one step above the content's, and the sidebar's _width_ is not part of
+  it** (2026-08-14). The ribbon is **56px** (was 48), a nav entry **44px** (was 36), the view
+  title and app mark **20px** Cinzel (was 18), nav labels and both ribbon buttons **16px** (was
+  14), the status line **14px** (was 12), and every icon in the chrome **20px** (was 16). Two
+  things deliberately did not move. **The mana line stays 2px** — it is the signature, and a
+  signature that grows with its frame is a border. **The sidebar stays `w-52` (208px)**, because
+  `main` is what a wider column takes the width out of and `DeckEditor` is measured against
+  `main` to the pixel: at 1280×800 with a card pane docked the desk row is 602px, the docked
+  search panel plus its `gap-4` want 400, and `DECK_FLOOR` (192) leaves **10px** of headroom —
+  so anything past 208 rails that panel at the app's own default window, the exact failure
+  `DECK_FLOOR`'s 224 → 208 → 192 drops exist to prevent. Widening the sidebar is a change to the
+  deck editor's arithmetic first. The 8px the ribbon gained comes off the editor's height
+  instead, which only costs it 8px more of a scroll it already had.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats

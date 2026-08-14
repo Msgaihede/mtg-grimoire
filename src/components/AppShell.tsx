@@ -151,9 +151,19 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
+      {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
+          bigger in every direction except the obvious one** (2026-08-14). The entries grew —
+          44px rows, 16px labels, 20px icons — and the column they sit in did not, because
+          `main` is what a wider sidebar takes the width out of and the deck editor is measured
+          against it to the pixel: at 1280×800 with a card pane docked the desk row is 602px,
+          the docked search panel and its gap want 400, and `DECK_FLOOR` (192) leaves **10px**
+          of headroom. Anything wider than 208 rails that panel at the app's own default window
+          size, which is precisely the failure `DECK_FLOOR`'s two drops (224 → 208 → 192) exist
+          to prevent. Widening this column is therefore a change to `DeckEditor`'s arithmetic
+          first and a change to the sidebar second. */}
       <nav
         aria-label="Views"
-        className="flex w-52 shrink-0 flex-col gap-1 border-r border-border bg-surface p-3"
+        className="flex w-52 shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3"
       >
         {NAV.map(({ id, label, Icon }) => (
           <NavItem
@@ -214,9 +224,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             <motion.div {...statusLineMotion} className="shrink-0 overflow-hidden">
               <div
                 role="alert"
-                className="flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-sm text-destructive"
+                className="flex items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-base text-destructive"
               >
-                <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
                 <span className="min-w-0">{error}</span>
               </div>
             </motion.div>
@@ -232,9 +242,14 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
 /**
  * One destination in the sidebar — and, for two of them, one place to let a card go.
  *
- * The entry is the whole target: a nav item is 36px tall and 172px wide, and asking a reader
+ * The entry is the whole target: a nav item is 44px tall and 184px wide, and asking a reader
  * to hit something smaller than the word they are aiming at while holding a card is asking
  * them to miss.
+ *
+ * It was 36px, and the eight it gained is the sidebar's whole share of the shell's 2026-08-14
+ * enlargement — the row grew, the column did not (see the `<nav>` above). The label is 16px
+ * against the ribbon's 20px title, which keeps the two rungs of app › view distinguishable by
+ * size rather than only by face.
  */
 function NavItem({
   label,
@@ -319,20 +334,22 @@ function NavItem({
         // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
         title={inert ? (drop.inertReason ?? undefined) : undefined}
         className={cn(
-          "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
+          "relative flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base",
           "transition-colors duration-150 motion-reduce:transition-none",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
           // The gold indicator: a hairline against the item, not a filled pill. The
           // sidebar is chrome, and chrome does not get to be the loudest thing on a
-          // screen that is about to be full of card art.
+          // screen that is about to be full of card art. It stayed 2px when the row grew:
+          // a hairline is a hairline at any row height, and a 3px one on a 44px row is the
+          // filled marker this deliberately is not.
           active
-            ? "bg-bg text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+            ? "bg-bg text-accent before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
             : "text-dim hover:bg-bg/60 hover:text-text",
           eligible && DROP_RING,
           over && DROP_OVER,
         )}
       >
-        <Icon className="size-4 shrink-0" aria-hidden="true" />
+        <Icon className="size-5 shrink-0" aria-hidden="true" />
         {label}
       </button>
       {drop && (
@@ -345,7 +362,7 @@ function NavItem({
         // Settings 32px down, which is a card the reader just dropped saying where it went.
         <p
           role="status"
-          className={drop.report ? "px-2.5 pt-1 text-[0.7rem] leading-tight text-dim" : "sr-only"}
+          className={drop.report ? "px-3 pt-1 text-xs leading-tight text-dim" : "sr-only"}
         >
           {drop.report}
         </p>

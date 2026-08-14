@@ -319,9 +319,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
   would put four charts between a card and the one drop that takes it out;
   **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
-  to **847px** in the **710px** a 1280×800 window leaves, so the deck holds a `min-h-96` floor
-  (**384px** = one whole stack card and its group heading) and the band's last ~137px is one
-  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**612px**);
+  to **847px** in the **702px** a 1280×800 window leaves (710 when it was measured, less the 8px
+  the ribbon gained when the shell was enlarged on 2026-08-14), so the deck holds a `min-h-96` floor
+  (**384px** = one whole stack card and its group heading) and the band's last ~145px is one
+  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**604px**);
   **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the
   row's arithmetic did not count — the same 16px correction, for the same reason, as the drop from
   224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
