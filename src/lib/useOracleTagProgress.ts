@@ -91,10 +91,25 @@ export function useOracleTagProgress(): OracleTagRefresh {
    * re-read after every one. A rejection is not guarded against because the command does not
    * have one — `oracle_tags_status` answers a database with no meta row rather than refusing,
    * so `data` being `undefined` here means the read has not landed, never that it failed.
+   *
+   * **It polls while it believes a refresh is running, and that is not belt-and-braces — it is
+   * the only thing that ends the line in the ordinary case.** Measured in the shipped window
+   * 2026-08-14 (`tauri dev`, debug): the ribbon read *"Updating card tags"* indefinitely while
+   * a direct `oracle_tags_status()` answered `refreshing: false` with the ingest long finished.
+   * The invalidation below never ran, because the terminal event was emitted **before this
+   * window registered its listener** — exactly the case this hook's own doc calls the ordinary
+   * one. Deriving `refreshing` from a cached status that only a *missed* event invalidates is
+   * circular, and the activity row never clears.
+   *
+   * 1.5 s against a local SQLite read of one row, and only while the flag is up, so an idle
+   * window polls nothing at all.
    */
   const status =
-    useQuery({ queryKey: ORACLE_TAGS_STATUS_KEY, queryFn: () => ipc.oracleTagsStatus() }).data ??
-    null;
+    useQuery({
+      queryKey: ORACLE_TAGS_STATUS_KEY,
+      queryFn: () => ipc.oracleTagsStatus(),
+      refetchInterval: (query) => (query.state.data?.refreshing === true ? 1500 : false),
+    }).data ?? null;
 
   useEffect(() => {
     let cancelled = false;

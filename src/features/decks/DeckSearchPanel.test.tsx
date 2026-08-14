@@ -256,7 +256,7 @@ describe("DeckSearchPanel", () => {
       // Not a category, first, and the editor's default — where a card is filed by its own type
       // line (`AUTO_CATEGORY`). This panel is driven with an explicit `targetCategoryId` here,
       // which is why the value above is still `MAIN`.
-      "Auto (by card type)",
+      "Auto (by what it does)",
       "Main deck",
       "Sideboard",
       "Maybeboard",
@@ -271,7 +271,7 @@ describe("DeckSearchPanel", () => {
     seeded.unmount();
 
     panel({ categories: [MAIN, category({ id: 9, name: "Ramp", sortOrder: 2 })] });
-    expect(categoryOptions()).toEqual(["Auto (by card type)", "Main deck", "Ramp"]);
+    expect(categoryOptions()).toEqual(["Auto (by what it does)", "Main deck", "Ramp"]);
   });
 
   /**

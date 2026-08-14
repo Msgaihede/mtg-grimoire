@@ -258,7 +258,7 @@ export function QuickAdd({
         type="text"
         role="combobox"
         // Named for where the card will land, and under `Auto` that is per card — so the name
-        // says only what it can promise. "Quick add a card to Auto (by card type)" would be a
+        // says only what it can promise. "Quick add a card to Auto (by what it does)" would be a
         // control named after a setting rather than after what pressing it does.
         aria-label={targetName === null ? "Quick add a card" : `Quick add a card to ${targetName}`}
         aria-expanded={listOpen}

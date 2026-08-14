@@ -113,6 +113,45 @@ it("reports a refresh that was already running when it mounted", async () => {
   expect(result.current.progress).toBeNull();
 });
 
+/**
+ * **The stuck ribbon, found by driving the shipped window on 2026-08-14** (`tauri dev`, debug):
+ * it read *"Updating card tags"* indefinitely while a direct `oracle_tags_status()` answered
+ * `refreshing: false` with the ingest long finished.
+ *
+ * The two facts above compose into a trap. The status read is what reports a refresh that began
+ * before this window had a listener — the ordinary case — and the *only* thing that took the
+ * flag back down was a terminal event invalidating the cached status. So the very run that needs
+ * the status read is the run whose terminal event is most likely to have been missed, and the
+ * flag then stays up for the life of the window. Circular, and it took a live pass to see:
+ * every unit test delivered the event it was asserting about.
+ *
+ * The fix is that the query polls itself while it believes a refresh is running, so a missed
+ * event self-heals. **This test never emits an event at all** — that is the whole point of it.
+ */
+it("takes the line down when the terminal event never arrives", async () => {
+  vi.useFakeTimers();
+  try {
+    oracleTagsStatus.mockResolvedValue({ ...INGESTED, refreshing: true });
+    const { result } = renderHook(() => useOracleTagProgress(), { wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.refreshing).toBe(true);
+
+    // The refresh ends in the backend. Nothing tells this window: no `done`, no `error`.
+    oracleTagsStatus.mockResolvedValue(INGESTED);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(result.current.refreshing).toBe(false);
+    // And it clears without ever having had an event to clear from.
+    expect(result.current.progress).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 /** …and the other half: a refresh that starts *after* the status read is carried by the event,
  *  because nothing would re-read the status on its own. */
 it("reports a refresh that starts after the status read, from the event alone", async () => {

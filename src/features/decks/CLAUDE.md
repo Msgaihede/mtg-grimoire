@@ -389,7 +389,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **The field is named for where the add lands, and a row is named by its own content.** The
   label is `Quick add a card to <pile>`, or bare `Quick add a card` under `AUTO_CATEGORY`, where
   there is no one answer because the pile is per card, so the name says only what it can promise
-  — "Quick add a card to Auto (by card type)" would name a *setting* rather than what pressing it
+  — "Quick add a card to Auto (by what it does)" would name a *setting* rather than what pressing it
   does. `DeckEditor.test.tsx` addresses the field by both names, so a reworded label is a suite
   failure. A row carries **no `aria-label`**: its name is the card's name, the cost's `sr-only`
   tokens and the set code, and a label carrying only the card's name would make the row

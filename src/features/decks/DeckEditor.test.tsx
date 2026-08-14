@@ -1081,7 +1081,7 @@ describe("DeckEditor", () => {
 
     const select = (await screen.findByLabelText("Add to")) as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual([
-      "Auto (by card type)",
+      "Auto (by what it does)",
       "Main deck",
       "Sideboard",
       // Modern requires no commander, and the group and the option are here anyway: a category
