@@ -1,5 +1,5 @@
 import { StrictMode, useState } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -118,6 +118,14 @@ const getMarketplace = vi.fn();
  */
 const marketplaceFeedStatus = vi.fn();
 /**
+ * The grouping preference, which is an `app_meta` row rather than component state — the pane's
+ * body is keyed on the card, so a reader clicking down the printings list remounts it on every
+ * row and the chosen order has to outlive that (`usePrintingGroupBy` is where that is argued,
+ * and where the read's and the write's failure modes are pinned).
+ */
+const printingGroupBy = vi.fn();
+const setPrintingGroupBy = vi.fn();
+/**
  * The two deck commands the pane can reach, and it reaches them only when the card was opened
  * from a deck row: the swap its printings rows offer, and the deck read that comes with the
  * hook the swap is mounted from (`useSwapFromPane` takes the whole of `useDeck`, whose query
@@ -132,6 +140,8 @@ vi.mock("@/lib/ipc", async (original) => ({
     cardPrintings: (o: string, marketplace: MarketplaceId) => cardPrintings(o, marketplace),
     getMarketplace: () => getMarketplace(),
     marketplaceFeedStatus: () => marketplaceFeedStatus(),
+    printingGroupBy: () => printingGroupBy(),
+    setPrintingGroupBy: (mode: string) => setPrintingGroupBy(mode),
     deckGet: (id: number, variant: DeckVariant) => deckGet(id, variant),
     deckSwapPrinting: (
       deckId: number,
@@ -205,6 +215,9 @@ beforeEach(() => {
   // the two feed ones is about.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  // Nobody has picked a grouping either, so the list opens where it always did — by artist.
+  printingGroupBy.mockReset().mockResolvedValue("artist");
+  setPrintingGroupBy.mockReset().mockResolvedValue(undefined);
   // A deck the read can find: a `deck_get` that answers nothing means the deck was deleted,
   // and the pane stops offering swaps it could only have refused (see the `gone` test).
   deckGet.mockReset().mockResolvedValue(DECK_DETAIL);
@@ -441,13 +454,20 @@ describe("CardDetailPane", () => {
     expect(screen.queryByText("en")).not.toBeInTheDocument();
   });
 
-  it("groups printings that share an artwork, and counts both", async () => {
+  /**
+   * The default grouping, and the behaviour change under it: the list is cut by **artist**, so
+   * two artworks by one hand are one group where the illustration grouping made two — two
+   * identically headed groups, which reads as a bug in the pane whatever the reason for it. The
+   * fixture is that exact case, and the count line says `artists` because that is what the
+   * reader is looking at.
+   */
+  it("groups printings by artist, merging two artworks by one hand", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(
       page([
         printing({ id: "a", illustrationId: "art-a", artist: "Christopher Rush" }),
-        printing({ id: "b", illustrationId: "art-a", artist: "Christopher Rush" }),
-        printing({ id: "c", illustrationId: "art-b", artist: "Rebecca Guay" }),
+        printing({ id: "b", illustrationId: "art-b", artist: "Christopher Rush" }),
+        printing({ id: "c", illustrationId: "art-c", artist: "Rebecca Guay" }),
       ]),
     );
 
@@ -455,13 +475,12 @@ describe("CardDetailPane", () => {
 
     // Awaited on the caption, not on the section: the section is rendered while the list
     // is still loading, so finding it proves nothing about the rows inside it yet.
-    expect(await screen.findByText(/3 printings · 2 artworks/)).toBeInTheDocument();
+    expect(await screen.findByText(/3 printings · 2 artists/)).toBeInTheDocument();
     const list = within(screen.getByRole("region", { name: /printings/i }));
     const groups = list.getAllByRole("list");
     expect(groups).toHaveLength(2);
+    // Both of Christopher Rush's, under his one heading — and alphabetically first.
     expect(within(groups[0]).getAllByRole("listitem")).toHaveLength(2);
-    // The artwork's identity is its illustrator — "Artwork 1 / Artwork 2" would be a
-    // number the reader cannot check against anything.
     expect(list.getByText("Christopher Rush")).toBeInTheDocument();
     expect(list.getByText("Rebecca Guay")).toBeInTheDocument();
   });
@@ -694,10 +713,180 @@ describe("CardDetailPane", () => {
 });
 
 /**
- * A printings row is first of all a way to *look at* that printing: clicking it re-anchors
- * the pane onto the row's card. Navigation inside the pane, so the deck row the card was
- * opened from — and the swap offers it carries — survives the trip (`store.test.ts` pins the
- * write itself; these pin the rows).
+ * The grouping control: one list of rows, and the four ways the reader can ask to read it.
+ *
+ * The orderings themselves are `printings.ts`'s and are pinned there over fixtures this pane
+ * would need forty rows to make. What these are for is the half only the pane can be wrong
+ * about: that the control is wired to the list at all, that a group's heading is drawn from the
+ * group rather than from the first row in it, and that the mode with **no** headings renders as
+ * a flat list rather than as a group whose name failed to load.
+ */
+describe("grouping the printings list", () => {
+  /**
+   * Three printings that disagree about everything the modes cut by: two artists, three dates,
+   * three sets, three prices — and cheapest-last in the order Rust sends them, so a price sort
+   * that did nothing would be visible.
+   *
+   * No September, deliberately: `en-GB` abbreviates it `Sept` in current CLDR and `Sep` in
+   * older, and a heading is not the place to find that out.
+   */
+  const GROUPED = [
+    printing({ releasedAt: "2011-10-04" }),
+    printing({
+      id: "p2",
+      setCode: "m10",
+      setName: "Magic 2010",
+      collectorNumber: "146",
+      releasedAt: "2009-07-17",
+      artist: "Christopher Rush",
+      illustrationId: "art-b",
+      finishes: '["nonfoil"]',
+      finishPrices: { nonfoil: 12, foil: null, etched: null },
+    }),
+    printing({
+      id: "p3",
+      setCode: "2ed",
+      setName: "Unlimited Edition",
+      collectorNumber: "162",
+      releasedAt: "1993-12-01",
+      artist: "Christopher Rush",
+      illustrationId: "art-c",
+      finishes: '["nonfoil"]',
+      finishPrices: { nonfoil: 0.25, foil: null, etched: null },
+    }),
+  ];
+
+  /** Named for a screen reader alone — the pane has no width for a visible label. */
+  const groupBy = () => screen.getByRole("combobox", { name: "Group printings by" });
+
+  const list = () => within(screen.getByRole("region", { name: /printings/i }));
+
+  /**
+   * Every group's heading, in the order they are drawn — and `null` for a group that has none,
+   * which is the whole of what `price` mode looks like from here.
+   */
+  const headings = () =>
+    list()
+      .getAllByRole("list")
+      .map((ul) => ul.previousElementSibling?.firstElementChild?.textContent ?? null);
+
+  /** Every row, in the order they are drawn. */
+  const rows = () => list().getAllByRole("listitem").map((li) => li.textContent);
+
+  async function openList() {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(GROUPED));
+    wrap("p1");
+    await screen.findByText(/3 printings/);
+  }
+
+  it("re-orders the list and re-words the count when another grouping is picked", async () => {
+    await openList();
+    expect(headings()).toEqual(["Christopher Rush", "Nils Hamm"]);
+
+    await userEvent.selectOptions(groupBy(), "released");
+
+    expect(await screen.findByText(/3 printings · 3 release dates/)).toBeInTheDocument();
+    expect(headings()).toEqual(["4 Oct 2011", "17 Jul 2009", "1 Dec 1993"]);
+    // And it is remembered: the pane's body is keyed on the card, so a preference this control
+    // did not write down would be gone by the next row the reader clicked.
+    expect(setPrintingGroupBy).toHaveBeenCalledWith("released");
+  });
+
+  /**
+   * `price` is the mode that makes no groups — a cheapest-first list has nothing to head its
+   * runs with that is not a number already printed on the row.
+   */
+  it("draws price as one list with no headings at all, cheapest first", async () => {
+    await openList();
+
+    await userEvent.selectOptions(groupBy(), "price");
+
+    // The second half of the count line is dropped whole rather than reworded: there is one
+    // group here and it has no heading, so "1 price" would be counting something invisible.
+    expect(await screen.findByText("3 printings")).toBeInTheDocument();
+    expect(headings()).toEqual([null]);
+    const order = rows();
+    expect(order[0]).toContain("2ED · 162");
+    expect(order[1]).toContain("ISD · 51");
+    expect(order[2]).toContain("M10 · 146");
+  });
+});
+
+/**
+ * **What this printing looks like shiny** — a view, and nothing more.
+ *
+ * There is no foil photograph to fetch: Scryfall publishes one image per printing and it is the
+ * plain one, so what the toggle turns on is this app's own overlay. It is offered because a
+ * reader choosing between forty printings wants to see it, and it says nothing whatever about
+ * which finish they own — that question belongs to a collection entry's own `finish`.
+ */
+describe("the foil view", () => {
+  it("offers a printing sold in both finishes as the shiny one, and says which it is showing", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil","etched"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+
+    wrap("p1");
+
+    // Foil over etched where a printing has both: it is the far commoner of the two and the one
+    // a reader means by "what does it look like shiny".
+    const toggle = await screen.findByRole("button", { name: "View as foil" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(toggle);
+
+    // The visible words **are** the accessible name here, so they move together — a name that
+    // no longer contains its label is a control voice control can no longer press (WCAG 2.5.3).
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "View as nonfoil" }));
+
+    expect(screen.getByRole("button", { name: "View as foil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("names the etched view where etched is the only shiny finish there is", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","etched"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+
+    wrap("p1");
+
+    expect(await screen.findByRole("button", { name: "View as etched" })).toBeInTheDocument();
+  });
+
+  /**
+   * Both exclusions, and neither is an oversight: a **nonfoil-only** printing has nothing to
+   * show, and a **foil-only** one already wears the treatment permanently — 12 366 printings
+   * exist in no other finish, and a toggle that turned it off would un-say a fact about the
+   * object rather than offering a view of it.
+   */
+  it("offers no foil view where there is nothing to switch between", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+
+    const { unmount } = wrap("p1");
+    await screen.findByAltText(/Delver of Secrets/);
+    expect(screen.queryByRole("button", { name: /^View as/ })).not.toBeInTheDocument();
+    unmount();
+
+    cardDetail.mockResolvedValue(card({ finishes: '["foil"]' }));
+    wrap("p1");
+
+    await screen.findByAltText(/Delver of Secrets/);
+    expect(screen.queryByRole("button", { name: /^View as/ })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A printings row is first of all a way to *look at* that printing: clicking it re-anchors the
+ * pane onto the row's card. Navigation inside the pane, and what a row means everywhere the pane
+ * was **not** opened from a deck — where the same press rewrites the deck slot instead, which is
+ * the describe below (`store.test.ts` pins the write itself; these pin the rows).
  */
 describe("browsing the printings list", () => {
   const PRINTINGS = [printing(), printing({ id: "p2", setCode: "m10", collectorNumber: "146" })];
@@ -725,16 +914,32 @@ describe("browsing the printings list", () => {
     expect(screen.queryByRole("button", { name: /^Show ISD/ })).not.toBeInTheDocument();
   });
 
-  it("keeps the deck row while the reader browses", async () => {
+  /**
+   * **A deck that has been deleted turns the list back into a list.**
+   *
+   * In a deck context a row's click *is* the swap, so this is the one path on which a pane that
+   * was opened from a deck row browses at all — and it is a real one: another view can delete
+   * the deck while the pane is open, and a press against it could only ever be refused. The
+   * offer is withdrawn before it is made (`deckGone` is the read the editor is already doing),
+   * the deck stops claiming a printing, and what is left is the list every other pane has.
+   */
+  it("browses again when the deck behind the pane has been deleted", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(PRINTINGS));
+    // The read succeeds and answers nothing, which is what a deleted deck looks like. Loading
+    // is not gone, so the row is an offer until this lands.
+    deckGet.mockResolvedValue(null);
     useAppStore.getState().openCardFromDeck(MAIN);
 
     wrap("p1");
     await userEvent.click(await screen.findByRole("button", { name: "Show M10 · 146" }));
 
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
     expect(useAppStore.getState().selectedCardId).toBe("p2");
+    // The context itself is untouched — this is still the pane that was opened from a deck row,
+    // and it is only the offer that is gone.
     expect(useAppStore.getState().paneDeckContext).toEqual(MAIN);
+    expect(screen.queryByText("In deck")).not.toBeInTheDocument();
   });
 
   /** The row's own controls keep their clicks to themselves: a press on the quick-add is not
@@ -756,10 +961,12 @@ describe("browsing the printings list", () => {
 
 /**
  * "Use this printing" — the printings list read as a way to *change* the deck rather than only
- * to look at it (spec §2).
+ * to look at it (spec §2), where since `DeckLine`'s deletion **the row itself is the press**.
  *
  * The affordance exists only when the card was opened from a deck row, because only then is
- * there a slot to rewrite. Everywhere else the same list is what it always was.
+ * there a slot to rewrite. Everywhere else the same list is what it always was — and what it
+ * costs, stated where the tests can see it: in a deck context there is no longer any way to
+ * *look* at a printing in the pane without committing to it, only to hover it.
  */
 describe("the printings list, opened from a deck row", () => {
   const SWAPPABLE = [printing(), printing({ id: "p2", setCode: "m10", collectorNumber: "146" })];
@@ -790,7 +997,7 @@ describe("the printings list, opened from a deck row", () => {
 
     expect(await screen.findByText("ISD · 51")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /use this printing/i })).not.toBeInTheDocument();
-    expect(screen.queryByText(/this deck uses this printing/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("In deck")).not.toBeInTheDocument();
     // And no deck is read for a pane that has no deck behind it.
     expect(deckGet).not.toHaveBeenCalled();
   });
@@ -798,7 +1005,13 @@ describe("the printings list, opened from a deck row", () => {
   /**
    * With a row behind it, every printing offers itself — except the one the deck already holds,
    * which says so instead. Two states in one column down the list, so the answer to "which one
-   * is in my deck" is read rather than deduced from which row has no button.
+   * is in my deck" is read rather than deduced from which row has no offer.
+   *
+   * The mark is the badge that replaced `DeckLine`'s sentence, and it is **text rather than
+   * colour**: the row's other mark is the gold hairline for the printing the pane is showing,
+   * which is a different fact entirely, and a second coloured edge would have collapsed the two.
+   * The offer is the row's own name button, whose accessible name is where a reader who cannot
+   * see the row finds out that pressing it rewrites a deck.
    */
   it("marks the printing the deck holds and offers every other one", async () => {
     cardDetail.mockResolvedValue(detail);
@@ -807,11 +1020,28 @@ describe("the printings list, opened from a deck row", () => {
 
     wrap("p1");
 
-    expect(await screen.findByText("This deck uses this printing")).toBeInTheDocument();
+    expect(await screen.findByText("In deck")).toBeInTheDocument();
     // On the deck's own row, and on no other.
-    expect(rowOf(screen.getByText("This deck uses this printing"))).toHaveTextContent("ISD · 51");
+    expect(rowOf(screen.getByText("In deck"))).toHaveTextContent("ISD · 51");
     expect(screen.getAllByRole("button", { name: /^Use this printing/ })).toHaveLength(1);
     expect(rowOf(useIt())).toHaveTextContent("M10 · 146");
+  });
+
+  /**
+   * And the row it marks is not an offer: pressing it would be a swap of the printing onto
+   * itself, which is a write with nothing to do and a pane already showing what it would land
+   * on. It is not a trip either — that row *is* where the reader is.
+   */
+  it("does nothing when the row the deck already holds is pressed", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    fromDeckRow();
+
+    wrap("p1");
+    await userEvent.click(rowOf(await screen.findByText("In deck")));
+
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
   });
 
   /**
@@ -862,32 +1092,42 @@ describe("the printings list, opened from a deck row", () => {
   });
 
   /**
-   * **A press on "Use this printing" is a press on the button.**
+   * **A plain press on the row is a click, and the row is still the drag source.**
    *
-   * The row is the drag handle now, and Chromium starts a drag from the nearest draggable
-   * *ancestor* of whatever was pressed — so without the mark, a press here that travelled five
-   * pixels would carry the printing off instead of swapping the deck's row to it, and the
-   * click would never be delivered. This is the one control this list grew after the drag did,
-   * which is exactly the case `cardDraggable`'s marked exclusion exists for.
+   * The swap button is gone and the row is the press — the same row that carries the printing
+   * off the list, which is spec §1's fourth drag source. So the two have to stay told apart in
+   * both directions: a press that travels five pixels carries the card away, and one that does
+   * not is the swap. What keeps a *control* inside the row out of it is its own `data-no-drag`
+   * mark, because Chromium starts a drag from the nearest draggable **ancestor** of whatever
+   * was pressed — without which a press on the quick-add would carry a printing off instead of
+   * opening the popup, and the click would never be delivered at all.
    */
-  it("does not drag the row when the press landed on its swap button", async () => {
+  it("reads a plain press on the row as a click, and still drags from it", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(SWAPPABLE));
     fromDeckRow();
 
     wrap("p1");
-    const use = await screen.findByRole("button", { name: /^Use this printing/ });
-    const row = rowOf(use);
+    const row = rowOf(await screen.findByRole("button", { name: /^Use this printing/ }));
 
-    const held = await startDrag(row, { pressOn: use });
-    expect(held.started).toBe(false);
+    // The quick-add owns its own press: nothing is picked up from it.
+    const refused = await startDrag(row, {
+      pressOn: within(row).getByRole("button", { name: /^Add / }),
+    });
+    expect(refused.started).toBe(false);
+    await refused.cancel();
+
+    // The row itself still is a drag source — the guard is a control's press, not a row's.
+    const held = await startDrag(row);
+    expect(held.started).toBe(true);
     await held.cancel();
     expect(deckSwapPrinting).not.toHaveBeenCalled();
 
-    // And the row itself still is one: the guard is a control's press, not a row's.
-    const again = await startDrag(row, { pressOn: within(row).getByText(/M10 · 146/) });
-    expect(again.started).toBe(true);
-    await again.cancel();
+    // And a press that stayed still is the swap, which the pane then follows into.
+    await userEvent.click(row);
+
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live");
+    await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("p2"));
   });
 
   /**
@@ -916,52 +1156,89 @@ describe("the printings list, opened from a deck row", () => {
     expect(useAppStore.getState().selectedCardId).toBe("p1");
     expect(useAppStore.getState().paneDeckContext).toEqual(MAIN);
     // The mark has not moved either: the deck holds what it held.
-    expect(rowOf(screen.getByText("This deck uses this printing"))).toHaveTextContent("ISD · 51");
+    expect(rowOf(screen.getByText("In deck"))).toHaveTextContent("ISD · 51");
+
+    // **And the sentence is not a dead end.** `DeckLine` stopped the click under its refusal,
+    // because the row underneath meant *view this printing* and that is not what a reader
+    // pressing "Use this printing" asked for. The row now means the same thing the refused
+    // press meant, so a click that lands on the sentence is a **retry** — which, for a busy
+    // database the reader has just read about, is exactly the next thing they want.
+    await userEvent.click(refusal);
+
+    expect(deckSwapPrinting).toHaveBeenCalledTimes(2);
   });
 
   /**
-   * One press is one swap, however many times it is pressed.
+   * One press is one swap, however many times it is pressed — and the fence is now a paint plus
+   * a guard in the handler rather than a button that switched itself off.
    *
-   * The guard is not only about double-clicks: while a swap is in flight every *other* row's
-   * button is disabled too, because they would all be sent the same `from` printing — the one
-   * the write in flight is in the middle of moving. The second write would be refused by the
-   * backend for a row that no longer exists, which is a true sentence about a press the reader
-   * should never have been allowed to make.
+   * It is not only about double-clicks: while a write is in flight **every** row that would
+   * swap is out of reach, not just the pressed one, because they would all be sent the same
+   * `from` printing — the one the write in flight is in the middle of moving. The second write
+   * would be refused by the backend for a row that no longer exists, which is a true sentence
+   * about a press the reader should never have been allowed to make.
+   *
+   * **`aria-disabled`, never the attribute** (`src/CLAUDE.md`), and here that rule pays for
+   * itself rather than merely being obeyed: `DeckLine`'s button *was* `disabled`, so pressing
+   * it dropped it out of the tab order mid-press and the browser blurred it to `<body>` with no
+   * `relatedTarget` — the whole of that component's focus hand-back existed to repair what its
+   * own attribute broke.
    */
   it("presses once, however many times it is pressed", async () => {
     cardDetail.mockResolvedValue(detail);
-    cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    cardPrintings.mockResolvedValue(
+      page([...SWAPPABLE, printing({ id: "p3", setCode: "2ed", collectorNumber: "162" })]),
+    );
     deckSwapPrinting.mockReturnValue(new Promise(() => {}));
     fromDeckRow();
 
     wrap("p1");
-    const button = await screen.findByRole("button", { name: /^Use this printing/ });
-    await userEvent.click(button);
-    await userEvent.click(button);
+    await screen.findByText(/3 printings/);
+    await userEvent.click(useIt());
+    // The same control, still there and still reachable — which is the point of not disabling
+    // it — so this is a second real press rather than one the DOM swallowed.
+    await userEvent.click(swapping());
 
     expect(deckSwapPrinting).toHaveBeenCalledTimes(1);
-    // It says what it is doing while it does it — in the visible label *and* in the accessible
-    // name, which `swapping()` is querying by: a name that still said "Use this printing" over
-    // a button reading "Swapping…" is a control voice control can no longer press.
-    expect(swapping()).toBeDisabled();
-    expect(swapping()).toHaveTextContent("Swapping…");
+    // It says what it is doing while it does it, and the name is the only place it can: the
+    // row's visible text is the printing, so a screen reader hears the press landed here or
+    // nowhere.
+    expect(swapping()).toHaveAttribute("aria-disabled", "true");
+    expect(swapping()).not.toBeDisabled();
+
+    // And the row nobody pressed is out of reach too — greyed, and **refused**: an
+    // `aria-disabled` control still delivers its press, so the paint would be a lie without the
+    // handler behind it.
+    const other = screen.getByRole("button", { name: "Use this printing (2ED 162) in Main deck" });
+    expect(other).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(other);
+
+    expect(deckSwapPrinting).toHaveBeenCalledTimes(1);
   });
 
   /**
-   * The disabled-on-press hazard, in the shape it takes **inside a dismissible layer**: a
-   * browser blurs a control that disables itself with no `relatedTarget` at all, so the caret
-   * lands on `<body>` — and this button is inside the card pane, whose Escape hand-back is the
-   * app's most-repaired piece of focus plumbing. A reader who pressed a row, was refused, and
-   * pressed Escape would be closing the pane from nowhere, with the sentence they had not
-   * finished reading going with it.
+   * **The caret, one step after a refusal, for the reader it stranded.**
    *
-   * So the button takes the caret back when the write settles, and only from `<body>` — a
-   * reader who has moved on in the meantime owns where they are. `DeckStats`' send button is
-   * the same guard outside a layer; this is the one the pane needs.
+   * This used to be the common path and used to belong to the pressed button: it disabled
+   * itself, the browser blurred it to `<body>` with no `relatedTarget`, the `onError` re-read
+   * landed, `deckGone` turned true and every "Use this printing" button — including the one
+   * holding the caret — was unmounted. A row that stays a row through all of that strands
+   * nobody, so what is left is a **fallback** on the pane rather than a hand-back on a control:
+   * anything that replaces the rows while a refusal is on screen (a printings refetch, a card
+   * leaving `cards`) drops the caret in front of a sentence the reader can then only leave by
+   * Tabbing from the top of the app. The pane is where that sentence lives, so the pane takes
+   * the caret — and only out of `<body>`, because a reader who has moved on owns where they are.
+   *
+   * jsdom cannot produce the unmount that strands it, so the caret is walked off through the
+   * DOM, which is where a real one ends up either way, and the guard is asserted on its own
+   * terms: the refusal is on screen, the caret is nowhere, and the pane takes it.
    */
-  it("takes the caret back after the swap it disabled itself for", async () => {
+  it("takes the caret into the pane when a refusal leaves it on nothing", async () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(SWAPPABLE));
+    // The commonest refusal there is: the deck was deleted from another view. The read that
+    // follows the failure is what teaches the pane so — the first one still finds it.
+    deckGet.mockResolvedValueOnce(DECK_DETAIL).mockResolvedValue(null);
     let refuse!: (reason: string) => void;
     deckSwapPrinting.mockReturnValue(
       new Promise((_resolve, reject) => {
@@ -973,22 +1250,17 @@ describe("the printings list, opened from a deck row", () => {
     wrap("p1");
     const button = await screen.findByRole("button", { name: /^Use this printing/ });
     await userEvent.click(button);
-
-    // What a browser does to a focused control that becomes disabled and jsdom does not: blurs
-    // it with no `relatedTarget` at all, leaving the caret on `<body>`. jsdom will not blur a
-    // control that is already disabled — `blur()` returns early on an element that is not a
-    // focusable area — so the caret is walked off it through the pane, which is where the DOM
-    // ends up either way, and the event a real blur would carry is delivered on top. Without
-    // this the test passes over a missing hand-back, because the caret never left.
-    const pane = screen.getByRole("complementary", { name: /card details/i });
-    pane.focus();
-    pane.blur();
-    fireEvent.focusOut(button, { relatedTarget: null });
+    act(() => button.blur());
     expect(document.body).toHaveFocus();
 
-    refuse("The database is busy with a sync — try again in a moment.");
+    refuse("That deck is not there any more.");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
-    await waitFor(() => expect(useIt()).toHaveFocus());
+    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more.");
+    await waitFor(() =>
+      expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus(),
+    );
+    // And the deck that is not there claims nothing: no mark, and no offers to rewrite it.
+    expect(screen.queryByText("In deck")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Use this printing/ })).not.toBeInTheDocument();
   });
 });

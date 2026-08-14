@@ -22,6 +22,15 @@
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  *
+ * **Two settings carry no struct at all.** Each is one `app_meta` row answered as a bare
+ * string: `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`). Both are the same shape,
+ * and it is the shape a stored preference has to have — the read falls back on its default for
+ * a row that is missing *or* holds a value this build does not recognise, and only the *write*
+ * refuses. So each is typed `string` here rather than as its union: the narrowing belongs to
+ * the module that owns the union (`@/lib/marketplace`, `@/features/card/printings`), and a row
+ * a newer build wrote must reach this side as the string it is.
+ *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
  * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
  * `totalPrice` / `value`, already in that marketplace's money — or, where a *card* rather than
@@ -2390,6 +2399,24 @@ export const ipc = {
   getMarketplace: () => invoke<string>("get_marketplace"),
   /** Choose one. Rejects an id the backend does not know, so `app_meta` cannot collect junk. */
   setMarketplace: (id: MarketplaceId) => invoke<void>("set_marketplace", { id }),
+  /**
+   * How the card pane groups its printings list — `artist` | `released` | `price` | `set`,
+   * stored so the choice survives a restart.
+   *
+   * A raw string rather than a `PrintingGroupBy`, for {@link getMarketplace}'s reason and it is
+   * the same reason: the value came out of `app_meta` and may have been written by a build that
+   * offered a mode this one does not, so narrowing it is `isPrintingGroupBy`'s job in
+   * `@/features/card/printings` on this side of the wire. The backend answers `artist` for a
+   * missing row **and for an unrecognised one** — a stale preference costs the reader their
+   * grouping, never the pane.
+   */
+  printingGroupBy: () => invoke<string>("printing_group_by"),
+  /**
+   * Choose one. Rejects a mode the backend does not know, so `app_meta` cannot collect junk —
+   * which matters more here than it looks, because the read side discards an unknown mode in
+   * silence and an unchecked write would read back as `artist` forever.
+   */
+  setPrintingGroupBy: (mode: string) => invoke<void>("set_printing_group_by", { mode }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.
