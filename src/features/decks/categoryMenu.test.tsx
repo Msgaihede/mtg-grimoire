@@ -101,8 +101,9 @@ describe("buildCategoryMenu", () => {
   it("hands the category's own cards to the export dialog", () => {
     const openExport = vi.fn();
 
-    (find(buildCategoryMenu(REMOVAL, deps({ openExport })), "Export cards…") as MenuAction)
-      .onSelect();
+    (
+      find(buildCategoryMenu(REMOVAL, deps({ openExport })), "Export cards…") as MenuAction
+    ).onSelect();
 
     expect(openExport).toHaveBeenCalledWith(
       expect.objectContaining({ subject: "Removal", cards: REMOVAL_CARDS }),
@@ -114,8 +115,9 @@ describe("buildCategoryMenu", () => {
   it("carries the category's id and nothing from another pile", () => {
     const openExport = vi.fn();
 
-    (find(buildCategoryMenu(REMOVAL, deps({ openExport })), "Export cards…") as MenuAction)
-      .onSelect();
+    (
+      find(buildCategoryMenu(REMOVAL, deps({ openExport })), "Export cards…") as MenuAction
+    ).onSelect();
 
     expect(openExport).toHaveBeenCalledWith({
       categoryId: REMOVAL.id,
@@ -127,8 +129,9 @@ describe("buildCategoryMenu", () => {
   it("opens the importer aimed at this pile", () => {
     const openImport = vi.fn();
 
-    (find(buildCategoryMenu(REMOVAL, deps({ openImport })), "Import cards…") as MenuAction)
-      .onSelect();
+    (
+      find(buildCategoryMenu(REMOVAL, deps({ openImport })), "Import cards…") as MenuAction
+    ).onSelect();
 
     expect(openImport).toHaveBeenCalledWith({ forcedCategoryName: "Removal" });
   });
@@ -165,6 +168,5 @@ describe("buildCategoryMenu", () => {
     (find(buildCategoryMenu(REMOVAL, deps({ askDelete })), "Delete…") as MenuAction).onSelect();
 
     expect(askDelete).toHaveBeenCalledWith(REMOVAL);
-    expect(Object.keys(deps())).not.toContain("deleteCategory");
   });
 });

@@ -1870,14 +1870,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **All six full-window overlays are modal, and Tab cannot leave one.**
+   * **The full-window overlays are modal, and Tab cannot leave one.**
    *
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
    * available right now — a pointer already cannot cross one. Two of them used to let the
    * caret walk back into the editor anyway, which offered the capability to one input method and
    * denied it to the other while the docs argued it was deliberate.
    *
-   * **Four of the six are one component now (`DeckDialog`) and two are not**: the import dialog
+   * **The editor has seven and this drives the six with a control in the view.** The seventh is
+   * the export dialog, opened from a category heading's right-click, so there is no button here
+   * to point the sweep at; it is a `DeckDialog` like four of the six, which is what the four
+   * cases below hold to the shell's behaviour.
+   *
+   * **Five of the seven are one component now (`DeckDialog`) and two are not**: the import dialog
    * and the theory diff still carry their own scrim, `aria-modal` and `onKeyDown={trapTab}`,
    * which is why this sweep is driven per surface rather than pointed at the shell. It is the
    * only thing holding the two copies to the shell's behaviour, and it is what would go red if
@@ -1936,7 +1941,7 @@ describe("DeckEditor", () => {
 
   /**
    * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
-   * would consume one press — so the editor holds *one* piece of state for all seven, and
+   * would consume one press — so the editor holds *one* piece of state for all eight, and
    * opening any of them takes whichever was up down with it.
    */
   it("never has two of its own layers open at once", async () => {
@@ -2108,9 +2113,9 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The **eighth** `"inner"` peer on this screen, and the one no state union covers: the set
+   * The **ninth** `"inner"` peer on this screen, and the one no state union covers: the set
    * filter inside the docked search panel owns its own Escape rung (`SetCombobox`). What keeps
-   * it exclusive with the editor's own seven is focus and click mechanics — each of them closes
+   * it exclusive with the editor's own eight is focus and click mechanics — each of them closes
    * on focus-out or on a press outside its root — so it is pinned here in the assembled editor,
    * both ways round. Neither direction is a structural guarantee, and a test is the only thing
    * that would notice one of them being dropped.

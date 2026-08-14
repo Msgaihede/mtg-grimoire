@@ -28,6 +28,7 @@ import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearch
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
+import { ExportDialog } from "./export/ExportDialog";
 import {
   asGroupBy,
   buildGroups,
@@ -178,6 +179,29 @@ const DECK_HEIGHT_FLOOR = "min-h-96";
 /** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
 const NO_TAGS: readonly number[] = [];
 
+/** The same trick for the closed export dialog, which is mounted at every render and asked for
+ *  a card list whether or not it is drawing one. */
+const NO_EXPORT_CARDS: readonly DeckCard[] = [];
+
+/**
+ * What the save dialog's file name starts as: the deck and the pile.
+ *
+ * The characters Windows forbids in a file name are taken out rather than replaced — a deck
+ * called `Atraxa: Superfriends` should suggest `Atraxa Superfriends - Removal`, not a name with
+ * an underscore where nobody typed one. The extension is `ExportDialog`'s, which appends the one
+ * belonging to the format chosen there.
+ */
+function exportFileName(deck: string, category: string): string {
+  const name = [deck, category]
+    .filter((part) => part !== "")
+    .join(" - ")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .trim();
+  // A deck with no name, and this dialog rendered closed, both reach here. `save()` is handed a
+  // `defaultPath`, and an empty one is a picker with no name in its box.
+  return name === "" ? "decklist" : name;
+}
+
 /**
  * The narrowest the deck's name field may be squeezed to.
  *
@@ -215,19 +239,25 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
  * would both close on a single press. Every member below registers that same `"inner"` rung
  * from inside its own component, so they are modelled as *one* piece of state: "never two" is
- * then structural rather than remembered, and at most one of the seven registrations is ever
+ * then structural rather than remembered, and at most one of the eight registrations is ever
  * enabled. `DecksPage`'s `Panel` is the same arrangement, for the same reason.
  *
- * **A union rather than seven booleans, and the rebuild is what makes that worth saying twice.**
- * Seven flags are seven ways to be in a state the Escape protocol cannot order, and the failure
+ * **A union rather than eight booleans, and the rebuild is what makes that worth saying twice.**
+ * Eight flags are eight ways to be in a state the Escape protocol cannot order, and the failure
  * is invisible: two layers close on one press, two focus hand-backs race for the caret, and
  * every test that opens one layer at a time still passes. The union cannot express it.
  *
- * `check` is the format check anchored to its chip; the other six are **full-window overlays**
- * on `LAYER.overlay` — which is one rung and not six for exactly this reason (see `layers.ts`).
- * Categories and tags used to be one of them: a single right-hand drawer with two sections in
- * it. Splitting it into two dialogs adds a member here and takes nothing away from the
- * argument — one slot is one slot however many things can occupy it.
+ * `check` is the format check anchored to its chip; the other seven are **full-window overlays**
+ * on `LAYER.overlay` — which is one rung and not seven for exactly this reason (see
+ * `layers.ts`). Categories and tags used to be one of them: a single right-hand drawer with two
+ * sections in it. Splitting it into two dialogs adds a member here and takes nothing away from
+ * the argument — one slot is one slot however many things can occupy it, which is also why the
+ * export dialog joined without an argument being reopened.
+ *
+ * **Two members carry a field, and both are the same idea**: which pile the layer is about. A
+ * union arm is where such a thing belongs — a second `useState` beside this one could hold a
+ * category id while the layer was closed, or while a *different* layer was open, and neither
+ * state means anything.
  *
  * **Two more `"inner"` peers sit on this screen and neither is in this union**: the set filter
  * inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`), and the quick
@@ -245,25 +275,26 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
  * way the set filter is, by focus — it closes when the caret leaves its root, and every layer
  * here focuses itself on the way up. The preview is a *dwell*, so it can coexist with an
- * anchored layer out here; the six overlays make it unreachable, because a pointer cannot get
+ * anchored layer out here; the seven overlays make it unreachable, because a pointer cannot get
  * to the pane through a scrim.
  *
- * **All six overlays are modal, and that is what makes the sentence above true of a keyboard
+ * **All seven overlays are modal, and that is what makes the sentence above true of a keyboard
  * too**: each paints a full-window scrim, claims `aria-modal="true"` and runs `lib/trapTab.ts`,
  * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
  * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
- * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds all six
- * together, and it is a **behavioural** sweep for a reason worth reading before the next
- * modality edit.
+ * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds the **six with
+ * a control in this view** together — the export dialog is opened from a category heading's
+ * right-click and has no button to point that sweep at — and it is a **behavioural** sweep for a
+ * reason worth reading before the next modality edit.
  *
- * **Four of the six are a `DeckDialog`** — Categories, Tags, History and Deck settings — where
- * the scrim, the centring, `aria-modal`, the trap, the ✕ and the `"inner"` rung are written
- * once. **`TheoryDiffDialog` and `ImportDeckDialog` are not**: each still carries its own copy
- * of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of scope when the
- * shell was written rather than exempt from it, and they are the next two to move onto it.
- * `CreateDeckDialog` is a third such copy outside this editor. So a change to how a modal
- * behaves here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
- * is an edit to **four files, not one**, until those three are converted.
+ * **Five of the seven are a `DeckDialog`** — Categories, Tags, History, Deck settings and the
+ * export — where the scrim, the centring, `aria-modal`, the trap, the ✕ and the `"inner"` rung
+ * are written once. **`TheoryDiffDialog` and `ImportDeckDialog` are not**: each still carries
+ * its own copy of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of
+ * scope when the shell was written rather than exempt from it, and they are the next two to
+ * move onto it. `CreateDeckDialog` is a third such copy outside this editor. So a change to how
+ * a modal behaves here — a focus restore, a different `trapTab`, a change to when the rung is
+ * enabled — is an edit to **four files, not one**, until those three are converted.
  */
 type Layer =
   | { kind: "check" }
@@ -272,7 +303,15 @@ type Layer =
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
-  | { kind: "import" }
+  /** The pile every line lands in, for an import opened from a category's right-click — absent
+   *  from the toolbar's own press, which files each card by what it does. */
+  | { kind: "import"; forcedCategoryName?: string }
+  /**
+   * Which pile is being exported. **The id and not the cards**: the deck is re-read after every
+   * write and this editor already holds the answer, so the dialog is fed from the live list
+   * rather than from an array frozen at the moment a menu row was pressed.
+   */
+  | { kind: "export"; categoryId: number }
   | null;
 
 /**
@@ -290,7 +329,7 @@ type Layer =
  *
  * **What this component is and is not.** It is a header, a toolbar and a frame: it decides which
  * variant is read, how the rows are grouped, sorted and filtered, which of the four views draws
- * them, and which of seven layers is open. It draws no card and no group heading itself —
+ * them, and which of eight layers is open. It draws no card and no group heading itself —
  * `grouping.ts` says what the groups are and `views/` draw them, so four surfaces cannot answer
  * "how many cards are in the Ramp column" four ways.
  *
@@ -474,6 +513,30 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => deck.cards.reduce((copies, card) => copies + card.quantity, 0),
     [deck.cards],
   );
+
+  /**
+   * The three arguments `ExportDialog` takes, derived from the pile the `export` layer names.
+   *
+   * **From the live list rather than from what a menu row was holding**, which is why the layer
+   * carries an id: a deck is re-read after every write, so a snapshot taken when the menu opened
+   * would describe the pile as it was. Renaming or deleting the category under the open dialog
+   * therefore empties it honestly instead of exporting a pile that is gone.
+   *
+   * **`deck.cards` and not `shown`**: the toolbar's filter narrows what is drawn, and exporting
+   * "Removal" means the pile rather than the four of it a search box happens to be showing.
+   */
+  const exportedId = layer?.kind === "export" ? layer.categoryId : null;
+  const exported = useMemo(() => {
+    const subject = categories.find((c) => c.id === exportedId)?.name ?? "";
+    return {
+      subject,
+      cards:
+        exportedId === null
+          ? NO_EXPORT_CARDS
+          : deck.cards.filter((c) => c.categoryId === exportedId),
+      fileName: exportFileName(row?.name ?? "", subject),
+    };
+  }, [exportedId, categories, deck.cards, row?.name]);
 
   // The add target has to be a category this deck still has — a category deleted or renamed
   // away under an open editor would otherwise leave the select holding an id that is not in its
@@ -705,8 +768,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
   const close = useCallback(() => setLayer(null), []);
 
-  /** Open one of the seven, from the control that was pressed — and never a second one, because
-   *  there is one slot. */
+  /** Open one of the eight, from the control that was pressed — and never a second one, because
+   *  there is one slot. A menu row has no control to hand back to and passes `null`. */
   const openLayer = useCallback((next: NonNullable<Layer>, trigger: HTMLButtonElement | null) => {
     openerRef.current = trigger;
     setLayer((open) => (open?.kind === next.kind ? null : next));
@@ -1735,7 +1798,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </section>
       )}
 
-      {/* The six overlays, mounted **at the editor's top level and as siblings of the layout
+      {/* The seven overlays, mounted **at the editor's top level and as siblings of the layout
           above**, which is not a tidiness preference. Each is `fixed inset-0` and none is
           portalled, so a transformed ancestor would become its containing block and pin it to
           whatever box that ancestor happens to occupy — and this editor has transformed
@@ -1743,10 +1806,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           is a stacking context and a containing block both). Mounted inside the view area, a
           dialog would centre itself over a column instead of over the window.
 
-          Each is closed by `open`, and each of the six unmounts everything behind that flag —
+          Each is closed by `open`, and each of the seven unmounts everything behind that flag —
           so a closed one costs no query, no window listener and no state. That is what makes it
-          safe to mount all six unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than six booleans. For four of them `DeckDialog` guarantees it:
+          safe to mount all seven unconditionally, and it is why the editor can hold them in one
+          `Layer` union rather than seven booleans. For five of them `DeckDialog` guarantees it:
           `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
           The theory diff and the import dialog are not on that shell (see the `Layer` union's
           doc) and each guarantees the same thing with an `AnimatePresence` of its own — which
@@ -1787,10 +1850,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The last of the six, and the one whose target has to be **the list on screen**: an
-          import lands in one variant and a `replace` clears at most one, so a paste made while
-          Theory is up must never touch what is sleeved. `cardsInVariant` is what a `replace`
-          would clear, said in words before it is chosen.
+      {/* The one whose target has to be **the list on screen**: an import lands in one variant
+          and a `replace` clears at most one, so a paste made while Theory is up must never touch
+          what is sleeved. `cardsInVariant` is what a `replace` would clear, said in words before
+          it is chosen.
+
+          `forcedCategoryName` is set only when the dialog was opened from a category heading's
+          right-click, and it is the whole of the difference between "import into this deck" and
+          "import into this pile" — applied in `buildImportPlan`, not here, because `plan.ts`
+          makes every deck decision. The toolbar's own press carries none and is unchanged.
 
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
           away in the toolbar and the deck it wrote into is already on screen — the editor
@@ -1798,10 +1866,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           it. */}
       <ImportDeckDialog
         target={{ kind: "deck", deckId, variant, cardsInVariant }}
+        forcedCategoryName={layer?.kind === "import" ? layer.forcedCategoryName : undefined}
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}
         onImported={dismiss}
+      />
+      {/* The last of the seven, and the only one with no control in this view: it is opened from
+          a category heading's right-click. `cards` is an argument the dialog never fetches —
+          which is exactly what lets one pile be handed to a component a deck-level export will
+          reuse whole — and it is derived from the deck's live list rather than from whatever the
+          menu was holding. See {@link exported}. */}
+      <ExportDialog
+        open={layer?.kind === "export"}
+        subject={exported.subject}
+        cards={exported.cards}
+        suggestedFileName={exported.fileName}
+        onDismiss={dismiss}
+        onClose={close}
       />
     </section>
   );
