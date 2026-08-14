@@ -2922,26 +2922,17 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });
 
-  /** The docked panel's tiles are cards too, and the menu they offer is the plain one — a
-   *  search result is not in the deck, so none of the four deck rows means anything about it. */
-  it("offers the card menu on the docked panel's tiles, without the deck's rows", async () => {
-    searchCards.mockResolvedValue({ items: [found("Goblin Guide")], total: 1, totalIsCapped: false });
-    await open();
-    await openSearchPanel();
-
-    // The tile's art button, whose name is the card and nothing else — the quick add beside it
-    // is called "Add Goblin Guide to …", which is why this one is matched exactly.
-    const tile = await screen.findByRole("button", { name: "Goblin Guide" });
-    fireEvent.contextMenu(tile);
-
-    await screen.findByRole("menu");
-    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /Move to/ })).not.toBeInTheDocument();
-  });
-
-  /** …and from the keyboard there too, which the wall takes in a slot of its own because a
-   *  keypress has no coordinates to anchor a panel at. */
-  it("offers the panel's tiles the same menu from the keyboard", async () => {
+  /**
+   * The docked panel's tiles are cards too, and the menu they offer is the plain one — a search
+   * result is in no deck, so none of the four deck rows means anything about it.
+   *
+   * **Both doors in one case, deliberately.** They are two slots on `CardGrid` (a keypress has
+   * no coordinates, so the panel is anchored at the tile's own corner instead) and each is
+   * asserted on its own, but the setup they share is a search panel opened and a page of results
+   * — the slowest thing in this file — and two copies of it made the pair the flakiest tests in
+   * it under load rather than the most informative.
+   */
+  it("offers the panel's tiles the card menu, from the pointer and from the keyboard", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],
       total: 1,
@@ -2950,12 +2941,23 @@ describe("DeckEditor — a card's menu", () => {
     await open();
     await openSearchPanel();
 
+    // The tile's art button, whose name is the card and nothing else — the quick add beside it
+    // is called "Add Goblin Guide to …", which is why this one is matched exactly.
     const tile = await screen.findByRole("button", { name: "Goblin Guide" });
     tile.focus();
     fireEvent.keyDown(tile, { key: "F10", shiftKey: true });
 
-    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    await screen.findByRole("menu");
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Move to/ })).not.toBeInTheDocument();
+
+    // Escape closes the menu it opened, so the pointer half below is a fresh open rather than a
+    // panel that was already there — which is the whole of what makes it discriminate.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+
+    fireEvent.contextMenu(tile);
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
   });
 });
 

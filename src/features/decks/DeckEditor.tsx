@@ -15,8 +15,14 @@ import {
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
-import type { CardSummary } from "@/lib/ipc";
-import { ipc, ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type CardSummary,
+  type DeckCard,
+  type DeckCategory,
+  type DeckVariant,
+} from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
@@ -825,7 +831,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
   //
-  // **All six writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
+  // **All seven writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
   // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
   // panel or on the stats block reaches the same sentence — and without them here that surface
   // would report a deck that is gone while the view beside it went on painting it, with every
@@ -840,10 +846,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // day one exists, and reading it as live GONE coverage would be reading it as something it
   // cannot do today.
   //
-  // **`moveCard` is fired by a drag and by nothing else** (2026-08-14), the card's own `Move…`
-  // select having been removed. A drop is still a press for this purpose — it reaches
-  // `applyDrop` and the same mutation — so this entry is live coverage rather than a placeholder
-  // like the one above it. What it is *not* any more is reachable from the keyboard.
+  // **`moveCard` has two callers again, and one of them is a keypress.** The card's own `Move…`
+  // select was removed on 2026-08-14 and left a drop as the only route — which a caret cannot
+  // perform — and the card's right-click restored both halves later the same day: `Move to`
+  // lists every category the deck has, and Shift+F10 opens the menu. So this entry is live
+  // coverage from a pointer *and* from the keyboard, rather than the placeholder the line above
+  // it describes.
+  //
+  // **`setTag` rides in through `writes`** and is live coverage for the same reason: nothing in
+  // the app could reach it until that menu, and every one of the four views can now.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,
