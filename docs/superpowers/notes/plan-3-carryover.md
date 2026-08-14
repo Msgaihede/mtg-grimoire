@@ -193,7 +193,10 @@ still `errors.scryfall.com/soon.jpg` in every slot. A query for
    the any-printing Lightning Bolt wish rendered `Rarity: Uncommon` while the pinned `sta 42`
    wish rendered `Rare` — two different printings of the same card. Task 12 ledgered the
    pricing consequence ("Still to buy" runs low); this is the same fact showing up in the
-   rarity gem.
+   rarity gem. **Still open on the wishlist as of 2026-08-14** — `wishlist.rs` is untouched —
+   but the *card search* moved to the cheapest printing of the latest release date that day, so
+   the two surfaces no longer resolve "any printing" the same way. See plan-4 carryover
+   Finding 1, which carries the detail.
 5. **The stepper's quantity persists across adds in one popup session.** Adding 2, then
    switching finish and adding again, adds 2 again. Defensible (it is the same popup), but
    it is how the smoke ended up with `foil ×2` when it meant `foil ×1`.

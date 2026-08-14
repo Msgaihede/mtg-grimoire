@@ -86,6 +86,14 @@ both plus the frontend.
 - **A finish's price is a lookup in the `prices` blob** (`usd`/`usd_foil`/`usd_etched`;
   `eur_etched` does not exist, so etched is unpriced in EUR). `cards.price_usd` is a
   sort/display fallback chain and must never be summed. `tix` is never summed with fiat.
+- **`CardFilters`' two `…Only` flags have opposite defaults, and that is deliberate.**
+  `paper_only` is omitted-means-**true** — every caller wants it, and the collection and wishlist
+  switch it off explicitly. `playable_only` (`legal_mask != 0`, so art series, tokens, emblems and
+  memorabilia) is omitted-means-**false**, and the **search view is the only thing that sends it**:
+  a collection lists what its owner owns, and an art card in a binder is still in the binder.
+  Flipping that default would silently drop rows out of every other list, which is the failure
+  nobody reports. The frontend's chip is inverted to match — pressed means "show them", which is
+  no filter at all.
 - **A list query is told which marketplace to price in and answers one number per row.**
   `SearchRequest`/`CollectionQuery`/`WishlistQuery` and the three priced deck commands carry a
   `marketplace`, and **anything that is not `cardmarket`/`cardkingdom`/`manapool` is

@@ -1110,6 +1110,19 @@ function matchesCardFilters(
   if (f.paperOnly ?? true) {
     if (!card?.isPaper) return false;
   }
+
+  // Omitted means **false**, which is the one place two neighbouring `…Only` flags disagree
+  // about their default — see `filters::CardFilters::playable_only`. The real predicate is
+  // `legal_mask != 0`, and the mask is `legalities` folded to one integer over the same two
+  // playable values the format filter above accepts, so asking the blob directly is the same
+  // question: is this card legal or restricted *anywhere*. An orphan fails it, as it fails
+  // format, because `NULL != 0` is NULL.
+  if (f.playableOnly ?? false) {
+    const legalities = parseJson(card?.legalities ?? null);
+    if (typeof legalities !== "object" || legalities === null) return false;
+    const values = Object.values(legalities as Record<string, unknown>);
+    if (!values.some((v) => v === "legal" || v === "restricted")) return false;
+  }
   return true;
 }
 
@@ -1259,7 +1272,8 @@ function collapseKey(c: FakeCard): string {
 }
 
 /**
- * `search.rs`'s collapsed page: one row per card, represented by the **newest** printing.
+ * `search.rs`'s collapsed page: one row per card, represented by the **cheapest printing of the
+ * newest release** among the printings that matched.
  *
  * Three things here are the parts a fake most easily gets wrong, so each is the real rule:
  *
@@ -1281,15 +1295,50 @@ function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): Ca
   }
 
   return [...groups.values()].map((group) => {
-    // `released_at DESC, id DESC` — the real pick, ties to the greatest id.
-    const rep = [...group].sort((a, b) => cmp(b.releasedAt, a.releasedAt) || cmp(b.id, a.id))[0];
+    // One price per printing, at the marketplace the request named, **priced once per printing
+    // and then read from this map** — by the representative below and by the span beneath it,
+    // so the row cannot pick its printing at one marketplace and quote its range at another.
+    //
+    // Priced up front rather than inside the comparator, and that is a cost rather than a
+    // tidiness point: on a feed marketplace `priceColumnAt` is up to three linear `find`s over
+    // every `marketplacePrices` row, and a comparator calls it O(n log n) times per group
+    // instead of n. Sorting the `large` seed's 686 groups through it is the fake's slowest path
+    // there is.
+    const prices = new Map<string, number | null>(
+      group.map((c) => [c.id, priceColumnAt(db, c, mp)]),
+    );
+    const priceOf = (c: FakeCard): number | null => prices.get(c.id) ?? null;
+    // `released_at DESC, price ASC NULLS LAST, id DESC` — the real pick, in three keys.
+    //
+    // * **The date first**, because the row stands for the card as it is printed *now*: a
+    //   cheaper old printing must not pull the row back to it.
+    // * **Then the price**, which is what makes the row the cheapest way into that latest
+    //   release. Every printing sharing the newest date is weighed together **whatever set it
+    //   is in**, and the missing set key is deliberate rather than an omission: promo sets are
+    //   `p`-prefixed (`pkhm` beside `khm`), so a `set_code DESC` tie-break would hand every
+    //   same-day tie to the promo printing — measured dearer far more often than not, which is
+    //   the one thing a rule called "cheapest" must never do.
+    // * **A `null` sorts last, never first.** It means "this marketplace does not quote this
+    //   printing", not "free", so it loses to every priced printing of the same date and only
+    //   represents the card when nothing of that date is priced at all.
+    // * `id` last, so the pick is total and stable — unchanged.
+    const rep = [...group].sort((a, b) => {
+      const byDate = cmp(b.releasedAt, a.releasedAt);
+      if (byDate !== 0) return byDate;
+      const pa = priceOf(a);
+      const pb = priceOf(b);
+      if (pa !== pb) {
+        if (pa === null) return 1;
+        if (pb === null) return -1;
+        return pa - pb;
+      }
+      return cmp(b.id, a.id);
+    })[0];
     // **The span covers the printings this marketplace prices**, and no others. Not one span
     // converted: a group whose only priced printing is etched has a TCGplayer span and no
     // Cardmarket one at all, and a group a feed has never listed has none there — the hole
     // showing up as an absent range rather than as a narrower one.
-    const priced = group
-      .map((c) => priceColumnAt(db, c, mp))
-      .filter((p): p is number => p !== null);
+    const priced = [...prices.values()].filter((p): p is number => p !== null);
     return {
       ...toCardSummary(db, rep, mp),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
@@ -2672,6 +2721,10 @@ export function readHandlers(db: FakeDb) {
        * `paperOnly: false` because the base has already applied the request's own paper
        * decision — putting the default back here would drop the digital printings a
        * `paperOnly: false` search asked for.
+       *
+       * `playableOnly` needs no such line, and the asymmetry is its default rather than an
+       * oversight: it is off unless asked for, so an option's own filter object cannot put
+       * back a narrowing the base already made. The base is where the request's value lives.
        */
       const countWith = (rows: FakeCard[], f: CardFilters) =>
         rows.filter((c) => matchesCardFilters(c, { ...f, paperOnly: false }, null)).length;

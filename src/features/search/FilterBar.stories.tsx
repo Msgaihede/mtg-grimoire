@@ -256,13 +256,17 @@ export const Cleared: Story = {
  * The greying, on an ordinary search: **one colour on, and four mana chips out of reach.**
  *
  * The rule is one sentence — *an option greys when turning it on would not change the result
- * set* — and this is the plain reading of it. 15 of the corpus' 41 paper printings are
- * castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
+ * set* — and this is the plain reading of it. 13 of the 38 printings this row searches over
+ * are castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
  * ignore a press. Standard goes with them in the format select — and **falls to the bottom of
  * it**, which is the second rule this row reads plainly: everything still pickable is listed
  * above everything that is not, each half alphabetical by the word on screen, under a pinned
  * "Any format". `FORMATS` writes Standard *first*; that order is a fact about the keys and
  * reaches the screen nowhere.
+ *
+ * 38 rather than the corpus' 41 paper printings, because `playableOnly` is on: the art card,
+ * `Kozilek, Compleated` and `Little Girl` are legal in no format and the search view hides
+ * them unless the Unplayable chip is pressed.
  *
  * **The colour chips all stay live, and that is the interesting half.** `colors` is *subset*
  * semantics, so pressing White with Red already on asks for "castable in RW" — a **superset**,
@@ -281,10 +285,10 @@ export const SomeUnavailable: Story = {
     // **The exact settled count, not a prefix.** The count rides in the accessible name, so
     // waiting on one is how a story waits for the facets — but the row wears the *previous*
     // search's counts while the next answer is in flight (`keepPreviousData`), and every
-    // state this passes through is also called "Red — N printings". 41 is the answer for a
+    // state this passes through is also called "Red — N printings". 38 is the answer for a
     // red search: pressing Red again would clear the filter, so its own chip counts the whole
-    // paper corpus rather than the red part of it.
-    await canvas.findByRole("button", { name: "Red — 41 printings" }, { timeout: 5000 });
+    // searchable corpus — paper and playable — rather than the red part of it.
+    await canvas.findByRole("button", { name: "Red — 38 printings" }, { timeout: 5000 });
 
     // Empty over a red search, and saying so where a reader can hover it.
     for (const value of [4, 5, 6, 7]) {

@@ -2,16 +2,20 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **359 stories across 47 story files, 46 docs
+`npm run storybook` · `npm run build-storybook`. **365 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 48th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the facet-ordering branch merged with
-`main`: 405 entries, 359 `story`, 46 `docs`, 48 distinct `importPath`s. The one story over the
-358 below is `Search/SetCombobox`'s `PickedFirst`, which pins the picked sets floating to the
-top of the paged list; no story *file* was added, which is why that count did not move. The
-stack-motion work `main` brought in the same window rewrote `CardStack`'s and `StackView`'s
-stories without adding one, which is why it does not appear in this arithmetic — re-counted
-after the merge rather than assumed.
+(`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
+**Measured 2026-08-14** off a fresh `build-storybook` on the facet-ordering branch **with `main`
+merged in**: 412 entries, 365 `story`, 47 `docs`, 49 distinct `importPath`s.
+
+**That merge is this line's own warning happening again, and it is worth reading as one.** Two
+branches each measured **359** against their own base and each was right about it — the
+facet-ordering branch had added `Search/SetCombobox`'s `PickedFirst`, and `main` had taken
+`Search/Page`'s `Unplayable` — and **neither number survived them meeting**, because the zoom,
+resize and cheapest-printing work `main` carried alongside brought a story file of its own.
+Taking either side of the conflict would have shipped a figure that was true of a tree nobody
+had. 365 is the count of the merged tree, built and counted after the merge rather than
+reasoned about from two branches' arithmetic.
 
 **Measured 2026-08-12** off the price-feed branch merged with `main`: 404 entries, 358 `story`,
 46 `docs`, 48 distinct `importPath`s. The five stories over `main`'s 353 were
@@ -33,9 +37,11 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**45 of the 47 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**46 of the 48 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
+(Re-derived 2026-08-14 from the built index rather than carried forward: `46 + 1 mdx = 47` docs
+pages against 48 story files, and the two opting out are still the same two.)
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a
@@ -96,9 +102,15 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
   `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
-  `fixed inset-0`, so inline it would cover the docs page rather than its own block — and the
-  other **38 docs pages render inline** (45 autodocs pages less those seven,
-  re-counted 2026-08-12 after the merge — the seven were found in source, not assumed). A new story file
+  `fixed inset-0`, so inline it would cover the docs page rather than its own block. **A third
+  kind arrived 2026-08-14 with the zoom work**: `CardZoomIndicator` sets the parameter on **one
+  story** rather than in its meta, because only that story writes `cardZoom` and the four beside
+  it take their figure as an argument — so what the frame buys there is that pressing Zoom in on
+  the docs page cannot leave a pulse behind in the page's own store. The other **38 docs pages
+  render inline** (46 autodocs pages less the seven framed wholesale and that one framed in
+  part). The arithmetic changed under this figure without moving it — it was `45 − 7` on
+  2026-08-12 and is `46 − 7 − 1` now, which is exactly the way a derived count goes stale while
+  still looking right. Re-derive it from `inline: false` in source, as this was; a new story file
   that writes the store needs the same parameter or its docs page shows one story's view under
   every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
@@ -122,10 +134,13 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**264** plays today, in a file of **267** tests — the other three are its own;
+  (**270** plays today, in a file of **273** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-12 after the merge), which is what puts a
-  story's own claim inside `npm run verify` —
+summary for the second, both measured 2026-08-14). **Both figures had rotted before this
+re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
+worth of drift added by branches that did not re-measure, and is the same prose-only rot the
+story totals above have taken three times. Only one of the six is this branch's
+(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.

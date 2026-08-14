@@ -41,6 +41,18 @@ pub struct CardFilters {
     /// Omitted means true in the search and false in the collection: a search offers cards
     /// to own, a collection lists cards that are owned.
     pub paper_only: Option<bool>,
+    /// Narrow to printings that are playable **somewhere** — `legal_mask != 0`.
+    ///
+    /// **Omitted means false**, unlike [`Self::paper_only`], so no caller that has not heard
+    /// of this filter changes behaviour. The search view sends `true` and is the only thing
+    /// that does; the collection and the wishlist list what the user owns and wants, and an
+    /// art card in a binder is still in the binder.
+    ///
+    /// The mask is Scryfall's whole `legalities` object folded to one integer, so zero means
+    /// "legal or restricted in none of the 23 formats" — art series, tokens, emblems,
+    /// memorabilia, and the acorn half of the un-sets. It is a fact about the card rather
+    /// than a layout guess, which is why this filter reads the mask and not `layout`.
+    pub playable_only: Option<bool>,
 }
 
 /// SQL fragments and the parameters they bound, in push order.
@@ -250,6 +262,23 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     if f.paper_only.unwrap_or(true) {
         p.wheres.push(format!("{alias}.is_paper = 1"));
     }
+
+    // Playable **somewhere**, which is the one question the whole mask answers at once: a
+    // format filter tests one bit, this tests whether any is set. No parameter, because there
+    // is nothing to bind — the constant is `0`.
+    //
+    // `legal_mask` is in `idx_cards_collapse` for the format filter's sake, so this rides the
+    // same covering scan rather than knocking the collapsed browse into row lookups. It is
+    // also why the filter is not `layout NOT IN (…)`: `layout` is in no index, and a layout
+    // list would have to be kept in step with Scryfall's by hand while the mask is computed
+    // from the card's own legalities on every sync.
+    //
+    // An orphan fails it, exactly as it fails the format filter: the collection's LEFT JOIN
+    // gives it a NULL alias and `NULL != 0` is NULL. The column is `NOT NULL DEFAULT 0` so a
+    // *card* row can never be that NULL.
+    if f.playable_only.unwrap_or(false) {
+        p.wheres.push(format!("{alias}.legal_mask != 0"));
+    }
 }
 
 /// The set codes a request really filters on: trimmed, lower-cased, blanks dropped, sorted,
@@ -314,5 +343,35 @@ mod tests {
         let sql = p.where_sql();
         assert!(sql.contains("legal_mask"), "{sql}");
         assert!(!sql.contains("json_extract"), "{sql}");
+    }
+
+    /// `playable_only` is the one filter here whose omission means **off**, and the asymmetry
+    /// with `paper_only` two lines above it is exactly what a reader would get wrong. Every
+    /// caller but the search view omits it, so a default of `true` would silently drop the
+    /// art cards out of a collection someone owns them in — a list showing too little, which
+    /// is the failure nobody reports either.
+    #[test]
+    fn playable_only_is_off_unless_it_is_asked_for() {
+        let sql = |f: CardFilters| {
+            let mut p = Predicates::default();
+            push_card_filters(&mut p, &f, "c", None);
+            p.where_sql()
+        };
+
+        assert!(
+            !sql(CardFilters::default()).contains("legal_mask"),
+            "omitted means no clause at all"
+        );
+        assert!(!sql(CardFilters {
+            playable_only: Some(false),
+            ..Default::default()
+        })
+        .contains("legal_mask"));
+
+        let on = sql(CardFilters {
+            playable_only: Some(true),
+            ..Default::default()
+        });
+        assert!(on.contains("c.legal_mask != 0"), "{on}");
     }
 }

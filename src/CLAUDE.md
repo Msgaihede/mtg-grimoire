@@ -90,6 +90,17 @@ Every one of these has its measurement and its story in
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
+- **Ctrl+wheel zooms the card sections and nothing else.** One `cardZoom` in `useAppStore`, stepped
+  along the ten-stop ladder in `src/lib/cardZoom.ts` (0.5×–2×) and attached per card section through
+  `useCardZoomGesture` — `CardGrid`'s scroller, `StackView`'s and `GridView`'s roots. The shell, the
+  tables and the card pane never scale. Three rules carry it, each with a live failure behind it in
+  [frontend-design.md](../docs/reference/frontend-design.md): the gesture needs a **native**
+  `addEventListener` with `{ passive: false }` (React's `onWheel` is passive, so `preventDefault`
+  does nothing and WebView2 zooms the whole window on top of you); the zoom rescales **geometry**
+  and is never a `transform: scale()`; and **a scaled budget holding unscaled chrome floors rather
+  than scales** — `max(base, scaled(base, zoom))`, which is why `CardGrid`'s caption, `CardStack`'s
+  34px reveal and `GridView`'s gutter all grow without shrinking. Session-only by design: no
+  persistence, matching `searchView`/`collectionView`.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns are
   data; only `renderRow` and `extraHeight` stay callbacks. **A header sorts by what its column
   shows**, Shift builds a multi-key sort, and `aria-sort` goes on **every** sorted column. A

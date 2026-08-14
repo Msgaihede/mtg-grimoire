@@ -291,6 +291,44 @@ describe("the paper filter", () => {
 });
 
 /**
+ * The paper filter's neighbour, whose default is the **opposite** — omitted means off, because
+ * the search view is the only caller that sends it (`filters::CardFilters::playable_only`).
+ * Getting that backwards is the one mistake this mirror can make silently: the collection would
+ * stop listing an art card its owner really owns, and nothing would say so.
+ */
+describe("the playable filter", () => {
+  /** The three paper printings the mask reads as legal nowhere, named rather than counted so a
+   *  regenerated `cards.ts` fails here rather than one number out. */
+  const UNPLAYABLE = ["Prismatic Ending // Prismatic Ending", "Kozilek, Compleated", "Little Girl"];
+
+  it("is off unless asked for, and then hides the printings no format allows", () => {
+    const db = makeDb();
+    const seen = (req: Record<string, unknown>) =>
+      (readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
+        items: { name: string }[];
+      }).items.map((i) => i.name);
+
+    // The three really are in the corpus and really are unplayable, so the assertion below is
+    // about the filter rather than about a fixture that never had them.
+    for (const name of UNPLAYABLE) {
+      const card = CARDS.find((c) => c.name === name)!;
+      expect(card.isPaper).toBe(true);
+      expect(/"(legal|restricted)"/.test(card.legalities)).toBe(false);
+    }
+
+    expect(seen({})).toHaveLength(41);
+    expect(seen({ playableOnly: false })).toHaveLength(41);
+
+    const playable = seen({ playableOnly: true });
+    expect(playable).toHaveLength(38);
+    for (const name of UNPLAYABLE) expect(playable).not.toContain(name);
+    // `restricted` counts as playable — a Vintage search that hid Black Lotus would be wrong.
+    expect(playable).toContain("Black Lotus");
+  });
+
+});
+
+/**
  * `index::facets::compute`, mirrored.
  *
  * **Every dimension is counted over a base carrying every filter EXCEPT its own** — Solr's
@@ -359,6 +397,25 @@ describe("facet counts", () => {
     expect(c.colors.C).toBe(41);
     // W/R replaces it rather than joining it: `"RC"` would silently mean plain `"R"`.
     expect(c.colors.R).toBe(15);
+  });
+
+  /**
+   * `playableOnly` is not a facet either, so it narrows every base — and it **cannot move a
+   * format count**, because a card legal in a format is playable by definition. That equality
+   * is the assertion worth making: if it ever failed, the format select would grey an option
+   * the search returns rows for.
+   */
+  it("narrows every base by the playable decision and leaves the format counts alone", () => {
+    const off = facets(makeDb(), {});
+    const on = facets(makeDb(), { playableOnly: true });
+
+    expect(off.total).toBe(41);
+    expect(on.total).toBe(38);
+    // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), which is one of the three.
+    expect(on.manaValues["8"]).toBe(off.manaValues["8"] - 1);
+    for (const key of ["modern", "vintage", "commander", "pauper"]) {
+      expect(on.formats[key]).toBe(off.formats[key]);
+    }
   });
 
   it("counts a colour over the paper decision the request made, not over the default", () => {
@@ -572,6 +629,100 @@ describe("prices", () => {
     expect(summary.totalCards).toBe(2);
     expect(summary.uniqueCards).toBe(2);
     expect(summary.entries).toBe(2);
+  });
+});
+
+/**
+ * Which printing stands for a collapsed row — `released_at DESC, price ASC NULLS LAST, id DESC`.
+ *
+ * **The corpus cannot show this and a fixture has to.** The rule only bites when two printings
+ * share the newest release date, and none of `cards.ts`'s 36 paper groups does (measured
+ * 2026-08-14); `large`'s synthetic corpus does, in 126 of its 686 groups, which is what makes the
+ * change visible in the workbench. So every row here is cut from a real Bolt row with three
+ * columns replaced, which keeps the other thirty the ingest's.
+ *
+ * The ids are named rather than uuid-shaped and are chosen so that **`id DESC` alone would pick
+ * the wrong one in every case below** — otherwise the old rule would pass these too.
+ */
+describe("the collapsed row's representative", () => {
+  /** One printing of the Bolt oracle card: its own id, release date and dollar price, and
+   *  `oracleId` left alone so any set of these collapses into one group. */
+  const printing = (id: string, releasedAt: string, usd: number | null): FakeCard => ({
+    ...BOLT,
+    id,
+    releasedAt,
+    priceUsd: usd,
+    prices: JSON.stringify({ usd: usd === null ? null : usd.toFixed(2) }),
+  });
+
+  const repOf = (cards: FakeCard[], marketplace?: MarketplaceId) =>
+    readHandlers(makeDb({ cards })).search_cards({
+      req: { collapse: true, marketplace, limit: 10, offset: 0 },
+    }).items[0];
+
+  it("takes the cheapest printing of the newest release, and never an older cheaper one", () => {
+    const row = repOf([
+      printing("z-new-dear", "2024-04-08", 50),
+      printing("a-new-cheap", "2024-04-08", 5),
+      // Cheaper than either, and irrelevant: the date decides first, so a collapsed row always
+      // stands for the card as it is printed now.
+      printing("m-old-cheapest", "2019-01-01", 1),
+    ]);
+    expect(row.id).toBe("a-new-cheap");
+    // The span is still every printing that matched, which is what keeps it wider than the
+    // representative's own price.
+    expect([row.priceLow, row.priceHigh]).toEqual([1, 50]);
+    expect(row.printings).toBe(3);
+  });
+
+  /**
+   * `null` is "this marketplace does not quote this printing", not "free".
+   *
+   * Sorted first it would make the cheapest-of-the-latest rule hand every row to the printing
+   * nobody has a price for — the one thing the rule cannot be allowed to mean.
+   */
+  it("sorts an unpriced printing last, and falls back to the id when none is priced", () => {
+    const unpriced = printing("z-new-null", "2024-04-08", null);
+    expect(repOf([unpriced, printing("a-new", "2024-04-08", 9)]).id).toBe("a-new");
+    // With nothing of that date priced there is no price to order by, and `id DESC` — the last
+    // key, unchanged — is what still makes the pick total.
+    expect(repOf([printing("a-new-null", "2024-04-08", null), unpriced]).id).toBe("z-new-null");
+  });
+
+  /**
+   * The representative is picked at the marketplace the request named, from the same call the
+   * span below it is built from — so the row cannot choose its printing at one marketplace and
+   * quote its range at another.
+   */
+  it("picks at the marketplace the search named", () => {
+    // `z-bolt` is what `id DESC` alone would take, and no marketplace below picks it — so each
+    // assertion is one the old rule fails.
+    const db = makeDb({
+      cards: [
+        printing("z-bolt", "2024-04-08", 50),
+        printing("a-bolt", "2024-04-08", 5),
+        printing("m-bolt", "2024-04-08", 20),
+      ],
+      marketplacePrices: [
+        // Card Kingdom's order is its own: it makes the dearest of the three in dollars the
+        // cheapest here, so the pick has to move with the parameter rather than with the blob.
+        { marketplace: "cardkingdom", cardId: "z-bolt", finish: "nonfoil", price: 40 },
+        { marketplace: "cardkingdom", cardId: "a-bolt", finish: "nonfoil", price: 30 },
+        { marketplace: "cardkingdom", cardId: "m-bolt", finish: "nonfoil", price: 3 },
+        // Mana Pool has never listed the other two at all — absent rows, not zeroes.
+        { marketplace: "manapool", cardId: "m-bolt", finish: "nonfoil", price: 44 },
+      ],
+    });
+    const at = (marketplace: MarketplaceId) =>
+      readHandlers(db).search_cards({ req: { collapse: true, marketplace, limit: 10, offset: 0 } })
+        .items[0];
+
+    expect(at("tcgplayer").id).toBe("a-bolt");
+    expect(at("cardkingdom").id).toBe("m-bolt");
+    // The only printing this feed prices, so it represents the card *and* is the whole span —
+    // the two read off one call, which is what stops them quoting different marketplaces.
+    expect(at("manapool").id).toBe("m-bolt");
+    expect([at("manapool").priceLow, at("manapool").priceHigh]).toEqual([44, 44]);
   });
 });
 
