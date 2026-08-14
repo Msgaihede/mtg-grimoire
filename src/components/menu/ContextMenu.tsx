@@ -408,6 +408,20 @@ export function ContextMenu({
   // `offsetHeight` are the layout box and ignore the entry animation's `scale`, which a
   // `getBoundingClientRect()` taken in this same tick would be 4% short of.
   useLayoutEffect(() => {
+    // **A hover armed against the menu that has just gone away, disarmed with it** — the third
+    // thing a new `openId` resets, and the one the render-phase block above cannot do, because
+    // clearing a timer is a side effect and a render is not where those go. Here rather than in
+    // an ordinary effect so it lands in the same commit that drew the new menu: a `setTimeout`
+    // callback is a macrotask, and React renders a discrete event's update synchronously, so
+    // there is no moment between the reset and this line for the stale timer to fire in.
+    //
+    // A pointer that leaves the panel fires no `pointerover` the panel can hear, so nothing else
+    // ever disarms one — and the reader whose pointer left is exactly the reader about to
+    // right-click something else. The cost of leaving it is not a stale expansion but a **mounted
+    // `lazy` body**: card menu ids are the same on every card, so the path still names a row of
+    // the menu now on screen, and the queries the `lazy` kind exists to keep off a right-click
+    // fire on a right-click.
+    clearHover();
     const el = panelRef.current;
     if (!el) return;
     el.focus();

@@ -461,6 +461,52 @@ describe("ContextMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toHaveFocus();
   });
 
+  /**
+   * The armed hover timer, and the one thing that can happen to a panel while it is running.
+   *
+   * A pointer leaving the panel fires no `pointerover` the panel can hear, so the timer stays
+   * armed with the path it was going to open — and the reset on a new `openId` clears `openPath`
+   * and `size` but is not, on its own, a reason for a timer belonging to the menu that just went
+   * away to stop existing. One panel is reused across every open, so the stale callback lands on
+   * the *new* menu.
+   *
+   * **Card menu ids are identical on every card**, which is what makes that a real failure rather
+   * than a harmless one: the path still names a row of the menu now on screen, so card B's menu
+   * spontaneously expands and mounts a `lazy` body the reader never asked for — firing the very
+   * queries that kind exists to keep off a right-click.
+   */
+  it("disarms a pending hover when the panel is handed a new menu", () => {
+    vi.useFakeTimers();
+    const mounted = vi.fn();
+    function Content() {
+      mounted();
+      return (
+        <div role="menuitem" tabIndex={-1}>
+          Burn
+        </div>
+      );
+    }
+    open([{ kind: "lazy", id: "deck", label: "Deck", Content }]);
+    const target = screen.getByRole("button", { name: "target" });
+    rightClick(target);
+
+    // Armed, and not yet fired: a pointer resting on the row of card A's menu.
+    fireEvent.pointerOver(screen.getByRole("menuitem", { name: /Deck/ }));
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS - 20));
+    expect(mounted).not.toHaveBeenCalled();
+
+    // The reader moves off the panel -- which the panel hears nothing about -- and right-clicks
+    // the next card inside the window the timer is still running in.
+    rightClick(target);
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
+
+    expect(mounted).not.toHaveBeenCalled();
+    expect(screen.getByRole("menuitem", { name: /Deck/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   it("takes Home and End to the ends of the list", async () => {
     const user = userEvent.setup();
     open([
