@@ -70,8 +70,14 @@ the path router working, not a failure.
 
 ## 6. Report, and stop
 
-Give the user the pull request URL and the `ci-ok` state. **Do not merge.** Do not enable
-auto-merge, do not delete the branch, do not remove the worktree. The user presses Merge.
+Give the user the pull request URL and the `ci-ok` state. **Do not press Merge**, do not
+delete the branch, do not remove the worktree.
+
+**Unless this is an auto-PR.** When the user asks for a PR that lands itself — "make an
+auto-pr", or several agents are shipping at once and the PRs keep knocking each other out
+of date — arming auto-merge is the point, and the `auto-pr` skill is the authority on it.
+Use that skill instead of steps 4-6 here: it clears `BEHIND` without waiting, watches for
+the two states GitHub abandons, and still never presses Merge by hand.
 
 ## Two things that look broken and are not
 
@@ -84,6 +90,8 @@ auto-merge, do not delete the branch, do not remove the worktree. The user press
 ## Red flags — stop
 
 - About to run `git rebase`, `git reset --hard`, or `git push --force`.
-- About to run `gh pr merge`, or `gh pr merge --auto`.
+- About to run `gh pr merge` to merge a PR now. (`gh pr merge --auto` is different, and is
+  the `auto-pr` skill's job — it arms GitHub to merge once `ci-ok` is green, rather than
+  merging anything itself.)
 - About to say "tests pass" without having run them in this session.
 - About to open a PR with a lock still held by your worktree.

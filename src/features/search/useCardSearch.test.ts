@@ -280,8 +280,10 @@ describe("the X mana chip", () => {
  * `Any format`, Reset all really clears it, and a deck the panel is not looking at any more
  * never gets to put its own answer back over the reader's.
  *
- * `SearchPage` and `CollectionFilterBar` pass nothing, and the first case here is theirs: with
- * no option the hook must behave exactly as it did before this parameter existed.
+ * `SearchPage` passes nothing, and the first case here is that one: with no option the hook must
+ * behave exactly as it did before this parameter existed. (`FilterBar.stories.tsx` is the other
+ * caller that passes nothing; `DeckSearchPanel` is the one that passes a default.
+ * `CollectionFilterBar` mounts none of this — it imports `FORMATS` and draws its own select.)
  */
 describe("the default format filter", () => {
   beforeEach(() => {
@@ -292,9 +294,9 @@ describe("the default format filter", () => {
 
   const COMMANDER: FormatFilterOption = { value: "commander", label: "Commander" };
   /**
-   * A key the deck picker offers and this filter's own list does not. `format_specs` seeds
-   * twenty-four pickable formats against `FORMATS`' seven, so a default the picker cannot draw
-   * is the ordinary case rather than the exotic one — and a `<select>` holding a value none of
+   * A key the deck picker offers and this filter's own list does not. The picker draws every
+   * enabled `format_specs` row against `FORMATS`' seven, so a default this list cannot draw is
+   * the ordinary case rather than the exotic one — and a `<select>` holding a value none of
    * its options carry does not show it, it silently reports the first one. The panel would then
    * read `Any format` over a filtered wall of cards.
    */
@@ -400,6 +402,28 @@ describe("the default format filter", () => {
 
     expect(result.current.format).toBe("modern");
     await waitFor(() => expect(lastSearchRequest().format).toBe("modern"));
+  });
+
+  /**
+   * The default going the other way, which is the arm the deck editor reaches by the reader
+   * changing the open deck's format to `casual`: the fence stops handing one down, and the
+   * filter has to follow it back to `Any format` rather than going on narrowing by a format the
+   * deck is not in any more. The same render-phase guard does it — `""` is a default like any
+   * other — and the request is what proves it, since a stale key would still be narrowing the
+   * search. Driven from the unlisted key so the picker's own row is watched back out too.
+   */
+  it("clears the filter when the deck's format stops offering a default", async () => {
+    const { result, rerender } = renderWithDeck(OATHBREAKER);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.format).toBe("oathbreaker");
+
+    rerender({ deck: null });
+
+    expect(result.current.format).toBe("");
+    await waitFor(() => expect(lastSearchRequest().format).toBeUndefined());
+    // And the picker goes back to the seven it had before, rather than keeping a row for a
+    // default nobody is passing any more.
+    expect(result.current.formats).toEqual(FORMATS);
   });
 
   /** A default the list already carries is not added twice, and one it does not is added. */

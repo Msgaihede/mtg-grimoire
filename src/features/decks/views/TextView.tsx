@@ -26,7 +26,7 @@ import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns, SIDEBOARD_ATTR, splitSideboard } from "./columns";
+import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /** Row pitch and header height, for the packer. Read off the classes below. */
@@ -42,7 +42,7 @@ const GROUP_GAP = 16;
  *
  * **One constant, read three times**: the packed column's width, both halves of its `flex`
  * shorthand, and the flowing area's `minWidth` — which is the number that decides whether the
- * sideboard rail fits beside the columns. A second spelling of "300px" would let the rail wrap at
+ * rail fits beside the columns. A second spelling of "300px" would let the rail wrap at
  * a width the columns had stopped agreeing with, and the layout would be wrong only in the narrow
  * window nobody develops in. It stays an **inline style** rather than a Tailwind class for the
  * usual reason: the scanner reads source text, so a class built from a constant emits no rule.
@@ -74,11 +74,12 @@ export function TextView({
   columnHeight?: number;
   className?: string;
 }) {
-  // The Sideboard is lifted out before anything is packed, so `packColumns` is handed a shorter
-  // list and none of its own rules change. It is a category like any other to a greedy in-order
-  // pack, which drops it wherever it lands — usually the far end of a long run, i.e. the one pile
-  // a reader looks for by position, in the one place it can never be.
-  const { flow, sideboard } = splitSideboard(groups);
+  // The Sideboard and the Maybeboard are lifted out before anything is packed, so `packColumns` is
+  // handed a shorter list and none of its own rules change. Each is a category like any other to a
+  // greedy in-order pack, which drops it wherever it lands — usually the far end of a long run,
+  // i.e. the two piles a reader looks for by position, in the one place they can never be.
+  // {@link splitRail} has which kinds, and why the rail is not sorted here.
+  const { flow, rail } = splitRail(groups);
   const columns = packColumns(flow, groupHeight, columnHeight);
 
   return (
@@ -133,21 +134,26 @@ export function TextView({
         ))}
       </div>
 
-      {/* Drawn for an **empty** Sideboard too, which is the case worth stating: an empty pile is
-          where the next sideboard card goes, and a rail that appeared with the first card would
-          shove the whole layout sideways under the reader's hand mid-drag. A group in here is the
-          same `TextGroup` as one in the flow, so its heading, its aria and its drop target need
-          no second definition — the rail is where it is drawn, not what it is. */}
-      {sideboard.length > 0 && (
+      {/* The Sideboard and the Maybeboard, in the reader's own `sortOrder` — nothing here
+          re-arranges them. Drawn for an **empty** pile too, which is the case worth stating: an
+          empty pile is where the next card of that kind goes, and a rail that appeared with the
+          first card would shove the whole layout sideways under the reader's hand mid-drag.
+
+          A group in here is the same `TextGroup` as one in the flow, so its heading, its aria and
+          its drop target need no second definition — the rail is where it is drawn, not what it
+          is. **That is also the whole answer to the Maybeboard being seeded switched off**: this
+          rail will routinely hold a dimmed pile, and it takes no code here, because the dimming
+          belongs to the group and travels with it. */}
+      {rail.length > 0 && (
         <div
-          {...{ [SIDEBOARD_ATTR]: "" }}
+          {...{ [RAIL_ATTR]: "" }}
           style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
           // `ml-auto` is a no-op while the flowing area is `flex-1` and does the whole job in the
           // one case that matters: the rail has wrapped onto a line of its own and should still
           // be on the right, where the reader last saw it.
           className="ml-auto flex flex-col gap-4"
         >
-          {sideboard.map((group) => (
+          {rail.map((group) => (
             <TextGroup
               key={group.key}
               group={group}

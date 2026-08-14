@@ -144,10 +144,9 @@ export interface DeckSearchPanelProps {
    * **A default, never a constraint.** It seeds `useCardSearch`'s `format` state and reaches
    * nothing else: `Any format` stays first in the list, the reader may move the select to any
    * format including one this deck is not legal in, and the card they then press Add on is
-   * added. A card the format does not allow is `validation/engine.ts`'s `RULE BREAK` to draw —
-   * a search that refused to show it would be this panel enforcing a rule the engine owns, and
-   * would make a deliberate trip out of the format (a sideboard, a proxy, a deck about to be
-   * re-formatted) impossible rather than merely marked.
+   * added. Legality is `validation/engine.ts`'s `RULE BREAK` on the card once it is in the
+   * deck, and why that is the only place it may be answered is the docked panel's bullet in
+   * this folder's `CLAUDE.md`.
    *
    * `null` and absent both mean **Any format**, and that is a working panel rather than a
    * degraded one. It has to be: the editor's answer is `null` while the format seed is still

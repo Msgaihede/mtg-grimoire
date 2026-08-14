@@ -379,18 +379,21 @@ export const FoldersUnavailable: Story = {
 /**
  * A gallery before there is a deck.
  *
- * "A deck is a list you build for a format. Start one and the app checks it as you go…" — a
- * statement about what a deck *is*, next to the one control that makes one, rather than the word
- * "empty". `seed: "empty"` is the seed with no decks; it also has no cards, which is why this is
- * the honest first-run gallery rather than a filtered one.
+ * **"No decks", and nothing else.** A placeholder's whole job is to say that the list is empty
+ * and that nothing has gone wrong; the control that fixes it is in the heading row above, where
+ * it is on every other visit, so the words here are not the affordance. It used to be a
+ * paragraph explaining what a deck is and what the app would do with one — an explanation
+ * carried by the one screen least able to act on it, and read by every reader exactly once.
+ * This gallery's story is its covers, and a gallery with no covers has no story to tell.
+ *
+ * `seed: "empty"` is the seed with no decks; it also has no cards, which is why this is the
+ * honest first-run gallery rather than a filtered one.
  */
 export const Empty: Story = {
   parameters: { fake: { seed: "empty" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(
-      await canvas.findByText(/A deck is a list you build for a format\./),
-    ).toBeInTheDocument();
+    await expect(await canvas.findByText("No decks")).toBeInTheDocument();
     await expect(canvas.queryByRole("list", { name: "Your decks" })).toBeNull();
     await expect(canvas.getByRole("button", { name: "New deck" })).toBeEnabled();
   },
@@ -406,9 +409,14 @@ export const Empty: Story = {
  * `validation/fixtures.ts`'s `SPECS` — **12 rows**, measured 2026-08-10 over
  * `format_specs_list()`, against the 25 the real migration seeds — so this select reads Brawl,
  * Casual, Commander, Duel Commander, Gladiator, Limited, Modern, Oathbreaker, Old School,
- * Pauper Commander, Tiny Leaders: Reborn, Vintage, and the shipped app's is twice as long. The
- * select starts on Casual, which is `decks.format_key`'s own DDL default: a deck that has not
- * been given a format yet should not be a deck full of complaints.
+ * Pauper Commander, Tiny Leaders: Reborn, Vintage, and the shipped app's is twice as long.
+ *
+ * **The select starts on Commander**, and it is the gallery that decides so: `useNewDeckFormat`
+ * is mounted here, not in the dialog, and answers the format the reader last *created* a deck in
+ * — `FIRST_DECK_FORMAT` where they have created none, which is this world. A seeded deck is not
+ * a created one, so `lastDeckFormat` is `null` however many tiles are on the wall. `casual` is
+ * still `decks.format_key`'s DDL default and still what a deck given no format is; it is simply
+ * not what a dialog *asking* the question should open on.
  *
  * The new tile says **"No cover"** rather than showing a grey rectangle, and it draws no credit
  * line — the two are different facts, and `Cover` tells them apart in as many words: "No cover"
@@ -425,7 +433,15 @@ export const NewDeck: Story = {
     // The caret starts in the field the reader has to fill.
     const name = within(form).getByLabelText("Name");
     await expect(name).toHaveFocus();
-    await expect(within(form).getByLabelText("Format")).toHaveValue("casual");
+    // `waitFor`, because this value now depends on **two** reads having landed —
+    // `format_specs_list` for the picker and `deck_last_format` for the memory — and
+    // `toHaveValue` does not retry. The old `casual` claim was true either way, so it could be
+    // asserted flat; this one is only true once both have answered, and under a loaded suite
+    // that is not guaranteed to be the microtask after the click. The same claim in
+    // `DecksPage.test.tsx` is wrapped for the same reason.
+    await waitFor(async () => {
+      await expect(within(form).getByLabelText("Format")).toHaveValue("commander");
+    });
 
     await userEvent.type(name, "Sunday Cube");
     await userEvent.click(within(form).getByRole("button", { name: "Create deck" }));
@@ -435,7 +451,11 @@ export const NewDeck: Story = {
     });
     // A deck with no cover and nothing in it, said in both places rather than left blank.
     await expect(canvas.getByText("No cover")).toBeInTheDocument();
-    await expect(canvas.getByText(/^Casual ·/)).toHaveTextContent("Casual · 0 cards");
+    // Made in the format the dialog opened on, untouched by the reader: the caption is the
+    // other end of the default, read off the row the write answered with. Scoped to the new
+    // tile, because this world already holds a Commander deck and the caption is not unique.
+    const made = canvas.getByRole("button", { name: /^Sunday Cube/ });
+    await expect(within(made).getByText(/^Commander ·/)).toHaveTextContent("Commander · 0 cards");
     // **No credit line**, because there is no artist to credit. Two on the wall, not three: the
     // archived deck's tile is behind a shut disclosure and is not mounted at all.
     await expect(canvas.getAllByText(/^Art by /)).toHaveLength(2);

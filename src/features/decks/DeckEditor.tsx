@@ -408,12 +408,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * The columns and the move targets: **every category the deck has, in `sortOrder`.**
    *
-   * There used to be a filter here, driven by the seeded format spec — the sideboard was hidden
-   * when `sideboard_max` was 0, the commander column unless `requires_commander`. Schema v8
-   * makes that wrong: a category is a row the user named, ordered and switched on or off, so
-   * hiding one would hide a pile they built, and a deck may own any number of `main` ones,
-   * which no spec cell has anything to say about. The format still judges the deck (the check
-   * chip in the header); it no longer decides what is drawn.
+   * There used to be a filter *here*, driven by the seeded format spec — the sideboard dropped
+   * out of this array when `sideboard_max` was 0, the commander column unless
+   * `requires_commander`. Schema v8 makes that wrong and still does: a category is a row the
+   * user named, ordered and switched on or off, so cutting one out of this list hides a pile
+   * they built, and a deck may own any number of `main` ones, which no spec cell has anything
+   * to say about.
+   *
+   * **The format has since come back, and it came back one rung lower — read this before
+   * reinstating anything here, because the change looks like a revert of that decision and is
+   * not.** What the spec answers now is {@link emptyGroupRules}, which `buildGroups` consults
+   * about a group holding **nothing**: a Modern deck draws no empty command zone. This array is
+   * untouched by it and is still every category of the deck. It is what the toolbar's "Add to"
+   * select and `CategoriesPanel` are built from, so every pile
+   * stays reachable by name whether or not a heading is drawn for it — and a pile that *holds*
+   * a card draws whatever the format says, because `drawsWhenEmpty` is never asked about a
+   * group with cards in it. Nothing holding cardboard is hidden, and nothing at all is hidden
+   * from the surfaces a reader files a card with. The format also still judges the deck, which
+   * is the check chip in the header and a different question again.
    */
   const categories = deck.categories;
 
@@ -924,12 +936,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * the only thing it is for.
    *
    * **Filtering therefore also decides which headings exist**, which is a consequence of
-   * `grouping.ts`' `drawsWhenEmpty` rather than a rule of its own: a category the filter empties
-   * is an empty category, so it stops drawing exactly as one the reader emptied by hand does.
-   * Only the four seeded zones survive it. That is deliberate — a filter whose matches are three
-   * cards should not answer with twenty headings and three rows — but it does mean the shape of
-   * the deck on screen changes as the reader types, and the pile a card would land in may not be
-   * on screen while a filter is running.
+   * `grouping.ts`' `drawsWhenEmpty` rather than a rule of its own — and it is **no longer the
+   * same answer as emptying a pile by hand**. A category the reader emptied themselves *stays*:
+   * it is a place they made, and a column that vanished with its last card is one they cannot
+   * put a card back into. A category the *filter* empties is the filter's doing rather than the
+   * deck's, so there — and only there — the older rule holds and only the four seeded zones
+   * survive. That half is exactly where it was earned: without it, three letters in the filter
+   * box answer with twenty headings and three rows. It does mean the shape of the deck on screen
+   * changes as the reader types, and the pile a card would land in may not be on screen while a
+   * filter is running. {@link emptyGroupRules}' `narrowed` is what carries the distinction.
    */
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -957,13 +972,39 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const separateX = row?.separateXGroup === true;
 
+  /**
+   * What `buildGroups` needs beyond the piles themselves to decide which **empty** headings are
+   * drawn. Neither half can reach a group that holds a card — `drawsWhenEmpty` is not asked
+   * about one — so nothing here hides cardboard.
+   *
+   * `requiresCommander` falls back to `false`, and the fallback is the half worth writing down.
+   * `useFormatSpecs` answers `null` twice over: while the table is still loading, and for a deck
+   * whose `formatKey` has left the seed — `decks.format_key` is deliberately not a foreign key,
+   * so that state can exist and the deck must still open. A deck with no format opinion
+   * therefore gets no empty command zone. That costs nothing, because a command zone **holding a
+   * card** draws whatever the format says, so the heading arrives with the first card filed
+   * there and never after it.
+   *
+   * `narrowed` is the one exception to "a pile the reader made is always drawn". An empty pile
+   * while the filter box or a tag chip is running is the *filter's* doing rather than the deck's,
+   * so the old rule — only the fixed zones survive — stays exactly where it was earned. What it
+   * prevents is a three-letter filter answering with twenty headings and three cards.
+   */
+  const emptyGroupRules = useMemo(
+    () => ({
+      requiresCommander: spec?.requiresCommander ?? false,
+      narrowed: filter.trim() !== "" || tagIds.length > 0,
+    }),
+    [spec, filter, tagIds],
+  );
+
   const groups = useMemo(
     // No currency any more: the rows this groups arrived priced at the selected marketplace,
     // because that marketplace is in `useDeck`'s query key. A switch therefore changes
     // `deck.cards` itself and this recomputes over the new answer, rather than picking a
     // different field out of the old one.
-    () => buildGroups(shown, categories, groupBy, sortBy, separateX),
-    [shown, categories, groupBy, sortBy, separateX],
+    () => buildGroups(shown, categories, groupBy, sortBy, separateX, emptyGroupRules),
+    [shown, categories, groupBy, sortBy, separateX, emptyGroupRules],
   );
 
   /**

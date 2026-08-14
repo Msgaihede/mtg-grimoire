@@ -17,7 +17,8 @@ Two workflows, and every rule below was measured live. Full detail, including th
   is the
   fail-safe that makes the lists safe to be wrong in the cheap direction. **Only the "neither"
   arm can wrongly skip work, so it stays small.**
-- **The `powershell` job runs `lock.test.ps1` on `windows-latest`**, and its `case` arm must
+- **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
+  for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its `case` arm must
   stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and `scripts/` is on the
   frontend list only because `eslint .` lints it, which a `.ps1` is not. It matches `.psm1`
   and `.psd1` too, because **the `*)` fail-safe does not set `powershell`**: a module would

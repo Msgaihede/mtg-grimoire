@@ -569,6 +569,24 @@ export interface FakeDb {
    */
   printingGroupBy: string | null;
   /**
+   * `app_meta.last_deck_format` — the format the last **created** deck carried, so the next
+   * "New deck" dialog opens on the format this reader actually makes decks in.
+   *
+   * The third row of the same key/value table, a **stored string** and `null` for the row not
+   * being there, for {@link FakeDb.marketplace}'s reason a third time: a reader who has never
+   * made a deck has never written it, and a key written by a different build may name a format
+   * this one has never heard of. Unlike its two neighbours, *neither* case is narrowed on the
+   * way out — see {@link readHandlers.deck_last_format}.
+   *
+   * **Written by `deck_create` and by nothing else**, which is why no setter sits beside
+   * `set_marketplace` and `set_printing_group_by`: this row is a side effect of making a deck
+   * rather than a preference anybody chooses. Re-formatting an existing deck does not move it
+   * and neither does a duplicate — the memory is of what was *created*. A seeded world
+   * therefore answers `null` however many decks it holds: those decks were seeded, not created
+   * through the command.
+   */
+  lastDeckFormat: string | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -742,6 +760,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The same, one row over: `printing_group_by` answers `artist` for a card pane nobody has
     // told, which is the grouping every story that says nothing about it is standing in.
     printingGroupBy: null,
+    // The third row, and the only one of the three no command sets on purpose: `deck_create`
+    // writes it, so a world whose decks were seeded rather than created has never written it —
+    // which is the state the dialog's own Commander default stands in for.
+    lastDeckFormat: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -3647,6 +3669,24 @@ export function readHandlers(db: FakeDb) {
         : DEFAULT_PRINTING_GROUP_BY,
 
     /**
+     * `deck::last_deck_format` — the format the last **created** deck carried, or `null`.
+     *
+     * The third `app_meta` row, and **the one that does not narrow on the way out**: the two
+     * above check what they read against a list and shrug at anything else, this one hands the
+     * stored key back verbatim. Not leniency — there is no list on this side to check it
+     * against. The formats are `format_specs`' rows, the narrowing is TypeScript's, and a
+     * default the backend picked would be a second opinion about a table the webview is already
+     * reading. So the Rust does not validate here either, and a fake that did would be telling
+     * stories about a check the app does not make.
+     *
+     * That leaves `null` and an unplaceable key meaning the same thing to the caller — open on
+     * the dialog's own default — and only the caller can tell them apart. A read, so no fault
+     * touches it, and there is no write beside it: {@link writeHandlers.deck_create} is the
+     * only thing that fills this row.
+     */
+    deck_last_format: (): string | null => db.lastDeckFormat,
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -4792,7 +4832,7 @@ export function writeHandlers(db: FakeDb) {
      *
      * Everything {@link DeckInput} carries below `formatKey` is written here rather than left
      * to a follow-up patch: create-then-patch-then-file is three writes and a half-made deck to
-     * unwind by hand when the second one fails. Four of its rules are **not**
+     * unwind by hand when the second one fails. Five of its rules are **not**
      * {@link deck_update}'s, and each is a rule a reader who knows the patch will guess wrong:
      *
      * - **Nothing here coalesces.** A patch reads an absent field as "leave it"; an insert has
@@ -4812,6 +4852,10 @@ export function writeHandlers(db: FakeDb) {
      *   being born is one event. It is also the only `deck` row whose `from` is null — there
      *   was no previous name, because there was no deck — and it is recorded rather than left
      *   out so a drawer scrolled to the bottom ends at the deck's own beginning.
+     * - **It is the only deck write that touches `app_meta`**, and the only writer of
+     *   {@link FakeDb.lastDeckFormat} anywhere. Re-formatting an existing deck is a correction
+     *   and a duplicate is not a decision, so neither moves the memory; making a deck in a
+     *   format *is* the decision, so this one does.
      *
      * `folderId` is checked **nowhere**, here or in Rust: `decks.folder_id REFERENCES
      * deck_folders(id)` is a real foreign key over two user tables, so SQLite refuses a folder
@@ -4848,6 +4892,13 @@ export function writeHandlers(db: FakeDb) {
         updatedAt: stamp(db),
       };
       db.decks.push(row);
+      // `app_meta.last_deck_format`, written from **`row.formatKey` and not from `args`**: the
+      // memory has to be the format the deck actually carries, so a blank input remembers the
+      // `casual` it became rather than the blank it arrived as. Placed here rather than beside
+      // the row's construction because that is where the transaction it lives in ends — a
+      // create refused above (a blank name, or a format {@link validFormat} does not know)
+      // never reaches this line, which is what leaves the previous answer standing.
+      db.lastDeckFormat = row.formatKey;
       ensurePredefinedCategories(db, row.id);
       record(db, row.id, DECK_LEVEL, "deck", null, { field: "name", from: null, to: row.name }, 0);
       return toDeckRow(db, row);

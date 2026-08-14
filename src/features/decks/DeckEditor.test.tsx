@@ -305,14 +305,16 @@ const group = (name: string) => screen.getByRole("region", { name });
  * deck the fence deliberately left unfiltered. Anything asserting on that default has to be past
  * this line or it is testing a query in flight.
  *
- * **`Modern` is the sentinel, and the deck's own format is not**: `pickerFormats` folds a deck's
- * format into the header's list whether or not anything has loaded, so the option a deck is
- * already on is there from the first paint and proves nothing.
+ * **The sentinel has to be a `PICKER` format the deck under test is _not_ on**: `pickerFormats`
+ * folds a deck's own format into the header's list whether or not anything has loaded, so that
+ * option is there from the first paint and waiting for it would gate on nothing. `Gladiator` is
+ * the default because every deck fixture here is on something else; the one test whose deck *is*
+ * Gladiator passes another of `PICKER`'s four.
  */
-const seeded = () =>
+const seeded = (sentinel = "Gladiator") =>
   waitFor(() =>
     expect(
-      within(screen.getByLabelText("Deck format")).getByRole("option", { name: "Modern" }),
+      within(screen.getByLabelText("Deck format")).getByRole("option", { name: sentinel }),
     ).toBeInTheDocument(),
   );
 
@@ -619,40 +621,133 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The groups are the deck's categories, and the format has nothing to say about them.**
+   * **The groups are the deck's categories; the format decides only whether an *empty* command
+   * zone is one of them.**
    *
-   * There used to be a filter here: Modern got a sideboard and no commander column, because
-   * `sideboard_max` and `requires_commander` decided which of the five fixed zones were slots
-   * this format had. Schema v8 makes a category a row the *user* named, ordered and switched on
-   * or off, so hiding one would hide a pile they built. This deck is Modern and its Commander
-   * group is drawn — which is the whole of what changed.
+   * Two rules have lived here in turn and this is neither of them whole. The first filtered the
+   * **category list** by the seeded spec — no commander column unless `requires_commander`, no
+   * sideboard when `sideboard_max` was 0 — and schema v8 killed it, because a category is a row
+   * the *user* named, ordered and switched on or off, so cutting one out hides a pile they
+   * built. The second was "draw every category, whatever the format says", which is what this
+   * test asserted until now.
+   *
+   * What replaced it reaches only the **empty** piles, and only through `buildGroups`' rules
+   * argument — `deck.categories` is untouched, which is why the "Add to" tests below still see
+   * every pile and none is unreachable. This deck is Modern: no empty Commander
+   * heading (the format needs none) and no empty Companion heading (a companion is nominated,
+   * never handed out, so an empty slot says nothing). Everything else is drawn empty — the two
+   * fixed zones Modern does use, and a pile the reader made and emptied, which is the reverse of
+   * the old rule and the whole reason this changed.
    *
    * The default grouping is Categories, so the deck opens on exactly this list.
    */
-  it("draws one group per category, whatever the format says about them", async () => {
+  it("draws no empty command zone or companion slot for a format with neither", async () => {
+    const brew = category(6, "Sunday brew", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, brew]));
+
     await open();
 
-    expect(
-      screen.getAllByRole("region", {
-        name: /^(Main deck|Sideboard|Commander|Companion|Maybeboard)$/,
-      }),
-    ).toHaveLength(5);
-    // Empty ones included: a category is a *place* as well as a heading, and a column that
-    // vanished with its last card is one the reader cannot put a card back into.
+    expect(screen.queryByRole("region", { name: "Commander" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Companion" })).not.toBeInTheDocument();
+    // A category is a *place* as well as a heading, and a column that vanished with its last
+    // card is one the reader cannot put a card back into — so the reader's own emptied pile is
+    // drawn, and so are the two fixed zones this format plays with.
+    expect(group("Main deck")).toBeInTheDocument();
     expect(within(group("Sideboard")).getByText("0 cards")).toBeInTheDocument();
-    // Modern requires no commander and this deck has none, and the group is here all the same.
-    expect(group("Commander")).toBeInTheDocument();
+    expect(within(group("Maybeboard")).getByText("0 cards")).toBeInTheDocument();
+    expect(within(group("Sunday brew")).getByText("0 cards")).toBeInTheDocument();
   });
 
-  /** And the same five for a Commander deck, whose `sideboard_max` is 0: a category is data the
-   *  user made, so re-formatting a deck never takes a pile away from it. */
-  it("draws the same groups for a commander deck", async () => {
+  /**
+   * And the other way for a Commander deck, which is the whole reason the format is asked at
+   * all: an empty command zone is itself a fact about a deck that needs one — it is where the
+   * commander goes, and the deck is not legal until something is in it.
+   *
+   * The Companion heading stays away even here. Commander's `allows_companion` is true, but the
+   * format hands nobody a companion; the reader nominates one, so an empty slot is a heading
+   * about a decision that has not been made. It appears with the card — see the test below.
+   *
+   * Nothing else moved: Commander's `sideboard_max` is 0 and the Sideboard is still the
+   * reader's own pile, so it draws for the reason it always did.
+   */
+  it("draws the empty command zone for a commander deck", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, []));
 
     await open();
 
     expect(await screen.findByRole("region", { name: "Commander" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Companion" })).not.toBeInTheDocument();
     expect(group("Sideboard")).toBeInTheDocument();
+    expect(group("Maybeboard")).toBeInTheDocument();
+  });
+
+  /**
+   * **A pile holding a card draws whatever the format says**, and that is the rule the two tests
+   * above are the exception to rather than the other way round. `drawsWhenEmpty` is asked only
+   * about a group with nothing in it, so a Modern deck still carrying a commander and a
+   * companion — a deck the reader re-formatted — shows both piles and the cards in them.
+   *
+   * The editor never hides cardboard: a card nothing draws is a card the reader cannot find,
+   * count or take out, and the format check in the header is where a deck is told it is wrong.
+   */
+  it("draws a commander and a companion holding cards in a format that wants neither", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        card({ name: "Kenrith", categoryKind: "commander", typeLine: "Legendary Creature" }),
+        card({ name: "Lurrus", categoryKind: "companion", typeLine: "Legendary Creature — Cat" }),
+      ]),
+    );
+
+    await open();
+
+    expect(
+      within(await screen.findByRole("region", { name: "Commander" })).getByRole("button", {
+        name: /^Kenrith/,
+      }),
+    ).toBeInTheDocument();
+    expect(within(group("Companion")).getByRole("button", { name: /^Lurrus/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **The filter is the one thing that takes a reader's own empty pile off the screen**, and the
+   * exception belongs to the filter rather than to the deck: a pile that is empty *because three
+   * letters are in the box* is empty by the act of looking, and a filter matching one card must
+   * not answer with twenty headings and one row. Only the fixed zones survive it — which is the
+   * rule the whole editor used to run on, kept exactly where it was earned.
+   *
+   * It is a fact about the view and never about the deck: `deck.categories` does not change, so
+   * the toolbar's "Add to" select goes on offering the pile by name throughout, and clearing the
+   * box brings the heading straight back.
+   */
+  it("collapses the reader's own empty piles while a filter is running", async () => {
+    const brew = category(6, "Sunday brew", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, brew]));
+
+    await open();
+    expect(group("Sunday brew")).toBeInTheDocument();
+
+    const box = screen.getByLabelText("Filter this deck");
+    await userEvent.type(box, "bolt");
+
+    expect(screen.queryByRole("region", { name: "Sunday brew" })).not.toBeInTheDocument();
+    expect(group("Main deck")).toBeInTheDocument();
+    expect(group("Sideboard")).toBeInTheDocument();
+    expect(group("Maybeboard")).toBeInTheDocument();
+    // The pile is still somewhere a card can be filed while it is not a heading — the whole
+    // reason hiding one is survivable is that no surface a reader files a card with is built
+    // from the drawn groups. The per-card "Move…" select made the same point and was removed on
+    // 2026-08-14, so the toolbar's "Add to" is what carries it now. It sits in the docked
+    // search panel, which opens collapsed since the same day — so the panel is opened here to
+    // read it. That the select is built from `deck_category_list` rather than from the drawn
+    // groups is what the assertion is about, and the disclosure changes neither.
+    await openSearchPanel();
+    expect(
+      within(screen.getByLabelText("Add to")).getByRole("option", { name: "Sunday brew" }),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(box);
+
+    expect(await screen.findByRole("region", { name: "Sunday brew" })).toBeInTheDocument();
   });
 
   /** A card is drawn in the group its `categoryId` names, which is the whole of the filing: the
@@ -1293,13 +1388,16 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The other `null` spec, and it answers the same way: `decks.format_key` is deliberately not a
-   * foreign key, so a deck whose format left the seed is a state that can exist and must still
-   * open. There is no `hasLegalityData` cell to read for it — and inferring one from the key
-   * would be this file guessing at what the database can answer — so the panel opens unfiltered
-   * rather than on a filter nothing behind it has heard of.
+   * The other `null` spec, and it answers the same way. `historic` here is a key **this
+   * fixture's `PICKER` does not carry**, standing in for one the seed has lost: `decks.format_key`
+   * is deliberately not a foreign key, so a deck whose format left the seed is a state that can
+   * exist and must still open. (The real seed does carry `historic`, and a Historic deck in the
+   * shipped app opens on Historic — what is being driven here is `formatSpecFor` answering
+   * `null`, whatever made it do so.) There is no `hasLegalityData` cell to read then — and
+   * inferring one from the key would be this file guessing at what the database can answer — so
+   * the panel opens unfiltered rather than on a filter nothing behind it has heard of.
    */
-  it("opens on Any format for a deck whose format has left the seed", async () => {
+  it("opens on Any format for a deck whose format the seed does not carry", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
     await open();
     await openSearchPanel();
@@ -1307,6 +1405,36 @@ describe("DeckEditor", () => {
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
     expect(screen.getByLabelText("Deck format")).toHaveValue("historic");
+  });
+
+  /**
+   * **A format the filter row's own list has never carried, driven the whole way** — editor to
+   * panel to `FilterBar`. `gladiator` is a seeded `format_specs` row with legality data behind
+   * it and is not one of `FORMATS`' seven, which is the ordinary case for a deck: the deck picker
+   * offers every enabled row and this filter offers seven keys.
+   *
+   * So the select can only read `Gladiator` because the hook folded the default into its own
+   * option list. Without that the value would match no option, React would select the first row
+   * that is not disabled, and the panel would say `Any format` over a wall already narrowed to
+   * Gladiator. Both assertions are made for that reason: `value` reads back `""` under the bug
+   * and the option's text is the whole of what the reader sees.
+   *
+   * The sentinel is `Commander` here rather than the helper's `Gladiator`, because this deck's
+   * own format is folded into the header's list before the seed lands.
+   */
+  it("draws a deck format the filter row's own list has never carried", async () => {
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "gladiator", formatName: "Gladiator" }, [bolt()]),
+    );
+    await open();
+    // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14).
+    await openSearchPanel();
+    await seeded("Commander");
+
+    const filter = screen.getByLabelText("Format") as HTMLSelectElement;
+    expect(filter).toHaveValue("gladiator");
+    expect(filter.selectedOptions[0]).toHaveTextContent("Gladiator");
+    expect(screen.getByLabelText("Deck format")).toHaveValue("gladiator");
   });
 
   /**

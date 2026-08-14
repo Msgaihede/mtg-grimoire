@@ -33,6 +33,12 @@
  * anywhere in here, and there must never be one: a deck's rules role is `kind`, which the
  * backend seeds, and every question this dialog asks about a category is answered by `kind`,
  * `isActive` or the name.
+ *
+ * **The format now reaches the editor, and that is not a reason to let it in here.** A Standard
+ * deck draws no empty command zone and no empty Companion — `grouping.ts`'s `drawsWhenEmpty`,
+ * asked about a group holding nothing. This dialog is the surface that answers "what piles does
+ * this deck have", and the answer is all of them: a heading the editor leaves out is exactly the
+ * pile a reader comes here to find, rename, reorder or delete. Every row, always.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type JSX } from "react";
 import { GripVertical } from "lucide-react";
@@ -710,10 +716,12 @@ function DeleteCategory({
  * *reach* worth stating — `useDeckMeta` words that sentence, so the hook that decided to move
  * nothing is the thing that says so.
  *
- * A pile this press empties disappears from the **editor** behind this dialog (`grouping.ts`'s
- * `drawsWhenEmpty`) and stays in the list above, which is `deck_category_list` and draws every
- * category a deck has. That is not a contradiction: this is the surface where a pile is the
- * subject rather than a heading over cards.
+ * **A pile this press empties keeps its heading in the editor behind this dialog**, and it used
+ * to lose it. `grouping.ts`'s `drawsWhenEmpty` draws an empty category now — a pile the cards
+ * left is still the place the next one goes — so this press moves cards out of a pile without
+ * moving the pile. The list above never depended on that either way: it is `deck_category_list`
+ * and draws every category a deck has, because this is the surface where a pile is the subject
+ * rather than a heading over cards.
  */
 function AutoCategorise({ meta, cards }: { meta: DeckMeta; cards: readonly DeckCard[] }) {
   const { autoCategorise } = meta;

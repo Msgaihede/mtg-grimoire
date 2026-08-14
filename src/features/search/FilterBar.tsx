@@ -62,10 +62,13 @@ export function FilterBar({
    * format whenever that one is not among them — the deck editor's docked panel opens on the
    * format of the deck being edited, and a deck can be in a format this picker has never
    * offered. That extra key is not decoration: **a `<select>` whose `value` matches no
-   * `<option>` draws blank** — not the format, not `Any format`, nothing — while the filter it
-   * names is silently applied to the results underneath, which is a control that lies about the
-   * list beside it. So the options have to come from whoever owns the value, and a constant
-   * imported here could only ever be right for the callers that never set one.
+   * `<option>` does not draw blank — it silently reports the first one.** React never assigns
+   * `select.value` for a controlled select; `react-dom` walks the options setting `selected`,
+   * and on no match it selects the first row that is not disabled — which here is the pinned
+   * `Any format`. So the control would read `Any format` while the filter it names goes on
+   * narrowing the results underneath, which is a control that lies about the list beside it.
+   * The options therefore have to come from whoever owns the value, and a constant imported
+   * here could only ever be right for the callers that never set one.
    *
    * The seeded key is a format like every other once it arrives: it sorts into the alphabet by
    * its label, greys by its own facet count, and is pinned by nothing. `Any format` is the only
