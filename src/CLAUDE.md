@@ -122,6 +122,18 @@ Every one of these has its measurement and its story in
 - **Tailwind scans source text for whole class names**, so a class built by interpolation emits
   no rule at all. Variant spellings (`has-[[aria-expanded=true]]:z-10`) are written out;
   a column template is an inline style, not an arbitrary value.
+- **A row of fixed-width controls is sized by the _narrowest_ surface that draws it, which in
+  this app is the 384px docked search panel — never the filter bar it was designed in.** Give
+  it `flex-wrap`. A flex item cannot shrink below its own min-content, so an unwrapped row just
+  hangs out of the panel, and `DeckEditor`'s section is `overflow-y-auto` — which computes
+  `overflow-x` to **`auto`** — so the overhang becomes a horizontal scrollbar across the whole
+  deck builder. That is the one thing the 1024px floor forbids, and it arrives with **no test
+  going red and nothing on screen naming the culprit**. It shipped: `ManaValueChips` was nine
+  `size-9` chips at `9 × 36 + 8 × 4` = 356 and fitted, the **X chip** made it ten at 396 against
+  a ~371 content box, and the editor overflowed by **25px at every window width** — 1042 vs 1017
+  at 1280×800 and 2322 vs 2297 at 2560×1400 — because the panel's width does not move with the
+  window. Only a live pass finds this one; the figures and the fix are in
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **`aria-disabled`, never the `disabled` attribute**, on anything that greys as the reader
   types — a `disabled` button leaves the tab order. The one exception is a native `<option>`.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser

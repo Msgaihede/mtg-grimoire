@@ -72,13 +72,16 @@ are all things no suite could have seen.
   `li.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))` then wait past the 70ms
   dwell — or `cdp.mjs hover --probe`, which is what the numbers above were taken with. Testing
   the caret path live needs the window actually focused.
-- **To read a 210px card at a legible size, clone the column rather than zoom the page.**
+- **To read a 210px card at a legible size, clone the pile rather than zoom the page.**
   `document.documentElement.style.zoom` reflows the editor and carries the stack out of the
   viewport; `cdp.mjs size` is fixed at `deviceScaleFactor: 1` and cannot magnify. What works is
-  cloning the column into a `position: fixed` element with its own `zoom` — inline styles and
+  cloning the pile into a `position: fixed` element with its own `zoom` — inline styles and
   `data-*` attributes come with the clone, so an open card stays open in it. Remove it before
-  any further probe: it is a second copy of every `[data-stack-column]` and `[data-stack-open]`
-  in the document, and it will double every count taken after it.
+  any further probe: it is a second copy of every `[data-deck-stack]` and `[data-stack-open]`
+  in the document, and it will double every count taken after it. (**The selector changed on
+  2026-08-14**: `[data-stack-column]` was a box `packColumns` produced, and `StackView` stopped
+  packing — `[data-deck-stack]` is one pile in the flow, and there is no wrapper box left, so a
+  clone of it is a clone of the `<section>` itself.)
 - **"A positioned element paints above a static sibling" is false for flex items, and only the
   window could say so.** The redesign's quantity tag has to cover the Game Changer banner tucked
   10px under its slanted tail. The first implementation did it without a z-index — tag

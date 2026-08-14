@@ -702,6 +702,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     **13 columns** are a ceiling for that seeded deck rather than a reading of it today. Nothing
     has been re-driven. The widths and both thresholds are untouched either way: they are
     arithmetic about one column, and a column is the same width whoever made the pile in it.
+- **The X scrollbar that pass declared gone came back through the docked panel, and it was a
+  filter row 25px too wide** (found and fixed 2026-08-14, driven on the reader's own deck at
+  `npm run tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain
+  `flex gap-1` of `size-9` chips: at nine numerals that is `9 × 36 + 8 × 4` = **356px** and it
+  fitted; the **X chip** made it ten, `10 × 36 + 9 × 4` = **396px**, against the docked search
+  panel's 384 (content box ~371). A flex item cannot shrink below its own min-content, so the
+  group hung out of the panel — and `DeckEditor`'s section is `overflow-y-auto`, which computes
+  `overflow-x` to **`auto`**, so it became a horizontal scrollbar across the whole deck builder.
+  Measured: editor `scrollWidth` **1042** against `clientWidth` **1017** at 1280×800, and **2322**
+  against **2297** at 2560×1400 — **25px at both**, because the panel's width never changes with
+  the window, which is exactly why it read as permanent rather than as a narrow-window bug.
+  `flex-wrap` on the group is the whole fix: its min-content becomes one chip, so it breaks onto
+  a second line inside the panel and is unchanged in the two full-width filter bars, where it
+  already fitted. After it, `scrollWidth === clientWidth` at both widths and the document had no
+  sideways scroller at all. **The general rule this is an instance of**: a row of fixed-width
+  controls is sized by the *narrowest* surface that draws it, and in this app that is the 384px
+  docked panel — never the filter bar it was designed in. Nothing goes red when a tenth chip is
+  added, so `FilterChips.test.tsx` now holds the arithmetic beside the wrap.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row
