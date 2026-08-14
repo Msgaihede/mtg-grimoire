@@ -42,6 +42,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { CollectionPage } from "./CollectionPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { useAppStore } from "@/lib/store";
 
 const BOLT: CollectionRow = {
@@ -815,6 +816,79 @@ describe("the card menu", () => {
         condition: "NM",
         quantity: 1,
       }),
+    );
+  });
+
+  /**
+   * The one field on the target nothing else here can see, and the reason it is carried: a
+   * deck add naming no category is filed by what the card *does*, and the type line is
+   * `autoCategoryFor`'s fallback. A drag of the same row carries it; a menu add would be the
+   * one path that did not.
+   *
+   * This is also the only test on these three surfaces that drives the deck picker, so it is
+   * what says the `lazy` row is reachable from a real page — the panel's own cascade is
+   * `cardMenu.test.tsx`'s subject.
+   */
+  it("carries the row's type line into a deck add, so the pile is chosen by what the card does", async () => {
+    const user = userEvent.setup();
+    const addToDeck = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Seeded rather than answered through `ipc`: the picker's two reads are `useDecks` and
+    // `useDeckFolders`, and this test is about what the *adapter* carries. A first paint
+    // saying "Loading decks…" would make it about the read's timing instead.
+    client.setQueryData(
+      ["decks", "list"],
+      [
+        {
+          id: 7,
+          name: "Burn",
+          formatKey: "commander",
+          formatName: "Commander",
+          description: null,
+          coverCardId: null,
+          coverKind: "card_art",
+          coverArtist: null,
+          isBuilt: false,
+          archived: false,
+          cardCount: 0,
+          updatedAt: 0,
+          folderId: null,
+          notes: null,
+          theoryEnabled: false,
+          lastVariant: "live",
+          lastGroupBy: "category",
+          lastSortBy: "alphabetical",
+          separateXGroup: false,
+        },
+      ],
+    );
+    client.setQueryData(["decks", "folders"], []);
+    render(
+      <QueryClientProvider client={client}>
+        {/* **Above `ContextMenuProvider`, and that nesting is the whole of what makes this
+            work.** The panel is a *sibling* of the provider's children, not a descendant of
+            them — `ContextMenuProvider` renders `{children}` and then the open menu beside it —
+            so a `CardToDeckProvider` mounted inside the surface is not above the picker, and
+            `useAddCardToDeck` throws on expand. A page rendered on its own has to supply this,
+            because the picker throws without it rather than swallowing the add. */}
+        <CardToDeckProvider value={{ addToDeck, error: null, clearError: vi.fn() }}>
+          <ContextMenuProvider>
+            <CollectionPage />
+          </ContextMenuProvider>
+        </CardToDeckProvider>
+      </QueryClientProvider>,
+    );
+
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Deck" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Burn" }));
+
+    expect(addToDeck).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", typeLine: "Instant" }),
+      7,
+      "live",
     );
   });
 

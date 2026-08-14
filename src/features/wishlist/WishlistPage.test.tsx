@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -696,19 +696,24 @@ describe("the card menu", () => {
   /**
    * The negative half, and it is the reason this suite renders both rows: an absence proves
    * nothing unless the same gesture on the row beside it produces the menu.
+   *
+   * **Both presses are inside `act`, and that is what makes the absence mean anything.** A raw
+   * `dispatchEvent` is not flushed synchronously, so a `queryByRole` on the next line finds no
+   * menu whether or not one was opened — this test passed against a build that offered the
+   * menu on every row until `act` was put round the press. The second half is then measured
+   * exactly the same way, so the two halves differ in the row and in nothing else.
    */
   it("offers no menu on a wish for any printing, which names no card to ask about", async () => {
     wishlistList.mockResolvedValue(page([BOLT, ANY]));
     wrap(<WishlistPage />);
     const any = await screen.findByRole("row", { name: /Ancestral Recall/ });
 
-    rightClick(any);
-
+    await act(async () => rightClick(any));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
     // The same press one row up, so the absence above is about the wish rather than about
     // the harness.
-    rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
-    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    await act(async () => rightClick(screen.getByRole("row", { name: /Lightning Bolt/ })));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 });
