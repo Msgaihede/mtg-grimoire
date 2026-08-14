@@ -467,11 +467,15 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
   promise the answer before the press.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
-  `newestWrite([...])` counts six of the hook's eight** — update (the rename, the cover, the
-  Built toggle and the `Split X` chip, all four of which are the same deck-row write and
-  therefore not four mutations), add-card, set-quantity, move, missing-to-wishlist,
-  swap-printing. The other two are `setTag` and `rememberView`, and neither is a write to what
-  is _in_ the deck.
+  `newestWrite([...])` takes every one of them but `rememberView`** — update (the rename, the
+  cover, the Built toggle and the `Split X` chip, all four of which are the same deck-row write
+  and therefore not four mutations), add-card, set-quantity, move, set-tag,
+  missing-to-wishlist, swap-printing — **and the `useDeckMeta` writes a right-click can now
+  reach**, which are the tag create and a category's rename, switch and delete. Read the array
+  rather than a count: this sentence carried one and it went stale on 2026-08-14, when the card
+  and category menus gave `setTag` and the `useDeckMeta` writes a control in this view for the
+  first time. `rememberView` is the one that stays out, because looking at a deck is not
+  editing it.
   **There is no remove
   mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
   removes a deck row. The deck _row_ is a different hook — the gallery's `useDecks` owns create,

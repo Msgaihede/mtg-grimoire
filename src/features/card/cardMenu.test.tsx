@@ -294,7 +294,8 @@ describe("buildDeckTargetItems", () => {
   it("keeps the reader's own folder order and sorts only the decks", () => {
     // `Standard` sorts first here and `Commander` second, which is the order the reader
     // arranged in the gallery and the reverse of the alphabet -- a folder tree is an
-    // arrangement, `src/lib/options.ts`'s second exemption. The loose decks are alphabetical.
+    // arrangement the reader made, which is the kind of list `src/lib/options.ts` exempts.
+    // The loose decks are alphabetical.
     const items = buildDeckTargetItems(
       [folder(2, "Standard", null, 0), folder(1, "Commander", null, 1)],
       [

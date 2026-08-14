@@ -896,12 +896,19 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     alphabet** (2026-08-14): `Any card`, then `Any format`, then the sorted formats — widest to
     narrowest. `Any card` is what the `Unplayable` chip beside this select became; the bullet
     below this block says why the two controls became one.
-  - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
-    Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
-    reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesDialog`
-    and rendered in that order by all four deck views, so an alphabetical dropdown would
-    disagree with the columns beside it. Both carry a comment at the site saying so, because
-    the next sweep for unsorted selects will otherwise "fix" them.
+  - **The exemptions are a test, and there is deliberately no list of them here** (changed
+    2026-08-15). A list is exempt when its order **is** the information — a **grade scale**,
+    card condition running Near Mint → Damaged, which alphabetised would open on "Damaged"; a
+    printing's finishes, plain before the two premium treatments; a declared ladder such as the
+    card menu's `Open on`, where sorting would move the row a reader has learnt the position of
+    whenever they changed marketplace — or when the order is one **the reader arranged
+    themselves**: a deck's categories are drag-sorted in `CategoriesDialog` and rendered in that
+    order by all four deck views, so an alphabetical dropdown would disagree with the columns
+    beside it, and a folder tree is the same argument. This bullet said "two, and they are the
+    whole list" until the context menus landed and made it several within a day, which is why it
+    states the rule instead. Every exemption carries a comment at its own site saying which of
+    the two it is — that comment is the record, and it is what stops the next sweep for unsorted
+    selects "fixing" them.
 
 - **The search's `Unplayable` chip is a row of its format select now** (2026-08-14) — one control
   where there were two, `FilterBar.tsx` plus `useCardSearch.ts`'s `ANY_CARD` and `formatParams`.

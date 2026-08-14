@@ -2508,6 +2508,10 @@ Run: `npx vitest run src/features/search src/features/collection src/features/wi
   `Move…` select could do that a drag cannot.
 - **Categories are one of exactly two exemptions from `sortOptions`** — an order the reader
   arranged themselves. Put the comment at the site, as the other exemption does.
+  > **Stale as of 2026-08-15, annotated rather than rewritten.** "Exactly two" was true when this
+  > plan was written; executing it added several more. The instruction is still right — put the
+  > comment at the site — but the count is not. `src/CLAUDE.md` carries the test the exemptions
+  > are granted by and deliberately keeps no list.
 - `commanderIneligibility` (`validation/commanders.ts`) and the companion rule
   (`validation/companions.ts`) supply the greyed items' reasons. Do not write a looser test
   here: it would offer a card the validation panel then refuses.
