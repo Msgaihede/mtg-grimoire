@@ -190,7 +190,7 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
           ))}
         </select>
 
-        {/* Nothing is drawn until there is something to clear — the rule lives in the
+        {/* Always drawn, greyed when there is nothing to clear — the rule lives in the
             control, so every view that offers a reset offers the same one. */}
         <ResetAll count={collection.activeCount} onReset={collection.resetAll} />
 
