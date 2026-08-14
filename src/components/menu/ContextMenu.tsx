@@ -207,6 +207,24 @@ function RadioRow({ item, run }: { item: MenuRadio; run: RowsContext["run"] }) {
  * rendered rather than decisions a caller should be making — and a caller that could pass the
  * wrong depth would produce a cascade whose levels close each other. It reads them from the panel
  * it is inside, so a `Content` mounted at depth 3 is at depth 3 without knowing the number exists.
+ *
+ * ## Two rules a caller has to keep
+ *
+ * **`id` must be unique within one level, and only within one level.** The caret, the expanded-row
+ * path and React's keys all key on it, and the path is *itself* keyed by depth — so a folder and a
+ * deck inside it may share an id, while two decks in one panel may not. Two siblings with one id
+ * expand and collapse each other.
+ *
+ * **A row's `onSelect` must not also call `onDone`.** Choosing a row already closes the whole menu
+ * — that is what `ActionRow` and `MenuRadio` mean — so an `onSelect` that closes as well is a
+ * second close of something already gone. `onDone` is for a body that finishes *without* a row
+ * being pressed: a form it drew itself, a step it completed on its own.
+ *
+ * And one thing that is not a rule but bites the same way: **`lazy` is a promise about mounting,
+ * not about rendering.** A body is mounted once, when its row is expanded, so a query in it fires
+ * once — but the component may re-render many times while the menu is open (any re-render of the
+ * menu reaches it; nothing in between is memoised, measured 2026-08-14). Work belongs in its
+ * hooks, not in its body.
  */
 export function MenuRows({ items }: { items: MenuItem[] }) {
   const { ctx, depth } = useContext(CascadeContext);
@@ -337,10 +355,18 @@ export function ContextMenu({
     hoverTimer.current = null;
   };
 
-  // Memoised because it is a **context value** now, and a context value penetrates the
-  // `children`-identity bail-out that keeps a `MenuLazy.Content` from re-rendering: without this,
-  // measuring the panel would re-render every foreign row in the cascade. The two setters read
-  // `prev`, so nothing here goes stale between renders that `openPath` did not cause.
+  // Memoised because it is a **context value** now: an identity that changed every render would
+  // be a context change every render, which is the one thing a context consumer cannot opt out of.
+  // The two setters read `prev`, so nothing here goes stale between renders `openPath` did not
+  // cause.
+  //
+  // **It does not stop a lazy body from re-rendering, and an earlier version of this comment
+  // claimed it did.** Measured 2026-08-14 with a throwaway probe — a re-render of `ContextMenu`
+  // with `ctx` identical still ran a `MenuLazy.Content` a second time. Nothing between here and
+  // that body is `memo()`d, so every element down the chain is rebuilt and the re-render arrives
+  // whatever this identity is. That is correct and worth stating plainly for whoever writes one:
+  // **`lazy` is a promise about mounting, not about rendering.** The query fires once; the
+  // component may run many times, so a body's work belongs in its hooks and not in its body.
   const ctx = useMemo<RowsContext>(
     () => ({
       openPath,
