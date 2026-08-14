@@ -53,6 +53,55 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   the reader groups by something else. Exported beside `X_GROUP_NAME` (`"Mana value X"`) so that
   no chart, story or test re-spells either one.
 
+## Deck settings, and the two surfaces that draw them
+
+Everything a deck carries that is not a card in it — name, format, description, notes, cover,
+folder, theory — is **one component, `DeckSettingsForm`, drawn by two hosts** (2026-08-14). The
+"New deck" dialog used to ask two questions and leave the reader to configure the deck they had
+just made; it now asks all of them.
+
+- **The form owns no mutation and imports no hook that reaches the backend** — not `useDeck`,
+  not `useDeckFolders`, not `useFormatSpecs`. Every value and every write arrives as a prop, and
+  that is precisely what lets `CreateDeckDialog` render it **before the deck exists**. The rule is
+  checkable rather than aspirational: `DeckSettingsForm.test.tsx` renders it with no
+  `QueryClientProvider` at all, so a stray query fails the suite rather than the review.
+- **Two callbacks, because the two hosts commit differently.** `onChange` fires for every change
+  including each keystroke; `onCommit` fires only for the three text fields, when the reader is
+  finished with one. `DeckSettingsDialog` writes on `onChange` for the controls that settle in a
+  single act (format, theory, folder, cover) and on `onCommit` for name/description/notes — which
+  is exactly its old behaviour, **no Save button and not meant to have one**.
+  `CreateDeckDialog` merges `onChange` into a draft and **does not pass `onCommit` at all**:
+  there is nothing to write until Create.
+- **`useDeckField` is the edit host's hook, not the form's** (`useDeckField.ts`, moved out
+  whole). It holds the draft, commits on blur, and commits again on the dialog's *close* rather
+  than its unmount — the panel outlives the flag by the length of its fade, and a write waiting
+  on an animation races the editor's teardown. The form is controlled and knows none of this.
+- **`deck_create` takes a whole deck now**, so the create dialog is one command and one
+  transaction. Four of its rules are *not* `deck_update`'s — no `coalesce`, so an absent
+  `folderId` really is the top level; `coverKind` is not settable; theory **moves** nothing (the
+  patch route's `move_live_into_theory` has no live list to act on at birth); and a
+  birth is **one** audit row however many fields it was born with. All four, and the reasons:
+  [decks-storage.md](../../../docs/reference/decks-storage.md).
+- **The cover picker searches every printing, not just the deck's own cards**
+  (`DeckCoverPicker`). One grid, two modes: an empty search box offers the deck's cards, a query
+  offers results. It exists because a deck being *created* has no cards to take art from, and it
+  improves the settings dialog for free. `collapse: false` because different printings are
+  different art and collapsing hides the choice being made; `playableOnly: false` because art
+  series and tokens are some of the best crops and a cover is not a card you cast.
+- **The tiles do not credit the illustrator, and that is the documented exception, not an
+  oversight.** `CardSummary` carries no `artist`; `CardStack`, `GridView`, `TheoryDiffDialog` and
+  the original `ChoiceTile` all draw the same crop uncredited, justified by every crop sitting
+  inside a control that names its card. The **preview** is strict at both surfaces: no artist, no
+  picture. At create there is no `DeckRow` to read one from, so the host fetches it with
+  `card_detail` — the credit arrives with the picture and never before it.
+- **The upload arm is the one thing a create cannot do in one call**, because
+  `deck_set_cover_image` takes a path *and a deck id*. It runs after the create; if it is
+  refused, the dialog holds the deck it made, says so, and turns its button into **Open deck** —
+  a created deck is never lost, and pressing again never makes a second one.
+- **`CAPTION` and `FIELD` live in `formFields.ts`**, not in `cardControl.tsx`: that module's
+  subject is a deck card drawn as a control and it pulls in the drag machinery, which a dialog
+  asking for a deck's name has no business importing.
+
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation**, and `DeckEditor`'s

@@ -179,6 +179,47 @@ are all things no suite could have seen.
   mana cost reads as a badge rather than as damage.
 - **Linux remains entirely unrun**, as everywhere else in this repo.
 
+## The create dialog carrying every deck setting — 2026-08-14, `npm run tauri dev` (debug)
+
+Driven over CDP against the live corpus (**116,703 cards**, data from 2026-08-13). Everything
+below is a measurement of that window, not of the suite.
+
+- **The whole deck is born in one write, and every field survives the round trip.** Name, format
+  (`modern`, changed from the default), description, notes, theory **on**, and a cover picked from
+  the search all went in through a single `deck_create`; reopening `Deck settings` on the created
+  deck read **all six back**, and the cover kept its credit. That is the plan's whole claim,
+  measured end to end rather than argued from the struct.
+- **The cover search reaches the real corpus.** `Shivan Dragon` answered **64 matches, 50 shown**
+  ("a narrower word reaches the rest"), the grid's heading switched from "Pick art from cards in
+  this deck" to "Pick art from any card", and picking a tile drew the `art` crop in the preview
+  under **"Art by Melissa A. Benson"** — the credit fetched by `card_detail`, because
+  `CardSummary` carries no artist and there is no `DeckRow` yet to read one from. Before that
+  fetch existed the preview read **"No cover"** after a pick, which is what a live pass is for:
+  every test in the suite passed over it.
+- **Enter in the Name field creates the deck**, and this is the one behaviour the shared form
+  took away and had to be given back. `DeckSettingsForm`'s name field spends Enter on
+  `preventDefault()` + blur — right in the settings dialog, where blur *is* the write — so
+  adopting it silently cost the create dialog its fast path. With `onSubmit` wired, one `press
+Enter` created the deck and opened the editor. The two textareas keep their newline and the
+  cover search box refuses Enter outright, so exactly one field in the panel submits.
+- **The refactor did not cost the settings dialog its commit-on-blur.** A rename typed into the
+  reopened dialog and committed with Enter reached the database and re-rendered the editor
+  behind it, with no `role="alert"` raised.
+- **The panel fits the smallest window the app allows.** 880×651 at **1024×700**
+  (`tauri.conf.json`'s `minWidth`/`minHeight`), both axes inside the viewport, no page scroll and
+  no inner scroller engaged; 880×724 at 1280×800, centred at `left: 200`. **CDP's
+  `setDeviceMetricsOverride` goes below the OS minimum and the panel does clip there** — at an
+  820px viewport it stays 880 wide and overflows — so do not read that as a bug the app can
+  reach. It is the settings dialog's own pre-existing `w-[55rem] max-w-full`, unchanged by this
+  work, and 1024 is the floor that matters.
+- **Console clean** across the pass: vite's two connect lines, React's DevTools notice, and one
+  WebView2 `intervention` about lazily-loaded images — which is the cover grid's `loading="lazy"`
+  doing its job on a plain scroller, where the repo's rule says it belongs.
+- **The file picker half is still undriven**, for the reason recorded above: `dialog:allow-open`
+  opens a native window CDP cannot reach. So at create, *path → shown filename → upload after the
+  INSERT* is covered by tests and the **click → path** step is not — and neither is the refused
+  upload's "Open deck" state, which needs that same picker to reach.
+
 ## The stats band, driven 2026-08-14
 
 `npm run tauri dev`, a **debug** build, against the real 116 703-card corpus and a saved

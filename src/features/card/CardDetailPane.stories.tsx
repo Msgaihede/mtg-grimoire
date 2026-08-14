@@ -174,7 +174,7 @@ const meta = {
        * the same card, the same layout, and reading as a component that ignores its arguments.
        *
        * The fake **backend** needs none of this — a world is per story in-process now
-       * (`.storybook/fake/scope.ts`), and 41 of the 49 story files still render inline. This is
+       * (`.storybook/fake/scope.ts`), and 43 of the 51 story files still render inline. This is
        * the four that touch the one global left over. The grouping seeded by {@link Pane} is not
        * one of them: a query cache *is* per story, so the three stories below that open in a
        * mode would be isolated with or without this parameter.

@@ -2,14 +2,32 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **389 stories across 49 story files, 48 docs
+`npm run storybook` · `npm run build-storybook`. **402 stories across 51 story files, 50 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 50th `importPath` is the `.mdx`).
+(`Object.values(index.entries)`, grouped by `type`; the 52nd `importPath` is the `.mdx`).
 **Measured 2026-08-14** off a fresh `build-storybook` on the merge commit being shipped — the
-column-overflow branch with the X-mana-category `main` (PR #43) merged in: **437 entries, 389
-`story`, 48 `docs`, 50 distinct `importPath`s.** **Only the first two moved**; the docs-page, story
-file and `importPath` counts are re-derived off that same index and unchanged, which is what they
-are supposed to say on a merge where no story file arrived.
+column-overflow branch with the deck-creation-overhaul `main` (PR #50) merged in: **452 entries,
+402 `story`, 50 `docs`, 52 distinct `importPath`s.** The two story files are that `main`'s —
+`Decks/Cover picker` and `Decks/Settings form` — and the four stories this branch contributes
+(`WrappedColumns` and `SideboardRail` in each of `Decks/StackView` and `Decks/TextView`) went into
+files that already existed, so they moved the story and entry totals and nothing else.
+
+**This headline has now conflicted on five consecutive merges of `main`, and one of them is the
+first the arithmetic would have got wrong.** That was two merges ago: the two sides read 388 (a
+branch over a 375 base) and 382 (`main`, `Decks/QuickAdd`'s six plus `Decks/Editor`'s
+`ReopensOnThePlan`). 375 + 13 + 7 is **395**; the merged tree built **396**. One story existed
+that neither branch could see in its own index and no addition would have found. So the rule
+below is not a counsel of tidiness, it is the only method that produces the right number:
+**rebuild and read the index on the tree you are shipping**, which is the merge commit and not
+either parent.
+
+**One branch measured five times in one session — 385, 387, 389, and this merge's 402 — adding
+four stories of its own across the whole run.** Every other move was somebody else's work
+arriving. A branch that sits open while `main` advances does not have a story total; it has one
+per merge, and the only honest thing to do with the previous one is overwrite it.
+
+The paragraphs under this one are a branch that trusted the arithmetic and was wrong, and two
+branches that were each right about a tree nobody was shipping.
 
 **An earlier draft of this headline said 386 and added a paragraph explaining that it was one low,
 because `cf13568`'s `PinnedSideboard` had not been counted yet and arithmetic said 387.** The
@@ -115,15 +133,16 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**47 of the 49 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
-file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
-stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
+**49 of the 51 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is
+declared per file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those
+two have stories and no docs page. A new story file gets neither unless it says
+`tags: ["autodocs"]`.
 (Re-derived on the merged tree 2026-08-14, from source and from the built index rather than from
-either side of the merge: **47 autodocs + 1 `.mdx` = 48 docs pages**, against 49 story files, and
+either side of the merge: **49 autodocs + 1 `.mdx` = 50 docs pages**, against 51 story files, and
 the two opting out are still `CategoriesPanel` and `TheoryDiffDialog` — checked by grepping the
 tag, and by reading back the two story `importPath`s the index has no `docs` entry for, rather
-than by subtracting. Every term held this merge, which is the only sort of "unchanged" worth
-writing down. **The line above it and this parenthetical disagreed for one merge** — the headline
+than by subtracting. Both story files this merge brings in carry the tag. **The line above it and
+this parenthetical disagreed for one merge** — the headline
 had been updated to 47-of-49 while the arithmetic under it still read `46 + 1 mdx = 47` against 48
 files, which was true one merge earlier. A derived count went stale two terms at a time while the
 term that names it, 47 autodocs, stayed right, inside the very sentence that says not to carry one
@@ -238,7 +257,7 @@ merge.)
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**298** plays today, in a file of **301** tests — the other three are its own;
+  (**311** plays today, in a file of **314** tests — the other three are its own;
   `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the file's own
   structure for the second — one `it` per play, plus the glob tripwire and the two
   mounted-together stories — both re-derived 2026-08-14 on the merge commit being shipped. The

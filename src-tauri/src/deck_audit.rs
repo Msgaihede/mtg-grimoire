@@ -309,7 +309,7 @@ mod tests {
             &DeckInput {
                 name: name.to_owned(),
                 format_key: "modern".to_owned(),
-                description: None,
+                ..Default::default()
             },
         )
         .unwrap()
