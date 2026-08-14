@@ -301,9 +301,9 @@ describe("DeckSearchPanel", () => {
    * the reader opened fired a `search_cards` for a wall nobody was looking at.
    *
    * The fix is the rule the editor's dialogs already keep — closed is nothing mounted — so the
-   * hook moved into a child that `shown` mounts. **The press is what makes the silence
-   * discriminate**: a mock that had been wired to nothing would pass the first assertion on its
-   * own, and the second one is what says the search really is behind the disclosure.
+   * hook moved into a child the reader's own `open` mounts. **The press is what makes the
+   * silence discriminate**: a mock that had been wired to nothing would pass the first assertion
+   * on its own, and the second one is what says the search really is behind the disclosure.
    */
   it("asks the backend for nothing until the reader opens it", async () => {
     panel();
@@ -711,6 +711,66 @@ describe("DeckSearchPanel", () => {
     view.update({ roomy: true });
 
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **What the reader typed survives the editor taking the width away**, which the assertion
+   * above cannot see and which this branch broke.
+   *
+   * `OpenPanel` — where `useCardSearch`, the filter state, the facets and the wall live — was
+   * mounted on `open && roomy`, folding together the two things the rest of this component is
+   * careful to keep apart: what the reader *chose* and whether the editor has *room*. So a
+   * **width** change unmounted the search. The measured flow: at 1024 the reader opens the
+   * panel and types; a tile press opens the card pane; the pane's arrival squeezes the desk row
+   * and rails the panel; Escape closes the pane, the width comes back — and the panel reopened
+   * with an empty box on the deck's default format, having thrown away a search nobody shut.
+   *
+   * So this asserts on the **state**, not on the searchbox merely existing again: "the searchbox
+   * is back" is exactly what the test above checks, and a freshly remounted panel passes it.
+   * Both filters are read, because they fail differently — the text is state the hook holds, and
+   * the format is state a remount actively *overwrites* from `defaultFormat`.
+   *
+   * The reader's own collapse is the other half and is asserted here beside it: that one really
+   * does throw the state away, and a fix that made the railing survive by never unmounting at
+   * all would have lost the distinction this whole component is built on.
+   */
+  it("keeps the reader's query and filters across a railing, and drops them on a collapse", async () => {
+    const view = await openPanel({ defaultFormat: COMMANDER });
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search cards" }), "goblin");
+    await userEvent.selectOptions(formatSelect(), "modern");
+    expect(formatSelect()).toHaveValue("modern");
+
+    // The wrapper the body now hangs on generates **no box** while the panel is drawn, which is
+    // what keeps `OpenPanel`'s children flex items of the panel's own column: the row's `gap-2`,
+    // the wall's `flex-1` and the `min-h-0` chain distribute exactly as they did when there was
+    // no wrapper there at all. A `block` in its place would read identically in jsdom, which
+    // lays nothing out, and would be a different layout on screen — so the class is the assertion.
+    const section = screen.getByRole("region", { name: "Add cards" });
+    expect(section.lastElementChild).toHaveClass("contents");
+
+    // The card pane arrives and the desk row has no width for the panel. The body is hidden
+    // rather than unmounted, which is invisible to a role query — `hidden` takes the whole
+    // subtree out of the accessibility tree — and is the whole of the fix.
+    view.update({ roomy: false });
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(section.lastElementChild).toHaveAttribute("hidden");
+
+    // The pane closes and the room comes back. Nothing the reader did was a decision to start
+    // over, so nothing has started over.
+    view.update({ roomy: true });
+
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("goblin");
+    expect(formatSelect()).toHaveValue("modern");
+
+    // And a press is still a press: shutting the panel is the reader saying they are done, so
+    // the next open is a clean search seeded from the deck's format again.
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("");
+    expect(formatSelect()).toHaveValue(COMMANDER.value);
   });
 
   /**

@@ -302,9 +302,17 @@ export const Collapsed: Story = {
  * and the tile that opened it has gone with the panel.
  *
  * The reader's own choice is untouched by this, so a panel they had opened comes back the moment
- * the room does. Untouched includes untouched by the press above: `roomy` decides what is
- * *drawn* and the reader decides what they *want*, and a refusal that quietly flipped the second
- * one would answer a reader who never operated the control.
+ * the room does — **and comes back as they left it**. `roomy` decides what is *drawn* and the
+ * reader decides what they *want*: a panel that was already open is hidden (`display: none`)
+ * rather than unmounted, so the typed query, the filters and the facets are all still there when
+ * the width returns. A panel nobody has opened is still mounted-as-nothing, which is what keeps
+ * this state free. Untouched includes untouched by the press above — a refusal that quietly
+ * flipped the reader's choice would answer somebody who never operated the control.
+ *
+ * This story is the never-opened arm, because `roomy` is an arg and the wrapper is keyed on it:
+ * a *railing* is a prop moving under a live panel, which is a re-render rather than a remount,
+ * and it is pinned in `DeckSearchPanel.test.tsx` ("keeps the reader's query and filters across a
+ * railing").
  */
 export const NoRoom: Story = {
   args: { roomy: false },

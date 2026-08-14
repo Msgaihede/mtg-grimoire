@@ -162,8 +162,16 @@ export interface DeckSearchPanelProps {
    *
    * `false` renders the rail whatever the reader last chose, and the disclosure goes with it:
    * a control that cannot do the thing it names is worse than one that says why it cannot.
-   * The reader's own choice is untouched by this, so the panel comes back the moment the room
-   * does — closing the card pane at 1024 is enough.
+   *
+   * **It decides what is _drawn_ and never what is _mounted_**, and the two are kept apart
+   * because they answer to different things: this prop moves on a **width** change nobody
+   * asked for, while `open` moves only on a press. So a panel the reader had opened is
+   * *hidden* when the room goes rather than torn down, and the typed query, the filter row,
+   * the facets and the pages already fetched are all still there when the room comes back —
+   * closing the card pane at 1024 is enough, and the panel comes back as they left it.
+   * Gating the mount on this as well threw every one of those away on a *resize*: at 1024 a
+   * tile press opens the card pane, the pane's arrival rails the panel, and Escape brought it
+   * back empty on the deck's default format.
    */
   roomy?: boolean;
 }
@@ -219,12 +227,16 @@ export function DeckSearchPanel({
    * a thing you open to do a job and shut when the job is done.
    *
    * **The search comes up with the disclosure and costs nothing before it** — {@link OpenPanel}
-   * is where `useCardSearch` lives, and `shown` is what mounts it. Closed is nothing mounted,
-   * which is the rule every dialog in this editor is built on and the one this panel used to be
-   * the exception to: the hook was unconditional here, so every deck a reader opened fired a
-   * `search_cards` for a wall nobody was looking at. That was defensible while the rail was the
-   * rare case — it only happened when `roomy` was false — and stopped being defensible the day
-   * collapsed became the resting state.
+   * is where `useCardSearch` lives, and **this flag on its own is what mounts it**. Closed is
+   * nothing mounted, which is the rule every dialog in this editor is built on and the one this
+   * panel used to be the exception to: the hook was unconditional here, so every deck a reader
+   * opened fired a `search_cards` for a wall nobody was looking at. That was defensible while
+   * the rail was the rare case — it only happened when `roomy` was false — and stopped being
+   * defensible the day collapsed became the resting state.
+   *
+   * `shown` below is the *drawn* state, this and the editor's room together, and it reaches the
+   * classes, the `aria-expanded` and the row's shape and nothing else. **A press is the only
+   * thing that can unmount a search; a railing hides one** — see {@link DeckSearchPanelProps.roomy}.
    */
   const [open, setOpen] = useState(false);
   const shown = open && roomy;
@@ -238,11 +250,13 @@ export function DeckSearchPanel({
    *
    * This panel is what took it away: at 1024 a tile press opens the pane, the pane's arrival
    * squeezes the row, the row squeezes this panel down to its rail — and the tile that was
-   * pressed unmounts with it. `CardDetailPane` hands the caret back to whatever opened it and
-   * checks `isConnected` before it does, so an opener that has gone means the pane simply
-   * closes and the caret lands on `<body>`, with the next Tab restarting from the top of the
-   * app. The disclosure is the honest place for it: it is where the reader's search went, and
-   * it is a Tab away from the search box and the results either way.
+   * pressed goes `display: none` with it, which is as good as gone to the caret, because focus
+   * cannot land on a box that is not rendered. `CardDetailPane` hands the caret back to whatever
+   * opened it and checks `isConnected` before it does; a hidden tile is still connected, so the
+   * hand-back is attempted and does nothing, and either way the caret ends on `<body>` with the
+   * next Tab restarting from the top of the app. The disclosure is the honest place for it: it
+   * is where the reader's search went, and it is a Tab away from the search box and the results
+   * either way.
    *
    * Read off a *remembered* collapse rather than off `roomy` at the moment the card closes,
    * because by then it is usually false again — closing the pane is what gives the width back,
@@ -321,8 +335,10 @@ export function DeckSearchPanel({
     // reads as if it works with either shape and only works with this one.
     //
     // Which is why the open body is a **child** rather than a second root: `OpenPanel` mounts
-    // and unmounts with the collapse — closed really is nothing mounted — while this element,
-    // the row below it and the disclosure inside that row are the same three nodes throughout.
+    // and unmounts with the reader's own press — closed really is nothing mounted — while this
+    // element, the row below it and the disclosure inside that row are the same three nodes
+    // throughout, and a railing takes the body out of the *layout* without taking it out of the
+    // tree.
     <section
       aria-label="Add cards"
       // One hairline down the left edge, and it is the only chrome the panel adds: the
@@ -382,36 +398,64 @@ export function DeckSearchPanel({
         )}
       </div>
 
-      {/* Everything below the row, and only while the disclosure is open — see
-          {@link OpenPanel}. One `{shown && …}` where there were five, which is what makes the
-          search a thing the reader asks for rather than a thing every deck pays for. */}
-      {shown && (
-        <OpenPanel
-          add={add}
-          categories={categories}
-          targetCategoryId={targetCategoryId}
-          defaultFormat={defaultFormat}
-        />
+      {/* Everything below the row, and only once the reader has asked for it — see
+          {@link OpenPanel}. One gate where there were five, which is what makes the search a
+          thing the reader asks for rather than a thing every deck pays for.
+
+          **Mounted on `open`, hidden on `!roomy`.** The press is a choice and the room is a
+          measurement, so a width change must not be able to throw the reader's search away —
+          which is exactly what `{shown && …}` here did.
+
+          `display: contents` is what makes the wrapper free: it generates no box at all, so
+          `OpenPanel`'s children stay flex items of this column and the `gap-2`, the `min-h-0`
+          and the wall's `flex-1` distribute exactly as they did with no wrapper there. Hiding
+          is `display: none` and deliberately not an `opacity` or a `visibility`: those two
+          leave the wall holding its space in the layout and its tiles in the tab order, which
+          is the whole of what the rail exists to give back. The `hidden` **attribute** beside
+          the class says the same thing to the accessibility tree — and to the suite, which
+          loads no stylesheet, so under jsdom the class alone would hide nothing from a role
+          query. */}
+      {open && (
+        <div className={shown ? "contents" : "hidden"} hidden={!shown}>
+          <OpenPanel
+            add={add}
+            categories={categories}
+            targetCategoryId={targetCategoryId}
+            defaultFormat={defaultFormat}
+          />
+        </div>
       )}
     </section>
   );
 }
 
 /**
- * The panel with its wall in it — **mounted only while the disclosure is open**, which is the
- * whole reason it is a component rather than a branch inside {@link DeckSearchPanel}.
+ * The panel with its wall in it — **mounted only while the reader has the disclosure open**,
+ * which is the whole reason it is a component rather than a branch inside
+ * {@link DeckSearchPanel}.
  *
  * A hook cannot be called conditionally, so `useCardSearch` sitting in the root meant its query
  * ran for every deck the reader opened whether or not they had asked for a wall. Closed is
  * nothing mounted here for the same reason it is in `DeckDialog`: the search, its filter state,
- * its facets and its scroll position all begin at the press and cost nothing before it. The
- * collapse throws that state away rather than hiding it, and that is the intended reading — this
- * is a column you open to do a job and shut when the job is done, and its own `open` state is
- * deliberately not remembered either.
+ * its facets and its scroll position all begin at the press and cost nothing before it. A
+ * *reader's* collapse throws that state away rather than hiding it, and that is the intended
+ * reading — this is a column you open to do a job and shut when the job is done, and its own
+ * `open` state is deliberately not remembered either.
  *
- * **What stays in the root is what has to outlive the collapse**: the disclosure button, whose
- * identity across the two states the caret depends on; the `roomy` refusal; and the "Add to"
- * select, which is a sibling of the toggle inside one flex row and asks the backend for nothing.
+ * **A railing is not a collapse and must not be read as one.** `roomy` goes false on a width
+ * change nobody asked for — the card pane opening at 1024 is the measured case — so the parent
+ * *hides* this subtree and leaves it mounted. The query, the typed text, the filters and the
+ * facets are where the reader left them when the room comes back. The one thing that does not
+ * survive is the wall's scroll offset, which is the browser's rather than this component's: a
+ * box that has been `display: none` comes back at the top. That is what a railing already did,
+ * so it is no regression — it is simply the part of the reader's place this cannot hold on to.
+ *
+ * **What stays in the root is what a collapse must not be able to take**: the disclosure button,
+ * whose identity across the two states the caret depends on, and the `roomy` refusal drawn on
+ * it. The "Add to" select is drawn up there too and is **not** an example of that — it sits
+ * inside the row's own `shown` gate and goes with everything else. What actually outlives a
+ * collapse is the *choice* it draws, `targetCategoryId`, and it outlives it because the
+ * **editor** owns it (`DeckEditor.tsx`) rather than because of where the control is rendered.
  */
 function OpenPanel({
   add,
@@ -430,6 +474,12 @@ function OpenPanel({
   // here for a reason of its own: a *default* the reader has to re-clear on every open would be
   // a fence, which is exactly what `defaultFormat` promises not to be — but a default that
   // silently stopped applying after the first open would be a seed that only worked once.
+  //
+  // **A railing is the case that deliberately does not re-seed.** The editor taking the width
+  // back does not unmount this component, so nothing is applied a second time and the format
+  // the reader picked is still theirs when the room returns. A resize is not a decision, and
+  // this used to answer one as though it were: the panel remounted on the way back and put the
+  // deck's format over a filter the reader had cleared.
   const search = useCardSearch({ defaultFormat });
   const { query, rows, searchKey } = search;
 
