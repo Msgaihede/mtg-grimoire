@@ -65,8 +65,13 @@ Every one of these has its measurement and its story in
   _registration_ order. Every new dismissible layer follows this or it will close something it
   did not open. A layer that Escape dismissed hands focus back to whatever opened it; an
   outside-click deliberately does not.
-- **An anchored popup near the right of a row is pinned to its trigger's _right_ edge** —
-  nothing clips these popups, so one that overflows scrolls the whole app sideways.
+- **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
+  — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
+  left. Nothing clips these popups, so one that overflows scrolls the whole app sideways; and
+  the corner it is pinned by has to be the corner it grows from, or the panel reads as unrelated
+  to the control that produced it. Mirroring one anchor onto another popup is wrong in both
+  directions — see the two comboboxes in
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **Money is drawn with `formatPrice(value, currency)` and the currency comes from
   `useMarketplace()`** — never a bare `Intl.NumberFormat`. **The marketplace is a query
   parameter and Rust answers one price per row**, so a cell renders the number it was given and
