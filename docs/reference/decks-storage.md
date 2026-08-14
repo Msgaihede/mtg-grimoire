@@ -394,8 +394,31 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   which is why the old single-row view's thumbnail, its `17rem` container query and
   `STACK_MAX_WIDTH` are gone rather than moved. **That pass predates the `Split X` toggle**
   (schema v12, 2026-08-14): the twelve stand as measured — the toggle is a modifier of one of the
-  three modes and not a fourth mode — but the _split_ arm of the mana-value grouping has never
-  been driven in the shipped window at all.
+  three modes and not a fourth mode.
+- **The split arm was then driven live 2026-08-14** (`npm run tauri dev`, a **debug** build,
+  1280×800, against the real 116,703-card corpus), and every claim above about it held:
+  - **Exclusive, measured rather than argued.** A deck holding one `{X}{R}` (Fireball, mana
+    value 1) read `Mana value 1 :: 2 rows` with the switch off, and `Mana value 1 :: 1 row` plus
+    `Mana value X :: 1 row` with it on — **six rows either way**. The card has one home in both
+    modes, which is the whole of the exclusive rule.
+  - **The heading sorts where it says.** `Mana value 1 … 5`, then `Mana value X`, then the
+    inactive `Maybeboard` — so the derived pile really does land ahead of the switched-off
+    categories rather than among them.
+  - **An empty X pile does not exist.** Removing the one `{X}` card took the heading with it
+    while the switch stayed on, which is the derived-group rule and not a special case.
+  - **It survives a reload, which is the whole point of the column.** `location.reload()`, back
+    to the gallery, reopen: the chip read `aria-pressed="true"` and `Mana value X` was drawn
+    again. `groupBy` itself is still `useState` and still resets — deliberately, and the reason
+    the chip is a *deck* answer while the grouping is a *session* one.
+  - **The audit sentence is right end to end**, which is the check that could only fail
+    silently: the history drew *"Split the X spells into their own group"* and *"Folded the X
+    spells back into their mana values"*. A `"xGroup"` that disagreed with `deck.rs` would have
+    rendered `auditText`'s default arm — a plain "Changed the deck" — and gone unnoticed.
+  - **The curve is the arithmetic, not an estimate.** Ten `<li>`s, the tenth reading *"1 card
+    with X in their cost"*, the list **216px** wide at **18px** cells, and `scrollWidth ===
+    clientWidth` — so the tenth bar fits the 250px content box with no overflow, as derived.
+  - **`Avg. mana value 2.67` with the switch on and off.** The one number the split does not
+    reach, confirmed against a live deck rather than a fixture.
 - **`Split X` is a modifier of the mana-value grouping, and in a deck the rule for X is the
   _exclusive_ one.** A card printing `{X}` lands in `X_GROUP_KEY` — `"mv-x"`, headed
   `Mana value X` — **and in no other group**, because every surface drawing these headings counts

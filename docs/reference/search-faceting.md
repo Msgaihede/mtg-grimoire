@@ -198,6 +198,22 @@ using it.
   measurement claims is _none greyed_, which a wider row does not change — but the X chip is the
   one to check first if it is ever re-driven, for the scalar reason above. The same note is on
   `SearchPage.stories.tsx`'s `Empty`, which is the story that pins this state.
+- **The X chip, driven live 2026-08-14** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against a corpus of **116,703** cards synced 2026-08-13). The row drew **ten** chips, the
+  tenth named `Cards with X in their mana cost — 2,009 printings` — so the count reaches the
+  accessible name on the same rule as `Mana value 0 — 12,162 printings` beside it.
+  - **The additive rule, shown on one card rather than argued from a total.** Text `fireball`
+    alone answered **3 cards**; adding the X chip narrowed it to **1**; clearing X and pressing
+    **Mana value 1** instead answered **1** as well. Fireball is `{X}{R}` — mana value 1,
+    because X counts zero (CR 202.3b) — and it is found by *both* chips. That is the whole of
+    what "additive" means here, and it is the half a total cannot show: pressing X **and** 3
+    together read `5,000+ cards`, which is the result cap and proves nothing either way.
+  - **The chip reaches the deck editor's search panel too**, unasked — `DeckSearchPanel` mounts
+    the same `FilterBar`, so the tenth chip arrived there by construction rather than by a
+    second wiring.
+  - **Unmeasured, and named so it is not mistaken for measured**: nobody has re-driven a
+    first-run sync against the ten-chip row, so the cold-response guard above is still argued
+    from the code and from `facets.test.ts` rather than from the window.
 - **Greying on the real corpus, measured in the shipped window 2026-08-11.** A `Lightning
 Bolt` search greys mana values 4, 6, 7 and 8+ (`title` "Mana value 4 — nothing in this
   search", opacity 0.45) — **read that as four of the nine chips that existed that day**; the X
