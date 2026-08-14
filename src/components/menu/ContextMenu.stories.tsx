@@ -125,6 +125,27 @@ function Stage(props: StageProps) {
  *  Collection** from a row that adds silently into a submenu that asks. */
 const BOLT = printing("2x2", "117");
 
+/** The ramp spell {@link RAMP_CARD} is built from, hoisted beside {@link BOLT} so the guard below
+ *  can see both. */
+const RAMP_CARD_PRINTING = printing("c21", "263");
+
+/**
+ * The two fixture lookups, pinned to the cards this file's `label`s and assertions were written
+ * for.
+ *
+ * `printing()` throws for a row the corpus does not have; it cannot tell you that the row it found
+ * is a different card from the one you meant. That gap is not hypothetical — `lea 288` reads as
+ * Sol Ring and is **Island** — and here it would surface as `NoStoredImage` failing to find a
+ * button named "Lightning Bolt", which says nothing about the cause. Checked at module load, where
+ * the message does.
+ */
+if (BOLT.name !== "Lightning Bolt" || RAMP_CARD_PRINTING.name !== "Sol Ring") {
+  throw new Error(
+    `ContextMenu.stories: the fixture printings are ${BOLT.name} and ` +
+      `${RAMP_CARD_PRINTING.name}; this file's labels are written for Lightning Bolt and Sol Ring.`,
+  );
+}
+
 const CARD_TARGET: CardMenuTarget = {
   cardId: BOLT.id,
   name: BOLT.name,
@@ -190,9 +211,15 @@ const TAGS: DeckTag[] = [
  *  checked, which is the state every card starts in. */
 const DECK_CARD: DeckCard = deckCard(BOLT, { categoryKind: "main" });
 
-/** One card in {@link RAMP_PILE}, so that pile's export is a pile with something in it — the
- *  menu filters the deck's rows by category id, which is the half worth showing. */
-const RAMP_CARD: DeckCard = deckCard(printing("lea", "288"), {
+/**
+ * One card in {@link RAMP_PILE}, so that pile's export is a pile with something in it — the menu
+ * filters the deck's rows by category id, which is the half worth showing.
+ *
+ * Sol Ring is `c21 263`. **`lea 288` is Island** and is what this said first: a two-mana rock and a
+ * basic land are one `printing()` lookup apart, and nothing about a wrong one is visible from the
+ * call — which is why {@link BOLT} and {@link RAMP_CARD_PRINTING} are pinned by name above.
+ */
+const RAMP_CARD: DeckCard = deckCard(RAMP_CARD_PRINTING, {
   categoryId: RAMP_PILE.id,
   categoryName: RAMP_PILE.name,
 });
@@ -327,10 +354,11 @@ type Story = StoryObj<typeof meta>;
  * The menu ten surfaces draw — the two search views, the two collection views, the wishlist, four
  * deck editor views, the docked panel, the card pane and the printings list.
  *
- * Seven rows and two rules. The two copies come first because they are what a right-click is most
- * often for; **Open on** and **View all printings** sit together under one rule because both
- * answer "show me more of this card", one outside the app and one in it; and the adds sit under
- * the second, because they are the rows that write something.
+ * **Five rows and two rules** — seven items, since a separator is a `MenuItem` too. The two copies
+ * come first because they are what a right-click is most often for; **Open on** and **View all
+ * printings** sit together under one rule because both answer "show me more of this card", one
+ * outside the app and one in it; and **Add to** sits under the second, because it is the row that
+ * writes something.
  */
 export const Card: Story = {
   args: { build: (act) => buildCardMenu(CARD_TARGET, cardDeps(act)) },
@@ -462,9 +490,16 @@ export const GreyedPrintings: Story = {
       within(row).getByText("this printing has left the card database"),
     ).toBeInTheDocument();
 
-    // Read, and never landed on: `menuRowsIn` filters on exactly that attribute, so the caret
-    // walks past it.
-    await userEvent.keyboard("{ArrowDown}");
+    // **Read, and never landed on** — `menuRowsIn` filters on exactly that attribute, so the
+    // caret walks past it. Driven from the *end* of the panel rather than the start, because that
+    // is where the greyed row is: the selectable rows are Copy card name, Copy card image, Open on
+    // and Add to, and "View all printings" sits in the DOM **between** the last two. So ArrowUp
+    // from the panel takes the last row, and a second ArrowUp has to step over the greyed one to
+    // reach "Open on". An ArrowDown from the top lands on row 1 of 5 and would prove nothing.
+    await userEvent.keyboard("{ArrowUp}");
+    await expect(canvas.getByRole("menuitem", { name: "Add to" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    await expect(canvas.getByRole("menuitem", { name: "Open on" })).toHaveFocus();
     await expect(row).not.toHaveFocus();
 
     await userEvent.click(row);

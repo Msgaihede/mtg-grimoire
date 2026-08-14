@@ -33,7 +33,24 @@ function preview(canvasElement: HTMLElement): HTMLElement {
  * needs more than one row under its header to look like a file.
  */
 const BOLT = printing("2x2", "117");
-const SOL_RING = printing("lea", "288");
+const SOL_RING = printing("c21", "263");
+
+/**
+ * **The fixtures come from the corpus and the expected strings below are typed out, so the two
+ * have to be pinned together.** This file's plays assert whole rendered lines — `1 Sol Ring (C21)
+ * 263` — because the *shape* of a line is the thing under test, and a string derived from the same
+ * row the writer derives it from would assert nothing about the format. The cost is that a wrong
+ * `printing()` lookup shows up only as four confusing play failures: `lea 288` looks like Sol Ring
+ * and is **Island**, which is how this arrived. So the pairing is checked here instead, at module
+ * load, where the message says what happened — the same discipline `printing()` itself applies
+ * when the corpus has no such row at all.
+ */
+if (BOLT.name !== "Lightning Bolt" || SOL_RING.name !== "Sol Ring") {
+  throw new Error(
+    `ExportDialog.stories: the fixture printings are ${BOLT.name} and ${SOL_RING.name}; ` +
+      `the expected export lines in this file are written for Lightning Bolt and Sol Ring.`,
+  );
+}
 
 const CARDS: ExportCard[] = [
   { name: BOLT.name, quantity: 2, setCode: BOLT.setCode, collectorNumber: BOLT.collectorNumber },
@@ -153,7 +170,7 @@ export const Mtgo: Story = {
     );
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
     // No set code anywhere in it — the whole of what makes this format different from Moxfield's.
-    await expect(preview(canvasElement).textContent).not.toMatch(/2X2|LEA/);
+    await expect(preview(canvasElement).textContent).not.toMatch(/2X2|C21/);
   },
 };
 
@@ -175,7 +192,7 @@ export const Moxfield: Story = {
 
     await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt (2X2) 117");
-    await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (LEA) 288");
+    await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
   },
 };
 
@@ -202,7 +219,7 @@ export const Csv: Story = {
     await expect(preview(canvasElement)).toHaveTextContent("2,Lightning Bolt,2x2,117");
     // The set code is **not** uppercased here, unlike Moxfield's: a CSV column is data for
     // something else to read, and the row's own spelling is what it stores.
-    await expect(preview(canvasElement)).toHaveTextContent("1,Sol Ring,lea,288");
+    await expect(preview(canvasElement)).toHaveTextContent("1,Sol Ring,c21,263");
   },
 };
 
@@ -250,7 +267,8 @@ export const Copied: Story = {
  *
  * Nothing is drawn on success, deliberately: the file is on disk and the dialog stays where it
  * was. So the whole of the happy path is that **no alert appeared**, which is exactly what a
- * reader sees.
+ * reader sees — and {@link SaveRefused} is the control that makes that assertion able to fail:
+ * the same press, one fault apart, really does draw one.
  */
 export const Saved: Story = {
   play: async ({ args, canvasElement }) => {
@@ -260,11 +278,21 @@ export const Saved: Story = {
       { timeout: FRAME_WAIT },
     );
 
-    await userEvent.click(canvas.getByRole("button", { name: "Save as…" }));
-    await waitFor(async () => await expect(canvas.queryByRole("alert")).toBeNull());
+    const button = canvas.getByRole("button", { name: "Save as…" });
+    await userEvent.click(button);
+
+    // **Wait for something positive first.** `queryByRole("alert")` is null on the tick after the
+    // press — before `save()`'s promise, the write and the `catch` have run — so a `waitFor` on
+    // the absence alone is satisfied by the very first poll and would stay green over a save that
+    // failed a moment later. `aria-busy` is set synchronously by the press and cleared in the
+    // `finally`, so waiting for it to go is waiting for the whole round trip to have finished.
+    await waitFor(async () => await expect(button).not.toHaveAttribute("aria-busy"));
+    await expect(canvas.queryByRole("alert")).toBeNull();
+
     // A saved export does not close the dialog either — the reader may want another format.
     await expect(args.onDismiss).not.toHaveBeenCalled();
     await expect(canvas.getByRole("dialog", { name: 'Export "Ramp"' })).toBeVisible();
+    await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt");
   },
 };
 
