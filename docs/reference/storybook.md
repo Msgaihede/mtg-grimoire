@@ -23,9 +23,14 @@ and read the index on the merge commit you are shipping.** Never add one branch'
 another's total — that has been wrong here more than once, and no side of a merge has ever
 predicted the merge.
 
-**`autodocs` is declared per file in the meta**, and `CategoriesPanel`/`TheoryDiffDialog` do not
-carry it, so those two have stories and no docs page. A new story file gets neither unless it
-says `tags: ["autodocs"]`.
+**`autodocs` is declared per file in the meta**, and
+`CategoriesDialog`/`TagsDialog`/`TheoryDiffDialog` do not carry it, so those three have stories
+and no docs page. It read `CategoriesPanel`/`TheoryDiffDialog` until 2026-08-14: that panel is
+two files now, and neither half declares it any more than the whole did. The other surfaces of
+that change went the other way — `DeckDialog`, the shell `CategoriesDialog` and `TagsDialog` are
+drawn in (`TheoryDiffDialog` is not: it still carries its own chrome), and `DeckHistoryDialog`,
+which was `AuditDrawer`, both carry it. A new story file gets neither unless
+it says `tags: ["autodocs"]`.
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a

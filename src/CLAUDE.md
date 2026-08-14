@@ -65,6 +65,26 @@ Every one of these has its measurement and its story in
   _registration_ order. Every new dismissible layer follows this or it will close something it
   did not open. A layer that Escape dismissed hands focus back to whatever opened it; an
   outside-click deliberately does not.
+- **A surface opened from a view is a centred modal over a scrim, not a docked column — unless
+  the reader works _out of_ it while editing beside it.** Width is the scarce thing in this app:
+  the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane
+  docked, so a 384px docked column leaves the deck **202px** — one stack column — and it is
+  subtracted from the work whether or not it is being used. A surface that is _consulted_
+  (history, categories, tags, deck settings) is therefore a
+  **`src/features/decks/DeckDialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
+  the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
+  because the panel outlives the flag by the length of its fade. **A new modal in the deck
+  surface is built _on_ that file rather than beside it** — and it is not yet the only definition
+  of one: `DeckSettingsDialog`, `CategoriesDialog`, `TagsDialog` and `DeckHistoryDialog` are on
+  the shell, while `ImportDeckDialog`, `TheoryDiffDialog` and `CreateDeckDialog` still carry
+  their own copy of the same chrome and are the three to move onto it. So a change to modality
+  here — a focus restore, a different `trapTab`, a change to when the rung is enabled — is an
+  edit to **four files until they are converted**, and `DeckEditor.test.tsx`'s Tab sweep is what
+  holds the copies to the shell's behaviour meanwhile. Only a
+  surface that is _worked out of_ earns a place in the layout — the deck editor's card search
+  column, whose tiles are drag sources into the deck's own category columns, and the card detail
+  pane, which is how a reader flips through a card's printings — and both of those are
+  collapsible or dismissible and **neither opens by default**.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
   left. Nothing clips these popups, so one that overflows scrolls the whole app sideways; and
@@ -129,7 +149,7 @@ Every one of these has its measurement and its story in
   sink below its pickable ones (`SetCombobox` also floats the picked ones to the top, because
   the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
   is not the bug when a picker reads wrong. Pinned rows (`Any format`, `Custom…`,
-  `Auto (by what it does)`, `Top level`) stay outside the sort, and `CategoriesPanel`'s
+  `Auto (by what it does)`, `Top level`) stay outside the sort, and `CategoriesDialog`'s
   `are deleted with it` stays pinned **last**. **Exactly two exemptions**: a grade scale (card
   condition, Near Mint → Damaged) and an order the reader arranged themselves (deck categories).
   Both carry a comment at the site; see
@@ -160,7 +180,9 @@ Every one of these has its measurement and its story in
 Full detail and every measurement: [docs/reference/motion.md](../docs/reference/motion.md).
 
 - **Timings live in `src/lib/motion.ts` and nowhere else.** Import a **preset** (`scrim`,
-  `drawerRight`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a number.
+  `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a number. There is no drawer
+  preset: `drawerRight` was deleted on 2026-08-14 when the deck editor's two right-hand drawers
+  became centred modals and it lost its last consumer.
   `src/index.css` carries the same scale so CSS-only sites agree. There is no `duration-base`
   utility — `--duration-*` is not a Tailwind v4 namespace, so it is read as
   `duration-[var(--duration-fast)]`; `--ease-*` **is** one, so `ease-standard` is real.

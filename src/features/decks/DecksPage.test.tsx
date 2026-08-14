@@ -980,8 +980,8 @@ describe("DecksPage folders", () => {
    * because a 208px row has no width for a second control; `F2` below is the keyboard's own
    * route, and a rename only a mouse can reach would be half a feature.
    *
-   * The current name arrives **selected**, `CategoriesPanel`'s ruling for its reason: the
-   * commonest rename replaces the word rather than edits inside it.
+   * The current name arrives **selected**, `metaRows.tsx`'s `RenameField` ruling for its reason:
+   * the commonest rename replaces the word rather than edits inside it.
    */
   it("renames a folder in place, from the wall's own control", async () => {
     withFolders();

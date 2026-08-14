@@ -49,8 +49,9 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   has never downloaded the taxonomy, a card Tagger has never tagged, an unknown printing and a
   refused tag read all file by type line. **Nothing about categorising a card may fail an add** —
   `useDeck`'s `oracleTagsFor` catches and answers `[]`, and its doc comment says not to turn that
-  into a rethrow. The one place that refuses instead is the Categories panel's bulk action, whose
-  blast radius is every loose card in the deck rather than one.
+  into a rethrow. The one place that refuses instead is the **Categories dialog's** bulk action
+  ("File cards by what they do", `CategoriesDialog.tsx`), whose blast radius is every loose card
+  in the deck rather than one.
 - **The tags are read at the rule, and that is a deliberate reversal.** This used to say the fact
   travels from the call site so no add pays a round trip — true while the fact was a type line the
   drag payload already carried. **No list DTO carries a slug list**: `CardSummary`, `CollectionRow`
@@ -758,10 +759,32 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's five full-window surfaces (Import, Categories & tags, History, Theory diff, Deck
+- The editor's **six** full-window surfaces (Import, Categories, Tags, History, Theory diff, Deck
   settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
-  rungs and two `"inner"` peers open at once are not ordered at all. The format check rides in the
-  same union, so at most one of its six registrations is ever enabled.
+  rungs and two `"inner"` peers open at once are not ordered at all. The anchored format check
+  rides in the same union, so at most one of its **seven** registrations is ever enabled.
+- **The two that were drawers are centred modals, and the search column deliberately is not**
+  (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
+  them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
+  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
+  one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
+  the two of them draw with. Those three and `DeckSettingsDialog` — **four** surfaces — are built
+  on one shell, `DeckDialog.tsx`; the editor's other two full-window overlays (Import cards, the
+  theory difference) were never drawers, still carry their own copy of that chrome and are the
+  next two to move onto the shell. **Five** is only the count of *toolbar buttons*. The
+  reason for all of it is the desk row: every one of these is **consulted** — read, or
+  edited and shut — and a right-hand drawer took the width it needed out of the deck for as long
+  as it was up while giving the deck nothing. The card search column stayed a docked sidebar
+  because it is the one surface here that is **worked out of**: its tiles are drag sources into
+  the deck's own category columns beside it, so a scrim would end the drag path and cover the card
+  pane a reader flips printings in. It opens **collapsed** instead, which is the same 602px
+  argument answered the other way — the deck starts with the whole desk and one press on the rail
+  gets the wall back. **Its body is mounted on the reader's press and merely _hidden_ when the
+  editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
+  choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
+  filters and format away on a *resize* — opening the card pane at 1024 was enough. Never opened
+  is still nothing mounted, which is what keeps the search off a deck nobody searched from.
+  The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
 
 ## The quick add
 
@@ -775,7 +798,8 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **It is a shortcut over the docked panel's wall, not a second way of choosing a printing.** The
   search is `collapse: true`, so every suggestion is the newest printing of that name — the same
   one the panel offers first for the same text. A reader who cares which printing they get has the
-  panel open beside them, so this field never grows a set column or a printing picker.
+  panel open beside them — one press on its rail, since it opens collapsed — so this field never
+  grows a set column or a printing picker.
   `MAX_SUGGESTIONS` is **five**, and the ceiling is the reader's rather than the backend's: a list
   long enough to need a scrollbar has stopped being a shortcut and started being the wall again.
 - **Three routes reach one write, and the third is the one that looks removable.** Enter on the
@@ -806,9 +830,11 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
-  as the docked panel's set filter. Every one of the editor's five surfaces is opened by pressing a
-  toolbar button, pressing a button takes the focus out of this field, and the root's `onBlur`
-  closes the list on the way. **That is the whole of what makes a third rung unnecessary**, so a
+  as the docked panel's set filter. Every one of the editor's six full-window surfaces is opened
+  by pressing a button — five of them in the toolbar (`Import cards · Categories · Tags · History
+  · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
+  — pressing a button takes the focus out of this field, and the root's `onBlur` closes the list
+  on the way. **That is the whole of what makes a third rung unnecessary**, so a
   future surface opened without moving the caret — a hotkey, an auto-open — breaks it, and the fix
   is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope.
 - **The query carries no `marketplace`, and that is a documented exception** to the app's rule that

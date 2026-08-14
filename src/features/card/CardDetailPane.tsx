@@ -182,13 +182,15 @@ interface SwapOffer {
  * width tween would flip that panel to its rail and back mid-animation. Layout is therefore
  * instant and only the paint moves.
  *
- * {@link dialog} rather than the drawer preset, which is the one this geometry argues for: a
- * right-docked panel is exactly what `drawerRight` describes, but it arrives from `x: 100%` —
- * off the right of its own slot, which here is already flush with the window — and the pane
- * lives inside `AppShell`'s `overflow-auto` main region, so those 384px of travel are 384px of
- * scrollable overflow and a horizontal scrollbar flashing on every card opened. A scale from
- * the right edge reads as the same arrival and cannot overflow anything, because it is never
- * larger than the box it lands in.
+ * **{@link dialog}, and the geometry argues for a slide that this pane cannot have.** It really
+ * is a right-docked panel, and the obvious arrival for one is a travel in from `x: 100%` — off
+ * the right of its own slot, which here is already flush with the window. That is 384px of
+ * travel inside `AppShell`'s `overflow-auto` main region, so it is 384px of scrollable overflow
+ * and a horizontal scrollbar flashing on every card opened. A scale from the right edge reads as
+ * the same arrival and cannot overflow anything, because it is never larger than the box it
+ * lands in. `lib/motion.ts` has no drawer preset at all now, for a related reason at the other
+ * end of the app — the deck editor's two right-hand drawers became centred modals — so this is
+ * the only preset a docked surface here has, and the reasoning above is why that costs nothing.
  */
 export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const paneRef = useRef<HTMLElement>(null);
