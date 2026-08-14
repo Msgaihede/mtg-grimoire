@@ -460,6 +460,37 @@ export function ContextMenu({
   const onKeyDown = (e: ReactKeyboardEvent) => {
     const root = panelRef.current;
     if (!root) return;
+    // **Tab closes the menu — and it is the one key a field does not get, which is why it is
+    // tested before the yield below rather than after it.**
+    //
+    // Not trapped. Rows are `tabIndex={-1}`, so a panel's only tab stop is a field a lazy body
+    // drew, and a trap with one stop cycles that field to itself and reads as a stuck key. The
+    // ARIA menu pattern says Tab closes, and here that is also what the reader means: Tab is
+    // "I am done here, move on", never a request to stay. Left alone it was a bug in its own
+    // right — focus left for the page behind while the panel stayed up, so the reader was
+    // somewhere else looking at a menu that was still open.
+    //
+    // **The same two lines as Escape's rung, ending somewhere else, and the difference is the
+    // `preventDefault` that is deliberately not here.** Escape's rung prevents the press and the
+    // caret therefore *stays* on the opener — a hand back. This lets the press through, so the
+    // opener is a waypoint rather than a destination: the browser's own Tab carries on from it to
+    // whatever follows it, which is the forward motion the reader asked for. Focusing the opener
+    // first is what makes "the next thing after the opener" true rather than "the first thing in
+    // the document", which is where the caret lands if the menu simply unmounts under it.
+    //
+    // **A half-typed field is discarded, and that is the house rule rather than a shrug.**
+    // `FolderTree`'s rename field says it in as many words — clicking or tabbing away discards a
+    // half-typed name, as every other popup in this app discards its half-made decision — and it
+    // names tabbing away specifically. Committing instead is not a thing this file *can* do: a
+    // `Content` is somebody else's component, its value and what "commit" would mean are entirely
+    // its own, and `MenuLazy` hands it nothing but `onDone`. Making that possible is a change to
+    // the contract, not a bug fix, so it is not smuggled in here.
+    if (e.key === "Tab") {
+      opener?.focus();
+      onClose();
+      return;
+    }
+
     // **A text field inside a panel is a mode, and while the caret is in one every key below
     // belongs to it.** A panel that owns the arrows, Home and End is right for a list of rows and
     // wrong for a caret in a field: typing works and *editing* does not, which is how this arrived

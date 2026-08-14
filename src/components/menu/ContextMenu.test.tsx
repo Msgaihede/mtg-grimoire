@@ -691,6 +691,74 @@ describe("ContextMenu", () => {
     expect(screen.getByLabelText("New tag")).toHaveValue("burn");
   });
 
+  /**
+   * Tab closes the menu, and — unlike Escape — does not hand the caret back to the opener.
+   *
+   * That pairing is the thing to get right, because the two run the same two lines and are meant
+   * to end somewhere different. Escape's rung `preventDefault`s, so the caret *stays* on the
+   * opener; Tab lets the press through, so the opener is a waypoint the browser carries on past.
+   * A reader who pressed Tab asked to move on, not to be put back where they started. The Escape
+   * test above asserts `toHaveFocus` on this same element; this one asserts the negative, and the
+   * two together are the contrast.
+   *
+   * **Where the caret finally lands is deliberately not asserted, because jsdom cannot show it.**
+   * user-event resolves Tab's destination from the DOM as it stood when the keydown was
+   * dispatched — menu rows included — and then focuses that node, which the close has since
+   * detached, so focus falls to `body`. A real browser computes its default action from the live
+   * DOM *after* the handlers run, where the opener is focused and the menu is gone. The control
+   * below proves the `body` landing is about the menu rather than about user-event: with nothing
+   * in the way, the same `user.tab()` reaches the next button. The real landing spot belongs to
+   * the live pass.
+   */
+  it("closes on Tab and does not hand the caret back the way Escape does", async () => {
+    const user = userEvent.setup();
+    render(
+      <ContextMenuProvider>
+        <Host items={[{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]} />
+        <button>after</button>
+      </ContextMenuProvider>,
+    );
+    const target = screen.getByRole("button", { name: "target" });
+    rightClick(target);
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}");
+
+    await user.tab();
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(target).not.toHaveFocus();
+
+    // The control described above.
+    target.focus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "after" })).toHaveFocus();
+  });
+
+  /**
+   * Tab is the one key a field does *not* get, and the half-typed name goes with the panel.
+   *
+   * That is the house rule rather than a shrug — `FolderTree`'s rename field says in as many words
+   * that clicking or tabbing away discards a half-typed name, as every other popup in this app
+   * discards its half-made decision. Committing instead is not something the menu *can* do: a
+   * lazy body is somebody else's component and `MenuLazy` hands it nothing but `onDone`, so a
+   * commit handshake is a change to the contract rather than a bug fix.
+   */
+  it("closes on Tab out of a field, discarding what was typed", async () => {
+    const user = userEvent.setup();
+    tagField();
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    const field = screen.getByLabelText("New tag");
+    await user.click(field);
+    await user.keyboard("burn");
+    expect(field).toHaveValue("burn");
+
+    await user.tab();
+
+    expect(screen.queryByLabelText("New tag")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("runs a foreign row's action and closes the whole menu", async () => {
     const user = userEvent.setup();
     const pick = vi.fn();
