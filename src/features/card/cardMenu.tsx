@@ -377,21 +377,27 @@ export interface CardToDeck {
 const CardToDeckContext = createContext<CardToDeck | null>(null);
 
 /**
- * Hand the app's single {@link useCardToDeck} down to every surface that draws a card menu.
+ * The app's single {@link useCardToDeck}, and the context every card menu reaches it through.
  *
- * Mounted **once**, by the one component that also draws the sentence a refusal leaves. That is
- * the difference between this and returning `error` to ten surfaces: `cardMenu.tsx` serves ten
- * of them, TypeScript can force a callback but cannot force anybody to *render* a string, and a
- * rule that lives at ten call sites is a rule that drifts. Here there is one place to forget, and
- * it is the same place the sentence is drawn.
+ * Mounted **once**: `cardMenu.tsx` serves ten surfaces, TypeScript can force a callback but
+ * cannot force anybody to *render* a string, and a rule that lives at ten call sites is a rule
+ * that drifts. One mount is one place to forget, and it is the same place the sentence is drawn
+ * ({@link useCardToDeckRefusal}).
+ *
+ * **It calls the hook itself rather than taking the value as a prop**, so the state and the
+ * sentence cannot end up owned in two different components.
+ *
+ * ## Where to mount it, and the trap
+ *
+ * **Above `ContextMenuProvider`, in `App.tsx` — not inside `AppShell`.** `ContextMenuProvider`
+ * draws the menu panel as a **sibling** of its `children`, so "inside the shell" and "inside the
+ * menu" are two different places: a provider around the shell is around every *view* and around
+ * none of the *menu rows*, and `useAddCardToDeck` then throws the moment a reader expands
+ * "Add to → Deck" on any surface. Anything a menu's rows need — this, and whatever comes next —
+ * belongs above `ContextMenuProvider`. That mistake shipped once; see this file's tests.
  */
-export function CardToDeckProvider({
-  value,
-  children,
-}: {
-  value: CardToDeck;
-  children: ReactNode;
-}) {
+export function CardToDeckProvider({ children }: { children: ReactNode }) {
+  const value = useCardToDeck();
   return <CardToDeckContext.Provider value={value}>{children}</CardToDeckContext.Provider>;
 }
 
@@ -405,11 +411,28 @@ export function CardToDeckProvider({
  * that made it rather than quiet at the reader's tenth add.
  */
 export function useAddCardToDeck(): CardToDeck["addToDeck"] {
+  return useMountedCardToDeck().addToDeck;
+}
+
+/**
+ * The sentence a refused add left, for the **one** place that draws it.
+ *
+ * Read through the same context as the write rather than out of a second `useCardToDeck`, so
+ * there is exactly one piece of state: a component that mounted its own hook to get the sentence
+ * would be reporting on adds nobody made through it.
+ */
+export function useCardToDeckRefusal(): string | null {
+  return useMountedCardToDeck().error;
+}
+
+function useMountedCardToDeck(): CardToDeck {
   const value = useContext(CardToDeckContext);
   if (value === null) {
-    throw new Error("A card menu needs <CardToDeckProvider> above it — see useCardToDeck.");
+    throw new Error(
+      "A card menu needs <CardToDeckProvider> above <ContextMenuProvider> — see CardToDeckProvider.",
+    );
   }
-  return value.addToDeck;
+  return value;
 }
 
 /**
@@ -424,10 +447,13 @@ export function useAddCardToDeck(): CardToDeck["addToDeck"] {
  * whole while owning only their own reporting. This is the third — and, like `useSidebarDrops`,
  * it is mounted **once** rather than per surface.
  *
- * Its `error` is drawn by that one mount. Nothing is invented for it: there is no toast in this
- * app, and a menu that has already closed is not a place to put one. The sentence belongs in the
- * live region the sidebar's Decks entry already keeps for exactly this — what just happened to a
- * deck, from a gesture made somewhere else in the window.
+ * **{@link CardToDeckProvider} is its only caller in the app**, and mounting it anywhere else
+ * would be a second piece of state reporting on adds nobody made through it. It is exported for
+ * the tests that drive the write directly, and for nothing else.
+ *
+ * Its `error` reaches the one place that draws it through {@link useCardToDeckRefusal}. Nothing
+ * is invented for it: there is no toast in this app, and a menu that has already closed is not a
+ * place to put one.
  */
 export function useCardToDeck(): CardToDeck {
   /**

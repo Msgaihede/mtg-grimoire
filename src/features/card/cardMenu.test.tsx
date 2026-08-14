@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,6 +15,7 @@ import {
   CardToDeckProvider,
   DeckTargetSubmenu,
   useCardToDeck,
+  useCardToDeckRefusal,
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
@@ -327,33 +327,38 @@ describe("buildDeckTargetItems", () => {
 });
 
 describe("DeckTargetSubmenu", () => {
-  function mount(addToDeck = vi.fn()) {
+  function mount() {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     render(
       <QueryClientProvider client={client}>
-        <CardToDeckProvider value={{ addToDeck, error: null, clearError: vi.fn() }}>
+        <CardToDeckProvider>
           <DeckTargetSubmenu target={{ ...BOLT, typeLine: "Instant" }} onDone={vi.fn()} />
         </CardToDeckProvider>
       </QueryClientProvider>,
     );
-    return addToDeck;
   }
 
   beforeEach(() => {
     deckList.mockResolvedValue([deck({ id: 7, name: "Burn" })]);
     deckFolderList.mockResolvedValue([]);
+    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn" }, cards: [], categories: [] });
+    deckAddCard.mockResolvedValue(undefined);
+    oracleTagsForPrintings.mockResolvedValue([]);
   });
 
-  it("hands the chosen deck and variant to the app's one write", async () => {
+  it("sends the chosen deck and variant to the app's one write", async () => {
     const user = userEvent.setup();
-    const addToDeck = mount();
-    const target = { ...BOLT, typeLine: "Instant" };
+    mount();
 
     await user.click(await screen.findByRole("menuitem", { name: /Burn/ }));
 
-    expect(addToDeck).toHaveBeenCalledWith(target, 7, "live");
+    // Through the real provider rather than a spy in its place: what a leaf is worth is the
+    // write that comes out the far end, deck and variant included.
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "live", 1),
+    );
   });
 
   it("refuses to render at all where nobody has mounted the write", () => {
@@ -481,19 +486,10 @@ describe("useCardToDeck", () => {
 const KRENKO = deck({ id: 7, name: "Krenko", folderId: 1, theoryEnabled: true });
 const COMMANDER = folder(1, "Commander");
 
-/**
- * The app's single mount, in miniature: one `useCardToDeck`, provided to everything below it,
- * and the sentence a refusal leaves drawn here — the only place it is drawn. This is the shape
- * `AppShell` will have, and the reason a surface has nothing to forget.
- */
-function AppRoot({ children }: { children: ReactNode }) {
-  const cardToDeck = useCardToDeck();
-  return (
-    <CardToDeckProvider value={cardToDeck}>
-      {children}
-      {cardToDeck.error !== null && <p role="alert">{cardToDeck.error}</p>}
-    </CardToDeckProvider>
-  );
+/** `AppShell`'s job, in miniature: the one place the refusal sentence is drawn. */
+function Refusal() {
+  const error = useCardToDeckRefusal();
+  return error === null ? null : <p role="alert">{error}</p>;
 }
 
 /** One of the ten. It passes `DeckTargetSubmenu` straight through, with no glue at all. */
@@ -507,25 +503,43 @@ function Surface() {
  * The real thing: the app's provider, the app's panel, and the picker mounted as the `lazy` body
  * of a menu `buildCardMenu` actually built.
  *
+ * **`nesting` is the whole subject of one of the tests below and is `App.tsx`'s arrangement by
+ * default.** `ContextMenuProvider` draws its panel as a **sibling** of its children, so a
+ * provider mounted *inside* it — which is where `AppShell` sits — is around every view and
+ * around none of the menu's rows. That shipped: the picker's leaf threw on all ten surfaces
+ * while every test here passed, because this harness had the order right and nothing pinned
+ * `App.tsx`'s.
+ *
  * The deck list and the folder list are **seeded into the cache** rather than awaited. The picker
  * is a consumer of the cascade here, and every assertion below is about the caret and the
  * arrows — a first paint that says `Loading decks…` would put the caret on the panel instead of
  * on a row and make the keyboard walk describe the read's timing rather than the menu's
  * behaviour. Both notes have their own tests above, against the unseeded hooks.
  */
-function openCardMenu() {
+function openCardMenu(nesting: "app" | "under-the-menu" = "app") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   client.setQueryData(["decks", "list"], [KRENKO]);
   client.setQueryData(["decks", "folders"], [COMMANDER]);
+  const inner = (
+    <>
+      <Surface />
+      <Refusal />
+    </>
+  );
   render(
     <QueryClientProvider client={client}>
-      <AppRoot>
+      {nesting === "app" ? (
+        <CardToDeckProvider>
+          <ContextMenuProvider>{inner}</ContextMenuProvider>
+        </CardToDeckProvider>
+      ) : (
+        // The shipped mistake: the provider where `AppShell` is, under the menu's own.
         <ContextMenuProvider>
-          <Surface />
+          <CardToDeckProvider>{inner}</CardToDeckProvider>
         </ContextMenuProvider>
-      </AppRoot>
+      )}
     </QueryClientProvider>,
   );
   screen
@@ -624,6 +638,31 @@ describe("the deck picker inside the real cascade", () => {
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", 1),
     );
+  });
+
+  it("is out of reach when the write is provided under the menu instead of over it", async () => {
+    /**
+     * **The bug this file did not catch, made into a test.**
+     *
+     * `ContextMenuProvider` renders its panel as a **sibling** of its children, so a provider
+     * around the *shell* is around every view and around none of the menu's rows. Mounted that
+     * way, the picker's leaf reaches `useAddCardToDeck`, finds no context and throws — on all ten
+     * surfaces at once, at the moment the reader expands "Add to → Deck". Nothing on the page
+     * says so; the panel simply dies.
+     *
+     * The harness above always had the order right, so every test here passed while the shipped
+     * `App.tsx` had it wrong. Stating the wrong order explicitly is what closes that.
+     */
+    const user = userEvent.setup();
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    openCardMenu("under-the-menu");
+    await screen.findByRole("menu");
+
+    // The picker's own body is what fails, so the throw lands on the expand rather than on the
+    // press — the row before the deck tree even draws.
+    await expect(user.keyboard(TO_PICKER)).rejects.toThrow(/CardToDeckProvider/);
+    expect(deckAddCard).not.toHaveBeenCalled();
+    quiet.mockRestore();
   });
 
   it("leaves a refused add's sentence on the surface, which outlived the menu", async () => {

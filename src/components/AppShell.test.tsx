@@ -70,7 +70,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
 import { REPORT_MS } from "./useSidebarDrops";
-import { useAddCardToDeck } from "@/features/card/cardMenu";
+import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
@@ -107,7 +107,16 @@ const noUpdate: Update = {
  * `invalidate` below is the spy it fires.
  */
 const render = (ui: ReactElement) =>
-  renderBare(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  renderBare(
+    <QueryClientProvider client={queryClient}>
+      {/* The shell draws the sentence a refused card-menu deck add leaves and reads it through
+          this context, so it is as much a part of the shell's surroundings as the query client.
+          `App.tsx` mounts it **above `ContextMenuProvider`** rather than here, because that
+          provider draws its panel as a sibling of the shell — a menu's rows are not inside the
+          shell, which is a trap that cost one commit. */}
+      <CardToDeckProvider>{ui}</CardToDeckProvider>
+    </QueryClientProvider>,
+  );
 
 const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   cardCount: 116_568,
