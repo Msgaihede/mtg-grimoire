@@ -101,10 +101,10 @@ function MenuSurface({ build, label, act, at = AT }: StageProps) {
  * ordering is the thing worth showing.
  *
  * **The other half of that pair does not throw.** `useContextMenu()` outside a
- * `ContextMenuProvider` is a deliberate no-op — thirteen surfaces call it and every one is also a
- * story — so a story that forgot the provider would render a surface whose right-click does
- * nothing at all, silently, and look entirely correct. Nothing here can tell you that; the wrap
- * is the rule.
+ * `ContextMenuProvider` is a deliberate no-op — every surface that offers a right-click calls it
+ * and every one is also a story — so a story that forgot the provider would render a surface
+ * whose right-click does nothing at all, silently, and look entirely correct. Nothing here can
+ * tell you that; the wrap is the rule.
  */
 function Stage(props: StageProps) {
   return (
@@ -162,7 +162,7 @@ const CARD_TARGET: CardMenuTarget = {
 const ORPHANED_TARGET: CardMenuTarget = { ...CARD_TARGET, oracleId: null };
 
 /**
- * Everything the ten-surface card menu needs that is not the card.
+ * Everything the card menu needs that is not the card.
  *
  * `viewPrintingsInPane: null` is "not inside the deck editor", where the item navigates to Search
  * instead of opening the pane. `DeckTargetSubmenu` is passed **as itself**, with no glue, which is
@@ -319,8 +319,8 @@ function categoryDeps(act: Act): CategoryMenuDeps {
  * keeps a right-click's rows the same shape wherever one is opened and what lets the keyboard
  * model — roving caret, submenu open and close, one Escape per level — be written once against
  * the array rather than once per surface. So the stories below are the **four builders** this
- * branch shipped, drawn by the one panel: the ten-surface card menu, the deck editor's additions
- * to it, the gallery's deck and folder menus, and a pile's.
+ * branch shipped, drawn by the one panel: the card menu every card surface draws, the deck
+ * editor's additions to it, the gallery's deck and folder menus, and a pile's.
  *
  * **Nothing here reaches the backend while a menu is merely open**, and two stories exist to show
  * the shape that guarantees it. `Add to → Deck` and both `Move to` rows are `lazy` submenus: their
@@ -351,8 +351,8 @@ type Story = StoryObj<typeof meta>;
 /* ------------------------------------------------------------------- the card menu ------ */
 
 /**
- * The menu ten surfaces draw — the two search views, the two collection views, the wishlist, four
- * deck editor views, the docked panel, the card pane and the printings list.
+ * The menu every card surface draws — the two search views, the two collection views, the
+ * wishlist, the four deck editor views, the docked panel, the card pane and the printings list.
  *
  * **Five rows and two rules** — seven items, since a separator is a `MenuItem` too. The two copies
  * come first because they are what a right-click is most often for; **Open on** and **View all

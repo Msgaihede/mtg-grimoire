@@ -714,14 +714,14 @@ describe("the sidebar's drop targets", () => {
 /**
  * The shell is the app's **one** mount of `useCardToDeck`, and this is what that buys.
  *
- * A card menu is opened on ten surfaces and its deck add has to outlive the menu — `ctx.run`
+ * A card menu is opened on every card surface and its deck add has to outlive the menu — `ctx.run`
  * closes the panel before it calls a row's handler — so the write is mounted here, where
  * `useSidebarDrops` is and for the same reason. Mounting it *once* rather than per surface is
  * the second reason: the sentence a refusal leaves then has one place to be drawn, and a surface
  * never holds it at all.
  */
 describe("the card menu's deck write", () => {
-  /** A view, standing in for any of the ten. It asks the shell for the write and nothing else,
+  /** A view, standing in for any card surface. It asks the shell for the write and nothing else,
    *  which is the whole claim: there is no `error` in its hands to forget to draw. */
   function AddProbe() {
     const addToDeck = useAddCardToDeck();

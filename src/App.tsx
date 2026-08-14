@@ -103,7 +103,8 @@ export default function App() {
             "inside `AppShell`" and "inside the menu" are two different places: this mounted
             around the shell would be around every *view* and around none of the menu's *rows*,
             and `useAddCardToDeck` would throw the moment a reader expanded "Add to → Deck" — on
-            all ten surfaces at once. It shipped that way for one commit. Anything a menu's rows
+            every card surface at once, not on one of them. It shipped that way for one commit.
+            Anything a menu's rows
             need goes here, outside the menu provider, not inside the shell it renders.
 
             Inside `QueryClientProvider` because it mounts `useDeck`, which is a query. */}

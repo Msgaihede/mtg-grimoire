@@ -38,12 +38,13 @@ export interface ContextMenuApi {
 /**
  * What a surface gets when nothing has mounted a `ContextMenuProvider` above it: no menu.
  *
- * **A no-op rather than a thrown "missing provider", and that is a decision with a cost.** The
- * hook is called by thirteen surfaces, every one of which is also a Storybook story and a test
- * that renders it on its own — so a throw here is not a helpful error at the one call site that
- * forgot, it is `src/stories.test.tsx` red for everybody, because that file composes the whole
- * tree. The cost is that a forgotten provider is a right-click that does nothing rather than a
- * message saying why; `App.tsx` mounts the one that matters and `App.test.tsx` renders it.
+ * **A no-op rather than a thrown "missing provider", and that is a decision with a cost.** Every
+ * surface that offers a right-click calls this hook, and every one of them is also a Storybook
+ * story and a test that renders it on its own — so a throw here is not a helpful error at the
+ * one call site that forgot, it is `src/stories.test.tsx` red for everybody, because that file
+ * composes the whole tree. The cost is that a forgotten provider is a right-click that does
+ * nothing rather than a message saying why; `App.tsx` mounts the one that matters and
+ * `App.test.tsx` renders it.
  */
 const NO_MENU: ContextMenuApi = { openMenu: () => {}, closeMenu: () => {} };
 
@@ -91,7 +92,7 @@ export interface ContextMenuHandles extends ContextMenuApi {
  * `preventDefault()` plus `stopPropagation()` means the provider's document-level test never runs
  * and never gets to save it. So the field would lose cut, copy, paste, undo and its spellcheck
  * suggestions and get a card menu instead. The test belongs in the primitive rather than in
- * thirteen callers, because a caller that forgets it produces a bug nobody can see from the call
+ * every caller, because a caller that forgets it produces a bug nobody can see from the call
  * site.
  */
 export function useContextMenu(): ContextMenuHandles {

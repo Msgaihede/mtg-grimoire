@@ -1,9 +1,9 @@
 /**
  * What a card offers on a right-click, anywhere it is drawn.
  *
- * **A pure builder, and its dependencies are an argument.** Ten surfaces call it — the two
- * search views, the two collection views, the wishlist, four deck editor views, the docked
- * panel, the card pane and the printings list — and each has its own writes, its own
+ * **A pure builder, and its dependencies are an argument.** Every card surface calls it — the
+ * two search views, the two collection views, the wishlist, the four deck editor views, the
+ * docked panel, the card pane and the printings list — and each has its own writes, its own
  * marketplace hook instance and its own answer to "am I inside the deck editor". Passing
  * `CardMenuDeps` keeps every one of those decisions at the surface and keeps this file
  * testable without a provider.
@@ -383,7 +383,7 @@ function run(work: Promise<unknown>): void {
  *
  * **The write arrives by context rather than by a prop, and that is the fence.** Its props are
  * exactly `CardMenuDeps`' `{ target, onDone }`, so a surface passes this component itself with
- * no glue: there is no callback to mis-wire and no `error` string for ten surfaces to forget to
+ * no glue: there is no callback to mis-wire and no `error` string for a surface to forget to
  * draw. Wiring the picker without the single mount is not a silent omission either — see
  * {@link useAddCardToDeck}.
  *
@@ -430,8 +430,8 @@ const CardToDeckContext = createContext<CardToDeck | null>(null);
 /**
  * The app's single {@link useCardToDeck}, and the context every card menu reaches it through.
  *
- * Mounted **once**: `cardMenu.tsx` serves ten surfaces, TypeScript can force a callback but
- * cannot force anybody to *render* a string, and a rule that lives at ten call sites is a rule
+ * Mounted **once**: `cardMenu.tsx` serves every card surface, TypeScript can force a callback but
+ * cannot force anybody to *render* a string, and a rule that lives at every call site is a rule
  * that drifts. One mount is one place to forget, and it is the same place the sentence is drawn
  * ({@link useCardToDeckRefusal}).
  *

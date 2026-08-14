@@ -300,7 +300,7 @@ markup of its own. Every rule below has a failure behind it that shipped or near
 - **Anything a menu's _rows_ need is provided above `ContextMenuProvider`, never inside
   `AppShell`.** The provider draws its panel as a sibling of `children`, so "inside the shell" and
   "inside the menu" are two different places. `CardToDeckProvider` shipped inside the shell for one
-  commit, and every deck add made from a menu threw — on all ten card surfaces at once — because
+  commit, and every deck add made from a menu threw — on every card surface at once — because
   the picker that consumes it is drawn in the panel and not in a view.
 - **A menu opened from inside a `LAYER.overlay` dialog paints behind that dialog's scrim.** `popup`
   is `z-30` and `overlay` is `z-45`: the panel is invisible and unreachable, and **nothing goes

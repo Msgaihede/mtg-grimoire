@@ -162,7 +162,7 @@ interface CardMenuTarget {
 }
 ```
 
-Ten surfaces build one each, from the row they already hold: search grid and table, collection
+Every card surface builds one, from the row it already holds: search grid and table, collection
 grid and table, wishlist, the deck editor's Stacks/Table/Text/Grid, the docked deck-search
 panel, the card detail pane, the printings list. **Out of scope:** the deck cover picker, the
 import preview and the theory-diff dialog — a right-click during a modal task is more likely a
@@ -473,7 +473,7 @@ src-tauri/Cargo.toml  ·  package.json
 .storybook/fake/db.ts              the three new commands
 ```
 
-Plus one `onContextMenu` line on each of the ten card surfaces, the deck tile, the folder row
+Plus one `onContextMenu` line on each card surface listed in §3, the deck tile, the folder row
 and the category heading.
 
 ---
@@ -520,4 +520,4 @@ plans has found something:
 | A four-level cascade overflows the window | Flip logic measured live at three widths; the 1024px floor is the acceptance test. |
 | The clipboard plugin behaves differently in the packaged exe | It is the plugin *because* the web API was unproven; still verified in a real window. |
 | Import-into-a-named-category changes shared importer behaviour | The argument is optional and defaults to today's behaviour; the toolbar's Import passes nothing. |
-| Ten surfaces drift in what they put in a `CardMenuTarget` | One builder function per surface, one shared type, and the menu is built in **one** place from that type. |
+| The card surfaces drift in what they put in a `CardMenuTarget` | One builder function per surface, one shared type, and the menu is built in **one** place from that type. |

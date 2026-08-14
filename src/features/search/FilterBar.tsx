@@ -127,7 +127,7 @@ export function FilterBar({
 
       {/* The card the wall is narrowed to, drawn only while it is — and drawn **first**,
           beside the search box, because it is the one filter on this row the reader did not
-          set here. It arrives from a card's own right-click menu in any of ten surfaces, so
+          set here. It arrives from a card's own right-click menu on any card surface, so
           without it the reader gets a wall holding one card's printings and nothing on screen
           saying why; the name is the whole account, and pressing it is the way out.
 

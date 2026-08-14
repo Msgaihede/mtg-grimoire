@@ -304,9 +304,9 @@ export function useCardSearch(
    * consumed further down.**
    *
    * Subscribed (`useAppStore(selector)`) rather than read through `getState()`, because one of
-   * the ten surfaces that offers this is the search results themselves: a right-click there
+   * the surfaces that offers this is the search results themselves: a right-click there
    * changes no view and unmounts nothing, so a bare read would sit on an intent that nothing
-   * ever re-rendered to notice. The other nine navigate, which mounts this panel fresh.
+   * ever re-rendered to notice. Every other one navigates, which mounts this panel fresh.
    *
    * The deck editor's docked panel calls this hook too and would be a second consumer, but
    * `requestAllPrintings` moves `activeView` in the same write — and that switch renders in an
@@ -369,7 +369,7 @@ export function useCardSearch(
    * One card, by its oracle id — every printing of it and nothing else.
    *
    * **The one filter on this row the reader did not set on this row.** It arrives from a card's
-   * own menu, pressed in any of ten surfaces (see `pendingCardSearch` on the store), so the chip
+   * own menu, pressed on any card surface (see `pendingCardSearch` on the store), so the chip
    * that draws it is the only account the reader gets of why the wall is one card wide. A filter
    * like every other for the two things that matter: `activeFilterCount` counts it and
    * `resetAll` clears it.
@@ -378,14 +378,15 @@ export function useCardSearch(
    * which is exactly the identity `cards.oracle_id` carries across every set it was printed in.
    *
    * **Seeded from the waiting intent, exactly as `format` is seeded from its default, and for a
-   * reason the render-phase guard below cannot cover.** Nine of the ten surfaces navigate here,
-   * so this panel *mounts* holding the intent — and a state adjusted during render does not
+   * reason the render-phase guard below cannot cover.** Every card surface but one navigates
+   * here, so this panel *mounts* holding the intent — and a state adjusted during render does not
    * reach the mount request: React Query builds its observer inside a `useState` initialiser
    * from the first pass's options and subscribes with those, so the second pass corrects the
    * hook and not the fetch already on its way. Measured here: with the seed removed and only
    * the guard below in place, request zero goes out with no card on it at all — the unfiltered
    * 116 k-row browse, answered and then replaced, which is the whole thing this is meant to
-   * avoid. The guard is what catches the tenth surface, where nothing mounts.
+   * avoid. The guard is what catches the exception — a right-click in the search results
+   * themselves, which changes no view, so nothing mounts.
    */
   const [oracleId, setOracleId] = useState(pendingCardSearch?.oracleId ?? "");
   /**
@@ -585,10 +586,15 @@ export function useCardSearch(
    *
    * Written out rather than derived from the query's own payload, because the two differ in
    * exactly the way that matters: the page carries a sort, an offset and a collapse, and a
-   * facet answer depends on none of the three. {@link FacetRequest} is the fence — it cannot
-   * hold them — and this object is what has to stay in step with the payload above it.
+   * facet answer depends on none of the three. {@link FacetRequest} is the fence around those
+   * three — it cannot hold them — and this object is what has to stay in step with the payload
+   * above it.
    *
-   * **`oracleId` is the one filter deliberately left out, and it is not a drift.** The counts
+   * **`oracleId` is the one filter deliberately left out, and the fence does not cover it.**
+   * `FacetRequest` omits the *page* fields, not the filters, so the type carries `oracleId`
+   * perfectly well; **this literal is the whole of what keeps it out of a facet key**, because
+   * the fields are written out here by hand. A second builder anywhere would be a second place
+   * to remember it. It is not a drift, either: the counts
    * come from the in-memory index (`index/facets.rs`), which has no oracle axis to filter on —
    * sending it would mint a second facet key for an answer identical to the one without it. So
    * while the wall is narrowed to one card the counts describe the corpus that card was picked
