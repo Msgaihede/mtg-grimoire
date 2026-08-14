@@ -32,8 +32,14 @@ export interface DeckDialogProps {
   /**
    * Escape, and the close control: hand focus back to whatever opened the dialog, then close.
    *
-   * Stable, please — {@link useDismissOnEscape} takes it as a dependency, so a function rebuilt
-   * on every render of the opener re-registers the window listener just as often.
+   * **Stability is a courtesy here now, not a requirement**, and the reason it used to be one is
+   * worth knowing. This said "{@link useDismissOnEscape} takes it as a dependency, so a function
+   * rebuilt on every render of the opener re-registers the window listener just as often" — and
+   * once that hook grew its stack, a re-registration did worse than cost a listener: it popped
+   * this layer's token and pushed a new one, landing on **top** of whatever had been opened over
+   * it, so the next Escape closed the wrong window. The hook latches this in a ref for exactly
+   * that reason and depends only on `enabled` and `layer`. An unstable one now costs a re-render
+   * of the panel and nothing else.
    */
   onDismiss: () => void;
   /** A press on the scrim: close without moving focus. The reader is already somewhere else. */
@@ -58,13 +64,21 @@ export interface DeckDialogProps {
  *   starts clean on every open, so the state belongs *inside* `children` rather than being reset
  *   by an effect out here.
  * * **The Escape rung is registered on the flag, not on the panel's mount.** The panel outlives
- *   `open` by the length of its fade, and a rung that came up with the *element* would still be
- *   consuming Escape while the next overlay opens — two `"inner"` peers, which
- *   {@link useDismissOnEscape} explicitly does not order.
- * * **{@link DeckDialogProps.onDismiss} must be stable.** See the prop.
+ *   `open` by the length of its fade, and a rung that came up with the *element* would go on
+ *   acting for that whole window — spending a press on a dialog that is already closing, and
+ *   starving whatever sits behind it, since an `"inner"` rung `preventDefault()`s and an
+ *   `"outer"` one (the card detail pane) returns early on `defaultPrevented`. `enabled: open`
+ *   kills it on the render that starts the exit. This used to name a different failure — "two
+ *   `"inner"` peers, which {@link useDismissOnEscape} explicitly does not order" — and that hook
+ *   keeps a stack of capture-phase registrations now, where only the token on top acts, so peers
+ *   *are* ordered, by mount depth. Registering on the flag is what decides when this dialog joins
+ *   and leaves that stack, which makes the flag more load-bearing than it was rather than less.
+ * * **{@link DeckDialogProps.onDismiss} is worth keeping stable, and no longer for correctness.**
+ *   See the prop.
  * * **The body owns its own scroller.** The header is this file's and everything under it is the
- *   host's, because the three bodies differ — one keeps a sticky roll-up inside its scroller —
- *   and a shell that owned the scroll container would have to grow a prop for each of them.
+ *   host's, because the bodies differ — one keeps a sticky roll-up inside its scroller — and a
+ *   shell that owned the scroll container would have to grow a prop for each of them. (A count of
+ *   hosts used to stand here and had already drifted once; it is a number the imports answer.)
  *   A body is expected to be, or to contain, `min-h-0 flex-1 overflow-y-auto` with its own
  *   padding; the panel is the `flex flex-col` that makes that work.
  * * **The presence subtree reaches the body.** `children` render inside the same
@@ -91,8 +105,11 @@ export function DeckDialog({
   // make Escape mean "revert what I typed": the press never reaches it, and a control that
   // works only sometimes is worse than one that never claimed to.
   //
-  // Out here because the panel outlives `open` by the length of its fade, and a rung that came
-  // up with the *element* would still be consuming Escape while the next overlay opens.
+  // Out here because the panel outlives `open` by the length of its fade, and a rung that came up
+  // with the *element* would go on acting for that whole window. The press it would eat is the
+  // one belonging to the layer **behind** this dialog — a capture rung `preventDefault()`s, and
+  // the card pane's bubble rung returns early on `defaultPrevented` — rather than the next
+  // overlay's, which mounts *after* this one and therefore lands above it on the hook's stack.
   // `enabled: open` kills it on the render that starts the exit.
   useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
 

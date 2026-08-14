@@ -293,24 +293,33 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
 /**
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
  *
- * `useDismissOnEscape` orders exactly two rungs — one capture-phase `"inner"` layer and one
- * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
- * would both close on a single press. Every member below registers that same `"inner"` rung
- * from inside its own component, so they are modelled as *one* piece of state: "never two" is
- * then structural rather than remembered, and at most one of the eight registrations is ever
- * enabled. `DecksPage`'s `Panel` is the same arrangement, for the same reason.
+ * **At most one of these is ever meant to be open, and a union is what makes that structural
+ * rather than remembered.** Eight booleans can express "Categories and History both up", which is
+ * a state nothing here draws and nothing here could draw well: two scrims, two `aria-modal`
+ * panels and two focus traps, with two hand-backs racing for the caret as either closes. One slot
+ * cannot say it, and the failure it forecloses is the invisible kind — every test that opens one
+ * layer at a time passes either way. Every member below registers the same `"inner"` Escape rung
+ * from inside its own component, so at most one of the eight registrations is ever enabled.
+ * `DecksPage`'s `Panel` is the same arrangement, for the same reason.
  *
- * **A union rather than eight booleans, and the rebuild is what makes that worth saying twice.**
- * Eight flags are eight ways to be in a state the Escape protocol cannot order, and the failure
- * is invisible: two layers close on one press, two focus hand-backs race for the caret, and
- * every test that opens one layer at a time still passes. The union cannot express it.
+ * **The Escape protocol is no longer that argument, and the change landed under this file.** This
+ * paragraph used to read "`useDismissOnEscape` orders exactly two rungs, so two `"inner"` peers
+ * open at once are not ordered at all and would both close on a single press", which is wrong
+ * now and was wrong then. It is wrong now because that hook keeps a **stack** of capture-phase
+ * registrations and only the token on top acts, so two `"inner"` peers *are* ordered — by mount
+ * depth, which is what lets a context menu open over a dialog opened over the card pane and give
+ * one press to each. It was wrong then because the capture rung checks `defaultPrevented` too, so
+ * the old hook did not close both: the *first-registered* peer consumed the press and the newer
+ * one — the thing on top — was **starved**, measured `{ first: 1, second: 0 }` on 2026-08-14. The
+ * reassuring version was the false one; the hook's own doc carries the whole of it. What survives
+ * is the paragraph above, which never depended on any of this.
  *
  * `check` is the format check anchored to its chip; the other seven are **full-window overlays**
- * on `LAYER.overlay` — which is one rung and not seven for exactly this reason (see
- * `layers.ts`). Categories and tags used to be one of them: a single right-hand drawer with two
- * sections in it. Splitting it into two dialogs adds a member here and takes nothing away from
- * the argument — one slot is one slot however many things can occupy it, which is also why the
- * export dialog joined without an argument being reopened.
+ * on `LAYER.overlay` — one rung and not seven because of that same "at most one is up": they
+ * never need ordering against each other (see `layers.ts`). Categories and tags used to be one of
+ * them: a single right-hand drawer with two sections in it. Splitting it into two dialogs adds a
+ * member here and takes nothing away from the argument — one slot is one slot however many things
+ * can occupy it, which is also why the export dialog joined without an argument being reopened.
  *
  * **Two members carry a field, and both are the same idea**: which pile the layer is about. A
  * union arm is where such a thing belongs — a second `useState` beside this one could hold a
