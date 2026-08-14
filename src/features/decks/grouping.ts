@@ -226,9 +226,18 @@ function strayGroup(cards: DeckCard[]): CardGroup {
  * that argument was written when a deck had five piles. A category is a card's **function**
  * now (`autoCategory.ts`: Removal, Ramp, Draw, Tutor and nine more), so a deck accumulates
  * columns faster than it fills them and the empty ones are a wall of headings between the
- * reader and their cards. The affordance that argument was protecting has not gone anywhere:
- * every card's "Move…" select offers **every** category of the deck, empty ones included,
- * because `DeckEditor` builds it from `categories` rather than from these groups.
+ * reader and their cards.
+ *
+ * **The affordance that argument was protecting is currently gone, and this is the file that
+ * has to say so.** It was every card's `Move…` select, which offered *every* category of the
+ * deck including the empty ones because `DeckEditor` built it from `categories` rather than
+ * from these groups — and it was removed on 2026-08-14 with a replacement expected later. A
+ * heading that is not drawn is not a drop target, so **an empty pile of the reader's own cannot
+ * be reached at all today** except by adding a card to it from the "Add to" select, which is
+ * built from `categories` the same way. The four seeded piles are unaffected: they draw empty
+ * by the exception below, so they can still be dropped into. Whatever replaces the select is
+ * measured against this paragraph — and if instead this rule is ever reversed, it is *this*
+ * that made the case, not a wall of headings.
  *
  * **The four seeded `schema::PREDEFINED_CATEGORIES` are the exception** — Commander,
  * Sideboard, Companion, Maybeboard. A reader can neither rename nor delete them, so an empty
