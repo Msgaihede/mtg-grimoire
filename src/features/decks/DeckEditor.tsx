@@ -4,7 +4,7 @@ import {
   dropTargetForElements,
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronLeft, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
@@ -93,26 +93,58 @@ const CONTROL =
  * | 1280 | open | 617 | 221 | open |
  * | 1440 | open | 777 | 381 | open |
  *
- * 208 is also the sidebar's width, which is the app's own evidence that a column this wide is
- * still a column.
+ * **192 rather than 208, and it is the same 16px correction a second time.** The editor became a
+ * scroller when the stats moved under the deck ({@link DECK_HEIGHT_FLOOR}), so the row now pays
+ * for *two* scrollbars rather than one: measured at 1280 with a card pane docked, it is **602**
+ * against the 617 in the table above, which leaves the deck **202** — and a 208 floor collapsed
+ * the panel at the app's default window size, which is precisely the failure the drop from 224
+ * to 208 existed to prevent. The reasoning is the earlier paragraph's, applied to the scrollbar
+ * the arithmetic did not count this time. `scrollbar-width: thin` was measured too and is not an
+ * answer: it costs 10px instead of 15 and lands on **207**, one pixel short of the old floor.
  *
- * **The stats aside is counted with the panel now**, which is the one thing about this that the
- * rebuild changed. The desk row holds three things where it used to hold two — the view, the
- * stats block and the search panel — and the stats block is a *reader's* toggle rather than a
- * measurement, so it is subtracted before the panel is asked whether it fits. Open Stats in a
- * 1280 window with a card pane docked and the panel goes to its rail; close either and it comes
- * back, because nothing here records an intention it cannot honour.
+ * 192 is the sidebar's 208 less that scrollbar — still a column by the app's own evidence, and
+ * still far from the 2px this constant exists to rule out.
+ *
+ * **The desk row holds two things, which is what the table above was measured against.** It
+ * briefly held three: the rebuild put a 280px stats aside between the view and the panel, and
+ * that width was subtracted here before the panel was asked whether it fit — so opening Stats
+ * at 1280 with a card pane docked cost the reader their search, and a toolbar toggle existed
+ * for no reason other than to give the width back. The stats are a band **under** the deck now
+ * (the section at the foot of this component), so the deck and the panel are measured against
+ * each other and against nothing else.
  */
-const DECK_FLOOR = 208;
+const DECK_FLOOR = 192;
 
-/** The `gap-4` between the three things on the desk, which each of their widths has to be
+/** The `gap-4` between the two things on the desk, which both of their widths have to be
  *  counted with. */
 const DESK_GAP = 16;
 
-/** How wide the stats aside is, off the design canvas: 280px, which fits the figure row two up
- *  and the curve's nine bars without any of them becoming a texture. */
-const STATS_WIDTH_PX = 280;
-const STATS_WIDTH = "w-70";
+/**
+ * The shortest the desk row may be squeezed to — `DECK_FLOOR`'s rule turned on its side, because
+ * the stats band is the first thing this editor has ever stacked *below* the deck rather than
+ * beside it.
+ *
+ * **384px, and it is a measurement rather than a taste**: a stack group holding one card is
+ * exactly that tall in the shipped window — 6px of column padding, a 43px group heading, the
+ * 319px card, `stackHeight`'s 8px tail and 6px more padding. One whole card is the floor because
+ * a deck view that cannot draw one has stopped being a deck view. Measured at 1280×800 with a
+ * content-height band and no floor at all, the row came out at **246px**: the commander was cut
+ * through the middle of its art, every column grew a scrollbar, and the docked panel's results
+ * spilled out from under it.
+ *
+ * **So the editor scrolls, and that is the trade this whole arrangement is.** Three things want
+ * the column's height — the deck, the price strip and the band — and at 1280×800 they come to
+ * **847px** in a **710px** editor. Rather than cut one of them, the section is
+ * `overflow-y-auto`: the deck holds 384, the band draws whole, and the last ~137px of it is one
+ * scroll away. At 1920×1080 nothing scrolls and the deck takes the surplus (**527px**). A band
+ * that shrank instead was measured at **92px** with 229px of charts inside it, which is a
+ * scrollbar over a chart nobody can read — the thing `DeckStats` refuses when it wraps rather
+ * than truncates.
+ *
+ * Written out whole rather than built from the number — Tailwind scans source text for class
+ * names, and one assembled at runtime emits no rule at all.
+ */
+const DECK_HEIGHT_FLOOR = "min-h-96";
 
 /** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
 const NO_TAGS: readonly number[] = [];
@@ -267,7 +299,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_BY);
   const [filter, setFilter] = useState("");
   const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
-  const [statsOpen, setStatsOpen] = useState(true);
   const [layer, setLayer] = useState<Layer>(null);
 
   /**
@@ -332,8 +363,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
 
   const editorRef = useRef<HTMLElement>(null);
-  /** The row the deck, the stats block and the panel share, and the only width any of them can
-   *  be judged against — the window's own is three layouts away from it. */
+  /** The row the deck and the panel share, and the only width either of them can be judged
+   *  against — the window's own is three layouts away from it. */
   const deskRef = useRef<HTMLDivElement>(null);
   /** The box the current view draws into — the one scroller a drag may have to move inside to
    *  reach its target, and the height the two column-packing views are told to pack to. */
@@ -528,9 +559,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * flash a rail, and the observer answers on the same frame.
    */
   const roomForPanel =
-    desk.width === 0 ||
-    desk.width - (statsOpen ? STATS_WIDTH_PX + DESK_GAP : 0) - (PANEL_WIDTH_PX + DESK_GAP) >=
-      DECK_FLOOR;
+    desk.width === 0 || desk.width - (PANEL_WIDTH_PX + DESK_GAP) >= DECK_FLOOR;
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -910,7 +939,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ref={editorRef}
       tabIndex={-1}
       aria-label={row ? `Deck editor: ${row.name}` : "Deck editor"}
-      className={cn("flex h-full min-h-0 flex-col gap-3", FOCUS)}
+      // **The one scroller in this view that is the *page*, and it is new** — see
+      // {@link DECK_HEIGHT_FLOOR}. The deck, the price strip and the stats band together want
+      // more height than a 1280×800 window has, and none of the three may be cut, so the column
+      // scrolls: the deck sits at its floor with the band's tail one scroll below it, and at a
+      // taller window nothing moves at all. The header and the toolbar scroll away with it,
+      // which is what makes this the page rather than a frame — the deck's own view keeps its
+      // scroller inside, and a wheel spent there is spent there first.
+      className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
         <button
@@ -1280,8 +1316,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 })}
               </div>
             )}
-
-            <ToggleChip label="Stats" pressed={statsOpen} onClick={() => setStatsOpen((v) => !v)} />
           </div>
         </div>
       )}
@@ -1325,13 +1359,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {row && (
-        // The deck on the left, what it adds up to beside it, and the way cards get into it on
-        // the right (spec §7). One flex row, so all three are the full height of the editor —
-        // and `min-w-0` on the deck side, because a view that cannot shrink is the horizontal
-        // scrollbar the 1024px floor forbids. This element is also what `DECK_FLOOR` is measured
-        // against: it is the width the three of them actually have, after the sidebar, the page
-        // padding and the card pane have taken theirs.
-        <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
+        // The deck on the left and the way cards get into it on the right (spec §7). One flex
+        // row, so both are the full height of the editor — and `min-w-0` on the deck side,
+        // because a view that cannot shrink is the horizontal scrollbar the 1024px floor
+        // forbids. This element is also what `DECK_FLOOR` is measured against: it is the width
+        // the two of them actually have, after the sidebar, the page padding and the card pane
+        // have taken theirs. What the deck *adds up to* is no longer in this row; it is the band
+        // under it, which trades no width with either of these — and no height either, until the
+        // window is too short for both, where {@link DECK_HEIGHT_FLOOR} says which gives way.
+        <div ref={deskRef} className={cn("flex flex-1 gap-4", DECK_HEIGHT_FLOOR)}>
           <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
             {view === "stacks" && (
               <StackView {...viewProps} columnHeight={desk.height || undefined} />
@@ -1340,50 +1376,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             {view === "text" && <TextView {...viewProps} columnHeight={desk.height || undefined} />}
             {view === "grid" && <GridView {...viewProps} />}
           </div>
-
-          {statsOpen && (
-            // A block rather than a strip, and beside the deck rather than over it: four charts
-            // and a figure row do not fit on one line at the widths this editor is read at, and
-            // the direction's floor is a chart whose numbers are legible, not a chart that fits.
-            //
-            // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
-            // same measured reason: the card detail pane is the app's one complementary landmark,
-            // and a second one answers `getByRole("complementary")` too. Drawn as an aside, this
-            // block broke five of `App.test.tsx`'s pane assertions without touching the pane.
-            <section
-              aria-label="Deck stats"
-              className={cn(
-                "flex shrink-0 flex-col gap-3 overflow-y-auto rounded-lg border border-border",
-                "bg-surface p-3.5",
-                STATS_WIDTH,
-              )}
-            >
-              <div className="flex shrink-0 items-center justify-between">
-                <h3 className="font-heading text-lg leading-none">Deck stats</h3>
-                <button
-                  type="button"
-                  onClick={() => setStatsOpen(false)}
-                  aria-label="Hide deck stats"
-                  className={cn(
-                    "rounded-md p-0.5 text-dim",
-                    "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                    FOCUS,
-                  )}
-                >
-                  <ChevronRight className="size-4" aria-hidden="true" />
-                </button>
-              </div>
-              {/* Every number over the same rows the view is drawn from — one query, so a curve
-                  and a legality panel can never disagree. Unfiltered on purpose: the toolbar's
-                  filter narrows what is *shown*, and a deck's mana curve is a fact about the
-                  deck rather than about what is on screen. */}
-              <DeckStats
-                cards={deck.cards}
-                marketplace={marketplace}
-                send={deck.missingToWishlist}
-              />
-            </section>
-          )}
 
           <DeckSearchPanel
             add={deck.addCard}
@@ -1443,6 +1435,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           </div>
         )}
       </div>
+
+      {row && (
+        // What the deck adds up to — the foot of the page, and the last thing under the deck.
+        //
+        // **It was an aside on the desk row with a toggle in the toolbar, and both halves of
+        // that cost more than they bought.** The block took 280px off a row that already had to
+        // fit a deck and a search panel, so opening it at 1280 with a card pane docked pushed
+        // the panel to its rail — and the toggle beside the tag filters was a control whose only
+        // job was to give that width back. Full width under the deck, the four charts and the
+        // figure row lay themselves out across the page instead of stacking down a column, and
+        // no reader has to trade their search for their curve.
+        //
+        // **A band, not a card**: a rule and the content under it, the same grammar as the
+        // toolbar above, which is a rule and its controls. The surface, the border and the
+        // rounded corners it used to carry said *a panel you opened* — which is precisely what
+        // it has stopped being.
+        //
+        // **Below the price strip on purpose.** The strip is where the remove tray is drawn
+        // during a drag, exactly `-top-3` over the gap under the deck; putting the band between
+        // them would leave a reader dragging a card the height of four charts to reach the one
+        // drop that takes it out.
+        //
+        // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
+        // same measured reason: the card detail pane is the app's one complementary landmark,
+        // and a second one answers `getByRole("complementary")` too. Drawn as an aside, this
+        // block broke five of `App.test.tsx`'s pane assertions without touching the pane.
+        //
+        // Named by its `aria-label` and by nothing drawn: every figure in it carries its own
+        // label and every chart its own caption, so a heading over the top would be a fifth
+        // word for something already said four times — and a line of deck height for it.
+        //
+        // **`shrink-0`, and that is the whole of why this editor scrolls now** — see
+        // {@link DECK_HEIGHT_FLOOR}. The band is drawn whole or not at all: a curve with its
+        // last two buckets cut off and a legend with its last colour under the fold is a chart
+        // that has stopped being one, which is the same line `DeckStats` takes about wrapping
+        // rather than truncating.
+        <section aria-label="Deck stats" className="shrink-0 border-t border-border pt-3">
+          {/* Every number over the same rows the view is drawn from — one query, so a curve and
+              a legality panel can never disagree. Unfiltered on purpose: the toolbar's filter
+              narrows what is *shown*, and a deck's mana curve is a fact about the deck rather
+              than about what is on screen. */}
+          <DeckStats cards={deck.cards} marketplace={marketplace} send={deck.missingToWishlist} />
+        </section>
+      )}
 
       {/* The five overlays, mounted **at the editor's top level and as siblings of the layout
           above**, which is not a tidiness preference. Each is `fixed inset-0` and none is
