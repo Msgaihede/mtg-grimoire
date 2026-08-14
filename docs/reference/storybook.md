@@ -2,16 +2,21 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **369 stories across 48 story files, 47 docs
+`npm run storybook` · `npm run build-storybook`. **375 stories across 49 story files, 48 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the printings-rework branch **after**
-merging `main`: 416 entries, 369 `story`, 47 `docs`, 49 distinct `importPath`s.
+(`Object.values(index.entries)`, grouped by `type`; the 50th `importPath` is the `.mdx`).
+**Measured 2026-08-14** off a fresh `build-storybook` on the quick-add-dropdown branch: 423
+entries, 375 `story`, 48 `docs`, 50 distinct `importPath`s.
 
-The eleven over the 358 measured 2026-08-12 come from four branches that never saw each other's
-stories: five are `Card/DetailPane`'s, fifteen to twenty, when the printings list gained a
-group-by selector (a story per mode that renders differently, plus one that drives the select)
-and the card art gained a foil view; one is `Search/Page`'s `Unplayable`; and five are
+The six over the 369 measured earlier the same day are all `Decks/QuickAdd`'s, a story file that
+did not exist before — so the file and the docs-page counts move with them, as they did the last
+time a whole file arrived. The 369 was measured off the printings-rework branch **after** merging
+`main`: 416 entries, 369 `story`, 47 `docs`, 49 distinct `importPath`s.
+
+The eleven of that 369 over the 358 measured 2026-08-12 come from four branches that never saw
+each other's stories: five are `Card/DetailPane`'s, fifteen to twenty, when the printings list
+gained a group-by selector (a story per mode that renders differently, plus one that drives the
+select) and the card art gained a foil view; one is `Search/Page`'s `Unplayable`; and five are
 `Components/CardZoomIndicator`'s, **the one new story _file_ in the set** — which is why the
 file and docs-page counts moved here when they had held for four measurements.
 
@@ -42,7 +47,7 @@ again by 2026-08-12**: it read 43 story files when 44 were on disk, and the moti
 found it added _no_ story file, so the drift predates that branch entirely. Count the files
 too, not just the stories — `Object.values(index.entries)` groups by `type`, and a whole file
 can go missing from the prose while the story total still looks plausible.
-**46 of the 48 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
+**47 of the 49 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 
@@ -106,10 +111,11 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   **frame** and with it its own module graph. `DeckSettingsDialog`, `CreateDeckDialog` and
   `import/ImportDeckDialog` carry the same parameter for an unrelated reason — their scrim is
   `fixed inset-0`, so inline it would cover the docs page rather than its own block — and the
-  other **38 docs pages render inline** (45 autodocs pages less those seven,
-  re-counted 2026-08-12 after the merge — the seven were found in source, not assumed). A new story file
-  that writes the store needs the same parameter or its docs page shows one story's view under
-  every heading.
+  other **40 docs pages render inline** (47 autodocs pages less those seven, re-counted
+  2026-08-14 — the seven are found in source, not assumed, and `CardZoomIndicator` is **not**
+  among them because its frame is declared on **one story** rather than on the file). A new story
+  file that writes the store needs the same parameter or its docs page shows one story's view
+  under every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
@@ -131,16 +137,17 @@ stories and no docs page. A new story file gets neither unless it says `tags: ["
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**270** plays today, in a file of **273** tests — the other three are its own;
+  (**283** plays today, in a file of **286** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-14). **Both figures had rotted before this
-re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
-worth of drift added by branches that did not re-measure, and is the same prose-only rot the
-story totals above have taken three times. Only one of the six is this branch's
-(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
-  `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
-  annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
-  after the scan it is a no-op and the failure is a story running with no decorator.
+summary for the second, both measured 2026-08-14). **This pair has now rotted twice** — it read
+264/267 against a tree already answering 269/272, was re-counted to 270/273, and had drifted to
+277/280 before `Decks/QuickAdd`'s six plays took it to 283/286. Both drifts are the same
+prose-only rot the story totals above have taken three times: a branch that adds a play and does
+not re-measure goes green either way. This is what puts a story's own claim inside
+  `npm run verify` — `build-storybook` compiles stories, it never plays them. `composeStories`
+  **snapshots project annotations at call time**, so `setProjectAnnotations` must run before it,
+  at module scope; after the scan it is a no-op and the failure is a story running with no
+  decorator.
 - It `vi.mock`s two of the three aliases, and **the third (`@/lib/images`) must never be
   mocked.** `vi.mock` matches the _resolved id_, so it resolves to the same `src/lib/images.ts`
   that the fake's own `export *` resolves to, and the factory imports the module it stands in

@@ -220,13 +220,58 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
   `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
   and each hands focus back to the control that opened it.
-- **An anchored popup near the right of a row is pinned to its trigger's _right_ edge.**
+- **A popup is pinned to, and grows from, the corner nearest its trigger's own edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
   picker did: 288px of listbox opening from a trigger at the end of the filter row put it
   **174px past a 1280px window** (measured), and the page slid left, sidebar and all, the
-  moment its own `scrollIntoView` ran. `right-0`, the same decision as
-  `AddToCollection`'s `align="end"`.
+  moment its own `scrollIntoView` ran. So `SetCombobox` is `right-0` with
+  `origin-top-right`, the same decision as `AddToCollection`'s `align="end"` — and **the
+  mirror of it is equally wrong**. The deck editor's quick add sits at the _left_ end of its
+  toolbar row, where that pair would hang a panel wider than the field out to the left of
+  the field that produced it, away from the edge it has room at; it takes `left-0` with
+  `origin-top-left`. The origin follows the pin, which is the one thing `lib/motion.ts`'s
+  `popup` leaves to whoever anchors it: a listbox that grows from a corner it is not
+  attached to reads as unrelated to the control that opened it. Both spellings are written
+  out whole, for the scanner reason above.
+- **Two comboboxes here are hand-rolled, and the CSP is the reason.** The set filter
+  (`features/search/SetCombobox.tsx`) and the deck editor's quick add
+  (`features/decks/QuickAdd.tsx`) are plain absolutely-positioned listboxes in the same
+  stacking context as their trigger, never portalled popovers: the shipped `csp` is
+  `style-src 'self'`, and every portalled overlay primitive injects a runtime `<style>` the
+  moment it opens — Radix's pull in `react-remove-scroll`. **`devCsp` carries
+  `'unsafe-inline'` and the shipped `csp` does not**, so the failure passes `tauri dev`,
+  Storybook and jsdom and breaks only in a packaged build, exactly like
+  `AnimatePresence mode="popLayout"`. The ARIA wiring is the whole of what the dependency
+  would have supplied: `role="combobox"` on the _field_, `aria-expanded` and
+  `aria-controls`, and `aria-activedescendant` moving the highlight while the caret stays
+  put — which is what lets a reader take a row without Tabbing into the list. Both files
+  build option ids from a module-scope `optionId(id, i)`, so the id an option carries and
+  the id `aria-activedescendant` points at are one spelling rather than two that happen to
+  agree; a mismatch is invisible to the eye and total to a screen reader, which simply
+  announces nothing.
+- **Both draw their panel in `components/PopupListbox`'s `PopupPanel`, and what is shared is
+  an inert guard.** `AnimatePresence` keeps the element it was last handed while that
+  element leaves, so an exiting panel goes on rendering the props of the render in which it
+  was still open — including its `className` — and a flag read upstairs can therefore never
+  reach it. `PopupPanel` reads `useIsPresent` _inside_ the presence, which is the only place
+  the answer changes, and turns the leaving panel `aria-hidden` and `pointer-events-none`.
+  Without it every dismissal a popup has — Escape, the outside-mousedown listener, `onBlur`
+  — comes down with the open flag while the panel is still painted and hit-testable for the
+  length of the fade: a press landing on a listbox that can no longer close itself, and a
+  second, stale copy of its list in the accessibility tree. One component rather than two
+  inline `motion.div`s, so the guard cannot drift between them.
+- **What the two do not share is deliberate.** `SetCombobox` opens from a disclosure button,
+  focuses a search field of its own and hands the caret back on Escape; the quick add _is_
+  the field, so its Escape closes the list and moves nothing. `SetCombobox` scrolls the
+  active option into view because it renders up to 50 rows; the quick add caps at five,
+  which are all visible at once, so it has no such effect and needs none. And the quick add
+  registers its `"inner"` Escape rung on _the list being up_ rather than on its own open
+  flag, because a toolbar field with no list under it owes the press to the card detail
+  pane, which listens on `window` in the bubble phase. Its deck-side rules — the three
+  routes to one write, the freshness guard, the missing `marketplace` — are in
+  `src/features/decks/CLAUDE.md`. **None of it has been driven in the shipped window yet;
+  that pass is outstanding.**
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row
