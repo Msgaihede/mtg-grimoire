@@ -155,6 +155,25 @@ panel, nothing written until Import). The Rust half and every measurement:
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes**.
+- **The deck stats are a band at the foot of the editor, and there is no control that hides
+  them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
+  the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
+  panel was asked whether it fit — so opening Stats at 1280 with a card pane docked cost the
+  reader their search, and the toggle existed to give that width back. Full width under the deck
+  the four charts sit on one line and nothing on the desk is traded for them. Three consequences,
+  each measured in the shipped window and none of them visible to a test:
+  **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
+  drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
+  would put four charts between a card and the one drop that takes it out;
+  **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
+  to **847px** in the **710px** a 1280×800 window leaves, so the deck holds a `min-h-96` floor
+  (**384px** = one whole stack card and its group heading) and the band's last ~137px is one
+  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**612px**);
+  **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the
+  row's arithmetic did not count — the same 16px correction, for the same reason, as the drop from
+  224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
+  `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
+  pixel short.
 - Only `Stacks` and `Grid` fetch a picture, and it is the **whole card** —
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:

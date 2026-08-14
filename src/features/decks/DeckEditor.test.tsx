@@ -317,13 +317,6 @@ function desk(px: number) {
   };
 }
 
-/** The stats block is open by default and is counted against the panel's floor, so the three
- *  width tests below close it first — they are about the panel and the deck, not about three
- *  columns at once. */
-async function hideStats() {
-  await userEvent.click(screen.getByRole("button", { name: "Stats" }));
-}
-
 beforeEach(() => {
   resetRowIds();
   useAppStore.setState({ openDeckId: 4, selectedCardId: null, paneDeckContext: null });
@@ -867,10 +860,11 @@ describe("DeckEditor", () => {
 
   /**
    * What the deck adds up to, over the same rows the view is drawn from — one query, so a curve
-   * and a legality panel can never disagree. It is an aside beside the deck rather than a band
-   * over it, and it is the reader's to put away.
+   * and a legality panel can never disagree. A band at the foot of the page rather than an aside
+   * beside the deck, and **nothing puts it away**: there is no toggle, because a block that
+   * takes no width off the desk row is a block nobody has to trade anything for.
    */
-  it("adds the deck up in an aside the reader can put away", async () => {
+  it("adds the deck up in a band under the deck", async () => {
     await open();
 
     const stats = screen.getByRole("region", { name: "Deck stats" });
@@ -882,9 +876,25 @@ describe("DeckEditor", () => {
       ),
     ).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Stats" }));
+    expect(screen.queryByRole("button", { name: "Stats" })).not.toBeInTheDocument();
+  });
 
-    expect(screen.queryByRole("region", { name: "Deck stats" })).not.toBeInTheDocument();
+  /**
+   * Under the deck means **under the price strip too**, which is where the remove tray is drawn
+   * for the length of a drag. A band between the two would put four charts between a card and
+   * the one drop that takes it out of the deck, so the order of these three is a fact about the
+   * drag rather than about the charts.
+   */
+  it("draws the stats band below the deck and the price strip", async () => {
+    await open();
+
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+    const asOf = screen.getByText(/prices as of the last/i);
+    // `DOCUMENT_POSITION_FOLLOWING` — the band comes after the as-of line in document order,
+    // which in this one flex column is after it on screen.
+    expect(
+      asOf.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   /**
@@ -1143,15 +1153,16 @@ describe("DeckEditor", () => {
    * narrowest thing gives way first.
    *
    * 376 is what a 1024px window leaves this row with the card pane docked beside the view
-   * (measured at 361 once the page's own scrollbar is out); 608 is `DECK_FLOOR` plus the panel
+   * (measured at 361 once the page's own scrollbar is out); 592 is `DECK_FLOOR` plus the panel
    * and the `gap-4` between them — the exact width at which both fit again, so the pair of
-   * tests pins the floor to the pixel. (604 in the previous editor, whose desk row was `gap-3`.)
+   * tests pins the floor to the pixel. (608 while the floor was 208, and 604 in the previous
+   * editor, whose desk row was `gap-3`. The floor dropped to 192 when the stats band made the
+   * editor a scroller and the row started paying for a second scrollbar.)
    */
   it("falls back to the rail when the deck and the panel cannot both fit", async () => {
     const restore = desk(376);
     try {
       await open();
-      await hideStats();
 
       const rail = await screen.findByRole("button", { name: "Search cards" });
       expect(rail).toHaveAttribute("aria-expanded", "false");
@@ -1166,10 +1177,9 @@ describe("DeckEditor", () => {
   });
 
   it("draws the panel at the width where the deck still clears its floor", async () => {
-    const restore = desk(608);
+    const restore = desk(592);
     try {
       await open();
-      await hideStats();
 
       expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Search cards" })).not.toHaveAttribute(
@@ -1182,10 +1192,9 @@ describe("DeckEditor", () => {
 
   /** And one pixel under it is the rail — the floor is a number, not a feeling. */
   it("gives way one pixel below that", async () => {
-    const restore = desk(607);
+    const restore = desk(591);
     try {
       await open();
-      await hideStats();
 
       expect(await screen.findByRole("button", { name: "Search cards" })).toHaveAttribute(
         "aria-disabled",
@@ -1198,24 +1207,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The stats aside is counted against that floor, which is the one thing the rebuild changed
-   * about it: the desk row holds three things where it held two. A reader who opens Stats in a
-   * window that was exactly wide enough for the deck and the panel gets the rail — and closing
-   * either gives the panel back, because nothing here records an intention it cannot honour.
+   * **Two things share the desk row, and the stats band is not one of them.** It was: the
+   * rebuild put a 280px aside between the view and the panel and subtracted it from this floor,
+   * so a reader who opened Stats at a width where the deck and the panel both fit lost the
+   * panel to its rail. The band is under the deck now and takes no width from either, so the
+   * pair of tests above is the whole of the arithmetic — this one holds the band to that.
    */
-  it("gives the panel up to the stats block when only one of them fits", async () => {
-    const restore = desk(608);
+  it("keeps the panel open beside a deck at the floor, stats and all", async () => {
+    const restore = desk(592);
     try {
       await open();
-      // Stats is open by default, so the panel is already a rail at this width.
-      expect(await screen.findByRole("button", { name: "Search cards" })).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
-
-      await hideStats();
 
       expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Deck stats" })).toBeInTheDocument();
     } finally {
       restore();
     }
