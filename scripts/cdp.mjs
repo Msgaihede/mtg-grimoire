@@ -18,6 +18,7 @@
 //     node scripts/cdp.mjs press Enter "[aria-label='Add Sol Ring to Main deck']"
 //     node scripts/cdp.mjs hover "<css>" --rest 400 --probe "expr"   # a real dwell
 //     node scripts/cdp.mjs drag "<source css>" "<target css>"  # a real Chromium drag
+//     node scripts/cdp.mjs pull "<css>" -120        # press, move by dx[,dy], release
 //     node scripts/cdp.mjs size 1024 768 "expr"      # or `size reset`; expr runs in-session
 //     node scripts/cdp.mjs media prefers-reduced-motion reduce "expr"  # measured in-session
 //     node scripts/cdp.mjs shot out.png 1024 768     # sized and captured in one session
@@ -148,6 +149,12 @@ const KEYS = {
   Tab: { windowsVirtualKeyCode: 9, key: "Tab", code: "Tab" },
   ArrowDown: { windowsVirtualKeyCode: 40, key: "ArrowDown", code: "ArrowDown" },
   ArrowUp: { windowsVirtualKeyCode: 38, key: "ArrowUp", code: "ArrowUp" },
+  // The horizontal pair and the two ends, for the app's one `separator` — the deck editor's
+  // search-panel resize handle, whose whole keyboard contract is these four.
+  ArrowLeft: { windowsVirtualKeyCode: 37, key: "ArrowLeft", code: "ArrowLeft" },
+  ArrowRight: { windowsVirtualKeyCode: 39, key: "ArrowRight", code: "ArrowRight" },
+  Home: { windowsVirtualKeyCode: 36, key: "Home", code: "Home" },
+  End: { windowsVirtualKeyCode: 35, key: "End", code: "End" },
 };
 
 /** The two keys that *activate* a control, with the `text` that makes Chromium act on them. */
@@ -484,6 +491,87 @@ async function main() {
         const after = probe ? await evaluate(cdp, probe) : undefined;
         console.log(
           JSON.stringify({ at: { x: at.x, y: at.y }, from, rest, before, after }, null, 2),
+        );
+        break;
+      }
+
+      // `pull <css> <dx> [dy] [--steps <n>] [--probe <expr>]`
+      //
+      // A pointer **pressed** on an element and moved: `mousePressed` → several `mouseMoved`
+      // with the button held → `mouseReleased`, all through `Input.dispatchMouseEvent`. That is
+      // what makes Chromium synthesise the `pointerdown`/`pointermove`/`pointerup` a handler
+      // listens for, and — the part that cannot be faked — what makes the pointer id **active**,
+      // so `setPointerCapture` is legal.
+      //
+      // **A `dispatchEvent(new PointerEvent(…))` out of `eval` cannot do this half.** The id it
+      // names was never active, so the capture throws `NotFoundError` *inside* the handler and
+      // the pass fails on the harness rather than on the page — a false failure that reads
+      // exactly like a real one, which is the trap this command exists to remove.
+      //
+      // The sibling of `drag` for everything that is *not* an HTML5 drag. `drag` intercepts the
+      // browser's drag controller (`Input.setInterceptDrags`) and is the right tool for a card
+      // going into a category; this is the right one for anything driven by raw pointer events,
+      // of which the deck editor's search-panel resize handle is the first.
+      //
+      // The probe is read twice, like `hover`'s and for the same reason: `during` is the last
+      // held frame and `after` is what survived the release. A handle that follows the pointer
+      // and then springs back reads as working from either one alone.
+      case "pull": {
+        const flag = (name) => {
+          const i = args.indexOf(name);
+          return i === -1 ? null : (args[i + 1] ?? "");
+        };
+        const flagsWithValues = ["--probe", "--steps"];
+        const positional = args.filter((arg, i) => {
+          if (arg.startsWith("--")) return false;
+          const before = args[i - 1];
+          return !(before && flagsWithValues.includes(before));
+        });
+        const selector = positional[0];
+        if (!selector) throw new Error("pull takes a selector and a dx");
+        const dx = Number(positional[1] ?? 0);
+        const dy = Number(positional[2] ?? 0);
+        // Steps rather than a teleport, for `hover`'s reason: a page watching `pointermove` —
+        // and a resize handle is exactly that — sees what a hand does rather than one jump.
+        const steps = Math.max(1, Number(flag("--steps") || 6));
+        const probe = flag("--probe");
+        const at = await evaluate(
+          cdp,
+          `(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return null;
+            el.scrollIntoView({ block: "center" });
+            const r = el.getBoundingClientRect();
+            return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+          })()`,
+        );
+        if (!at) throw new Error(`no element matches ${selector}`);
+        const mouse = (type, x, y, buttons) =>
+          cdp.send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons, clickCount: 1 });
+        // Arrive first, so the press lands on an element the pointer is already over — a
+        // `mousePressed` at a point Chromium believes the pointer is nowhere near still hits,
+        // but the page sees no enter and a handle that reveals itself on hover would be pressed
+        // while invisible, which is not what a reader does.
+        await mouse("mouseMoved", at.x, at.y, 0);
+        await mouse("mousePressed", at.x, at.y, 1);
+        for (let i = 1; i <= steps; i++) {
+          await mouse(
+            "mouseMoved",
+            Math.round(at.x + (dx * i) / steps),
+            Math.round(at.y + (dy * i) / steps),
+            1,
+          );
+          await new Promise((r) => setTimeout(r, 16));
+        }
+        const during = probe ? await evaluate(cdp, probe) : undefined;
+        await mouse("mouseReleased", Math.round(at.x + dx), Math.round(at.y + dy), 0);
+        const after = probe ? await evaluate(cdp, probe) : undefined;
+        console.log(
+          JSON.stringify(
+            { from: at, to: { x: at.x + dx, y: at.y + dy }, steps, during, after },
+            null,
+            2,
+          ),
         );
         break;
       }

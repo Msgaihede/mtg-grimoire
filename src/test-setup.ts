@@ -48,3 +48,11 @@ globalThis.ResizeObserver ??= class {
 // the run without failing an assertion. Nothing is under a pointer in a window with no layout,
 // and that is what this answers — the auto-scroll itself is the live CDP pass's to prove.
 document.elementsFromPoint ??= () => [];
+
+// jsdom implements no pointer capture either, and the deck editor's search panel resizes with
+// it: the handle captures on `pointerdown` so the drag survives the pointer leaving a 9px strip
+// that is *moving away from it*, and releases on `pointerup`. An unimplemented method there
+// throws inside the event handler, so a resize test would fail on the API rather than on the
+// behaviour. `??=`, so a jsdom that grows a real implementation is used instead of this.
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.releasePointerCapture ??= () => {};

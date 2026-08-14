@@ -18,11 +18,17 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { collectionAdd: vi.fn(), wishlistAdd },
 }));
 
-import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
+import { CardGrid, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, scaled, type ZoomSection } from "@/lib/cardZoom";
+import {
+  DEFAULT_SECTION_ZOOMS,
+  DEFAULT_ZOOM,
+  ZOOM_STEPS,
+  scaled,
+  type ZoomSection,
+} from "@/lib/cardZoom";
 import { parseFinishes } from "@/lib/finish";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -766,72 +772,109 @@ describe("CardGrid", () => {
     expect(tileWidthFor(0)).toBeGreaterThan(0);
   });
 
-  it("fits whole tiles across, then shares the leftover out so the wall reaches both edges", () => {
-    expect(columnsFor(352)).toBe(2); // exactly two minimum-width tiles and a gap
+  it("fits whole tiles across and centres the leftover rather than filling with it", () => {
+    expect(columnsFor(352)).toBe(2); // exactly two tiles and a gap
     expect(columnsFor(363)).toBe(2); // and a strip too narrow to be a third
     expect(columnsFor(534)).toBe(3);
 
     const columns = columnsFor(1200);
     const tile = tileWidthFor(1200);
-    // No gutter left over at the right edge, and no tile narrower than the minimum that
-    // decided the column count in the first place.
-    expect(columns * tile + (columns - 1) * 12).toBeCloseTo(1200);
-    expect(tile).toBeGreaterThanOrEqual(170);
+    // The tile is the size asked for — not a share of the row — so the row does not fill the
+    // wall, and what it does not use is split either side of it.
+    expect(tile).toBe(170);
+    const used = columns * tile + (columns - 1) * 12;
+    expect(used).toBeLessThan(1200);
+    expect(sideGutterFor(1200)).toBeCloseTo((1200 - used) / 2);
+    // Which is the whole of it: the row plus its two gutters is the wall, to the pixel.
+    expect(used + 2 * sideGutterFor(1200)).toBeCloseTo(1200);
   });
 
   /**
    * The one wall that is not a page-width wall: the deck editor's docked panel measures 331px
    * inside the panel's own padding, the scrollbar and this wall's padding — 330 in the running
    * window — which is 23 short of two standard tiles, so it drew one 330px card per row in a
-   * 341px-tall column, less than a whole card ever on screen. The floor is a prop for exactly
+   * 341px-tall column, less than a whole card ever on screen. The base is a prop for exactly
    * that, and the numbers here are the measured ones.
    */
-  it("fits two tiles in the deck panel's column when it is given a lower floor", () => {
+  it("fits two tiles in the deck panel's column when it is given a smaller base", () => {
     expect(columnsFor(330)).toBe(1);
     expect(columnsFor(330, 150)).toBe(2);
-    // Still a floor and not a width: the pair share out the whole column, gap included — 159px
-    // each, which is what the running window measures.
-    expect(tileWidthFor(330, 150)).toBeCloseTo(159);
+    // The pair are 150 each and the column keeps the 18px they leave, 9 down each side.
+    expect(tileWidthFor(330, 150)).toBe(150);
+    expect(sideGutterFor(330, 150)).toBeCloseTo(9);
   });
 
   /**
-   * The zoom is arithmetic on the **floor**, and this is the whole of it: a bigger floor fits
-   * fewer columns across the same wall, and the tiles then share out the leftover — so zooming
-   * in grows every tile *and* the wall still reaches both edges. That flushness is the reason
-   * the floor is the seam; a scaled tile would have left a widening gutter down one side.
+   * **The defect this change is about.** The zoom used to move a *floor*, and the tiles then
+   * stretched to share out the row — so the drawn width was a function of the column count,
+   * which is a step function of the zoom. On this panel's 331px column the ten stops of
+   * `ZOOM_STEPS` collapsed to three distinct widths (102, 102, 159, 159, 159, 331, 331, 331,
+   * 331, 331): seven gestures in a row that moved nothing on screen.
    *
-   * On the exported pair rather than through a render, for the reason the two tests above are:
-   * jsdom measures every container at zero, so a 1200px wall exists nowhere else.
+   * Sized directly, every stop is its own width. That is the assertion — ten stops, ten answers,
+   * each strictly bigger than the last — and it is the one a floor cannot pass.
+   *
+   * On the exported functions rather than through a render, for the reason the tests around it
+   * are: jsdom measures every container at zero, so a 331px wall exists nowhere else.
+   */
+  it("draws a different tile at every stop on the ladder, not only where a column is lost", () => {
+    const widths = ZOOM_STEPS.map((zoom) => tileWidthFor(331, scaled(150, zoom)));
+
+    expect(widths).toEqual([75, 101, 113, 135, 150, 165, 188, 225, 263, 300]);
+    expect(new Set(widths).size).toBe(ZOOM_STEPS.length);
+    for (let i = 1; i < widths.length; i++) expect(widths[i]).toBeGreaterThan(widths[i - 1]);
+  });
+
+  /**
+   * The count is what falls out of the size, and the wall stays centred at every one of them.
    */
   it("fits fewer, larger tiles across the same wall as the reader zooms in", () => {
     expect(columnsFor(1200, scaled(170, 0.5))).toBe(12);
     expect(columnsFor(1200, scaled(170, DEFAULT_ZOOM))).toBe(6);
     expect(columnsFor(1200, scaled(170, 2))).toBe(3);
 
-    for (const zoom of [0.5, DEFAULT_ZOOM, 1.25, 2]) {
-      const floor = scaled(170, zoom);
-      const columns = columnsFor(1200, floor);
-      const tile = tileWidthFor(1200, floor);
-      // Flush at every zoom, and never a tile narrower than the floor that decided the count.
-      expect(columns * tile + (columns - 1) * 12).toBeCloseTo(1200);
-      expect(tile).toBeGreaterThanOrEqual(floor);
+    for (const zoom of ZOOM_STEPS) {
+      const size = scaled(170, zoom);
+      const columns = columnsFor(1200, size);
+      const tile = tileWidthFor(1200, size);
+      // The tile is exactly what the zoom asked for, and the row sits centred in the wall.
+      expect(tile).toBe(size);
+      expect(columns * tile + (columns - 1) * 12 + 2 * sideGutterFor(1200, size)).toBeCloseTo(1200);
+      expect(sideGutterFor(1200, size)).toBeGreaterThanOrEqual(0);
     }
   });
 
   /**
-   * A wall given its own floor is scaled by the same factor, so the deck editor's docked column
+   * A wall given its own base is scaled by the same factor, so the deck editor's docked column
    * zooms with the rest of the app instead of staying at the size it was scoped for. The numbers
-   * are that panel's measured 331px column: one card at 2×, three at 0.5×, and the column full
-   * either way.
+   * are that panel's measured 331px column: one 300px card at 2×, three 75px ones at 0.5×.
    */
-  it("scales a wall's own floor with the zoom rather than pinning it", () => {
+  it("scales a wall's own base with the zoom rather than pinning it", () => {
     expect(scaled(150, 2)).toBe(300);
 
     expect(columnsFor(330, scaled(150, 2))).toBe(1);
-    expect(tileWidthFor(330, scaled(150, 2))).toBeCloseTo(330);
+    expect(tileWidthFor(330, scaled(150, 2))).toBe(300);
+    expect(sideGutterFor(330, scaled(150, 2))).toBeCloseTo(15);
 
     expect(columnsFor(330, scaled(150, 0.5))).toBe(3);
-    expect(tileWidthFor(330, scaled(150, 0.5))).toBeCloseTo(102);
+    expect(tileWidthFor(330, scaled(150, 0.5))).toBe(75);
+  });
+
+  /**
+   * The one case the cap exists for, and the reason it is a cap rather than an assertion: a
+   * reader who zooms a narrow column past its own width. `columnsFor` floors at one column
+   * whatever the arithmetic says, so without the clamp the tile would be wider than the box it
+   * is in — and the deck editor is `overflow-y-auto`, which computes `overflow-x` to `auto`, so a
+   * 300px card in a 206px column is a horizontal scrollbar across the whole deck builder. That is
+   * the one thing the app's 1024px floor forbids, and it arrives with nothing on screen naming
+   * the culprit.
+   */
+  it("never draws a tile wider than the wall it is in", () => {
+    // `MIN_PANEL_WIDTH_PX` (206) less the panel's chrome is one 150px tile — at 2× the reader is
+    // asking for 300 in a box that holds 150.
+    expect(columnsFor(150, 300)).toBe(1);
+    expect(tileWidthFor(150, 300)).toBe(150);
+    expect(sideGutterFor(150, 300)).toBe(0);
   });
 
   /**

@@ -123,8 +123,11 @@ Every one of these has its measurement and its story in
   no rule at all. Variant spellings (`has-[[aria-expanded=true]]:z-10`) are written out;
   a column template is an inline style, not an arbitrary value.
 - **A row of fixed-width controls is sized by the _narrowest_ surface that draws it, which in
-  this app is the 384px docked search panel — never the filter bar it was designed in.** Give
-  it `flex-wrap`. A flex item cannot shrink below its own min-content, so an unwrapped row just
+  this app is the docked search panel — never the filter bar it was designed in.** Give
+  it `flex-wrap`. **That surface is a range now, not 384**: the panel is draggable from its left
+  edge and its floor is `MIN_PANEL_WIDTH_PX`, **206**, so the narrowest content box a filter
+  control has to survive is ~193 rather than ~371. Wrapping is what makes that free — a wrapped
+  group's min-content is one chip — and it is why the drag needed no change to `FilterBar`. A flex item cannot shrink below its own min-content, so an unwrapped row just
   hangs out of the panel, and `DeckEditor`'s section is `overflow-y-auto` — which computes
   `overflow-x` to **`auto`** — so the overhang becomes a horizontal scrollbar across the whole
   deck builder. That is the one thing the 1024px floor forbids, and it arrives with **no test
@@ -174,6 +177,21 @@ Every one of these has its measurement and its story in
   [frontend-design.md](../docs/reference/frontend-design.md) — with one carve-out that matters to
   the rules above and is stated there: the wheel was dispatched **synthetically**, so the
   `preventDefault`/WebView2 rule was exercised but **not** re-proved on that pass.
+- **The zoom sizes the tile; the column count is what falls out of it, and the remainder is split
+  either side** (changed 2026-08-14). `CardGrid` draws `scaled(baseTileWidth, cardZoom)` exactly,
+  fits however many of those the wall holds, and centres the row with `sideGutterFor`. It used to
+  scale a **floor** and stretch the tiles to fill the row, which kept the wall flush to both edges
+  and made the drawn size a function of the *column count* — a step function of the zoom. On the
+  deck panel's 330px wall the ten stops of `ZOOM_STEPS` collapsed to **three** distinct widths, so
+  seven gestures in a row moved nothing on screen. `minTileWidth` is `baseTileWidth` now and
+  `TILE_MIN_WIDTH` is `TILE_BASE_WIDTH`: it is a **width**, not a floor. Two things follow.
+  **`tileWidthFor` caps at the wall** — `columnsFor` floors at one column whatever the arithmetic
+  says, so without the cap a 300px tile in a 206px column is a horizontal scrollbar across the
+  whole deck builder, which the 1024px floor forbids. And the **gutter is padding on every row**,
+  never `justify-center`, or a part-full last row stops lining up with the full ones above it —
+  and never on the box around the rows, which is what the `ResizeObserver` measures, so padding
+  there feeds back into the width it is computed from. Driven in the shipped window; every figure
+  is in [frontend-design.md](../docs/reference/frontend-design.md).
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against
@@ -210,9 +228,11 @@ Every one of these has its measurement and its story in
   step.** Ribbon 56px, nav entry 44px, view title and app mark 20px Cinzel, nav labels and both
   ribbon buttons 16px, status line 14px, chrome icons 20px. The **mana line stays 2px** (a
   signature that grows with its frame is a border) and the **sidebar stays `w-52`/208px** —
-  `main` is what a wider column takes width from, and `DeckEditor`'s docked search panel has
-  **10px** of headroom at the app's own 1280px window, so widening the sidebar is a change to
-  `DECK_FLOOR`'s arithmetic first. Both, with every figure:
+  `main` is what a wider column takes width from, and the docked search panel is what runs out of
+  it — the panel is draggable now, so the headroom is no longer the 10px a fixed 384 left at the
+  app's own 1280px window, but the rail still arrives at a desk of **414** (`DECK_FLOOR` plus
+  `MIN_PANEL_WIDTH_PX` plus the gap) and every pixel the sidebar takes is a pixel off that.
+  Widening the sidebar is a change to `DECK_FLOOR`'s arithmetic first. Both, with every figure:
   [frontend-design.md](../docs/reference/frontend-design.md).
 - **The ribbon's status line is one permanently mounted `role="status"`** — a live region that
   first appears with its sentence already inside announces nothing — and the number inside it is

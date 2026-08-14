@@ -20,24 +20,49 @@ import type { Deck } from "./useDeck";
 const NO_ROOM = "Not enough room — close the card details or widen the window";
 
 /**
- * How wide the panel is when it is open, in px and in the class that draws it — the editor
- * reads the number to decide whether there is room for the panel at all.
+ * How wide the panel is **when it is first opened**, in px — the reader may then drag its edge
+ * (see {@link ResizeHandle}), and this is where every deck starts.
  *
  * The direction's docked column is 320 and this is 384, and the reason is the wall rather than
  * the filter row: 320 leaves **267** inside the panel's padding, the wall's padding and the
- * scrollbar, which is one tile at any floor a card is still legible at (two would be 127px
+ * scrollbar, which is one tile at any size a card is still legible at (two would be 127px
  * each). 384 leaves 331 and holds two. The filter row is the smaller half of it — the
- * mana-value chips are nine 36px squares 4px apart, **356px**, which at 320 would *squash* to
- * fit (their group has no `flex-wrap`, and a flex item with a set width still shrinks); with
- * one `flex-wrap` on that group they would instead wrap to a second line, costing 44px of the
- * wall's height for the privilege of a narrower panel. Neither is a break, and neither is
- * worth the tile.
+ * mana-value chips are ten 36px squares 4px apart, **396px**, which `flex-wrap` now breaks onto
+ * a second line here and leaves alone in the two full-width filter bars.
  *
  * Measured in the running window at 1280×800: header 36, filter row 168 (four wrapped lines),
  * count line 16, and 341px of card wall.
+ *
+ * **A pixel default rather than a share of the window**, deliberately, while the *cap* on a drag
+ * is a share of it ({@link DeckSearchPanelProps.maxWidth}). A deck opened on a 2560px monitor
+ * would otherwise start with a 768px search column nobody asked for; 384 is a column, and what
+ * a wider window buys is room to drag rather than a wider default.
  */
-export const PANEL_WIDTH_PX = 384;
-const PANEL_WIDTH = "w-96";
+export const DEFAULT_PANEL_WIDTH_PX = 384;
+
+/**
+ * The narrowest the panel may be dragged, in px — **and the width the editor decides "there is
+ * no room for this at all" by**, which is the whole reason it is a measurement rather than a
+ * round number.
+ *
+ * One card, and the chrome around it: a 150px tile ({@link TILE_BASE}), the panel's own left
+ * border and padding (1 + 12), the wall's border and padding (2 + 24) and the wall's scrollbar
+ * (15, measured — not the 17 an older note here guessed) — **204**, taken as **206** for two
+ * pixels of slack. Driven in the shipped window on 2026-08-14, a panel held at this width
+ * measured **152px** of wall inside it: one 150px tile with a pixel either side of it. Below it
+ * the wall cannot draw a whole card at the size this column is scoped for, and a search column
+ * with no card in it is a filter row taking width off the deck.
+ *
+ * That is what the rail is for. `DeckEditor` compares this against what the desk can spare, so
+ * a window too narrow for one card collapses the panel to its rail rather than squeezing it —
+ * and the width the reader had dragged to is still here when the room comes back, because this
+ * component stays mounted through a railing.
+ */
+export const MIN_PANEL_WIDTH_PX = 206;
+
+/** How far one arrow press moves the edge. A pointer drags continuously; a caret needs a step
+ *  big enough to be worth pressing and small enough to aim with. */
+const RESIZE_STEP_PX = 24;
 
 /**
  * The "Add to" value meaning **the card's type line decides** — the default, and the one value
@@ -70,24 +95,24 @@ export const AUTO_CATEGORY = 0;
 const AUTO_LABEL = "Auto (by what it does)";
 
 /**
- * The wall's tile floor in here, and the number that decides whether this column shows one
- * card or two.
+ * How wide a tile is in here at 100%, and the number that decides whether this column shows one
+ * card or two at its opening width.
  *
  * 384 is **331** by the time the panel's own left padding (12), the scrollbar (17) and the
  * wall's padding (24) are off it — measured at 330 in the running window — which is 23 short
- * of two of `CardGrid`'s standard 170px tiles. At the standard floor this column drew one
+ * of two of `CardGrid`'s standard 170px tiles. At the standard size this column drew one
  * 330×490 card per row inside a 341px-tall wall: less than a whole card, ever. At 150 the same
- * 331 is two 159px tiles, which is the "~2 tiles per row" this panel was scoped around.
+ * 331 is two tiles with 19px of gutter split either side, which is the "~2 tiles per row" this
+ * panel was scoped around.
  *
- * **All of that describes 100% zoom, and only 100%.** `CardGrid` scales whatever floor it is
- * handed by the reader's zoom for **this column's own section** (`deckSearch` — every card
- * section carries its own number), this floor included, so the two-per-row scoping above is
- * the *resting* shape rather than an invariant: at 2× this column draws one 300px tile and at
- * 0.5× it draws four 75px ones, which is the reader asking for exactly that and getting it. The
- * measurement is kept unqualified because it is what sets the resting value; nothing here needs
- * a per-zoom override.
+ * **All of that describes 100% zoom at the opening width, and only that.** Two things move it
+ * now and both are the reader's: `CardGrid` scales this by the zoom held for **this column's own
+ * section** (`deckSearch` — every card section carries its own number), so at 2× the column
+ * draws one 300px tile and at 0.5× four 75px ones; and the panel itself is draggable, so the 331
+ * is only where it starts. Neither needs an override here — the measurement is what sets the
+ * resting value, and everything downstream is arithmetic on it.
  */
-const TILE_FLOOR = 150;
+const TILE_BASE = 150;
 
 /**
  * Whether a tile's card is a Commander **game changer**, for the crown `CardArt` draws in the
@@ -174,6 +199,25 @@ export interface DeckSearchPanelProps {
    * back empty on the deck's default format.
    */
   roomy?: boolean;
+  /**
+   * The widest this panel may be drawn or dragged, in px — the editor's answer, because the
+   * editor is what holds the two measurements it is made of.
+   *
+   * `min(half the window, what the desk can spare over `DECK_FLOOR`)`. Two bounds because they
+   * bind at different sizes and each is wrong on its own: at 1280 with the card pane docked the
+   * desk is 602, so half the window (640) is wider than the whole row and only the deck's floor
+   * says anything useful; at 1920 with the pane closed the desk can spare ~1462 and only the
+   * half-window cap stops the search column becoming the deck builder.
+   *
+   * **A cap on the drawn width, not a correction to the reader's.** The width they dragged to is
+   * held un-clamped, so a window narrowed and widened again gives it back rather than leaving
+   * the panel at whatever the narrow moment allowed.
+   *
+   * Absent — and `Infinity` — mean *unmeasured*, which is the first paint's honest answer and
+   * reads as no cap; the editor's observer answers on the same frame. A story rendering this
+   * panel on its own passes nothing and gets the width it asks for.
+   */
+  maxWidth?: number;
 }
 
 /**
@@ -206,6 +250,7 @@ export function DeckSearchPanel({
   onTargetCategoryChange,
   defaultFormat,
   roomy = true,
+  maxWidth = Number.POSITIVE_INFINITY,
 }: DeckSearchPanelProps) {
   /**
    * What the *reader* last chose, and it starts **collapsed** (changed 2026-08-14). What is
@@ -246,6 +291,42 @@ export function DeckSearchPanel({
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const categoryFieldId = useId();
+  const bodyId = useId();
+
+  /**
+   * How wide the reader has dragged this column, in px — **only ever written by the reader**,
+   * and clamped again where it is drawn.
+   *
+   * That split is the whole of "reopens at the last valid width". A narrowing window, a card
+   * pane opening beside the editor, a `DECK_FLOOR` that will not give any more — each of those
+   * caps what can be *drawn* without being a thing the reader asked for, so none of them may
+   * overwrite what they did ask for. Let the environment write here instead and a momentary
+   * squeeze is permanent: widen the window back and the panel stays where the narrow moment left
+   * it. A *drag* does write clamped, because there the bound is the edge the reader is pushing
+   * against rather than something that happened to the window while they were not looking.
+   *
+   * `useState` here rather than `useAppStore`, for {@link open}'s reason and one of its own. It
+   * is not remembered past this editor, which is the same answer this panel gives for whether it
+   * is open at all — a search column is a thing you open to do a job, size for the job, and shut.
+   * It **does** survive a collapse and a railing, though, because it lives in this root rather
+   * than in `OpenPanel`: the disclosure and the reader's width outlast the search they were
+   * pointed at, so reopening gives back the column they had rather than the one the app ships.
+   */
+  const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
+
+  // What is actually drawn: the reader's width inside the editor's cap, and never below the one
+  // card `MIN_PANEL_WIDTH_PX` is measured from. The `max` around the cap matters at exactly one
+  // moment — a desk too narrow for the minimum, where `roomy` is already false and this element
+  // is 36px of rail whose width nothing reads.
+  const drawnWidth = Math.min(Math.max(width, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX));
+
+  // The drag's own clamp, which is the drawn one plus the fact that a drag cannot ask for a
+  // width the editor has already refused.
+  const resize = useCallback(
+    (next: number) =>
+      setWidth(Math.min(Math.max(next, MIN_PANEL_WIDTH_PX), Math.max(maxWidth, MIN_PANEL_WIDTH_PX))),
+    [maxWidth],
+  );
 
   const selectedCardId = useAppStore((s) => s.selectedCardId);
 
@@ -344,17 +425,30 @@ export function DeckSearchPanel({
     // throughout, and a railing takes the body out of the *layout* without taking it out of the
     // tree.
     <section
+      id={bodyId}
       aria-label="Add cards"
       // One hairline down the left edge, and it is the only chrome the panel adds: the
       // category columns beside it are bordered boxes and these controls sit on the page, so without it
       // the "Add to" select reads as part of the deck's own header row. Everything right of
       // the line is not your deck. The rail carries its own border instead — at 36px a hairline
       // beside a bordered button would be two lines saying one thing.
+      // `relative` for the resize handle, which is drawn *over* the hairline rather than in the
+      // column: a grab strip that took a place in this flex column would be a strip the length
+      // of one row rather than the length of the edge.
       className={cn(
         "flex min-h-0 shrink-0 flex-col gap-2",
-        shown ? cn("border-l border-border pl-3", PANEL_WIDTH) : "w-9",
+        shown ? "relative border-l border-border pl-3" : "w-9",
       )}
+      style={shown ? { width: drawnWidth } : undefined}
     >
+      {shown && (
+        <ResizeHandle
+          controls={bodyId}
+          width={drawnWidth}
+          max={Math.max(maxWidth, MIN_PANEL_WIDTH_PX)}
+          onResize={resize}
+        />
+      )}
       {/* Collapsed, this row *is* the panel, so it takes the height and lets the rail stretch
           down it — a 36px strip reads as an edge, an 80px one reads as a stray button. */}
       <div
@@ -430,6 +524,130 @@ export function DeckSearchPanel({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The panel's left edge, as something to pull on.
+ *
+ * A `separator` with a `tabIndex` and a value, which is the ARIA window-splitter pattern: the
+ * pointer path and the keyboard path are one control rather than a drag with a settings dialog
+ * beside it for anyone who cannot perform one. `aria-valuenow` is the width in px — the unit the
+ * reader is actually choosing, and the one the editor's cap is expressed in — so a screen reader
+ * announcing "206" is announcing the same number the panel is drawn at.
+ *
+ * **Absolutely positioned over the hairline, not a flex item beside it.** This column is a
+ * `flex-col`, so a child of it would be one row's worth of grab strip at the top of a
+ * several-hundred-pixel edge. It straddles the border instead — 9px wide, 4px of it out in the
+ * desk's own 16px gap and the rest over the panel's padding — which is Fitts' law rather than
+ * taste: a 1px hairline is not a target, and every pixel of the strip that is *outside* the panel
+ * is a pixel the reader can overshoot into without hitting the deck.
+ *
+ * **Pointer capture rather than window listeners**, which is what makes the drag survive the
+ * pointer leaving the strip — and it will, immediately, because the strip moves with the edge
+ * and the hand does not track it exactly. Capture also ends the drag correctly when the pointer
+ * is released outside the window, where a `pointerup` listener on `window` hears nothing.
+ *
+ * The grip is drawn only on hover and focus. At rest this edge is the hairline the panel already
+ * had — the one piece of chrome it adds — and a permanent handle down it would be a second line
+ * saying the same thing, on the border this app spent a lot of care making quiet.
+ */
+function ResizeHandle({
+  controls,
+  width,
+  max,
+  onResize,
+}: {
+  controls: string;
+  width: number;
+  max: number;
+  onResize: (width: number) => void;
+}) {
+  // Where the drag started, in both senses. `null` is "not dragging", which is also what a
+  // `pointermove` over an idle handle has to be told.
+  const from = useRef<{ x: number; width: number } | null>(null);
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-controls={controls}
+      // Named for what pulling it does, not for what it is: "separator" is the role's job and
+      // "Resize card search" is the reader's.
+      aria-label="Resize card search"
+      aria-valuenow={width}
+      aria-valuemin={MIN_PANEL_WIDTH_PX}
+      aria-valuemax={max}
+      tabIndex={0}
+      onPointerDown={(e) => {
+        // The primary button only: a right-press opening a context menu mid-drag would leave the
+        // capture on and the panel following the pointer with nothing held down.
+        if (e.button !== 0) return;
+        e.preventDefault();
+        from.current = { x: e.clientX, width };
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        const start = from.current;
+        if (!start) return;
+        // Leftward is wider: the panel is docked right, so its edge moving left is the column
+        // growing into the desk.
+        onResize(start.width + (start.x - e.clientX));
+      }}
+      onPointerUp={(e) => {
+        from.current = null;
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      // A cancelled pointer — the OS taking the gesture, a touch turning into a scroll — is an
+      // ended drag and not a dropped one. Without this the handle stays armed and the next
+      // ordinary move over it resizes the panel.
+      onPointerCancel={() => {
+        from.current = null;
+      }}
+      onKeyDown={(e) => {
+        // Left widens and right narrows, matching the pointer: the key moves the *separator*,
+        // which is what the role says this is, rather than moving a value that happens to be a
+        // width. Home and End are the two ends of the same range.
+        const next =
+          e.key === "ArrowLeft"
+            ? width + RESIZE_STEP_PX
+            : e.key === "ArrowRight"
+              ? width - RESIZE_STEP_PX
+              : e.key === "Home"
+                ? MIN_PANEL_WIDTH_PX
+                : e.key === "End"
+                  ? max
+                  : null;
+        if (next === null) return;
+        // The arrows scroll the editor otherwise — it is an `overflow-y-auto` page — and Home
+        // and End take it to its ends.
+        e.preventDefault();
+        onResize(next);
+      }}
+      // `touch-none` so a drag on a touch screen is a drag rather than the browser deciding
+      // partway through that it was a scroll and cancelling the pointer.
+      className={cn(
+        // No z-index, and none is owed: the strip lives in the panel's own left padding and the
+        // desk's gap, where nothing else in this column paints. `LAYER` is the only place a
+        // z-index may come from in this app, and asking it for one here would be asking for a
+        // rung this element does not need.
+        "group absolute inset-y-0 -left-1 flex w-[9px] cursor-col-resize touch-none items-center justify-center",
+        FOCUS,
+      )}
+    >
+      {/* The grip: three columns of nothing, drawn as one 2px line the height of a fingertip.
+          `bg-border` at rest under the pointer and `bg-accent` while the caret is on it, so the
+          keyboard's own state is visible on a control whose whole affordance is otherwise a
+          cursor change. */}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "h-8 w-0.5 rounded-full bg-border opacity-0",
+          "transition-opacity duration-150 motion-reduce:transition-none",
+          "group-hover:opacity-100 group-focus-visible:bg-accent group-focus-visible:opacity-100",
+        )}
+      />
+    </div>
   );
 }
 
@@ -637,7 +855,7 @@ function OpenPanel({
           // asked for and had no way to undo separately. `deckSearch` is this column's alone;
           // the deck's two views share `deck`. See `CardGrid`'s `zoomSection`.
           zoomSection="deckSearch"
-          minTileWidth={TILE_FLOOR}
+          baseTileWidth={TILE_BASE}
           selectedId={selectedCardId}
           onSelect={selectCard}
           tileRef={tileRef}
