@@ -385,6 +385,59 @@ pub async fn card_printings(
     .map_err(|e| format!("printings could not be read: {e}"))?
 }
 
+/// The Scryfall CDN URL for one printing at one size, or `None`.
+///
+/// **A command rather than a field on five list DTOs.** These URLs are ~100 bytes each and
+/// are wanted on a deliberate user act — one menu press — so putting them on `CardSummary`,
+/// `DeckCard`, `CollectionRow`, `WishRow` and `Printing` would pay for them on every row of
+/// every list to serve a press that mostly never happens.
+///
+/// Three ways to `None`, and all three are answers rather than faults: the card is unknown,
+/// its `image_uris` column is NULL (it carried none), or the variant is JSON `null` — which
+/// `card_row::webp_uris` writes for a variant the source lacked, so a present key is not a
+/// present URL.
+///
+/// The variant is checked against [`crate::schema::IMAGE_VARIANTS`] and **never
+/// interpolated**: it reaches SQL as a `json_extract` path, so an unchecked one is an
+/// injection point. There are four; `png` is not among them, because the ingest keeps four
+/// of Scryfall's eleven image keys and drops the legacy JPG/PNG family its own docs mark as
+/// replaced.
+///
+/// Read-only connection, blocking pool — as [`card_detail`] is, and for the same reason.
+#[tauri::command]
+pub async fn card_image_uri(
+    state: tauri::State<'_, Arc<AppState>>,
+    card_id: String,
+    variant: String,
+) -> Result<Option<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        card_image_uri_inner(&lock_db_read(&state), &card_id, &variant)
+    })
+    .await
+    .map_err(|e| format!("the image URL could not be read: {e}"))?
+}
+
+fn card_image_uri_inner(
+    conn: &Connection,
+    card_id: &str,
+    variant: &str,
+) -> Result<Option<String>, String> {
+    if !crate::schema::IMAGE_VARIANTS.contains(&variant) {
+        return Err(format!("unknown image variant: {variant}"));
+    }
+    let uri: Option<String> = conn
+        .query_row(
+            "SELECT json_extract(image_uris, '$.' || ?2) FROM cards WHERE id = ?1",
+            params![card_id, variant],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+    Ok(uri)
+}
+
 // ---------------------------------------------------------------------------------------
 // How the pane groups that list — one `app_meta` row
 // ---------------------------------------------------------------------------------------
@@ -1218,5 +1271,81 @@ mod tests {
 
         assert_eq!(stored_group_by(&conn), "set");
         assert_eq!(crate::marketplace::stored(&conn), "cardmarket");
+    }
+
+    /// One card row with a real `image_uris` blob, for [`card_image_uri_inner`]'s tests.
+    fn fixture_with_image_uris(id: &str, image_uris_json: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
+             VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', ?2, '{}')",
+            rusqlite::params![id, image_uris_json],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// A card whose `image_uris` column is `NULL` — it carried none at all, as opposed to a
+    /// present key holding JSON `null`.
+    fn fixture_with_no_image_uris(id: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', '{}')",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn the_image_uri_command_answers_the_variant_asked_for() {
+        let conn = fixture_with_image_uris(
+            "bolt-lea",
+            r#"{"thumb":"https://cards.scryfall.io/thumb/x.webp?1",
+                "grid":"https://cards.scryfall.io/grid/x.webp?1",
+                "display":"https://cards.scryfall.io/display/x.webp?1",
+                "art":"https://cards.scryfall.io/art/x.webp?1"}"#,
+        );
+        let got = card_image_uri_inner(&conn, "bolt-lea", "display").unwrap();
+        assert_eq!(
+            got.as_deref(),
+            Some("https://cards.scryfall.io/display/x.webp?1")
+        );
+    }
+
+    #[test]
+    fn a_json_null_variant_is_none_rather_than_the_string_null() {
+        let conn = fixture_with_image_uris(
+            "odd",
+            r#"{"thumb":null,"grid":null,"display":null,"art":null}"#,
+        );
+        assert_eq!(card_image_uri_inner(&conn, "odd", "display").unwrap(), None);
+    }
+
+    #[test]
+    fn a_card_with_no_image_uris_column_is_none() {
+        let conn = fixture_with_no_image_uris("artless");
+        assert_eq!(
+            card_image_uri_inner(&conn, "artless", "display").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_card_is_none_rather_than_an_error() {
+        let conn = fixture_with_no_image_uris("artless");
+        assert_eq!(
+            card_image_uri_inner(&conn, "nobody", "display").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_variant_is_refused_rather_than_interpolated() {
+        let conn = fixture_with_image_uris("bolt-lea", r#"{"display":"u"}"#);
+        assert!(card_image_uri_inner(&conn, "bolt-lea", "png").is_err());
     }
 }
