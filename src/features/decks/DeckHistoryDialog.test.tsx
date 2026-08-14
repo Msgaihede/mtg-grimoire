@@ -11,10 +11,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { deckAuditList },
 }));
 
-import { AuditDrawer, auditBand } from "./AuditDrawer";
+import { DeckHistoryDialog, auditBand } from "./DeckHistoryDialog";
 
 /** Unix **seconds**, like every stamp in this schema. Built from "now" so the day labels the
- *  drawer prints are stable whenever the suite runs. */
+ *  dialog prints are stable whenever the suite runs. */
 const NOW = Math.floor(Date.now() / 1000);
 const DAY = 86_400;
 
@@ -39,20 +39,22 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
 }
 
-function draw(props: Partial<Parameters<typeof AuditDrawer>[0]> = {}) {
+function draw(props: Partial<Parameters<typeof DeckHistoryDialog>[0]> = {}) {
   const onDismiss = vi.fn();
   const onClose = vi.fn();
   const view = render(
-    <AuditDrawer deckId={4} open onDismiss={onDismiss} onClose={onClose} {...props} />,
+    <DeckHistoryDialog deckId={4} open onDismiss={onDismiss} onClose={onClose} {...props} />,
     { wrapper },
   );
   return { ...view, onDismiss, onClose };
 }
 
-/** The drawer, once its first read has landed. */
-async function drawn(props: Partial<Parameters<typeof AuditDrawer>[0]> = {}) {
+/** The dialog, once its first read has landed. `find`, not `get`: a `motion` element's first
+ *  painted frame under jsdom carries its `initial`, so everything inside a freshly opened
+ *  overlay has to be waited for. */
+async function drawn(props: Partial<Parameters<typeof DeckHistoryDialog>[0]> = {}) {
   const view = draw(props);
-  const panel = await screen.findByRole("dialog", { name: "Deck history" });
+  const panel = await screen.findByRole("dialog", { name: "History" });
   return { ...view, panel };
 }
 
@@ -90,9 +92,9 @@ describe("auditBand", () => {
   });
 });
 
-describe("AuditDrawer", () => {
+describe("DeckHistoryDialog", () => {
   /** Closed is closed: no markup, and no read either — the editor keeps this mounted, and a
-   *  drawer that asked anyway would spend a query on every deck the reader opens. */
+   *  dialog that asked anyway would spend a query on every deck the reader opens. */
   it("draws nothing and asks nothing while it is closed", () => {
     const { container } = draw({ open: false });
 
@@ -107,10 +109,11 @@ describe("AuditDrawer", () => {
   });
 
   /**
-   * The header's total is the **whole** history and the date is its oldest row, so the line
-   * says how far back the drawer can see. Both are read off the rows rather than told to the
-   * drawer, because a count the backend sent separately is a count that can disagree with the
-   * list under it.
+   * The count is the **whole** history and the date is its oldest row, so the line says how far
+   * back the dialog can see. It rides beside the filter chips rather than beside the title,
+   * because `DeckDialog`'s header takes a title and nothing else — and it is a caption for the
+   * filter anyway. Both figures are read off the rows rather than told to the dialog, because a
+   * count the backend sent separately is a count that can disagree with the list under it.
    */
   it("says how many changes there are and how far back they go", async () => {
     deckAuditList.mockResolvedValue([entry(), entry({ at: NOW - DAY * 4 }), entry()]);
@@ -123,7 +126,7 @@ describe("AuditDrawer", () => {
   });
 
   /**
-   * Day sections come from `auditDays` and are not re-derived here. What this drawer adds is
+   * Day sections come from `auditDays` and are not re-derived here. What this dialog adds is
    * the roll-up: gains and losses kept **apart** rather than netted, because a day that added
    * seven and cut six is not the quiet day one number would report it as.
    */
@@ -142,7 +145,7 @@ describe("AuditDrawer", () => {
     expect(section).not.toBeNull();
     expect(within(section!).getByText("+7 / −6")).toBeInTheDocument();
     // The drawn figure reads as "plus seven slash minus six"; the spoken one is the sentence.
-    // This is the only number in the drawer that no row's own sentence carries.
+    // This is the only number in the dialog that no row's own sentence carries.
     expect(within(section!).getByText("7 copies added, 6 copies removed")).toBeInTheDocument();
     expect(within(section!).getByText("2 changes")).toBeInTheDocument();
   });
@@ -161,7 +164,7 @@ describe("AuditDrawer", () => {
   /**
    * The sentence is `auditSentence`'s, **verbatim** — this component writes no wording at all,
    * which is the whole reason the wording lives in one module. Asserting the exact string here
-   * is what would fail if a second copy of it ever appeared in the drawer.
+   * is what would fail if a second copy of it ever appeared in the dialog.
    */
   it("draws each entry as the sentence, the detail line and the time", async () => {
     deckAuditList.mockResolvedValue([
@@ -188,7 +191,7 @@ describe("AuditDrawer", () => {
   });
 
   /**
-   * **Nothing may take the drawer down.** A payload is a string an older or newer build wrote,
+   * **Nothing may take the dialog down.** A payload is a string an older or newer build wrote,
    * so a malformed one degrades to the shortest honest sentence and the rows around it are
    * untouched.
    */
@@ -204,7 +207,7 @@ describe("AuditDrawer", () => {
   });
 
   describe("the kind filter", () => {
-    /** Five chips, all on, so the drawer opens showing everything it has. */
+    /** Five chips, all on, so the dialog opens showing everything it has. */
     it("offers the five bands, every one pressed", async () => {
       await drawn();
 
@@ -266,6 +269,33 @@ describe("AuditDrawer", () => {
     });
 
     /**
+     * **The filter is the reader's and outlives a close**, which is why it is held above
+     * {@link DeckDialog} rather than in the body: `children` render only while the dialog is
+     * open, so a chip switched off inside it would come back on every time the reader opened
+     * the history again. The query is the opposite case and is deliberately inside.
+     */
+    it("still has the reader's filter when it is closed and opened again", async () => {
+      const { rerender } = await drawn();
+      await screen.findByText("Added 2 × Lightning Bolt");
+      await userEvent.click(screen.getByRole("button", { name: "Adds" }));
+
+      rerender(
+        <DeckHistoryDialog deckId={4} open={false} onDismiss={vi.fn()} onClose={vi.fn()} />,
+      );
+      // The panel outlives the flag by the length of its exit, so wait for it to go rather than
+      // opening a second one beside the one still fading.
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "History" })).toBeNull());
+      rerender(<DeckHistoryDialog deckId={4} open onDismiss={vi.fn()} onClose={vi.fn()} />);
+
+      await screen.findByRole("dialog", { name: "History" });
+      expect(await screen.findByRole("button", { name: "Adds" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+      expect(screen.getByText("Nothing matches these filters.")).toBeInTheDocument();
+    });
+
+    /**
      * **A row in none of the five chips must still be reachable.** The audit contract grows,
      * and a kind this build has never met arrives with a chip of its own the moment one
      * exists — never as a row that quietly is not there.
@@ -298,85 +328,58 @@ describe("AuditDrawer", () => {
     });
   });
 
+  /**
+   * The chrome is {@link DeckDialog}'s now — the scrim's outside click, the Tab trap, the
+   * self-focus and the capture-phase `preventDefault()` are tested once, where they live. What
+   * is left to check here is the **wiring**: that this component is on the ladder at all, and
+   * that the two callbacks it is handed reach the two controls that mean them.
+   */
   describe("the way out", () => {
-    /**
-     * An `"inner"` rung: capture phase, and `preventDefault()` so the card pane behind the view
-     * keeps its own press. Fired at `window`, which is where both rungs listen.
-     */
-    it("closes on Escape and marks the press consumed", async () => {
+    it("closes on Escape, and takes the dismiss route rather than the close one", async () => {
       const { onDismiss, onClose } = await drawn();
 
-      const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
-      window.dispatchEvent(press);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
 
       expect(onDismiss).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
-      expect(press.defaultPrevented).toBe(true);
-    });
-
-    /** A press something else already consumed is not this drawer's. */
-    it("leaves a press another layer has taken", async () => {
-      const { onDismiss } = await drawn();
-
-      const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
-      press.preventDefault();
-      window.dispatchEvent(press);
-
-      expect(onDismiss).not.toHaveBeenCalled();
     });
 
     /**
-     * The ✕ takes the **dismiss** route, which is the one that hands the caret back.
+     * The ✕ is the shell's button wearing this dialog's `closeLabel`, and both halves are worth
+     * pinning here: the name is the one `DeckEditor.test.tsx` presses by, and the route is the
+     * one that hands the caret back.
      *
-     * Named for what this file can actually check. The hand-back itself is the *opener's* — the
-     * drawer is handed two callbacks and calling the right one is the whole of its part — so
-     * "hands focus back" is asserted where the opener lives, in
-     * `DeckEditor.test.tsx`'s `closes it on its own ✕, caret back on the trigger`. What matters
-     * here is the pair of conditions that make a hand-back possible at all: `onDismiss` and not
-     * `onClose`, and the drawer **still mounted** when it fires, since focusing a detached node
-     * lands the caret on `<body>`.
+     * Named for what this file can actually check. The hand-back itself is the *opener's* — this
+     * dialog is handed two callbacks and calling the right one is the whole of its part — so
+     * "hands focus back" is asserted where the opener lives, in `DeckEditor.test.tsx`'s
+     * `closes it on its own ✕, caret back on the trigger`. What matters here is the pair of
+     * conditions that make a hand-back possible at all: `onDismiss` and not `onClose`, and the
+     * dialog **still mounted** when it fires, since focusing a detached node lands the caret on
+     * `<body>`.
      */
     it("takes the dismiss route on its own close button, while still mounted", async () => {
       const { onDismiss, onClose } = await drawn();
       let mountedAtDismiss = false;
       onDismiss.mockImplementation(() => {
-        mountedAtDismiss = screen.queryByRole("dialog", { name: "Deck history" }) !== null;
+        mountedAtDismiss = screen.queryByRole("dialog", { name: "History" }) !== null;
       });
 
-      await userEvent.click(screen.getByRole("button", { name: "Close the history" }));
+      await userEvent.click(screen.getByRole("button", { name: "Close history" }));
 
       expect(onDismiss).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
       expect(mountedAtDismiss).toBe(true);
     });
 
-    /** The scrim is the outside click, and it moves no focus — the reader is already
-     *  somewhere else. */
-    it("closes without moving focus when the scrim is clicked", async () => {
+    /** The scrim is the outside click, and it moves no focus — the reader is already somewhere
+     *  else. The mechanism is the shell's; that this dialog hands it `onClose` is this file's. */
+    it("closes without moving focus when the scrim is pressed", async () => {
       const { container, onDismiss, onClose } = await drawn();
 
       await userEvent.click(container.firstElementChild!);
 
       expect(onClose).toHaveBeenCalledTimes(1);
       expect(onDismiss).not.toHaveBeenCalled();
-    });
-
-    /** A click that lands on the drawer is not an outside click, however far it is from a
-     *  control — the scrim's handler answers for itself only. */
-    it("stays open when the click lands inside it", async () => {
-      const { panel, onClose } = await drawn();
-
-      await userEvent.click(panel);
-
-      expect(onClose).not.toHaveBeenCalled();
-    });
-
-    /** The caret moves into the layer, so Tab starts inside it and Escape has something to
-     *  hand back. */
-    it("takes focus when it opens", async () => {
-      const { panel } = await drawn();
-
-      await waitFor(() => expect(panel).toHaveFocus());
     });
   });
 
