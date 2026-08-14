@@ -304,7 +304,9 @@ export const WrappedColumns: Story = {
     // rectangle here is 0×0 and no play in this file can see a second line. What it *can* read is
     // what the layout is given: the widths this view writes inline — the same
     // `stackColumnWidth(zoom)` for a column and for the rail, so this holds at whatever zoom the
-    // store is left on rather than at 1× only — against the desk the decorator declares. More
+    // **deck section** is left on rather than at 1× only — against the desk the decorator
+    // declares. (`cardZoom.deck`: the desk's own number, shared with `GridView` because the two
+    // are one deck drawn two ways, and not the docked search column's.) More
     // columns than fit on a line is a wrap, and pinning the count against that capacity is what
     // stops the story going quiet the way it just did: rail one more pile, or widen the rail
     // until a column no longer fits beside it, and this fails instead of silently drawing a

@@ -209,14 +209,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   deck tiles and folder strips (`DecksPage.tsx`), the theory diff (`TheoryDiffDialog.tsx`) and
   the cover art picker (`DeckSettingsDialog.tsx`) — where a 100-card list really is 100 mounted
   rows. (It used to say "the deck zone columns", a component the rebuild deleted.)
-- **Ctrl+wheel resizes the cards and nothing else.** The gesture is attached per _card section_ —
-  `CardGrid`'s scroller (which is the search wall, the collection wall and the deck editor's docked
-  search panel at once) and the deck editor's own `StackView` and `GridView` roots — so the sidebar,
-  the ribbon, the tables and the card pane never move. There is one `cardZoom` behind all of them
-  (`useAppStore`), because it is a statement about how the reader is reading cards rather than about
-  how one list is configured: zoom the search wall, switch to Decks, and the cards there are already
-  the size that was asked for. **The wishlist has no zoom because it has no card section** — it is
-  `VirtualTable` only.
+- **Ctrl+wheel resizes the cards and nothing else, and since 2026-08-14 each card section holds its
+  own zoom.** The gesture was already attached per _card section_ — `CardGrid`'s scroller and the
+  deck editor's own `StackView` and `GridView` roots — so the sidebar, the ribbon, the tables and
+  the card pane never move. What changed is what those listeners write. `useAppStore`'s `cardZoom`
+  is a `Record<ZoomSection, number>` over **four** sections (`ZOOM_SECTIONS`, `src/lib/cardZoom.ts`):
+  `search` and `collection`, the two walls; `deckSearch`, the deck editor's docked search column,
+  which is a third `CardGrid`; and `deck`, the editor's desk — **one key for both deck views**,
+  because Stacks and Grid are two drawings of the same pile and switching between them must not
+  resize the cards the reader just settled on. `useCardZoomGesture(ref, section)` names the section
+  it is stepping. **The wishlist has no zoom because it has no card section** — it is `VirtualTable`
+  only.
+- **The rule this reversed, and why it was wrong.** It read: there is one `cardZoom` behind all of
+  them, "because it is a statement about how the reader is reading cards rather than about how one
+  list is configured: zoom the search wall, switch to Decks, and the cards there are already the
+  size that was asked for." That argument is about a **navigation** — one section leaving the screen
+  as another arrives — and it never covered the case the deck editor creates, where two card
+  sections are on screen **at the same time**. A reader zooming the docked search column was
+  resizing the deck laid out beside it, and those are two different questions asked in the same
+  second: *how big are the cards I am browsing* against *how big is my deck laid out*. The
+  cross-surface convenience is what the split costs, and it is the smaller loss — a reader who zooms
+  the search wall and then opens a deck now finds the deck at whatever they last left it at, which
+  is the same promise ("the size I asked for") read per section instead of per app. Each section
+  starts at `DEFAULT_ZOOM` and every one is still **session-only**: no persistence, no SQLite, no
+  IPC, for the reason that has not changed — zoom is a posture a reader takes for a minute of
+  comparing art, and restoring 200% tiles on launch explains itself to nobody. Two guards keep a
+  fifth section from arriving silently: `DEFAULT_SECTION_ZOOMS` is spelled out as a literal rather
+  than reduced over `ZOOM_SECTIONS`, so `Record<ZoomSection, number>` makes a new section a compile
+  error until somebody has said what it starts at; and `CardGrid`'s `zoomSection` prop is
+  **required**, so a new wall cannot default into sharing another wall's number.
 - **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
   obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
   of a 488px `grid` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
@@ -353,6 +374,85 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   reader needs an answer — they are still rolling the wheel and nothing is happening. Keyed off the
   value, the badge would fade out under their hand at the one moment it is load-bearing. It is
   `aria-hidden` on purpose: a live region here would announce a percentage per wheel notch.
+  **`zoomPulse` stayed a single counter when the zoom went per-section**, and that is the right
+  shape: it is the badge's clock, there is still exactly one badge, and a counter per section would
+  be four clocks racing to describe one gesture. `zoomSection` — the section the last gesture landed
+  on, `null` before any — is what tells that one badge which number it is showing and where.
+- **The badge moved from the window's bottom centre to the zoomed section's top-right**
+  (2026-08-14, with the per-section zoom). A figure floating at the bottom of the window was
+  unambiguous while there was one zoom and is a riddle once there are four: in the deck editor, with
+  the search column beside the desk, it named a percentage without saying whose. It is still **one
+  instance mounted at the app root**, a sibling of `AppShell` in `App.tsx` — `LAYER.popup` only
+  competes in the root stacking context, so mounting it inside a view would cap it at that view's,
+  which is the bug `lib/layers.ts` exists about, and nothing between the root and it transforms.
+  What changed is where it draws. `useCardZoomGesture` registers each section's element in a
+  module-level `Map<ZoomSection, HTMLElement>` as part of the same effect that attaches the
+  listener, and cleanup deletes the entry **only if the map still holds this element** — React may
+  mount a replacement before unmounting the old one, and an unconditional delete would then drop a
+  live registration. `anchorFor(section)` reads that element and answers viewport offsets from its
+  `getBoundingClientRect()` — `rect.top` and `documentElement.clientWidth - rect.right` (**not**
+  `window.innerWidth`; see the scrollbar entry below), each inset by
+  `ZOOM_BADGE_INSET`. With no element (no gesture yet, or a section that is not mounted, which is
+  what a story driving the store directly looks like) it falls back to the **window's** top-right
+  corner, so the badge is always somewhere sensible rather than conditional on a rect. The pill is
+  `fixed` at those offsets with `origin-top-right`, so `popup`'s 0.96 scale grows it **into** its
+  corner instead of sliding it across the screen; the old `inset-x-0 bottom-10 flex justify-center`
+  row went with the reason it was written for, which was that a centred pill in a full-width row
+  scales about its own middle.
+- **The rect is measured during the render that detects the pulse, not in an effect, and that is
+  correct rather than a shortcut.** A section's *box* does not move when the zoom steps — only its
+  contents resize — so the pre-commit rect is already the right answer, and the badge's first
+  painted frame is in the right corner. An effect would cost a frame with the badge somewhere else,
+  on a surface that is only up for `ZOOM_QUIET_MS` in the first place. The anchor is set beside
+  `shownFor` in the same during-render adjustment the indicator already used for its pulse, which is
+  React's own answer for state derived from something that changed and this project's — see
+  `lib/useDelayedFlag.ts`.
+- **The anchor and the split are measured in the shipped window — 2026-08-14,
+  `npm run tauri build -- --debug --no-bundle`, a debug build at 1280×800**, driven over
+  `scripts/cdp.mjs` against the real corpus. (Two things in this group were *not* driven; the last
+  bullet of the four says which.) **The badge lands on the zoomed section's corner exactly.** On the search wall the scroller's rect read `top 190 / right 1260` and the badge painted
+  at `top 198 / right 1252` — both edges inset by `ZOOM_BADGE_INSET` and neither off by a pixel. The
+  pill computed `position: fixed`, `z-index: 30` (`LAYER.popup`), `pointer-events: none` and a
+  `transform-origin` of `59.6px 0px` on a 59.6px-wide pill, which is `origin-top-right` measured
+  rather than argued: the scale grows it into its own corner.
+- **The sections are independent, driven in both directions with the deck editor's panel open.**
+  Desk at `top 263 / right 830`, the docked panel's wall at `top 551 / right 1230`. Ctrl+wheel over a
+  deck card took that card **208 → 229px** while the panel's tile held at **159px**; ctrl+wheel over
+  the panel took its tile **159 → 330px** — its 371px column dropping from two tiles to one — while
+  the deck card held at **229px**. Three sections held their own value at the same moment: `search`
+  at **150%**, `deck` at **110%**, `deckSearch` at **110%** (the last two coincide; they were
+  arrived at separately and neither followed the other). That is the defect this change was made
+  about, measured gone.
+- **`window.innerWidth` is the wrong viewport width to position a `fixed` element from, and this
+  branch shipped the bug for a day.** `anchorFor` computed its `right` offset from
+  `window.innerWidth`, which **includes** the classic vertical scrollbar, while a `position: fixed`
+  element is positioned against the initial containing block, which **excludes** it. Measured in the
+  same pass: `innerWidth` **1280** against `documentElement.clientWidth` **1265**, so the badge sat
+  **15px left** of the corner it was aiming at — painting its right edge at 807 where 822 was wanted
+  on the desk, and at 1207 where 1222 was wanted on the panel. Fixed by reading
+  `documentElement.clientWidth`. **It hid twice over, and the second hiding place is the one worth
+  reading**, which is why this is its own rule rather than a footnote to the anchor. It was
+  invisible on the search wall, which has no page scrollbar and so reads correct at every zoom. And
+  it was invisible to the suite — but **not** because jsdom reported the two widths as equal, which
+  is the plausible wrong answer and was believed for a day. **jsdom has no layout engine at all**:
+  `Element-impl.js` is a hard `get clientWidth() { return 0; }` for every element, with no special
+  case for the document element. Probed in this repo: `window.innerWidth` **1024**,
+  `document.documentElement.clientWidth` **0**. So a jsdom test cannot read a viewport width — it
+  has to **state** one — and the test helper stated `window.innerWidth`, which is precisely the
+  expression the bug was made of. **That is worse than blindness: the suite pinned the defect as
+  the expected answer and certified it.** The assertion looks like it is checking where the badge
+  is anchored and is checking nothing, and it would have gone red against the *fix*. The general
+  trap, for whoever writes the next one: **a stated-viewport test proves only that the code agrees
+  with the number the test stated**, so state a width that is not the expression under test, or
+  accept that the question is a live one. Anything else positioned `fixed` from a measured rect
+  owes the same distinction.
+- **What was *not* driven here, stated plainly.** The gesture was dispatched as a **synthetic**
+  `WheelEvent` with `ctrlKey` on a card and left to bubble to the section root. That exercises the
+  listener, the store and the whole render path — `dispatchEvent` returned `false`, so something did
+  call `preventDefault` — but a synthetic event is not a trusted input event, so **the
+  `preventDefault`/WebView2 page-zoom suppression below was not re-driven on this branch**; it is
+  unchanged from before it and rests on its own earlier evidence. Storybook was never started for
+  this branch either, so no story here has been previewed.
 - **The wheel listener is a native `addEventListener` with `{ passive: false }`, never React's
   `onWheel`.** React registers `wheel` as passive on the root container, and a passive listener's
   `preventDefault()` is defined to do nothing — so the zoom would step *and* WebView2 would apply
@@ -423,8 +523,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   stack column on every deck they opened whether or not they were adding cards. Collapsed, the
   deck starts with the whole desk and one press on the rail gets the wall back. The choice is the
   component's own `useState` and deliberately not a `useAppStore` field: it is per editor-open and
-  not remembered, on the same line `cardZoom`/`searchView`/`collectionView` sit the other side of
-  — those are session-wide answers about the *app*.
+  not remembered, on the same line `searchView`/`collectionView` sit the other side of
+  — those are session-wide answers about the *app*. (`cardZoom` was named in that group until
+  2026-08-14 and is a third thing now: session-scoped like those two, but one number per card
+  **section**, so this panel's own wall zooms apart from the desk beside it — see the zoom entry
+  above.)
   `src/lib/motion.ts`'s `drawerRight` lost its last consumer to this change and was deleted; see
   [motion.md](motion.md). **None of this has been driven in the shipped window yet** — the layer,
   focus and Escape figures above were taken on the drawers this replaced, and the collapsed

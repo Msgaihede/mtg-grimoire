@@ -97,13 +97,25 @@ export function GridView({
 }) {
   // One read for the whole wall, passed down rather than read per tile: a hundred-card deck is a
   // hundred `GridCard`s, and a hundred store subscriptions to answer one number they all share.
-  const cardZoom = useAppStore((s) => s.cardZoom);
+  //
+  // **`deck`, which is `StackView`'s key too, and the sharing is the decision.** This view and
+  // that one are one deck drawn two ways — every card at once here, a stack per pile there — so a
+  // reader who sizes the deck in Stacks and presses `Grid` must find it the size they left it. A
+  // section each would make the toolbar's view switch a resize, and changing drawings is not a
+  // request for bigger cards. What is *not* shared is the docked search column beside the desk
+  // (`deckSearch`): that wall and this one are on screen together answering different questions,
+  // which is why `cardZoom` holds a number per section at all.
+  const cardZoom = useAppStore((s) => s.cardZoom.deck);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ctrl+wheel, on this element because this is the one that scrolls — the group sections and
   // the tiles inside it do not, and a wheel over the gap between two groups belongs to neither.
   // The hook attaches a native non-passive listener, which is the only kind that may
   // `preventDefault`; without that WebView2 zooms the whole window on top of the wall.
-  useCardZoomGesture(scrollRef);
+  //
+  // `"deck"` again, and it has to be the literal the read above uses and the one `StackView`
+  // passes: a gesture writing one section while the geometry read another would step a number
+  // this wall never draws.
+  useCardZoomGesture(scrollRef, "deck");
 
   return (
     // Down the page rather than across it: a wall wraps, so the columns the other two views

@@ -21,11 +21,16 @@
  *
  * ## Where the state lives
  *
- * Not here. This module is arithmetic — the value is `useAppStore`'s `cardZoom`, and it is
- * deliberately session-only: no persistence, no SQLite, no IPC. Zoom is a posture a reader takes
- * for a minute of comparing art, not a preference they set once; restoring it on launch would
- * mean a reader who peered at one card in the last session is greeted by 200% tiles in the next
- * one, with nothing on screen explaining why.
+ * Not here. This module is arithmetic — the values are `useAppStore`'s `cardZoom`, which holds
+ * **one number per card section** ({@link ZOOM_SECTIONS}) rather than one for the app. A reader
+ * zooming the deck editor's docked search column was resizing the deck laid out beside it, and
+ * those are two different questions asked in the same second; the ladder below is the same ladder
+ * either way, it is just walked once per section.
+ *
+ * All of them are deliberately session-only: no persistence, no SQLite, no IPC. Zoom is a posture
+ * a reader takes for a minute of comparing art, not a preference they set once; restoring it on
+ * launch would mean a reader who peered at one card in the last session is greeted by 200% tiles
+ * in the next one, with nothing on screen explaining why.
  */
 
 /**
@@ -48,6 +53,36 @@ export const MIN_ZOOM: number = ZOOM_STEPS[0];
 
 /** The top of {@link ZOOM_STEPS}. */
 export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+
+/**
+ * The card sections that zoom independently of one another.
+ *
+ * Four surfaces draw walls of cards, and two of them are on screen at once: the deck editor puts
+ * its docked card search column beside the deck itself. One shared number made a gesture over
+ * the search column resize the deck too — "how big are the cards I am browsing" and "how big is
+ * my deck laid out" answered together, when the reader only asked one of them.
+ *
+ * `deck` is one key for **both** deck views. Stacks and Grid are two drawings of the same pile,
+ * so switching between them must not resize the cards the reader just settled on.
+ */
+export const ZOOM_SECTIONS = ["search", "collection", "deckSearch", "deck"] as const;
+
+export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
+
+/**
+ * Every section at {@link DEFAULT_ZOOM} — the shape `cardZoom` starts a session as.
+ *
+ * Spelled out as a literal rather than reduced over {@link ZOOM_SECTIONS}, because
+ * `Record<ZoomSection, number>` then makes a new section a **compile error** until somebody has
+ * said what it starts at. A `reduce` would quietly hand it whatever the reduce's default was, and
+ * a section nobody chose a starting size for is exactly the thing worth stopping a build over.
+ */
+export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
+  search: DEFAULT_ZOOM,
+  collection: DEFAULT_ZOOM,
+  deckSearch: DEFAULT_ZOOM,
+  deck: DEFAULT_ZOOM,
+};
 
 /**
  * The stop nearest `zoom`, so an off-ladder value has somewhere to step *from*.

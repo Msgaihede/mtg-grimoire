@@ -128,14 +128,29 @@ export function StackView({
   columnHeight?: number;
   className?: string;
 }) {
-  const cardZoom = useAppStore((s) => s.cardZoom);
+  // **`deck`, and `GridView` reads this same key on purpose.** The two are one deck drawn two
+  // ways — a stack per pile here, every card at once there — so the size the reader settled on
+  // has to survive the toolbar's `Stacks | Grid` press. A section each would resize the whole
+  // deck on a change of *view*, which is nobody's question: switching drawings is not asking for
+  // bigger cards. The pairing is the section key and nothing else, which is what keeps the two
+  // files from needing to agree about anything more.
+  //
+  // It is equally deliberately **not** `deckSearch`, the docked card search column drawn beside
+  // this view. Those are the two sections on screen together, and they answer different
+  // questions — "how big are the cards I am browsing" and "how big is my deck laid out" — which
+  // is the whole of why `cardZoom` stopped being one number.
+  const cardZoom = useAppStore((s) => s.cardZoom.deck);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ctrl+wheel, on the element that scrolls: this view is the whole desk, and a wheel event
   // bubbles from whichever card the pointer is over up to here — including from the gaps between
   // the columns, which belong to no card at all. A native non-passive listener is what the hook
   // is for; React's own wheel listeners are passive and could not `preventDefault`, so WebView2
   // would zoom the entire window underneath the cards.
-  useCardZoomGesture(scrollRef);
+  //
+  // The literal `"deck"` is the same key the read above takes and the same one `GridView` passes,
+  // for the reason written there: the gesture and the geometry have to name one section, and the
+  // two deck views have to name each other's.
+  useCardZoomGesture(scrollRef, "deck");
 
   // Sized from the same zoom the stacks inside are, so the column is exactly the card plus its
   // chrome at every stop on the ladder. A px number in an inline style rather than the `14rem`

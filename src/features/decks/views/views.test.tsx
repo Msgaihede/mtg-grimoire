@@ -1,7 +1,14 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { DEFAULT_ZOOM, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
+import {
+  DEFAULT_SECTION_ZOOMS,
+  DEFAULT_ZOOM,
+  MIN_ZOOM,
+  scaled,
+  ZOOM_SECTIONS,
+  ZOOM_STEPS,
+} from "@/lib/cardZoom";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
@@ -33,6 +40,41 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, value: 1200 });
   Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
 });
+
+/**
+ * Size the cards on the **deck desk**, and leave every other section where it was.
+ *
+ * `cardZoom` is a number per card section rather than one for the app, so a bare
+ * `setState({ cardZoom: 2 })` no longer type-checks and — worse if it did — would be a claim
+ * about four surfaces when the two views here are one of them. Written whole from
+ * {@link DEFAULT_SECTION_ZOOMS} rather than spread off the live state, so a case that runs after
+ * one which zoomed the search column starts from the same place either way.
+ */
+function setDeckZoom(zoom: number) {
+  useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deck: zoom } });
+}
+
+/**
+ * Every section back to 100%, and the pulse with them.
+ *
+ * The store outlives a test — it is a module singleton — so a case that leaves the desk at 2×
+ * silently re-packs every suite that runs after it. `zoomPulse`/`zoomSection` are reset here
+ * because the gesture case below writes them and the badge's own suite reads them.
+ *
+ * Spread into a **copy**, the way {@link setDeckZoom} above and `store.ts`'s own initialiser
+ * spread it: `Readonly<>` is a compile-time fence and nothing more, so state holding the exported
+ * object itself would let one in-place write corrupt the module constant every other suite in this
+ * process resets from — and the failure would surface as an unrelated file going red much later.
+ * Nothing writes in place today, because `zoomCards` is the single writer and it spreads; the
+ * spelling is kept identical everywhere so that stays the obvious thing to do.
+ */
+function resetZoom() {
+  useAppStore.setState({
+    cardZoom: { ...DEFAULT_SECTION_ZOOMS },
+    zoomPulse: 0,
+    zoomSection: null,
+  });
+}
 
 function category(over: Partial<DeckCategory> = {}): DeckCategory {
   return {
@@ -580,9 +622,9 @@ describe("StackView columns", () => {
   const headingsIn = (column: Element) =>
     [...column.querySelectorAll('[id^="group-"]')].map((n) => n.textContent);
 
-  /** The zoom is one number for the whole app and this store outlives a test, so a case that
-   *  leaves it at 2× would silently re-pack every suite that runs after it. */
-  afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+  /** The desk's zoom is remembered for the session and this store outlives a test, so a case
+   *  that leaves it at 2× would silently re-pack every suite that runs after it. */
+  afterEach(resetZoom);
 
   /**
    * Groups are packed into columns in the reader's own order and never split — so a category
@@ -671,7 +713,7 @@ describe("StackView columns", () => {
    * would win over the width and nothing about the markup would look wrong.
    */
   it("writes the zoomed column width onto the column, basis included", () => {
-    useAppStore.setState({ cardZoom: 2 });
+    setDeckZoom(2);
     render(
       <StackView
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
@@ -716,7 +758,7 @@ describe("StackView columns", () => {
     expect(headingsIn(columns()[1])).toEqual(["Draw"]);
     cleanup();
 
-    useAppStore.setState({ cardZoom: 2 });
+    setDeckZoom(2);
     render(<StackView groups={groups} marketplace={TCG} columnHeight={desk} />);
     expect(headingsIn(columns()[0])).toEqual(["Commander"]);
     expect(headingsIn(columns()[1])).toEqual(["Ramp", "Draw"]);
@@ -1070,9 +1112,9 @@ describe.each(COLUMN_VIEWS)(
   // print as `'StackView''s`. Same shape as `$name editing` above.
   "$name rail",
   ({ render: renderView, heading, width, zoomedWidth }) => {
-    /** The zoom is one number for the whole app and this store outlives a test — the reason
-     *  `StackView columns` resets it, and the same reason here. */
-    afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+    /** The desk's zoom is remembered for the session and this store outlives a test — the
+     *  reason `StackView columns` resets it, and the same reason here. */
+    afterEach(resetZoom);
 
     /** `GROUPS`' deck with a Sideboard in the middle of the reader's own order, and the
      *  Maybeboard after it — the two piles the rail takes, arriving from opposite ends of the
@@ -1177,7 +1219,7 @@ describe.each(COLUMN_VIEWS)(
      * old value wins over the width, and nothing about the markup looks wrong.
      */
     it("makes the rail one column wide, in both halves of the shorthand", () => {
-      useAppStore.setState({ cardZoom: 2 });
+      setDeckZoom(2);
       draw();
 
       const column = flow().firstElementChild as HTMLElement;
@@ -1298,7 +1340,7 @@ describe.each(COLUMN_VIEWS)(
  * what stops a wall of cards reading as a single sheet at half size.
  */
 describe("GridView tiles", () => {
-  afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+  afterEach(resetZoom);
 
   const wall = () => screen.getByRole("list", { name: "Ramp" });
   const tile = () => within(wall()).getAllByRole("listitem")[0];
@@ -1308,7 +1350,7 @@ describe("GridView tiles", () => {
   const controls = () => tile().lastElementChild as HTMLElement;
 
   const draw = (zoom: number) => {
-    useAppStore.setState({ cardZoom: zoom });
+    setDeckZoom(zoom);
     render(
       <GridView
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
@@ -1352,6 +1394,113 @@ describe("GridView tiles", () => {
     expect(foot().style.height).toBe("20px");
     expect(foot().style.fontSize).toBe("9px");
     expect(controls().style.bottom).toBe("20px");
+  });
+});
+
+/**
+ * **The deck desk is one zoom section, and it is not the search column's.**
+ *
+ * `useAppStore.cardZoom` holds a number per card section rather than one for the app, and the two
+ * views here share the `deck` key: they are one deck drawn two ways, so switching between Stacks
+ * and Grid must not resize the cards the reader just settled on. The block above pins what each
+ * view does *with* a zoom; this one pins **which number it reads** — the half that has no
+ * geometry in it and that every assertion in this file would go on passing without.
+ *
+ * The failure it exists for is the one the split was made to fix, in both directions: a view
+ * reading a section of its own would make the toolbar's `Stacks | Grid` press a resize, and a view
+ * left reading `deckSearch` (or a re-merged single number) would put the deck back to being
+ * resized by a gesture over the card wall docked beside it.
+ */
+describe("the deck's two views and their one zoom section", () => {
+  afterEach(resetZoom);
+
+  /** One card in one pile, which is all either view needs to state a width. */
+  const ONE_CARD = buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical");
+
+  /** The width `StackView` gives a packed column — the card plus its chrome, so it moves with
+   *  the zoom the view read. */
+  const columnWidth = () =>
+    (document.querySelector(`[${STACK_COLUMN_ATTR}]`) as HTMLElement).style.width;
+  /** The width `GridView` gives a tile, which is that view's whole geometry. */
+  const tileWidth = () =>
+    (within(screen.getByRole("list", { name: "Ramp" })).getAllByRole("listitem")[0] as HTMLElement)
+      .style.width;
+
+  /**
+   * **Both views draw at `cardZoom.deck`, and a future split of that key fails here.**
+   *
+   * Asserted as two views against one `setDeckZoom`, and against the *zoomed* answers rather than
+   * merely against each other: two views that had each grown a section of their own would still
+   * agree with one another at 1×, which is where a test that only compared them would sit.
+   */
+  it("draws Stacks and Grid at the one zoom the deck section holds", () => {
+    setDeckZoom(2);
+
+    render(<StackView groups={ONE_CARD} marketplace={TCG} />);
+    expect(columnWidth()).toBe(`${stackColumnWidth(2)}px`);
+    expect(columnWidth()).toBe("434px");
+    cleanup();
+
+    render(<GridView groups={ONE_CARD} marketplace={TCG} />);
+    expect(tileWidth()).toBe(`${scaled(150, 2)}px`);
+    expect(tileWidth()).toBe("300px");
+  });
+
+  /**
+   * **…and neither of them moves when another section is zoomed**, which is the whole of the
+   * reader's complaint: the deck editor puts its docked card search column beside the desk, both
+   * are walls of cards, and one gesture used to size both.
+   *
+   * `search` is set as well as `deckSearch` — the two sections the reader is most likely to have
+   * left somewhere else — so this fails for a view that went back to reading any single shared
+   * number rather than only for one that read the search column's by name.
+   */
+  it("leaves the deck at its own size when another section is zoomed", () => {
+    useAppStore.setState({
+      cardZoom: { ...DEFAULT_SECTION_ZOOMS, deckSearch: 2, search: MIN_ZOOM },
+    });
+
+    render(<StackView groups={ONE_CARD} marketplace={TCG} />);
+    expect(columnWidth()).toBe(`${stackColumnWidth(DEFAULT_ZOOM)}px`);
+    expect(columnWidth()).toBe("224px");
+    cleanup();
+
+    render(<GridView groups={ONE_CARD} marketplace={TCG} />);
+    expect(tileWidth()).toBe("150px");
+  });
+
+  /**
+   * **The gesture writes the section the pointer is over, and only that one.**
+   *
+   * Driven as a real `wheel` at the view's own root, which is the element the hook is handed:
+   * `useCardZoomGesture` attaches a **native** non-passive listener, so this proves the listener
+   * is on the scroller as well as which key it steps — a view that passed the right section to a
+   * ref pointing at the wrong element would answer every geometry assertion above.
+   *
+   * The other three sections are swept out of `ZOOM_SECTIONS` rather than named, so a fifth
+   * section added later is covered by this the day it exists. `zoomSection` is asserted beside
+   * them because it is what tells the badge which corner to draw itself in — the value the
+   * reader sees is `cardZoom[zoomSection]`, so a gesture that stepped `deck` while naming
+   * something else would print a number nothing on screen is drawn at.
+   */
+  it.each([
+    ["StackView", <StackView key="s" groups={ONE_CARD} marketplace={TCG} />],
+    ["GridView", <GridView key="g" groups={ONE_CARD} marketplace={TCG} />],
+  ])("steps only the deck section on a ctrl+wheel over %s", (_name, element) => {
+    const before = useAppStore.getState().zoomPulse;
+    const { container } = render(element);
+
+    fireEvent.wheel(container.firstElementChild as HTMLElement, { deltaY: -100, ctrlKey: true });
+
+    const { cardZoom, zoomSection, zoomPulse } = useAppStore.getState();
+    expect(cardZoom.deck).toBe(1.1);
+    for (const section of ZOOM_SECTIONS.filter((s) => s !== "deck")) {
+      expect(cardZoom[section]).toBe(DEFAULT_ZOOM);
+    }
+    expect(zoomSection).toBe("deck");
+    // One wheel, one pulse — read as a delta rather than as `1`, because the counter is a
+    // session's and this file is not the only thing that has run in it.
+    expect(zoomPulse).toBe(before + 1);
   });
 });
 

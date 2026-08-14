@@ -4,7 +4,7 @@ import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
-import { scaled } from "@/lib/cardZoom";
+import { scaled, type ZoomSection } from "@/lib/cardZoom";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
@@ -106,6 +106,7 @@ export function CardGrid<T extends GridCard>({
   onSelect,
   onNeedNextPage,
   listKey,
+  zoomSection,
   selectedId = null,
   label = "Search results",
   badge,
@@ -123,6 +124,21 @@ export function CardGrid<T extends GridCard>({
   /** Identity of the current list — a search, or a filtered collection — so a new one
    *  starts at the top. */
   listKey: string;
+  /**
+   * Which of the app's card sections this wall *is* — the key the reader's zoom is stored
+   * under, and the section a ctrl+wheel here writes to. Both ends of the zoom read it: the
+   * size drawn, and the size the gesture changes.
+   *
+   * **Required, and deliberately not defaulted.** One component draws three of the four
+   * sections — the search's wall, the collection's wall and the deck editor's docked search
+   * column — so a default would hand a caller who never thought about this some *other* wall's
+   * setting by omission, silently and with nothing on screen to say so. That is precisely the
+   * defect this prop exists to fix: the deck editor puts its search column beside the deck, and
+   * a reader zooming the column was resizing the deck too — two questions asked in the same
+   * second, answered together when only one was asked. A wall that has not said which section
+   * it is has not thought about it, and the compiler is the cheapest place for that to surface.
+   */
+  zoomSection: ZoomSection;
   /** The card the detail pane is showing, so the wall can say which one that is. */
   selectedId?: string | null;
   /** What the wall is, for anyone who cannot see that it is a wall of cards. */
@@ -254,15 +270,25 @@ export function CardGrid<T extends GridCard>({
   }, []);
 
   /**
-   * How big the reader wants their cards — the one thing about this wall that is theirs.
+   * How big the reader wants their cards *on this wall* — the one thing about it that is theirs.
    *
-   * Read from the store here rather than taken as a prop, and that is the whole reason this
-   * component was the place to put the zoom: it *is* the search's wall, the collection's wall
-   * and the deck editor's docked panel, so three of the app's card surfaces zoom together and
-   * not one of their call sites changed. A prop would have made it three settings that drift,
-   * and a reader who zoomed the search would find the collection back at 1×.
+   * **The value is the store's and only the key is a prop**, and that split is the whole of this
+   * change. This comment used to argue the reverse: one number for every wall, three surfaces
+   * zooming together, no call site involved. Three settings that drift was named as the danger
+   * and it turned out to be the request — the deck editor's docked search column and the deck
+   * laid out beside it are two different questions, and a gesture over one must not answer the
+   * other. So the section moved out into {@link zoomSection} and the store now holds one number
+   * per section (`ZOOM_SECTIONS` in `cardZoom.ts`); a reader who zooms the search really does
+   * find the collection back where they left it, which is the point rather than the regression.
+   *
+   * The store stays where the *value* lives, and that half is not incidental either. A wall
+   * holding its own zoom in `useState` would lose it on every unmount — switch the search to
+   * Table view and back, leave the collection and return, collapse the deck panel and reopen it
+   * — and a size the reader chose would silently reset each time. `cardZoom[zoomSection]`
+   * outlives all of those, and is still session-only (see `cardZoom.ts`), so it does not follow
+   * them into tomorrow.
    */
-  const cardZoom = useAppStore((s) => s.cardZoom);
+  const cardZoom = useAppStore((s) => s.cardZoom[zoomSection]);
 
   // Ctrl+wheel, attached to the **scroller** rather than to the sizer inside it: the scroller is
   // what the pointer is actually over, since the sizer sits inside this wall's padding and the
@@ -271,7 +297,7 @@ export function CardGrid<T extends GridCard>({
   // non-passive one for the usual reason (it has to `preventDefault`, or the browser zooms the
   // whole window underneath it), which is what the hook is for; React registers its own wheel
   // listeners passively at the root and could not.
-  useCardZoomGesture(scrollRef);
+  useCardZoomGesture(scrollRef, zoomSection);
 
   // The zoom moves the **floor**, not the tiles. Raise the narrowest a tile may be and fewer
   // columns fit, so each one grows — and `tileWidthFor` still shares the leftover out, so the

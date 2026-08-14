@@ -161,9 +161,13 @@ const meta = {
           "which grouping, which sort: each press writes its own field through " +
           "`deck_set_view_state`, which moves no `updated_at`, records no history and " +
           "reallocates nothing — looking at a tab is not editing a deck — and the editor reads " +
-          "the triple back when it opens. Deliberately **not** `useAppStore`: `cardZoom` and " +
-          "the two view preferences are one session-wide answer, while which list of a " +
-          "*particular* deck somebody was reading is a fact about that deck. " +
+          "the triple back when it opens. Deliberately **not** `useAppStore`: the two view " +
+          "preferences are one session-wide answer and `cardZoom` is one per card *section* — " +
+          "the desk here is `deck`, shared with the Grid view because they are one deck drawn " +
+          "two ways and separate from the docked search column's `deckSearch` — so both are " +
+          "facts about a **surface**, kept for a session and the same whichever deck is open, " +
+          "while which list of a *particular* deck somebody was reading is a fact about that " +
+          "deck. " +
           "{@link ReopensOnThePlan} is the deck that was left on its plan.\n\n" +
           "**An inactive category counts toward nothing at all** — not size, not copies, not " +
           "legality — and the allocator never claims a copy for one, so every card in it reads " +

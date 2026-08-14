@@ -127,17 +127,54 @@ Every one of these has its measurement and its story in
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
-- **Ctrl+wheel zooms the card sections and nothing else.** One `cardZoom` in `useAppStore`, stepped
-  along the ten-stop ladder in `src/lib/cardZoom.ts` (0.5×–2×) and attached per card section through
-  `useCardZoomGesture` — `CardGrid`'s scroller, `StackView`'s and `GridView`'s roots. The shell, the
-  tables and the card pane never scale. Three rules carry it, each with a live failure behind it in
-  [frontend-design.md](../docs/reference/frontend-design.md): the gesture needs a **native**
-  `addEventListener` with `{ passive: false }` (React's `onWheel` is passive, so `preventDefault`
-  does nothing and WebView2 zooms the whole window on top of you); the zoom rescales **geometry**
-  and is never a `transform: scale()`; and **a scaled budget holding unscaled chrome floors rather
-  than scales** — `max(base, scaled(base, zoom))`, which is why `CardGrid`'s caption, `CardStack`'s
-  34px reveal and `GridView`'s gutter all grow without shrinking. Session-only by design: no
-  persistence, matching `searchView`/`collectionView`.
+- **Ctrl+wheel zooms the card sections and nothing else, and every section zooms on its own.**
+  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the four card sections named in
+  `src/lib/cardZoom.ts` — `search` and `collection` (the two walls), `deckSearch` (the deck editor's
+  docked search column) and `deck` (the editor's desk, where **Stacks and Grid share one key**
+  because they are two drawings of the same pile and switching view must not resize the cards). Each
+  starts at `DEFAULT_ZOOM`, each is stepped along the same ten-stop ladder (0.5×–2×), and each is
+  remembered for the rest of the session and handed back when the reader returns to that section.
+  **This reverses the single shared `cardZoom` that was here until 2026-08-14**, whose argument was
+  that zoom is a statement about how a reader reads cards rather than about one list: it holds
+  across a navigation and breaks in the deck editor, where two card sections are on screen at once
+  and zooming the docked search column also resized the deck laid out beside it — "how big are the
+  cards I am browsing" and "how big is my deck laid out" answered together when only one was asked.
+  Still session-only by design: no persistence, no SQLite, no IPC, matching
+  `searchView`/`collectionView`. The gesture is attached through `useCardZoomGesture(ref, section)`
+  on `CardGrid`'s scroller, `StackView`'s root and `GridView`'s root; `CardGrid`'s `zoomSection` prop
+  is **required**, because a wall that has not thought about which section it is must not silently
+  share another wall's number. The shell, the tables and the card pane never scale. Three rules
+  carry it, each with a live failure behind it in
+  [frontend-design.md](../docs/reference/frontend-design.md), and none of the three changed with the
+  split: the gesture needs a **native** `addEventListener` with `{ passive: false }` (React's
+  `onWheel` is passive, so `preventDefault` does nothing and WebView2 zooms the whole window on top
+  of you); the zoom rescales **geometry** and is never a `transform: scale()`; and **a scaled budget
+  holding unscaled chrome floors rather than scales** — `max(base, scaled(base, zoom))`, which is why
+  `CardGrid`'s caption, `CardStack`'s 34px reveal and `GridView`'s gutter all grow without shrinking.
+  **The badge is still one instance mounted at the app root** (`CardZoomIndicator`, a sibling of
+  `AppShell`) — `LAYER.popup` only competes in the root stacking context, so mounting it inside a
+  view would cap it at that view's — but it is now drawn at the **top-right of the section the
+  gesture landed in**, anchored by measuring that section's box (`useCardZoomGesture` registers the
+  element; `anchorFor` reads its rect). One badge because a reader makes one gesture at a time, not
+  because there is one zoom: `zoomPulse` stays a single counter and `zoomSection` says which section
+  the badge is about. All of that is driven in the shipped window (2026-08-14, debug build,
+  1280×800) — the figures are in
+  [frontend-design.md](../docs/reference/frontend-design.md) — with one carve-out that matters to
+  the rules above and is stated there: the wheel was dispatched **synthetically**, so the
+  `preventDefault`/WebView2 rule was exercised but **not** re-proved on that pass.
+- **Anything `fixed` positioned from a measured rect takes its viewport width from
+  `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
+  classic vertical scrollbar; the initial containing block a `fixed` box is laid out against
+  excludes it, so the two differ by the scrollbar on every surface that has one — **1280 against
+  1265**, measured 2026-08-14, which is how the zoom badge came to sit 15px left of the corner it
+  was anchored to. **Two things hide it, and the second does worse than hide it**: a surface with
+  no page scrollbar reads correct at every size; and **jsdom has no layout engine, so
+  `clientWidth` is a hard `0` on every element, the document element included** (probed in this
+  repo: `innerWidth` **1024**, `documentElement.clientWidth` **0**). A jsdom test therefore has to
+  **state a viewport width itself** — and the helper stated `window.innerWidth`, which is the
+  buggy expression. The suite did not merely miss the defect, it **pinned the defect as the
+  expected answer**: the assertion reads as a check on the anchor and checks nothing. Only a live
+  pass finds this one.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns are
   data; only `renderRow` and `extraHeight` stay callbacks. **A header sorts by what its column
   shows**, Shift builds a multi-key sort, and `aria-sort` goes on **every** sorted column. A

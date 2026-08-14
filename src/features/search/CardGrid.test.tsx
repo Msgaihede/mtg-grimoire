@@ -22,7 +22,7 @@ import { CardGrid, columnsFor, tileWidthFor } from "./CardGrid";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
+import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { parseFinishes } from "@/lib/finish";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -78,6 +78,18 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
 const rowIsGameChanger = (c: CardSummary) => c.gameChanger;
 
 /**
+ * One section's zoom, with the other three left at their default.
+ *
+ * `setState({ cardZoom: 2 })` was the whole of this and no longer type-checks: `cardZoom` is a
+ * number *per card section* now, so a test has to say which wall it is talking about. Spreading
+ * the defaults rather than patching what is there is deliberate — it makes every write from here
+ * a statement about all four sections, so a test that means "only this one moved" cannot be read
+ * against whatever the previous line left behind.
+ */
+const setZoom = (section: ZoomSection, zoom: number) =>
+  useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, [section]: zoom } });
+
+/**
  * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height
  * and renders an empty window. `@tanstack/react-virtual` sizes it with `offsetHeight` and
  * scrolls it with `Element.scrollTo`, which jsdom does not implement either.
@@ -90,8 +102,10 @@ beforeAll(() => {
 beforeEach(() => {
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   // The wall's tile size is the reader's, and it lives in a module-level store that outlives a
-  // render — so a test that zooms would hand the next one a 2× wall to measure.
-  useAppStore.setState({ cardZoom: DEFAULT_ZOOM });
+  // render — so a test that zooms would hand the next one a 2× wall to measure. **Every**
+  // section, not this file's own: the walls here are `search`, but a sibling suite that left
+  // `collection` at 2× would be measured by the two tests below that render one.
+  useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS } });
 });
 
 afterEach(() => {
@@ -115,6 +129,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -144,6 +159,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         tileRef={(c, el) => {
           if (el) seen.push([c.id, el.tagName]);
         }}
@@ -170,6 +186,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
     expect(inert.container.querySelector('[draggable="true"]')).toBeNull();
@@ -181,6 +198,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         dragPayload={(c) => ({
           kind: "card",
           cardId: c.id,
@@ -213,6 +231,7 @@ describe("CardGrid", () => {
         onSelect={onSelect}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -236,6 +255,7 @@ describe("CardGrid", () => {
         onSelect={onSelect}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         action={quickAdd}
       />,
     );
@@ -264,6 +284,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         action={quickAdd}
       />,
     );
@@ -287,6 +308,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         action={quickAdd}
       />,
     );
@@ -315,6 +337,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -334,6 +357,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         action={quickAdd}
       />,
     );
@@ -356,6 +380,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         badge={(c) => <span>owned: {c.name}</span>}
       />,
     );
@@ -390,6 +415,7 @@ describe("CardGrid", () => {
         onSelect={onSelect}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         badge={(c) => <span title="3 in your collection">×{c.printings}</span>}
         topLeft={() => <span title="3 printings matched these filters">×3</span>}
       />,
@@ -428,6 +454,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         gameChanger={rowIsGameChanger}
       />,
     );
@@ -452,6 +479,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         gameChanger={rowIsGameChanger}
       />,
     );
@@ -470,6 +498,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -496,6 +525,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         badge={() => null}
       />,
     );
@@ -507,6 +537,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         badge={() => <OwnedBadge owned={0} />}
       />,
     );
@@ -523,6 +554,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
         label="Your collection"
       />,
     );
@@ -544,6 +576,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -577,6 +610,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -604,6 +638,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -631,6 +666,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
 
@@ -655,7 +691,14 @@ describe("CardGrid", () => {
    * with the card it belonged to.
    */
   it("gives a new card in a reused slot its own attempt", () => {
-    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), listKey: "k" };
+    const props = {
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      // `as const`, because a spread object's `"search"` widens to `string` and the wall's
+      // prop is the union — the whole point of it being one.
+      zoomSection: "search" as const,
+    };
     const { rerender } = render(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
 
     fireEvent.error(screen.getByAltText("Lightning Bolt"));
@@ -676,7 +719,14 @@ describe("CardGrid", () => {
    * search's captions for as long as the fetch takes. The art has to leave with the card.
    */
   it("never leaves the last card's art in a slot it has handed to another card", () => {
-    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), listKey: "k" };
+    const props = {
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      // `as const`, because a spread object's `"search"` widens to `string` and the wall's
+      // prop is the union — the whole point of it being one.
+      zoomSection: "search" as const,
+    };
     const { rerender } = render(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
     const before = screen.getByAltText("Lightning Bolt");
 
@@ -688,7 +738,14 @@ describe("CardGrid", () => {
 
   /** The other half: a wall that replaced its images every render would flicker constantly. */
   it("keeps a tile's art across a re-render that did not change the card", () => {
-    const props = { onSelect: vi.fn(), onNeedNextPage: vi.fn(), listKey: "k" };
+    const props = {
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      // `as const`, because a spread object's `"search"` widens to `string` and the wall's
+      // prop is the union — the whole point of it being one.
+      zoomSection: "search" as const,
+    };
     const { rerender } = render(<CardGrid rows={[card("aaa", "Lightning Bolt")]} {...props} />);
     const before = screen.getByAltText("Lightning Bolt");
 
@@ -778,32 +835,122 @@ describe("CardGrid", () => {
   });
 
   /**
-   * The store is this wall's only zoom input, and that is the point of putting it here: the
-   * search, the collection and the deck panel are all this component, so they are one setting
-   * rather than three, and not one of those call sites passes anything.
+   * The store is this wall's only zoom *value*, and the only thing a call site supplies is which
+   * of the four sections it is asking about — the search, the collection and the deck panel are
+   * all this component, and they are three settings on purpose (see the two tests after this
+   * one). What is asserted here is unchanged by that: the number in the store reaches the tiles.
    *
    * jsdom measures the container at zero and `tileWidthFor` answers a zero-width wall with its
    * floor — so the width drawn on a tile here *is* the scaled floor, which is the number under
    * test. Live, rather than at mount, because a reader zooms while looking at the wall.
    */
-  it("resizes its tiles when the reader zooms, with no call site involved", () => {
+  it("resizes its tiles when its own section's zoom moves", () => {
     render(
       <CardGrid
         rows={[card("aaa", "Lightning Bolt")]}
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
     const tile = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".group");
 
     expect(tile()).toHaveStyle({ width: "170px" });
 
-    act(() => useAppStore.setState({ cardZoom: 2 }));
+    act(() => setZoom("search", 2));
     expect(tile()).toHaveStyle({ width: "340px" });
 
-    act(() => useAppStore.setState({ cardZoom: 0.5 }));
+    act(() => setZoom("search", 0.5));
     expect(tile()).toHaveStyle({ width: "85px" });
+  });
+
+  /**
+   * The defect this whole change is about, seen from the wall's end: a gesture belongs to the
+   * section the pointer is over and to nothing else. It was one number for every card surface,
+   * so a reader sizing up the deck editor's docked search column was resizing the deck laid out
+   * beside it — two questions asked in the same second, answered together when only one was
+   * asked.
+   *
+   * Rendered rather than done on the exported `columnsFor`/`tileWidthFor` pair, unlike the four
+   * arithmetic tests above, because the arithmetic is not what changed: *which* number is fed to
+   * it is, and only a mounted wall reads that. The `ResizeObserver` in `src/test-setup.ts` is a
+   * no-op, so the container measures 0 and `tileWidthFor` answers a zero-width wall with its
+   * floor — the width on a tile here *is* the scaled floor, which is exactly the number under
+   * test. Driven through `zoomCards`, the store's one door, rather than through `setZoom`: a
+   * gesture is what has to land on one section, and the action is where that is decided.
+   */
+  it("leaves its tiles alone when another section is zoomed", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+    const tile = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".group");
+
+    expect(tile()).toHaveStyle({ width: "170px" });
+
+    // Three real gestures, one on each of the other sections. Every one of them is a store
+    // write the badge counts, and not one of them is about this wall.
+    act(() => {
+      const { zoomCards } = useAppStore.getState();
+      zoomCards("collection", 1);
+      zoomCards("deckSearch", 1);
+      zoomCards("deck", -1);
+    });
+    expect(useAppStore.getState().cardZoom.collection).toBeGreaterThan(DEFAULT_ZOOM);
+    expect(useAppStore.getState().cardZoom.deck).toBeLessThan(DEFAULT_ZOOM);
+    expect(tile()).toHaveStyle({ width: "170px" });
+
+    // And the half that must still work: its own section moves it. One stop up from 1× is
+    // 1.1, and 170 at 1.1 is 187.
+    act(() => useAppStore.getState().zoomCards("search", 1));
+    expect(tile()).toHaveStyle({ width: "187px" });
+  });
+
+  /**
+   * The read half of the same rule: a wall draws at *its own* section's stored size, not at
+   * whatever the last gesture anywhere left behind. Two walls of one component over one row,
+   * differing in nothing but the prop — which is the whole of what a section is here.
+   *
+   * It is also what makes "each section remembers its own zoom" true across a remount: the
+   * collection wall below has never been rendered before and comes up at 2× because that is
+   * where the reader left the collection, which is why the value stayed in the store when the
+   * key moved into a prop.
+   */
+  it("draws at its own section's stored zoom rather than another section's", () => {
+    // No `act`, and none is owed: nothing is mounted yet, so this is the state both walls
+    // below are *born* into rather than a change either of them has to react to.
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, search: 0.5, collection: 2 } });
+    const tile = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".group");
+
+    const searchWall = render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+    expect(tile()).toHaveStyle({ width: "85px" });
+    searchWall.unmount();
+
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        label="Your collection"
+        zoomSection="collection"
+      />,
+    );
+    expect(tile()).toHaveStyle({ width: "340px" });
   });
 
   /**
@@ -819,6 +966,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
     const row = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".absolute");
@@ -827,12 +975,12 @@ describe("CardGrid", () => {
     expect(row()).toHaveStyle({ height: "266px" });
 
     // Twice the card is twice the strip: 476 of art and 56 of caption.
-    act(() => useAppStore.setState({ cardZoom: 2 }));
+    act(() => setZoom("search", 2));
     expect(row()).toHaveStyle({ height: "532px" });
 
     // Half the card is *not* half the strip: 119 of art and the same 28, because the button in
     // the caption is 24px whatever the tiles are doing.
-    act(() => useAppStore.setState({ cardZoom: 0.5 }));
+    act(() => setZoom("search", 0.5));
     expect(row()).toHaveStyle({ height: "147px" });
   });
 
@@ -854,20 +1002,52 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={vi.fn()}
         listKey="k"
+        zoomSection="search"
       />,
     );
     const scroller = screen.getByRole("group", { name: "Search results" });
 
     // A wall of cards is a thing readers scroll, and 117 k results is a lot of scrolling.
     fireEvent.wheel(scroller, { deltaY: -240 });
-    expect(useAppStore.getState().cardZoom).toBe(DEFAULT_ZOOM);
+    expect(useAppStore.getState().cardZoom.search).toBe(DEFAULT_ZOOM);
 
     fireEvent.wheel(scroller, { ctrlKey: true, deltaY: -240 });
-    expect(useAppStore.getState().cardZoom).toBeGreaterThan(DEFAULT_ZOOM);
+    expect(useAppStore.getState().cardZoom.search).toBeGreaterThan(DEFAULT_ZOOM);
 
-    act(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+    act(() => setZoom("search", DEFAULT_ZOOM));
     fireEvent.wheel(scroller, { ctrlKey: true, deltaY: 240 });
-    expect(useAppStore.getState().cardZoom).toBeLessThan(DEFAULT_ZOOM);
+    expect(useAppStore.getState().cardZoom.search).toBeLessThan(DEFAULT_ZOOM);
+  });
+
+  /**
+   * And the section the listener writes to is the wall's own, rather than a literal the hook
+   * call was given once. The wall above is the `search` one, which a hard-coded `"search"` would
+   * pass just as happily — so this is the same gesture over a `collection` wall, which is the
+   * cheapest thing that can tell the two apart. The other three sections are asserted still at
+   * their default, because "zooms this one" and "zooms only this one" are two claims.
+   */
+  it("writes the gesture to the section the wall was told it is", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        label="Your collection"
+        zoomSection="collection"
+      />,
+    );
+
+    fireEvent.wheel(screen.getByRole("group", { name: "Your collection" }), {
+      ctrlKey: true,
+      deltaY: -240,
+    });
+
+    const { cardZoom } = useAppStore.getState();
+    expect(cardZoom.collection).toBeGreaterThan(DEFAULT_ZOOM);
+    expect(cardZoom.search).toBe(DEFAULT_ZOOM);
+    expect(cardZoom.deckSearch).toBe(DEFAULT_ZOOM);
+    expect(cardZoom.deck).toBe(DEFAULT_ZOOM);
   });
 
   it("asks for the next page once the reader is near the bottom of the loaded rows", () => {
@@ -880,6 +1060,7 @@ describe("CardGrid", () => {
         onSelect={vi.fn()}
         onNeedNextPage={onNeedNextPage}
         listKey="k"
+        zoomSection="search"
       />,
     );
 

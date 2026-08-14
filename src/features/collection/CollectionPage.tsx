@@ -303,6 +303,11 @@ export function CollectionPage() {
               rows={tiles}
               label="Your collection"
               listKey={collection.queryKeyString}
+              // This wall's own zoom, kept apart from the search's: the two views are the same
+              // component over different rows, and a reader who peers at one printing's art in
+              // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
+              // carries why it is required rather than defaulted.
+              zoomSection="collection"
               selectedId={selectedCardId}
               onSelect={selectCard}
               onNeedNextPage={onNeedNextPage}
