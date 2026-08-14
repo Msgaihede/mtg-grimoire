@@ -331,6 +331,7 @@ export function ToggleChip({
   onClick,
   hint,
   title,
+  className,
 }: {
   label: string;
   pressed: boolean;
@@ -349,6 +350,22 @@ export function ToggleChip({
    * reason about and no behaviour at all.
    */
   title?: string;
+  /**
+   * Extra classes, **for a label that is data rather than app vocabulary** — and that is the
+   * whole of what it is for.
+   *
+   * Every other chip in this family is captioned with a word this app chose ("Owned", "Near
+   * Mint"), so the recipe's fixed `h-9` is safe by construction. The search's card filter is
+   * captioned with a **card name**, which is arbitrary up to 141 characters ("Our Market
+   * Research Shows That Players Like Really Long Card Names…"), and a name that long wraps to
+   * three lines inside a box that is 36px tall. Its caller spends this on `max-w-48 truncate`;
+   * the `title` still carries the whole name, so nothing is lost but the overflow.
+   *
+   * Merged last so tailwind-merge resolves a clash in the caller's favour — which is also why
+   * it must not be spent on the state classes {@link filterChipState} decides, since a caller
+   * quietly winning that argument is a chip that stops saying whether it is on.
+   */
+  className?: string;
 }) {
   const name = title ?? (hint ? `${label}, ${hint}` : undefined);
   return (
@@ -358,7 +375,7 @@ export function ToggleChip({
       aria-pressed={pressed}
       title={title ?? hint}
       aria-label={name}
-      className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(pressed))}
+      className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(pressed), className)}
     >
       {label}
     </button>
