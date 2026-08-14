@@ -157,7 +157,21 @@ const onClose = vi.fn();
  * The trigger is real too. Escape's contract is "hands the caret back to whatever opened
  * this", and there is nothing to hand it back to without a button that is still on screen.
  */
-function Harness({ startOpen = true }: { startOpen?: boolean }) {
+function Harness({
+  startOpen = true,
+  /**
+   * What the *host* resolved — `useNewDeckFormat()` in the gallery, a fixed key here.
+   *
+   * `casual` by default so the claims below that are not about this prop go on being about what
+   * they were about: it is `DEFAULT_FORMAT`, which is what the draft used to start on
+   * unconditionally, so every payload assertion in this file still reads the value the reader
+   * did not change.
+   */
+  defaultFormatKey = "casual",
+}: {
+  startOpen?: boolean;
+  defaultFormatKey?: string;
+}) {
   const { create } = useDecks();
   const [open, setOpen] = useState(startOpen);
   return (
@@ -167,6 +181,7 @@ function Harness({ startOpen = true }: { startOpen?: boolean }) {
       </button>
       <CreateDeckDialog
         create={create}
+        defaultFormatKey={defaultFormatKey}
         open={open}
         onCreated={(deck) => {
           onCreated(deck);
@@ -691,6 +706,57 @@ describe("the create deck dialog", () => {
           .getAllByRole("option")
           .map((o) => o.textContent),
       ).toEqual(["Casual", "Modern", "Standard"]),
+    );
+  });
+
+  /**
+   * **The draft starts on the format its host resolved**, which is the one the reader last
+   * created a deck in — not on `casual`, which is only what a deck with no format at all is.
+   *
+   * The value is read into the draft in a lazy `useState` initializer at mount and is never
+   * written again — the `waitFor` below is the format *list* arriving from `format_specs`, not
+   * the value changing. (A `<select>` cannot show a value its options do not carry, which is
+   * why the claim is made once the list is in hand; in the app the two cannot disagree, because
+   * `newDeckFormat` resolves against that same list.)
+   */
+  it("opens on the format the host resolved rather than on Casual", async () => {
+    wrap(<Harness defaultFormatKey="modern" />);
+
+    const format = await screen.findByLabelText("Format");
+    // The list it is picked out of is the seed's, in the picker's own order…
+    await waitFor(() =>
+      expect(
+        within(format)
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toEqual(["Casual", "Modern", "Standard"]),
+    );
+    // …and the row standing selected in it is the host's answer.
+    expect(format).toHaveValue("modern");
+  });
+
+  /**
+   * **And the reader's own pick outranks it**, all the way into the write.
+   *
+   * The default is a *starting point*, so it is seeded once at mount and never again — no
+   * effect watches the prop, because an effect cannot tell "the remembered answer just landed"
+   * from "the reader has already chosen something else". This is the half that would go red if
+   * one were ever added.
+   */
+  it("lets the reader's own format win over the remembered one", async () => {
+    wrap(<Harness defaultFormatKey="modern" />);
+
+    const format = await screen.findByLabelText("Format");
+    await waitFor(() => expect(within(format).getAllByRole("option")).toHaveLength(3));
+    await userEvent.selectOptions(format, "standard");
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+
+    expect(format).toHaveValue("standard");
+    await userEvent.click(submitButton());
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Sunday burn", formatKey: "standard" }),
+      ),
     );
   });
 

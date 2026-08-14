@@ -108,6 +108,34 @@ just made; it now asks all of them.
   patch route's `move_live_into_theory` has no live list to act on at birth); and a
   birth is **one** audit row however many fields it was born with. All four, and the reasons:
   [decks-storage.md](../../../docs/reference/decks-storage.md).
+- **A new deck starts on the format the reader last created one in, and the whole rule is one
+  pure function.** `newDeckFormat(picker, lastFormat)` in `useNewDeckFormat.ts`: the remembered
+  key **if the picker holds it**, else `FIRST_DECK_FORMAT` (`commander`) if the picker holds
+  that, else `DEFAULT_FORMAT`. The membership tests are the point — a `<select>` whose value is
+  not among its options shows the wrong row and silently re-formats the deck on the reader's
+  first other change — and they close two real cases: a format that left the seed (`format_key`
+  is deliberately not a foreign key, and migrations re-seed `format_specs`), and **the one launch
+  where `format_specs` has not answered yet**, where the picker is `[]` and both dialogs already
+  fall back to a single `Casual` option. That last arm is what makes the *value* fall back with
+  them, and it is why no fallback rendering had to change. **Commander rather than
+  `DEFAULT_FORMAT` for a reader with no history**, because `casual` answers a different question
+  — "this deck was given no format" — and is `decks.format_key`'s DDL default, which stays what
+  it is.
+- **`DecksPage` resolves that answer and hands it down; neither dialog fetches it.** The gallery
+  is mounted long before **New deck** is pressed, so by press time the value is real and
+  `CreateDeckDialog`'s `Panel` seeds its draft in a **lazy `useState` initializer** — mount-only,
+  no effect, so nothing can land on top of a format the reader has already picked, and no
+  `useEffect` would be able to tell "the answer arrived" from "they have not touched it yet".
+  Closing unmounts the draft, so every reopen asks again. `defaultFormatKey` is **required** on
+  `CreateDeckDialog` (a host that has not thought about it must not quietly get Casual) and
+  **optional** on `ImportDeckDialog`, which draws a format select only for a `new` target — the
+  editor imports into a deck that already has a format and passes nothing. The query key is
+  `["decks", "lastFormat"]`, under the root every `useDecks` mutation invalidates, so a create
+  refreshes it for free.
+- **The gallery's no-deck state is the two words `No decks`.** It was a paragraph explaining what
+  a deck is and what the app would do with one; the affordance was never the words — `New deck`
+  sits in the heading row above, where it is on every other visit. No `max-w-prose`: that width
+  belongs to prose.
 - **The cover picker searches every printing, not just the deck's own cards**
   (`DeckCoverPicker`). One grid, two modes: an empty search box offers the deck's cards, a query
   offers results. It exists because a deck being *created* has no cards to take art from, and it

@@ -2725,14 +2725,73 @@ describe("the whole command table", () => {
     expect(db.printingGroupBy).toBe(chosen);
   });
 
-  /** Two rows of one key/value table: writing either must not be a way to lose the other. */
-  it("keeps the grouping and the marketplace rows apart", () => {
+  /**
+   * The third `app_meta` row, and the one **no command sets on purpose**: `deck_create` writes
+   * it as a side effect of making a deck, so the questions worth asking of it are questions
+   * about the create — a reader who has never made one, the format the row actually ended up
+   * carrying, and a create that was refused.
+   */
+  it("remembers the format of the last deck created, and only of one that was created", () => {
+    // Never written, because nothing has been created. The dialog's own default is what stands
+    // in for it, and only the caller can supply that.
+    expect(readHandlers(makeDb()).deck_last_format()).toBeNull();
+
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(readHandlers(db).deck_last_format()).toBe("modern");
+
+    // The last create wins: this is a memory of what the reader just did, not a first choice
+    // they are stuck with.
+    w.deck_create({ deck: { name: "Atraxa", formatKey: "commander" } });
+    expect(readHandlers(db).deck_last_format()).toBe("commander");
+
+    // The **validated** key rather than the raw input. A blank format makes a `casual` deck, so
+    // `casual` is what a blank format is remembered as — storing the argument instead would
+    // hand the next dialog a blank and look like a memory that had never been written.
+    expect(w.deck_create({ deck: { name: "Kitchen table", formatKey: "" } }).formatKey).toBe(
+      "casual",
+    );
+    expect(readHandlers(db).deck_last_format()).toBe("casual");
+
+    // A refused create writes nothing at all — the row and the memory are one transaction, so a
+    // deck that never existed cannot leave a preference behind. Both refusals, because they
+    // happen at different points and only one of them is about the format.
+    expect(() => w.deck_create({ deck: { name: "Burn", formatKey: "premodern" } })).toThrow(
+      /not a format this app knows/,
+    );
+    expect(() => w.deck_create({ deck: { name: "   ", formatKey: "modern" } })).toThrow(
+      /needs a name/,
+    );
+    expect(readHandlers(db).deck_last_format()).toBe("casual");
+
+    // And a store is a store: none of that reached a world that was not asked.
+    expect(readHandlers(makeDb()).deck_last_format()).toBeNull();
+  });
+
+  /**
+   * The one place this row differs from the two above it: an unplaceable key comes back
+   * **verbatim** where theirs fall back on a default. There is no list on this side to check it
+   * against — the formats are `format_specs`' rows and the narrowing is the webview's — and
+   * `premodern` is the standing proof, a format this fixture's 12 specs refuse to *create* in
+   * and this read still hands over.
+   */
+  it("hands back a stored format this build cannot place, rather than a default", () => {
+    expect(readHandlers(makeDb({ lastDeckFormat: "premodern" })).deck_last_format()).toBe(
+      "premodern",
+    );
+  });
+
+  /** Three rows of one key/value table: writing any of them must not be a way to lose another. */
+  it("keeps the grouping, the marketplace and the remembered format apart", () => {
     const db = makeDb();
     writeHandlers(db).set_printing_group_by({ mode: "set" });
     writeHandlers(db).set_marketplace({ id: "cardmarket" });
+    writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
 
     expect(readHandlers(db).printing_group_by()).toBe("set");
     expect(readHandlers(db).get_marketplace()).toBe("cardmarket");
+    expect(readHandlers(db).deck_last_format()).toBe("modern");
   });
 
   /**

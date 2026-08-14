@@ -41,6 +41,7 @@ import {
 import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
+import { useNewDeckFormat } from "./useNewDeckFormat";
 
 /** The gallery imports into a deck of its own and never into an existing one — there is no
  *  deck open here to import into. A module constant so the prop keeps one identity across
@@ -146,6 +147,19 @@ export function DecksPage() {
   const decks = useDecks();
   const folders = useDeckFolders();
   const { query } = decks;
+  /**
+   * What format a deck made from this screen starts on — the one the reader last created a deck
+   * in, else Commander.
+   *
+   * **Resolved here rather than inside either dialog, and that is the load-bearing part.** The
+   * gallery is mounted long before "New deck" is pressed, so by press time the answer is a real
+   * value the dialog can seed its draft with *at mount*. A dialog that read this itself would
+   * open on Commander and then have to overwrite the select a beat later — on top of a format
+   * the reader may already have picked. It also asks once for the two surfaces that create a
+   * deck, and the answer is invalidated for free: the query lives under the `["decks"]` root
+   * every `useDecks` mutation invalidates.
+   */
+  const newDeckFormatKey = useNewDeckFormat();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
@@ -669,6 +683,10 @@ export function DecksPage() {
                     it, and take its exit tween with it. */}
                 <ImportDeckDialog
                   target={NEW_DECK}
+                  // Resolved by this screen and handed down — see {@link useNewDeckFormat}'s
+                  // call above. Both surfaces that make a deck take the same answer, so a list
+                  // pasted into a new deck starts on the format the reader last built for.
+                  defaultFormatKey={newDeckFormatKey}
                   open={panel?.kind === "importDeck"}
                   onDismiss={dismiss}
                   onClose={close}
@@ -678,6 +696,10 @@ export function DecksPage() {
 
               <NewDeck
                 buttonRef={newDeckRef}
+                // The same answer, resolved once by this screen — see {@link useNewDeckFormat}'s
+                // call above. The dialog seeds its draft with it at mount, which it can only do
+                // because the value is already real by the time the button is pressed.
+                defaultFormatKey={newDeckFormatKey}
                 open={panel?.kind === "createDeck"}
                 onOpen={openCreate}
                 onDismiss={dismiss}
@@ -701,12 +723,13 @@ export function DecksPage() {
             {status}
           </p>
 
+          {/* A placeholder, not a pitch. It used to be a paragraph explaining what a deck is and
+              what the app would do with one; the affordance was never the words — "New deck" is
+              in the heading row above, where it is on every other visit — so the sentence was an
+              explanation nobody needed twice. No `max-w-prose`: that width belongs to prose, and
+              two words centre themselves. */}
           {!status && decks.decks.length === 0 && (
-            <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
-              A deck is a list you build for a format. Start one and the app checks it as you go —
-              deck size, copy limits, the commander's colours — and tells you which of the cards you
-              already own.
-            </p>
+            <p className="py-16 text-center text-sm text-dim">No decks</p>
           )}
 
           {!status && decks.decks.length > 0 && childFolders.length === 0 && here.length === 0 && (
@@ -1447,6 +1470,7 @@ function DeleteFolderConfirm({
  */
 function NewDeck({
   buttonRef,
+  defaultFormatKey,
   open,
   onOpen,
   onDismiss,
@@ -1455,6 +1479,9 @@ function NewDeck({
   onCreated,
 }: {
   buttonRef: RefObject<HTMLButtonElement | null>;
+  /** The format the dialog's draft starts on, resolved by {@link DecksPage} and passed straight
+   *  through — this component holds no state of its own and decides nothing about it. */
+  defaultFormatKey: string;
   open: boolean;
   onOpen: () => void;
   /** Escape, the dialog's ✕ and the trigger pressed a second time: the caret comes back here. */
@@ -1487,6 +1514,7 @@ function NewDeck({
           its exit tween with it. */}
       <CreateDeckDialog
         create={create}
+        defaultFormatKey={defaultFormatKey}
         open={open}
         onCreated={onCreated}
         onDismiss={onDismiss}

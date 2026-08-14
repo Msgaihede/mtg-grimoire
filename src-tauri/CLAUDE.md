@@ -199,6 +199,24 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
 - **`format_specs` is data, not code.** A rules change is a new migration step re-running the
   seed constant, never an engine branch; a new format is a row. Never derive one format from
   another.
+- **The format a deck was created in is remembered in one `app_meta` row** (`last_deck_format`,
+  no migration — a key in schema v6's table, like `marketplace` and `printing_group_by`), and
+  **`create_deck` is the only writer**. It records the key `valid_format` produced, so a blank
+  input is remembered as `casual` — what the deck actually is — and a refused **create** records
+  nothing, because the write is inside that create's own transaction. **That guarantee is about
+  the create and no wider, and the exception is known**: `useDeckImport`'s `importIntoNewDeck` is
+  `deck_create` then `deck_import_commit` — two commands, so two transactions, with a hand-rolled
+  rollback — and a refused *commit* deletes the deck while the create's `last_deck_format` stands.
+  The next New deck then opens on the format of a deck that never survived. **Left that way
+  deliberately**: the reader really did pick that format, and un-writing it means reading the
+  previous value before the create and compensating after the delete, i.e. two more statements on
+  the one path whose whole difficulty is already that it is not one transaction. Its error is
+  deliberately **ignored**,
+  unlike the `deck_audit::record` two lines away: a remembered preference must never cost the
+  reader their deck. `duplicate_deck` has its own INSERT and does **not** update it — duplicating
+  chooses no format. `deck_last_format` answers the stored string **verbatim or `None`** and
+  checks it against `format_specs` not at all: which format a *dialog* starts on is a display
+  decision, and TypeScript's `newDeckFormat` is where the fallback to Commander lives.
 - **The allocator runs on seven writes and nothing else** — a card write, the Built toggle,
   `missing_to_wishlist`, `set_category_active`, `delete_category`, `commit_import` (**once**
   for a whole decklist, which is the reason that command exists), and the theory list being

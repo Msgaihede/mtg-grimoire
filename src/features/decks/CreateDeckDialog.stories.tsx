@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { FOCUS } from "./cardControl";
 import { useDecks } from "./useDecks";
+import { useNewDeckFormat } from "./useNewDeckFormat";
 
 /**
  * The dialog with the two things the gallery owns and hands down: the `create` mutation, and
@@ -47,6 +48,35 @@ function Dialog({
   });
 
   const { create } = useDecks();
+  /**
+   * The format the draft starts on, resolved by the **host** — which is what the gallery does,
+   * and why the prop is required rather than defaulted inside the dialog. The call is
+   * `useNewDeckFormat()` rather than a literal on purpose: a hard-coded string would draw the
+   * same select while proving nothing about the wiring the app actually runs.
+   *
+   * **On this page it resolves to `casual` in every story, which is not the app's answer, and
+   * the reason is this host's own shape.** `open` starts `true`, so `Panel` mounts on the very
+   * first render — and on that render the story's cold `QueryClient` has answered neither
+   * `format_specs_list` nor `deck_last_format`. `newDeckFormat` therefore sees an empty picker
+   * and no memory and lands on its **third arm**, `DEFAULT_FORMAT`; the draft is a lazy
+   * `useState` initializer, so it runs once and the two answers arriving a beat later change
+   * nothing. Every play on this page opens on Casual.
+   *
+   * **That is the third arm working, not a defect to patch out.** An empty picker is precisely
+   * the state both dialogs already draw a single `Casual` option for, and the arm exists so the
+   * *value* falls back with the options rather than holding a key the select cannot offer. The
+   * mount-on-first-render shape is also what the rest of this file's plays are built on, so
+   * what gets corrected here is the prose and not the story. `noFormats` still changes
+   * something real: it keeps the picker empty **after** the read lands, so the select goes on
+   * offering one row — which is the pairing **NoFormats** below asserts, against the other
+   * stories' full list with `casual` merely selected in it.
+   *
+   * **The remembered/Commander path is exercised in `DecksPage.stories.tsx`'s `NewDeck`**,
+   * which is the only place it can be: there the gallery mounts first and the dialog opens on a
+   * press, so both reads have landed before any draft is seeded. That order of events is the
+   * whole reason `DecksPage` is what mounts the hook.
+   */
+  const defaultFormatKey = useNewDeckFormat();
   const [open, setOpen] = useState(true);
 
   return (
@@ -65,6 +95,7 @@ function Dialog({
       </button>
       <CreateDeckDialog
         create={create}
+        defaultFormatKey={defaultFormatKey}
         open={open}
         onCreated={(deck) => {
           onCreated(deck);
