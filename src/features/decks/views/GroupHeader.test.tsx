@@ -14,6 +14,11 @@ function group(over: Partial<CardGroup> = {}): CardGroup {
     categoryId: 1,
     isActive: true,
     isPredefined: false,
+    // `isAuto` decides whether an *empty* pile is drawn at all (`drawsWhenEmpty`) and nothing
+    // about how a drawn one looks: there is no third marker for it, and there should not be —
+    // who made the pile is not a fact about the cards under it. It is `false` here for the same
+    // reason `isPredefined` is: the fixture is a pile the reader made.
+    isAuto: false,
     cards: [],
     count: 0,
     totalPrice: null,

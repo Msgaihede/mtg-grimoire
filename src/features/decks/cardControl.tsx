@@ -334,11 +334,15 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
  * - **It was the only keyboard path to moving a card.** What is left is a drag, which a caret
  *   cannot perform, so a reader on the keyboard can step a card to zero and add it again
  *   elsewhere but cannot move the slot.
- * - **It was the only way to reach an *empty* category.** `grouping.ts`'s `drawsWhenEmpty`
- *   draws no heading for a pile of the reader's own that holds nothing, and a heading that is
- *   not drawn is not a drop target — the select was built from the deck's `categories` rather
- *   than from the drawn groups, which is exactly what closed that hole. The four seeded piles
- *   are unaffected: they draw empty, so they can still be dropped into.
+ * - **It was the only way to reach an empty category**, and that hole has since closed from the
+ *   other end. It was written when `drawsWhenEmpty` drew no heading for a pile of the reader's
+ *   own that held nothing, so the select — built from the deck's `categories` rather than from
+ *   the drawn groups — was the one route to one. A pile the reader made draws empty now and is
+ *   therefore its own drop target. **The pile with no drag route today is an `origin = 'auto'`
+ *   one that has gone empty**: nobody asked for it, so it goes with its last card, and the way
+ *   back to it is to add a card that files there or to use the "Add to" select. Whatever
+ *   replaces the `Move…` control is still measured against this — it is a smaller hole, not a
+ *   closed one.
  *
  * `null` when there is nothing to offer, so a view can render this unconditionally and a view
  * with no actions grows no empty box.

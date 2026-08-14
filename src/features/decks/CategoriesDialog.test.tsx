@@ -73,6 +73,11 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     sortOrder: over.id,
     cardCount: 0,
     totalPrice: null,
+    // The reader's, unless a test says otherwise. `create_category` and the four seeds both
+    // write `'user'`; `'auto'` is the app filing a card, and the one test below that cares
+    // passes it — this drawer draws all three classes alike and nothing here reads the field
+    // except `groupOf`.
+    origin: "user" as const,
     ...over,
   };
   // Both lists, defaulting to the one-list count: these fixtures are single-list decks unless
@@ -383,6 +388,39 @@ describe("Escape during a dialog's exit", () => {
 /* ------------------------------------------------------------------- categories ------- */
 
 describe("categories", () => {
+  /**
+   * **Every pile the deck has, whichever of the three classes it belongs to** — and this is the
+   * assertion the auto rule made load-bearing rather than merely true.
+   *
+   * `drawsWhenEmpty` gives three different answers about an *empty* pile: a predefined zone draws
+   * (bar the two conditional ones), a pile the reader made draws, and a pile the app made while
+   * filing a card (`origin: "auto"`) does not — it arrives with its first card and leaves with
+   * its last. So an emptied `Draw` is a pile with **no heading anywhere in the editor**, and this
+   * dialog is the only place left to find it, rename it or delete it. An `origin` branch in here
+   * would close the one door, which is why this file's header says there must never be one.
+   *
+   * The empty user pile beside it is what keeps this discriminating: a panel that had quietly
+   * grown the editor's rule would drop the auto row and keep that one, and the two together say
+   * which mistake was made.
+   */
+  it("draws a row for every pile, including an empty auto one the editor no longer draws", async () => {
+    deckCategoryList.mockResolvedValue([
+      ...CATEGORIES,
+      category({ id: 6, name: "Draw", sortOrder: 5, origin: "auto" }),
+      category({ id: 7, name: "Sunday brew", sortOrder: 6 }),
+    ]);
+    mount();
+    await screen.findByText("Ramp");
+
+    expect(within(row("Draw")).getByText("0 cards")).toBeInTheDocument();
+    expect(within(row("Sunday brew")).getByText("0 cards")).toBeInTheDocument();
+    // And it is deletable from here, which is the whole reason the row has to exist: `origin`
+    // decides nothing about the two affordances — `isPredefined` does, and an auto pile is a
+    // `main` category like any other of the reader's.
+    expect(within(row("Draw")).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(within(row("Draw")).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+  });
+
   /**
    * `RULE` is `GroupHeader`'s decision and this dialog renders that component rather than
    * drawing its own line, so the marker cannot come to mean one thing in a column heading and

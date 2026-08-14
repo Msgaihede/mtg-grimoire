@@ -22,8 +22,9 @@ import { DeckEditor } from "./DeckEditor";
  * `staleTime: Infinity` is what keeps a window refocus in the Storybook browser from creating a
  * second deck.
  *
- * **`formatKey` matters only on that path, and it is an argument because the format is now one of
- * the two facts that decide which empty headings are drawn** (`grouping.ts`' `drawsWhenEmpty`).
+ * **`formatKey` matters only on that path, and it is an argument because the format is the one
+ * fact deciding an empty heading that does not travel on the pile** (`grouping.ts`'
+ * `drawsWhenEmpty` — the other two, its `kind` and who made it, are the pile's own).
  * The same four seeded piles read differently in Modern and in Commander, and the pair of stories
  * that shows it — {@link EmptyDeck} and {@link EmptyCommandZone} — differ in this and in nothing
  * else. It is in the query key too: a deck is made once per key, so two formats have to be two
@@ -101,24 +102,38 @@ const meta = {
           "four surfaces answering “how many cards are in the Ramp column” four ways.\n\n" +
           "**The groups are the deck's own categories** (schema v8), in `sortOrder`, " +
           "switched-off ones included — never a fixed set of zones. A category is a row the user " +
-          "names, orders and switches on or off, and no pile of theirs is ever cut out of this " +
-          "list: the format judges the deck through the check chip, and the only thing it " +
-          "decides about the *drawing* is the two zones below.\n\n" +
-          "**Every category draws, empty or not** — a column is a *place* as well as a heading, " +
-          "and an empty `Ramp` is where the next ramp spell goes. The exceptions are the two " +
-          "**conditional zones**: a command zone is drawn empty only where the format has one " +
-          "(`requiresCommander`), and a companion slot is never drawn empty in any format, " +
-          "because a companion is a card you either have or do not. **A pile holding cards " +
-          "always draws whatever the format says** — `grouping.ts`' `drawsWhenEmpty` is asked " +
-          "about empty piles only, so nothing here can hide cardboard, and a Modern deck whose " +
-          "Commander pile still holds a card draws it. Switched-off is a third question again: " +
-          "an inactive category holding cards still draws, because `isActive` decides whether a " +
-          "pile *counts* and the cards under it decide whether it is *drawn*.\n\n" +
-          "**A filter is the one case where the older rule survives.** While the toolbar's text " +
-          "field or a tag chip is narrowing the deck, an empty pile is the filter's doing rather " +
-          "than the deck's, so only the four fixed zones outlive it — without which three " +
-          "letters would answer with twenty headings over three cards. That is why typing in " +
-          "the toolbar changes which headings exist.\n\n" +
+          "names, orders and switches on or off, and **no pile of theirs is ever cut out of this " +
+          "list**; the only ones that come out are piles the *app* made and nothing is left in, " +
+          "which is the next paragraph. The format judges the deck through the check chip, and " +
+          "the only thing it decides about the *drawing* is the two conditional zones.\n\n" +
+          "**An empty pile draws or not by who made it, and there are three classes.** A pile " +
+          "the *reader* made draws for as long as it exists: a column is a *place* as well as a " +
+          "heading, their empty `Ramp` is where they mean the next ramp spell to go, and " +
+          "**delete is the only way to remove one** — there is no hide flag and `isActive` is " +
+          "not one. A pile the *app* made while filing a card (`deck_categories.origin` is " +
+          "`auto`, schema v15) **arrives with its first card and goes with its last**: nobody " +
+          "asked for it, so an empty one is a heading about a card the deck does not contain. " +
+          "The two **conditional zones** answer to the format instead — a command zone draws " +
+          "empty only where the format has one (`requiresCommander`), and a companion slot " +
+          "draws empty in no format, because a companion is a card you either have or do not. " +
+          "{@link AutoPileArrivesWithItsCard} is all three in one deck.\n\n" +
+          "**The test is provenance and never the name**, which is the whole reason it is a " +
+          "column: “Ramp”, “Draw” and “Removal” are exactly what a person calls a pile they " +
+          "made, and `category_for_name` *finds* an existing pile before it makes one — so " +
+          "filing a ramp spell into the reader's own `Ramp` leaves it theirs, and it goes on " +
+          "drawing when they empty it. **A pile holding cards always draws whatever any of this " +
+          "says** — `drawsWhenEmpty` is asked about empty piles only, so nothing here can hide " +
+          "cardboard, and a Modern deck whose Commander pile still holds a card draws it. " +
+          "Switched-off is a fourth question again: an inactive category holding cards still " +
+          "draws, because `isActive` decides whether a pile *counts* and the cards under it " +
+          "decide whether it is *drawn*.\n\n" +
+          "**A filter decides nothing about which headings exist, and it used to.** " +
+          "`EmptyGroupRules.narrowed` made the four fixed zones the only empty piles that " +
+          "survived a filter, so that three letters could not answer with twenty headings over " +
+          "three cards. That flag is gone: the wall it was aimed at was always *auto* piles, " +
+          "and a pile the filter empties **is** empty, so they stay out either way — while the " +
+          "reader's own piles go on drawing, filter or no filter, exactly as they do when the " +
+          "reader empties one by hand.\n\n" +
           "**Seven layers, one piece of state.** The anchored format check and six full-window " +
           "dialogs — Import cards, Categories, Tags, History, the theory difference and Deck " +
           'settings — each register the `"inner"` Escape rung, and `useDismissOnEscape` orders ' +
@@ -179,13 +194,15 @@ const meta = {
           "**There were four until 2026-08-14, and the fourth was a move control** — a native " +
           "`Move…` `<select>` listing every other pile of the deck. It was removed whole, with " +
           "a different control expected later, so **moving a card between piles is a drag and " +
-          "nothing else today**. Two things that costs, written here because no story can " +
-          "assert an absence usefully: there is no keyboard path to a move, and an *empty* pile " +
-          "of the reader's own draws no heading (`grouping.ts`'s `drawsWhenEmpty`) and is " +
-          "therefore not a drop target — the select was built from the deck's categories rather " +
-          "than from the drawn groups, which is what used to close that hole. The four seeded " +
-          "piles draw empty, so they can still be dropped into. {@link NoMoveControl} is the " +
-          "absence, pinned.\n\n" +
+          "nothing else today**. What that costs is one thing rather than the two it cost " +
+          "yesterday, written here because no story can assert an absence usefully: there is no " +
+          "keyboard path to a move. The second cost was that an empty pile drew no heading and " +
+          "a heading that is not drawn is not a drop target — the select was the one control " +
+          "built from the deck's categories rather than from the drawn groups, which is what " +
+          "used to close that hole. **Every pile the reader made now draws empty**, so a drawn " +
+          "heading is the affordance itself; what is left undroppable is an empty *auto* pile, " +
+          "which is a pile nobody asked for and which the add path files into by name anyway. " +
+          "{@link NoMoveControl} is the absence, pinned.\n\n" +
           "**The stepper sends an absolute quantity and never a delta**, and the reason is in " +
           "`useDeck.ts`: `deck_add_card` looks the printing up in `cards` and therefore " +
           "*refuses an orphaned card*, while `deck_set_card_quantity` addresses the slot that " +
@@ -210,9 +227,12 @@ const meta = {
           "command zone and only its companion slot holds a card. Decks 1 and 3 draw three. A " +
           "deck made *today* starts with only the four predefined categories " +
           "({@link EmptyDeck}) and grows the rest by name. **Deck 4 " +
-          "`Rhystic Testbed`** is that second shape filled in: three piles the reader named, " +
-          "one of them switched off, two game changers, a tagged card, a copy limit broken on " +
-          "purpose and a theory list that differs from the deck. The categories, tags, history " +
+          "`Rhystic Testbed`** is that second shape filled in: three `main` piles — two the " +
+          "reader named, one of them switched off, and `Ramp`, which the add path made and " +
+          "which therefore carries `origin: auto` — plus two game changers, a tagged card, a " +
+          "copy limit broken on purpose and a theory list that differs from the deck. Its " +
+          "`Ramp` is the pile whose *name* proves nothing: the two beside it are the reader's " +
+          "and one of them is called `Card advantage`. The categories, tags, history " +
           "and theory commands the dialogs read are all the fake's now, so those surfaces are " +
           "driven rather than degraded — see `Decks/CategoriesDialog`, `Decks/TagsDialog`, " +
           "`Decks/DeckHistoryDialog` and `Decks/TheoryDiffDialog` for what each of them draws, " +
@@ -238,8 +258,15 @@ type Story = StoryObj<typeof meta>;
  * quietly. {@link CommanderDeck} is the same two piles with cards in them, and
  * {@link EmptyCommandZone} is the command zone drawn empty where the format wants one.
  *
+ * **All five are `origin: user`, so the auto rule takes nothing away here** — four are
+ * `create_deck`'s seeds and the fifth is the pile schema v8's migration built out of this deck's
+ * old `main` zone, which v15's backfill deliberately leaves alone: "Main deck" is a real pile
+ * holding real cards and not a name the app would ever invent. The format is therefore the only
+ * variable in the paragraph above. {@link AutoPileArrivesWithItsCard} is the other class, on a
+ * deck made today.
+ *
  * **Neither category is gone, and neither is unreachable.** `deck.categories` is still all five —
- * the toolbar's "Add to" select and `CategoriesPanel` are built from
+ * the toolbar's "Add to" select and `CategoriesDialog` are built from
  * that list and not from the drawn groups — and the moment a card is filed into the Commander
  * pile the heading arrives with it, because `drawsWhenEmpty` is never asked about a group holding
  * cards.
@@ -442,6 +469,13 @@ export const GroupAndSort: Story = {
  * Smuggler's Copter is the proof that the *list* changed and not just which button is lit — it is
  * in this deck's plan and in no part of what is sleeved up. Pressing Live is what the memory is
  * not: a starting point, never a lock.
+ *
+ * **It is also the seeded half of {@link AutoPileArrivesWithItsCard}.** This deck's "Cut list" is
+ * a pile the reader made and switched off, and the plan has nothing in it — so the heading is
+ * here, empty, over the words "Nothing here yet.". A pile the *app* made would be gone in that
+ * state; the switch decides only whether what is in it counts. (Its `Ramp` is the `auto` one, and
+ * it is not a heading here at all: under `type` an active pile's cards are bucketed by what they
+ * are, and only switched-off piles are appended as themselves.)
  */
 export const ReopensOnThePlan: Story = {
   args: { deckId: 4 },
@@ -456,6 +490,11 @@ export const ReopensOnThePlan: Story = {
 
     await expect(canvas.getByLabelText("Group by")).toHaveValue("type");
     await expect(canvas.getByLabelText("Sort")).toHaveValue("manaCost");
+
+    // Empty in the plan and drawn regardless, because the reader made it.
+    await expect(
+      within(canvas.getByRole("region", { name: "Cut list" })).getByText("Nothing here yet."),
+    ).toBeInTheDocument();
 
     const copter = await canvas.findByRole("button", { name: /^Smuggler's Copter/ });
     await expect(copter).toBeInTheDocument();
@@ -720,6 +759,11 @@ export const NeverTwoLayers: Story = {
  * first add rather than born with the deck. That is the difference between a deck made today and
  * one the v8 migration converted, which is why the seeded decks above have five.
  *
+ * **All four are `origin: user`**, which is what keeps two of them on screen: a seed is not the
+ * app filing a card. The first `auto` pile this deck can have arrives with its first add, because
+ * `category_for_name` is the one writer that stamps one — {@link AutoPileArrivesWithItsCard}
+ * carries on from exactly here.
+ *
  * **Two of those four are drawn, because this deck is Modern.** Sideboard and Maybeboard are
  * unconditional piles and say "Nothing here yet."; the command zone belongs to a format this
  * deck is not being built for, and the companion slot draws empty in no format at all. So the
@@ -786,6 +830,81 @@ export const EmptyCommandZone: Story = {
     await expect(canvas.getByRole("dialog", { name: "Commander check" })).toHaveTextContent(
       "Commander decks need a commander; the commander zone is empty.",
     );
+  },
+};
+
+/**
+ * **The whole of the empty-pile rule, in one deck: a pile the reader made, and a pile the app
+ * made, side by side with nothing in either.**
+ *
+ * The two are indistinguishable on screen once they hold cards, so the only way to see the rule is
+ * to empty them — and the only way to be honest about which is which is to *make* them the way the
+ * app does. Both writes here are the real commands through the fake: `Combo pieces` comes from the
+ * panel's "New category" button (`deck_category_create`, `origin: user`) and `Ramp` is invented by
+ * `category_for_name` while the quick add files a Sol Ring (`origin: auto`) — `autoCategoryFor`
+ * reads that card's Oracle tags (`mana-producer`, `ramp`) and answers with the word this deck has
+ * never heard before.
+ *
+ * **Then the card is stepped out again, which is the assertion the story exists for.** The heading
+ * `Ramp` goes with its last card, because nobody asked for that pile; `Combo pieces` stays, empty,
+ * because somebody did. Neither *category* was deleted — the toolbar's "Add to" still offers both
+ * by name, which is what makes hiding one survivable: no surface a card is filed with is built
+ * from the drawn groups.
+ *
+ * A fresh deck rather than a seeded one, because the two facts have to be **made** rather than
+ * asserted: a hand-written seed row could claim any `origin` it liked and would be a story about
+ * this file's opinion. {@link ReopensOnThePlan}'s deck 4 is the seeded half — its `Ramp` is `auto`
+ * and holds cards in both lists, and its switched-off `Cut list` is a user pile the plan leaves
+ * empty.
+ */
+export const AutoPileArrivesWithItsCard: Story = {
+  args: { deckId: null },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const heading = (name: string) => canvas.queryByRole("region", { name });
+    await canvas.findByRole("region", { name: "Sideboard" });
+
+    // --- the pile the reader asks for -------------------------------------------------------
+    await userEvent.click(canvas.getByRole("button", { name: "Categories" }));
+    const dialog = await canvas.findByRole("dialog", { name: "Categories" });
+    await userEvent.type(within(dialog).getByLabelText("New category name"), "Combo pieces");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    await waitFor(async () => {
+      await expect(within(dialog).getByText("Combo pieces")).toBeInTheDocument();
+    });
+    // Out of the way: the dialog is `position: fixed` over the deck it is about.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
+
+    const theirs = await canvas.findByRole("region", { name: "Combo pieces" });
+    await expect(within(theirs).getByText("Nothing here yet.")).toBeInTheDocument();
+    // And no `Ramp` yet — the deck has no such category at all, which is the state the next
+    // three lines change.
+    await expect(heading("Ramp")).toBeNull();
+
+    // --- the pile the app makes -------------------------------------------------------------
+    await userEvent.type(
+      canvas.getByRole("combobox", { name: "Quick add a card" }),
+      "Sol Ring{Enter}",
+    );
+    const auto = await canvas.findByRole("region", { name: "Ramp" }, { timeout: 4000 });
+    await expect(within(auto).getByRole("button", { name: /^Sol Ring/ })).toBeInTheDocument();
+
+    // --- and the difference between them ----------------------------------------------------
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Decrease Copies of Sol Ring in Ramp" }),
+    );
+    await waitFor(async () => await expect(heading("Ramp")).toBeNull(), { timeout: 4000 });
+    // Empty since it was made, and still drawn: a place the reader chose to keep.
+    await expect(canvas.getByRole("region", { name: "Combo pieces" })).toBeVisible();
+    // The row is still in `deck.categories`, which is what the "Add to" select is built from —
+    // undrawn is not deleted, and the next Sol Ring lands back in it by name. That select lives
+    // in the docked search panel, which opens collapsed, so it is disclosed here; what is being
+    // asserted is where the options come from, which the disclosure does not touch.
+    await userEvent.click(await canvas.findByRole("button", { name: "Search cards" }));
+    const addTo = within(await canvas.findByLabelText("Add to"));
+    await expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    await expect(addTo.getByRole("option", { name: "Combo pieces" })).toBeInTheDocument();
   },
 };
 

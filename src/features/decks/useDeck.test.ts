@@ -84,6 +84,9 @@ const MAIN: DeckCategory = {
   deckId: 4,
   name: "Main deck",
   kind: "main",
+  // All three are `user`: the two seeded zones are written that way, and "Main deck" is the
+  // pile the v8 migration made, which holds real cards and is nobody's find-or-create.
+  origin: "user",
   isActive: true,
   sortOrder: 0,
   cardCount: 4,
@@ -95,6 +98,7 @@ const SIDE: DeckCategory = {
   deckId: 4,
   name: "Sideboard",
   kind: "side",
+  origin: "user",
   isActive: true,
   sortOrder: 1,
   cardCount: 0,
@@ -106,6 +110,7 @@ const MAYBE: DeckCategory = {
   deckId: 4,
   name: "Maybeboard",
   kind: "maybe",
+  origin: "user",
   isActive: false,
   sortOrder: 2,
   cardCount: 0,

@@ -14,12 +14,12 @@
  * derived groups are built from the **active** cards only, and every **inactive category**
  * holding cards is then appended as itself, unchanged, in `sortOrder`.
  *
- * **A pile holding cards always draws; an empty one is a question about the deck** —
- * {@link drawsWhenEmpty}, which is the whole of that rule and takes the two facts a pile cannot
- * know about itself: whether the deck's format has a command zone, and whether a filter is
- * narrowing what these groups were built from ({@link EmptyGroupRules}). Switched off and empty
- * are two different questions and this file keeps answering them separately: `isActive` decides
- * whether a pile *counts*, the cards under it decide whether it is *drawn*.
+ * **A pile holding cards always draws; an empty one is a question about who made it** —
+ * {@link drawsWhenEmpty}, which is the whole of that rule. It reads two facts the pile carries,
+ * its `kind` and its `isAuto`, plus the one fact a pile cannot know about itself: whether the
+ * deck's format has a command zone ({@link EmptyGroupRules}). Switched off and empty are two
+ * different questions and this file keeps answering them separately: `isActive` decides whether
+ * a pile *counts*, the cards under it decide whether it is *drawn*.
  *
  * The one thing above this line that is the *reader's* to decide is `separateX`: whether a
  * spell printing `{X}` is counted at the mana value Scryfall gives it or gathered into a pile
@@ -77,8 +77,9 @@ export function asGroupBy(value: string): GroupBy {
  *
  * * a **category** group *is* a pile of the deck. It has an id, so a card can be dropped
  *   into it, its heading renamed and its switch flipped. Whether it draws with nothing under
- *   it is {@link drawsWhenEmpty}'s answer and not this shape's — an empty pile is a *place*,
- *   and the exceptions are about the deck rather than about the group.
+ *   it is {@link drawsWhenEmpty}'s answer and not this shape's — a pile the reader made is a
+ *   *place*, and the exceptions are about the deck's format and about who made the pile, never
+ *   about what happens to be in it.
  * * a **derived** group is a heading and nothing more — `categoryId`, `kind` `null`. Nothing
  *   can be dropped into "Mana value 3", and an empty one does not exist at all.
  */
@@ -98,11 +99,28 @@ export interface CardGroup {
    * allocator's claims. A derived group is built from active cards, so it is always `true`.
    */
   isActive: boolean;
-  /** One of the four `schema::PREDEFINED_CATEGORIES` — cannot be renamed or deleted. It used to
-   *  be the whole of {@link drawsWhenEmpty}; it now decides nothing on an unfiltered deck, where
-   *  every empty pile is a place, and survives as the test for the one case where the fixed
-   *  zones are exactly what should outlive a filter ({@link EmptyGroupRules.narrowed}). */
+  /**
+   * One of the four `schema::PREDEFINED_CATEGORIES` — cannot be renamed or deleted, and that is
+   * now the whole of what it is for: `CategoriesDialog` reads it to decide whether a row gets
+   * Rename and Delete affordances.
+   *
+   * **It decides nothing about whether a heading is drawn.** It was once the whole of
+   * {@link drawsWhenEmpty} — the four seeded zones drew empty and nothing else did — and then
+   * the survivor test while a filter was running. Both of those are gone: Sideboard and
+   * Maybeboard reach that function's last line and draw exactly as a pile of the reader's own
+   * does, because "always, until it is deleted" is one answer for both.
+   */
   isPredefined: boolean;
+  /**
+   * The app made this pile while filing a card; the reader did not ask for it.
+   *
+   * `DeckCategory.origin === "auto"` and nothing else — never the name, which is the reader's to
+   * type and is exactly what an app-made "Ramp" and a reader-made "Ramp" have in common. An auto
+   * pile is the one class that does **not** draw empty: it arrives with its first card and goes
+   * with its last. `false` for a derived group and for a stray, neither of which can be empty in
+   * the first place.
+   */
+  isAuto: boolean;
   /** In the order `sortBy` asked for, already applied. */
   cards: DeckCard[];
   /** **Copies**, not rows: four Bolts are four cards, and a deck is counted in cards. */
@@ -195,6 +213,10 @@ function categoryGroup(category: DeckCategory, cards: DeckCard[]): CardGroup {
     // `DECK_CATEGORY_GRAIN` allows it, because the predefined Sideboard was never named by
     // the user — and that one is theirs to rename and delete like any other.
     isPredefined: category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
+    // The row's own provenance, carried through unchanged. `category_for_name` finds before it
+    // creates, so a pile the reader made stays `user` for ever however many cards the app later
+    // files into it — which is the case a name list gets wrong and this gets right for free.
+    isAuto: category.origin === "auto",
     cards,
     ...totals(cards),
   };
@@ -217,19 +239,35 @@ function strayGroup(cards: DeckCard[]): CardGroup {
     categoryId: first.categoryId,
     isActive: first.categoryActive,
     isPredefined: false,
+    // A stray is built *from* rows, so it always holds at least one card and `drawsWhenEmpty` is
+    // never asked about it. `DeckCard` carries no origin to copy either — the row knows its
+    // category's name, kind and switch, and nothing more.
+    isAuto: false,
     cards,
     ...totals(cards),
   };
 }
 
 /**
- * What an empty pile's heading depends on beyond the pile itself.
+ * What an empty pile's heading depends on that is not a fact about the pile.
  *
- * Two facts a {@link CardGroup} cannot carry, because neither of them is about the pile: which
- * zones the deck's **format** has, and whether the reader is looking at the whole deck or at a
- * narrowed slice of it. Both are the editor's to know, so they arrive as an argument rather
- * than being re-derived down here — this file has never heard of a format spec and must not
- * start.
+ * **One fact, and it is the deck's format**: which zones the game being built for even has. The
+ * other two things the rule reads — the pile's `kind` and whether the app made it — travel on
+ * the {@link CardGroup} itself, so they are not here. A format is the editor's to know, and this
+ * file has never heard of a format spec and must not start.
+ *
+ * **A second member lived here until the three classes replaced it, and it is worth saying what
+ * it decided.** `narrowed` reported whether a filter was running, and while one was, only the
+ * predefined zones drew empty — so that typing three letters could not answer with twenty
+ * headings over three cards. The wall it was aimed at was always made of *auto* piles (Removal,
+ * Ramp, Draw and the type buckets), and those now stay out whenever they are empty, filter or no
+ * filter, because a pile the filter emptied *is* empty. So a filter no longer decides anything
+ * about which headings exist; what it leaves on screen is the reader's own handful of deliberate
+ * piles, which is exactly what "always shown" asks for. There is nothing left for the editor to
+ * pass.
+ *
+ * A one-member object rather than a bare boolean, because the call site reads as a sentence and
+ * the next conditional zone lands here without touching a signature.
  */
 export interface EmptyGroupRules {
   /** `FormatSpec.requiresCommander` for the deck's own format. `false` while the specs are
@@ -237,19 +275,17 @@ export interface EmptyGroupRules {
    *  answer rather than a gap: a deck with no format opinion gets no empty command zone, and
    *  the zone appears the moment it holds a card. */
   requiresCommander: boolean;
-  /** Whether a filter — the toolbar's text field or its tag chips — is narrowing what these
-   *  groups were built from. */
-  narrowed: boolean;
 }
 
 /**
- * What a caller that has not heard of a format gets: no command zone, nothing narrowed. Every
- * empty pile of the reader's own therefore draws, which is the unfiltered deck's answer and the
- * one a story, a chart or a test wants when it is asking about something else entirely.
+ * What a caller that has not heard of a format gets: no command zone.
+ *
+ * Every empty pile of the reader's own draws under it and every empty auto pile stays out, which
+ * is the answer for a deck in any format bar the ones with a command zone — and the one a story,
+ * a chart or a test wants when it is asking about something else entirely.
  */
 export const DEFAULT_EMPTY_GROUP_RULES: EmptyGroupRules = {
   requiresCommander: false,
-  narrowed: false,
 };
 
 /**
@@ -263,53 +299,63 @@ export const DEFAULT_EMPTY_GROUP_RULES: EmptyGroupRules = {
  * remember: the `cards.length > 0` arm in {@link buildGroups}' filter runs in front of this
  * call, so no answer here can hide a card.
  *
- * **The reversal below is the answer to a question this comment used to ask.** Every card's
- * `Move…` select — which offered *every* category of the deck, empty ones included, because
- * `DeckEditor` built it from `categories` rather than from these groups — was removed on
- * 2026-08-14, and what stood here said so: a heading that is not drawn is not a drop target, so
- * an empty pile of the reader's own could not be reached at all, and *"if instead this rule is
- * ever reversed, it is this that made the case, not a wall of headings."* It has been. A pile of
- * the reader's own draws empty now, which makes it a drop target again, and the "Add to" select
- * (still built from `categories`) is the second route rather than the only one.
+ * **Three classes of pile, three answers, and the four lines below are that table.**
  *
- * **An empty pile the reader made draws, because a column is a *place* as well as a heading.**
- * An empty `Ramp` is where the next ramp spell goes, and a pile that vanished with its last card
- * would move the layout under the reader's hand and take its own drop target with it. This file
- * answered the other way round for a while — every pile of the reader's hidden when empty, the
- * four seeded zones excepted — on the argument that a category is a card's **function** now
- * (`autoCategory.ts`: Removal, Ramp, Draw, Tutor and nine more), so a deck accumulates columns
- * faster than it fills them. That argument was really about a deck being *narrowed*, and
- * narrowing is the one case it still governs — see `narrowed` below.
+ * * A **predefined** zone answers by what the deck's format has. Both conditional arms are here,
+ *   and each is conditional for its own reason (below). Sideboard and Maybeboard are not
+ *   conditional at all and fall through to the last line.
+ * * An **auto** pile — one the app made while filing a card, `isAuto` — **never draws empty**. It
+ *   arrives with its first card and goes with its last. Nobody asked for it, so there is nothing
+ *   to keep a place for: an empty `Ramp` the app would have invented is a heading about a card
+ *   the deck does not contain.
+ * * A pile the **reader** made always draws, until they delete it. A category typed by hand is
+ *   made with intent, and their empty `Ramp` is where they mean the next ramp spell to go — a
+ *   column that vanished with its last card would move the layout under their hand and take its
+ *   own drop target with it. Delete is the removal; there is no hide flag, and `isActive` is not
+ *   one.
  *
- * **Two of the four fixed zones are conditional now, each for its own reason.** `commander`
- * draws empty only where the format has a command zone: an empty command zone in a Commander
- * deck is itself a fact about the deck's validity, the one heading the editor must never answer
- * a question about by leaving it out — while in a Standard deck it is not a fact about that deck
- * at all, but a zone the game it is being built for does not have. `companion` never draws
- * empty, in any format: a companion is a card you either have or do not, and an empty pile there
- * says nothing that its absence does not say more quietly. Sideboard and Maybeboard stay
- * unconditional, like every other empty pile.
+ * **The test is provenance, never the name**, which is the difference the two `Ramp`s above turn
+ * on. `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a deck holds one pile per name: if the
+ * reader makes "Ramp" themselves and a ramp spell is filed later, `category_for_name` *finds*
+ * their pile rather than making one, and it stays `origin: 'user'`. Matching on a name list
+ * instead — "Ramp", "Draw", "Removal", "Lands" are exactly what a person calls their own piles —
+ * would silently start hiding the very pile the reader was most deliberate about. The standing
+ * law of this folder, applied: the name is the user's, and the rules read something else.
  *
- * **While a filter is narrowing the deck the old rule stands, cut down to the fixed zones.** An
- * empty pile is then the *filter's* doing rather than the deck's, and typing three letters would
- * otherwise answer with twenty headings over three cards — exactly what the old rule was written
- * to stop. {@link CardGroup.isPredefined} is the right test for what survives that: the four
- * seeded zones are the piles a reader can neither rename nor delete, so they are the deck's
- * furniture rather than its contents.
+ * **Each conditional zone, and why.** `commander` draws empty only where the format has a command
+ * zone: an empty command zone in a Commander deck is itself a fact about the deck's validity, the
+ * one heading the editor must never answer a question about by leaving it out — while in a
+ * Standard deck it is not a fact about that deck at all, but a zone the game it is being built
+ * for does not have. `companion` never draws empty, in any format: a companion is a card you
+ * either have or do not, and an empty pile there says nothing that its absence does not say more
+ * quietly.
  *
- * **It reads `kind` and `isPredefined` and could not read the name if it wanted to** — which is
- * what the `Pick` is for. `deck_category_create` takes `(deck_id, name)` and no kind, so
- * `commander` and `companion` can only ever be the two seeded zones; a pile a reader called
- * "Sideboard" is a `main` like every other pile of theirs, and {@link categoryGroup} is the
- * single place a name is consulted at all.
+ * **A filter used to decide this and now decides nothing about it.** {@link EmptyGroupRules}
+ * carried a `narrowed` flag, and while the toolbar's text field or a tag chip was running, only
+ * the predefined zones drew empty — because typing three letters otherwise answered with twenty
+ * headings over three cards. The auto rule subsumes it: that wall was always auto piles, and a
+ * pile the filter emptied is an empty pile, so they are out either way. What a filter leaves is
+ * the reader's own deliberate piles plus the fixed zones, which is the answer the rule wanted in
+ * the first place, and it is now the same answer as emptying a pile by hand. The cost that went
+ * with the old flag went with it: **an empty pile of the reader's own is a drop target under a
+ * filter again**, which matters because the per-card `Move…` select was removed on 2026-08-14
+ * and a drawn heading is the whole affordance for moving a card into an empty pile.
+ *
+ * **It reads `kind` and `isAuto` and could not read the name if it wanted to** — which is what
+ * the `Pick` is for. `deck_category_create` takes `(deck_id, name)` and no kind, so `commander`
+ * and `companion` can only ever be the two seeded zones; a pile a reader called "Sideboard" is a
+ * `main` like every other pile of theirs, and {@link categoryGroup} is the single place a name is
+ * consulted at all. {@link CardGroup.isPredefined} is deliberately **not** among the two: it says
+ * a row cannot be renamed or deleted, which is a question for the categories panel and not for a
+ * heading.
  */
 export function drawsWhenEmpty(
-  group: Pick<CardGroup, "kind" | "isPredefined">,
+  group: Pick<CardGroup, "kind" | "isAuto">,
   rules: EmptyGroupRules = DEFAULT_EMPTY_GROUP_RULES,
 ): boolean {
   if (group.kind === "companion") return false;
   if (group.kind === "commander") return rules.requiresCommander;
-  return rules.narrowed ? group.isPredefined : true;
+  return !group.isAuto;
 }
 
 /**
@@ -325,9 +371,9 @@ export function drawsWhenEmpty(
  * @param separateX the deck's own `separateXGroup` preference — see below. Defaults to
  *   `false`, which is what this function answered before the switch existed, so every caller
  *   that has not heard of it keeps the grouping it had.
- * @param rules the two facts an empty pile's heading depends on that the pile itself cannot
- *   carry — {@link EmptyGroupRules}. Defaults to {@link DEFAULT_EMPTY_GROUP_RULES}, and is last
- *   for the same reason `separateX` is: no existing call site breaks.
+ * @param rules the one fact an empty pile's heading depends on that the pile itself cannot carry
+ *   — {@link EmptyGroupRules}. Defaults to {@link DEFAULT_EMPTY_GROUP_RULES}, and is last for
+ *   the same reason `separateX` is: no existing call site breaks.
  *
  * **There is no currency argument any more.** It took one while every row carried two prices,
  * so that a heading's total and the `price` order under it could not be computed from
@@ -363,10 +409,12 @@ export function buildGroups(
   const ordered = [...categories].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
 
   // Every pile that has something in it — that arm first, so nothing below it can hide a card —
-  // plus the empty ones `drawsWhenEmpty` still calls places, which on an unfiltered deck is all
-  // of them bar the Companion and the command zone of a format that has none. That predicate is
-  // deliberately blind to the category's name; the emptiness test is `cards`, not `count`,
-  // because a row in a deck always carries at least one copy — zero is what removes it.
+  // plus the empty ones `drawsWhenEmpty` still calls places: the reader's own, the Sideboard and
+  // the Maybeboard, and a command zone where the format has one. Out go the empty auto piles the
+  // app made while filing cards, the Companion, and a command zone in a format with no such
+  // zone. That predicate is deliberately blind to the category's name; the emptiness test is
+  // `cards`, not `count`, because a row in a deck always carries at least one copy — zero is
+  // what removes it.
   const categoryGroups = ordered
     .map((category) =>
       categoryGroup(category, sortCards(byCategory.get(category.id) ?? [], sortBy)),
@@ -413,6 +461,10 @@ export function buildGroups(
           categoryId: null,
           isActive: true,
           isPredefined: false,
+          // A derived bucket is built *from* cards, so an empty one has never been expressible
+          // and `drawsWhenEmpty` is never asked about it. `false` is the honest value anyway:
+          // nothing made this pile, it is a heading over the cards that answered to it.
+          isAuto: false,
           cards: [card],
           count: 0,
           totalPrice: null,

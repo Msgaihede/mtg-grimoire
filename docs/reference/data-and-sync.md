@@ -307,7 +307,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v14.** v14 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
+- **Schema is v15.** v15 adds `deck_categories.origin`
+  (`TEXT NOT NULL DEFAULT 'user'`) — **who made the pile**: `'auto'` is the app, filing a card it
+  had to invent a column for, `'user'` is the reader pressing "New category", and the four seeded
+  zones count as the reader's. TypeScript hides an *empty* `auto` pile and always draws a `user`
+  one; Rust records the fact and concludes nothing from it. **No CHECK** (`ALTER TABLE ADD COLUMN`
+  cannot add one, `decks.last_variant`'s constraint) and **no Rust fence either**, which is the
+  deliberate difference from `last_variant`: `origin` is never a caller's value — four INSERTs
+  inside the crate write it (`deck_meta::category_for_name` → `'auto'`,
+  `deck_meta::create_category` → `'user'`, `deck_meta::ensure_predefined_categories` → `'user'`,
+  and `deck::duplicate_deck`, which **copies** the source pile's answer rather than re-deciding
+  it) and no command parameter reaches it. **The point of storing it is that `category_for_name`
+  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader's own "Ramp"
+  is found rather than re-made and keeps `'user'` forever, which is exactly the case a rule driven
+  off the *name* — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
+  wrong. The backfill is a **one-time frozen guess**: `kind = 'main'` plus one of the 22 names
+  `autoCategoryFor` could answer with on the day it shipped (the 13 functional buckets, the 8 type
+  buckets, `Uncategorised`), spelled as literals and deliberately **not** kept in step with
+  TypeScript's list, for `PREDEFINED_CATEGORIES`' reason. **`Main deck` is not on it** — that is
+  the v8 migration's own pile, holding real cards. Both ways of being wrong are mild and
+  self-correcting: a mis-marked pile either hides until a card is added or draws until the reader
+  deletes it, and neither loses a card. The step touches `cards` not at all, so like v8, v9, v11,
+  v12, v13 and v14 it neither needs the `CARDS_INDEXES` replay nor takes it from v10, and owes no
+  `cards_fts` rebuild.
+- v14 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
   description), `oracle_tag_parents` (`child_slug, parent_slug` — **many parents per child**,
   684 of 4 521 tags have several), `oracle_taggings` (`oracle_id, slug, weight, annotation`)
   and `oracle_tag_cards` (`oracle_id, slug`), all four `WITHOUT ROWID` with no index but their
@@ -362,12 +385,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   order** (`deck_columns`, `card_columns`' counterpart): `decks` has an `ALTER` ladder of its own
   now — v8's three columns, v12's three and v13's one — and every read of a deck row is
   **positional**, so a route that reaches head with the same column _set_ in a different order is
-  a `DeckRow` reading the wrong fields with no error anywhere.
+  a `DeckRow` reading the wrong fields with no error anywhere. **Since v15 it compares
+  `deck_categories`' columns as well** (`category_columns`), for the half of that reasoning that is
+  not about ordinals: mirroring `origin` into v8's `CREATE TABLE` so a fresh install "has it"
+  breaks **only** fresh installs, because the v15 `ALTER` then hits a duplicate column — the one
+  population no upgrade fixture can stand in for.
   **"Head minus one" is a title that moves between fixtures, not a fixture that is renamed.**
   `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
   `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
-  to a new **`v12_database`**. The fixtures it passes stay exactly where they are, each pinned to
+  to a new **`v12_database`**, v14 to **`v13_database`** and v15 to **`v14_database`**. The fixtures it passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
   actually run over, and `v10_database` to 10 before it, for
@@ -376,17 +403,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   which is the only thing that can prove a machine entering the ladder under v10 still ends up
   with every index a fresh install has.
   **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
-  for every one of them whose DDL is not idempotent.** All four rewind fixtures —
-  `v9_database`, `v10_database`, `v11_database`, `v12_database` — are built the same way, because
+  for every one of them whose DDL is not idempotent.** All six rewind fixtures —
+  `v9_database`, `v10_database`, `v11_database`, `v12_database`, `v13_database`, `v14_database` —
+  are built the same way, because
   only version 1's DDL is frozen and there is no way to _build_ a later database forwards:
   migrate to head, undo by hand, renumber. `migrate` then reads `user_version` once and walks
   every step above it, so each of those steps is **replayed** over the fixture.
   `CREATE TABLE IF NOT EXISTS` survives that; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
-  answers `duplicate column name`. That is why v13's `separate_x_group` has to come back out in
-  **all four**, and v12's three view-state columns in the three below it, `v9_database` and
+  answers `duplicate column name`. That is why v15's `deck_categories.origin` has to come back out
+  in all five below it, v13's `separate_x_group` in the four below **it**, and v12's three
+  view-state columns in the three below that, `v9_database` and
   `v10_database` included — the three travel together as one `UNDO_V12` constant, so they cannot
   drift apart fixture by fixture — while v11's `CREATE TABLE IF NOT EXISTS` tables need no line in
-  `v9_database` at all. (`v10_database` drops them for a different reason: a fixture claiming to
+  `v9_database` at all. **One named `UNDO_V…` constant per rung** is the shape that keeps this
+  cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
+  whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to
   be a v10 must not already hold what the v11 step is being tested for creating.) Rewinding
   _too far_ fails the same way from the other direction: a head database rewound two versions
   re-runs v8's deck rebuild over v8-shaped tables and dies on a duplicate column — a failure no

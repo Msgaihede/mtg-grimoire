@@ -87,6 +87,11 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     cardCount: 0,
     totalPrice: null,
     cardCountAllVariants: over.cardCount ?? 0,
+    // A pile the reader made, unless a fixture says otherwise — and the default matters here in
+    // a way it does not in most files: `buildGroups` drops an **empty** `origin: "auto"` pile,
+    // so a fixture that drifted to `"auto"` would silently take a group out of every column
+    // count below. `DRAW` is the one to watch; see its own note.
+    origin: "user",
     ...over,
   };
 }
@@ -94,9 +99,12 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
 const RAMP = category();
 const COMMANDER = category({ id: 3, name: "Commander", kind: "commander", sortOrder: 0 });
 /** A seeded zone, used as the deck that is one empty pile and nothing else. A fixed zone is the
- *  pile that reaches a view empty under *either* of `drawsWhenEmpty`'s answers — every empty pile
- *  on an unfiltered deck, only the fixed ones while a filter is narrowing it — so it is the
- *  fixture that keeps saying what this case is about however that rule is tuned. */
+ *  pile that reaches a view empty under *every* answer `drawsWhenEmpty` has given — the Sideboard
+ *  draws empty whatever the format wants and whoever made it — so it is the fixture that keeps
+ *  saying what this case is about however that rule is tuned. (It once had a second reason: while
+ *  a filter narrowed a deck only the fixed zones survived it. That knob is gone — what a filter
+ *  empties now is auto piles, because an empty auto pile is never drawn — and this fixture is
+ *  unaffected either way, which is the property it was chosen for.) */
 const SIDEBOARD = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
 /**
  * The other pile the rail exists for, and it is seeded **switched off** — `fixtures.ts` mirrors
@@ -135,6 +143,13 @@ const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
  * the packer no longer sees. A `main` category is the honest stand-in — 66px of heading with
  * nothing under it, flowing, and drawn empty because every pile of the reader's own is a *place*
  * (`drawsWhenEmpty`).
+ *
+ * **It is `origin: "user"` by the factory's default, and that is the whole of why it still
+ * draws.** "Draw" is one of `AUTO_CATEGORY_NAMES` — it is exactly what the app calls a pile it
+ * makes while filing a card, and an empty one of those is no longer drawn at all. It is also
+ * exactly what a person calls a pile of their own, which is why the rule reads provenance and
+ * never the name: this fixture is a reader's pile that happens to be called Draw, it keeps its
+ * heading, and if this ever becomes an auto pile every column count in this file moves.
  */
 const DRAW = category({ id: 6, name: "Draw", kind: "main", sortOrder: 3 });
 
@@ -581,9 +596,10 @@ describe("the views that are not the table", () => {
    * sentence, because an empty Sideboard is where the next sideboard card goes.
    *
    * **The empty group is the Sideboard rather than `Ramp`**, and it is a fixed zone on purpose:
-   * `drawsWhenEmpty` draws every empty pile of an unfiltered deck but only the fixed zones while
-   * a filter is narrowing one, so a seeded pile is the fixture that keeps reaching a view empty
-   * whichever way that rule is tuned. The sentence is what this asserts either way.
+   * a seeded pile is the fixture that keeps reaching a view empty however `drawsWhenEmpty` is
+   * tuned, and that rule has since been tuned twice. It no longer has a narrowed case at all; it
+   * now hides an empty pile the *app* made, which is the case a `Ramp` fixture would have walked
+   * straight into. The sentence is what this asserts either way.
    */
   it.each([
     ["StackView", <StackView key="s" groups={empty} marketplace={TCG} />],

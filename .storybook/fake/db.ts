@@ -114,6 +114,7 @@ import type {
   CardSummary,
   CardTags,
   CategoryKind,
+  CategoryOrigin,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
@@ -392,6 +393,21 @@ export interface FakeDeckCategory {
   kind: CategoryKind;
   isActive: boolean;
   sortOrder: number;
+  /**
+   * `deck_categories.origin` (schema v15) — **who made this row**, and a column rather than a
+   * conclusion for the same reason `kind` is one: the name is the user's.
+   *
+   * Written by exactly three sites in this file, mirroring the three in `deck_meta.rs`:
+   * {@link categoryForName} (the add and import paths' find-or-create) writes `"auto"`,
+   * {@link ensurePredefinedCategories} and `deck_category_create` write `"user"`. Nothing else
+   * may set it and no command takes it as a parameter — it is never supplied by a caller, which
+   * is why neither the crate nor this fake validates it.
+   *
+   * **`categoryForName` finds before it creates**, so a pile the reader made keeps `"user"`
+   * forever even once the app starts filing cards into it. That is the case a rule matching
+   * `AUTO_CATEGORY_NAMES` gets wrong, and it is what this column exists to get right.
+   */
+  origin: CategoryOrigin;
 }
 
 /** One row of `deck_tags`: a per-deck label, at most one per card row. `color` names a token
@@ -2149,6 +2165,10 @@ function toDeckCategory(
     kind: c.kind,
     isActive: c.isActive,
     sortOrder: c.sortOrder,
+    // Carried through as the row's own, never re-derived from the name: `grouping.ts` reads it
+    // to decide whether an *empty* pile draws, so a DTO that guessed here would answer the one
+    // question this column was added for.
+    origin: c.origin,
     cardCount: rows.reduce((n, dc) => n + dc.quantity, 0),
     totalPrice,
     cardCountAllVariants: filed.reduce((n, dc) => n + dc.quantity, 0),
@@ -4236,6 +4256,11 @@ function categoryOfDeck(db: FakeDb, deckId: number, categoryId: number): FakeDec
  * computed in TypeScript (`autoCategoryFor`), because which pile a Sol Ring belongs in is
  * domain logic and this is plumbing. Matched on the name alone, `DECK_CATEGORY_GRAIN`'s shape:
  * a deck's own "Sideboard" category and the predefined one are the same row by that grain.
+ *
+ * **This is the one path that writes `origin: "auto"`**, and the `found` return above it is
+ * half of what that means: the app asked for this pile while filing a card, so a pile it had to
+ * *make* is one the reader never asked for — while a pile that was already there stays whatever
+ * it was, which for anything the reader typed is `"user"`.
  */
 function categoryForName(db: FakeDb, deckId: number, name: string): FakeDeckCategory {
   const trimmed = name.trim();
@@ -4251,6 +4276,7 @@ function categoryForName(db: FakeDb, deckId: number, name: string): FakeDeckCate
     kind: "main",
     isActive: true,
     sortOrder: nextSortOrder(db, deckId),
+    origin: "auto",
   };
   db.deckCategories.push(row);
   return row;
@@ -4281,6 +4307,11 @@ function ensurePredefinedCategories(db: FakeDb, deckId: number): void {
       kind,
       isActive,
       sortOrder: nextSortOrder(db, deckId),
+      // `user`, like the panel's create and unlike the add path's find-or-create. These four are
+      // the deck's fixed zones rather than piles the app filed something into, and three of them
+      // draw empty for reasons of their own — so marking them `auto` would make the Sideboard of
+      // every new deck disappear.
+      origin: "user",
     });
   }
 }
@@ -5603,8 +5634,13 @@ export function writeHandlers(db: FakeDb) {
     /* ------------------------------------------------- categories, tags and folders ---- */
 
     /**
-     * `deck_meta::create_category` — a new pile, always `kind: "main"`, always active, appended
-     * after the deck's last one.
+     * `deck_meta::create_category` — a new pile, always `kind: "main"`, always active, always
+     * `origin: "user"`, appended after the deck's last one.
+     *
+     * **The reader pressed a button to get here**, which is the whole of what `origin` records
+     * and the opposite of {@link categoryForName}'s answer. A pile made this way draws for as
+     * long as it exists, empty or not, because it was made with an intent nothing on screen can
+     * see — and deleting it is how they say they are done with it.
      *
      * The duplicate check runs **before** the deck is touched: a refused create should not move
      * `updated_at` and resort the gallery over a write that never happened.
@@ -5623,6 +5659,7 @@ export function writeHandlers(db: FakeDb) {
         kind: "main",
         isActive: true,
         sortOrder: nextSortOrder(db, deck.id),
+        origin: "user",
       };
       db.deckCategories.push(category);
       recordCategory(db, deck.id, { action: "create", name });

@@ -70,6 +70,11 @@ function wideGroups() {
   // Five piles the reader named. Ids of their own rather than a second `main` row out of
   // `DECK_CATEGORIES`, which holds one of each kind: a user may own any number of `main`
   // categories, and this deck's shape is the ordinary one.
+  //
+  // **They inherit `origin: "user"`, and four of these five names are words `autoCategoryFor`
+  // also answers with** — which is the point rather than an oversight: who made a pile is a
+  // column (`deck_categories.origin`), never a guess from what it is called, so `Ramp` here is
+  // the reader's and draws the day they empty it.
   const named = (id: number, name: string, sortOrder: number): DeckCategory => ({
     ...deckCategory("main"),
     id,

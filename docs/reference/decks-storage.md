@@ -25,6 +25,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   there is deliberately **no predefined `main`**, because a deck may own any number and the
   pile a plain add lands in is found-or-created by name (`deck_meta::category_for_name`).
   **Deck cards side with the wishlist: `CHECK (quantity > 0)`, so zero removes the row.**
+- **Schema v15 added `origin` beside the kind: who _made_ the pile.** `'auto'` is the app,
+  filing a card it had to invent a column for (`category_for_name`); `'user'` is the reader
+  pressing "New category" (`create_category`), and the four seeded zones count as the reader's
+  (`ensure_predefined_categories`). `duplicate_deck` **copies** it — a duplicate has its
+  original's shape. TypeScript hides an **empty** `auto` pile and always draws a `user` one, so
+  a Ramp column appears with its first ramp spell while a pile the reader made stays until they
+  delete it; Rust records the fact and draws no conclusion from it. **It is stored rather than
+  derived from the name because `category_for_name` finds before it creates**: the grain is
+  `(deck_id, name)`, so a reader's own "Ramp" is found rather than re-made and keeps `'user'`
+  even once ramp spells are filed into it — and "Ramp", "Draw", "Removal" and "Land" are exactly
+  what a person names their own piles. The one-time backfill and why it is frozen:
+  [data-and-sync.md](data-and-sync.md).
 - **The grain is `deck_id, variant, category_id, card_id`** (`schema::DECK_CARD_GRAIN`) — the
   same printing in two categories is two rows, added twice in one is one row with the sum, and
   `variant` widens it again: `live` is what is sleeved up, `theory` is what the deck is being
@@ -35,7 +47,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it. The Maybeboard is not a special case in five files any more; it is one seeded row with
   the flag off, and a category of the user's own that they switch off behaves identically.
   **Nothing anywhere may branch on the kind being `maybe`** — that was measured: the old shape
-  looked correct and was wrong the first time a user deactivated a pile of their own.
+  looked correct and was wrong the first time a user deactivated a pile of their own. **There is no
+  hide column beside it and none is wanted**: `is_active` is not one — it deliberately keeps
+  drawing the pile, because the affordance for switching it back on is seeing what is in it — and
+  `delete_category` is the removal. The only pile that stops being drawn without a write is an
+  `origin = 'auto'` one that has gone empty, which is `drawsWhenEmpty` reading a row that is still
+  there.
 - **Which totals a pile lands in: the switch decides whether it counts at all; the kind
   decides only whether it is played _beside_ the deck or _in_ it, and only `side` and
   `companion` are beside it** (CR 100.4a; EDH's companion is "effectively a 101st card"). So
@@ -102,10 +119,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   vocabulary, it is a bug in the caller, and storing it hands the editor back a remembered choice
   of nothing.
 - **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
-  else.** All categories and all tags come back whatever the variant — an empty category still
-  draws its column, an inactive one always draws — but a category's _and a tag's_ `card_count`
-  read the variant asked for. Threading it into `list_categories` and not `list_tags` is
-  exactly how they came to disagree once.
+  else.** All categories and all tags come back whatever the variant — the empty ones included,
+  because **which of them draw a column is TypeScript's answer and not this read's**
+  (`grouping.ts`'s `drawsWhenEmpty`, which files the empty ones by `kind` and `origin`: a pile the
+  reader made draws, one the app made does not). A read that pre-filtered would be a second copy of
+  that rule, and the two would part company silently. A category's _and a tag's_ `card_count` do
+  read the variant asked for; threading it into `list_categories` and not `list_tags` is exactly
+  how they came to disagree once.
 - Category and tag writes live in **`deck_meta.rs`**, and **two of them reallocate**:
   `set_category_active` (the flag is the whole of what the allocator allocates _for_) and
   `delete_category` (the cards leave, or land under a category with a different flag). A
