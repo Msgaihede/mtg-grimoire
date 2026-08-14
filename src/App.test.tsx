@@ -314,6 +314,26 @@ const BOLT_DETAIL: CardDetail = {
 };
 
 /**
+ * The other printing as the pane's own card — what a `card_detail` read for `c2` answers.
+ *
+ * **Which row is `current` is a fact the DOM now depends on.** A printings row draws the printing
+ * the pane is already showing without a press — pressing where you are is nothing, in a deck or
+ * out of one — so that row has no button at all, and every other row's button says what pressing
+ * it does. A mock that answered `c1` for every id would leave the pane showing M10 with the LEA
+ * row still drawn as the one in front of the reader, and the swap tests below reading a list no
+ * running window produces.
+ */
+const M10_DETAIL: CardDetail = {
+  ...BOLT_DETAIL,
+  id: "c2",
+  setCode: "m10",
+  setName: "Magic 2010",
+  collectorNumber: "146",
+  releasedAt: "2009-07-17",
+  finishPrices: { nonfoil: 1.5, foil: null, etched: null },
+};
+
+/**
  * jsdom lays nothing out, so the virtualised card wall measures a container of zero and
  * renders no tiles at all — and a test about opening a card needs a card to click.
  * `@tanstack/react-virtual` sizes its scroller with `offsetHeight` and scrolls it with
@@ -332,7 +352,11 @@ beforeEach(() => {
   queryClient.clear();
   useAppStore.setState(useAppStore.getInitialState());
   searchCards.mockReset().mockResolvedValue({ items: [BOLT], total: 1, totalIsCapped: false });
-  cardDetail.mockReset().mockResolvedValue(BOLT_DETAIL);
+  // Answered per id rather than one card for every read — see {@link M10_DETAIL} for why the
+  // difference reaches the DOM now that a printings row is its own press.
+  cardDetail
+    .mockReset()
+    .mockImplementation((id: string) => Promise.resolve(id === "c2" ? M10_DETAIL : BOLT_DETAIL));
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
@@ -664,9 +688,9 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
         ?.querySelector("img"),
     ).toHaveAttribute("src", expect.stringContaining(`/${DECK_CARD_VARIANT}/c2/0`)),
   );
-  // And the pane has followed it: the mark is on the row that was pressed, and the row that
-  // had it is offering itself again.
-  const marked = await screen.findByText("This deck uses this printing");
+  // And the pane has followed it: the mark — the `In deck` badge that replaced `DeckLine`'s
+  // sentence — is on the row that was pressed, and the row that had it is offering itself again.
+  const marked = await screen.findByText("In deck");
   expect(marked.closest("li")).toHaveTextContent("M10 · 146");
   expect(
     screen.getByRole("button", { name: "Use this printing (LEA 161) in Main deck" }),
@@ -702,7 +726,8 @@ it("says a refused swap in the pane, and the deck behind it goes with it", async
   await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
 
   const pane = await screen.findByRole("complementary", { name: /card details/i });
-  await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
+  const pressed = within(pane).getByRole("button", { name: /^Use this printing/ });
+  await userEvent.click(pressed);
 
   expect(await within(pane).findByRole("alert")).toHaveTextContent(
     "Could not use this printing — That deck is not there any more.",
@@ -711,15 +736,36 @@ it("says a refused swap in the pane, and the deck behind it goes with it", async
     await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
   ).toBeInTheDocument();
 
-  // **And the caret is still somewhere.** This refusal is a deleted deck, so the re-read it
-  // triggers turns every offer off — including the button the reader pressed, which by then has
-  // taken the caret back and is unmounted with it. The pane is where the sentence they are
-  // reading lives, so the pane takes the caret: Escape still closes what is in front of them
-  // and the next Tab does not restart from the top of the app.
-  await waitFor(() =>
-    expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus(),
-  );
+  // **And the caret has not moved — there is nothing left here to strand it.**
+  //
+  // This used to be a hand-back, and it was one because `DeckLine`'s button broke it: the button
+  // *disabled* itself for the write, so the browser blurred it to `<body>`, and the re-read this
+  // refusal triggers then unmounted every offer in the list. The pane was where the sentence
+  // lived, so the pane took the caret. The press is now the row's own name button, which is
+  // drawn whether the deck is there or not and never leaves the tab order (`aria-disabled`,
+  // never the attribute) — so a refusal unmounts nothing, and the pane's fallback
+  // (`deckGone && refused && activeElement === body`) correctly never fires.
+  //
+  // What changes is only what the button *says*: the deck is gone, so the offer language goes
+  // with it and the same element goes back to naming the trip it makes with no deck behind the
+  // pane. Same element, same caret, a different sentence on it.
+  await waitFor(() => expect(pressed).toHaveAccessibleName("Show M10 · 146"));
+  expect(pressed).toHaveFocus();
+  // Greyed is a paint here and never the attribute, so "still reachable" is asserted as the
+  // pair: nothing in the DOM took this control out of the tab order under the reader.
+  expect(pressed).toHaveAttribute("aria-disabled", "false");
+  expect(pressed).not.toBeDisabled();
+  expect(pane).not.toHaveFocus();
   expect(within(pane).getByRole("alert")).toBeInTheDocument();
+
+  // And it is a working caret rather than an attribute: the row it sits on still answers the
+  // keyboard, which is what `aria-disabled` bought and `disabled` would have cost. Pressed with
+  // `userEvent.keyboard` on a caret nothing here placed by hand — the click under test put it
+  // there — so this cannot pass by having focused what it then asserts about. With the deck
+  // gone the row means what it means everywhere else: show me this printing.
+  await userEvent.keyboard("{Enter}");
+
+  await waitFor(() => expect(cardDetail).toHaveBeenCalledWith("c2", "tcgplayer"));
 });
 
 /**
@@ -742,6 +788,9 @@ it("stops offering swaps into a deck the read says is gone", async () => {
   await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
   const pane = await screen.findByRole("complementary", { name: /card details/i });
   expect(within(pane).getByRole("button", { name: /^Use this printing/ })).toBeInTheDocument();
+  // Both claims are on screen **before** the deck goes, so each negative below is a change this
+  // test watched happen rather than a string that was never there to begin with.
+  expect(within(pane).getByText("In deck")).toBeInTheDocument();
 
   // The deck goes, and the editor's own re-read is what tells both surfaces. Any deck write
   // would do it; the format select is the cheapest one to press that is not the swap.
@@ -750,11 +799,16 @@ it("stops offering swaps into a deck the read says is gone", async () => {
     await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
   ).toBeInTheDocument();
 
+  // What a deleted deck takes down is the **offers**, not the list: every row is still a row,
+  // and the one that was an offer has gone back to naming the trip it makes with no deck behind
+  // the pane. Asserted both ways round, because the row *is* the press now — a query for the
+  // offer's name alone would also pass if the printings list had vanished entirely.
   expect(
     within(pane).queryByRole("button", { name: /^Use this printing/ }),
   ).not.toBeInTheDocument();
-  // And the mark with it: "this deck uses this printing" is not true of a deck that is gone.
-  expect(within(pane).queryByText(/this deck uses this printing/i)).not.toBeInTheDocument();
+  expect(within(pane).getByRole("button", { name: "Show M10 · 146" })).toBeInTheDocument();
+  // And the mark with it: `In deck` is not true of a deck that is gone.
+  expect(within(pane).queryByText("In deck")).not.toBeInTheDocument();
 });
 
 /**
@@ -764,10 +818,11 @@ it("stops offering swaps into a deck the read says is gone", async () => {
  * 1. **The fold.** A category holds a printing at most once, so a swap onto one it already had
  *    merges two rows into one and a line disappears from the deck list — `ipc.ts`'s `SwapResult`
  *    exists to say so, and nothing said it.
- * 2. **The caret.** The pressed button disabled itself for the write, so the browser left the
- *    caret on `<body>`; then the pane it was in unmounted. Escape out of the new pane has to
- *    land somewhere, and the somewhere is the deck's card for the printing the deck now holds —
- *    the control the reader opened the card from, as the swap has just rebuilt it.
+ * 2. **The caret.** The re-key unmounts the row the press came from, so the browser has nothing
+ *    to leave the caret on. (It used to be the pressed button that did this, by disabling itself
+ *    for the write; that button is gone and the re-key does it on its own.) Escape out of the new
+ *    pane has to land somewhere, and the somewhere is the deck's card for the printing the deck
+ *    now holds — the control the reader opened the card from, as the swap has just rebuilt it.
  */
 it("announces a fold and hands the caret to the deck's card when the pane closes", async () => {
   deckList.mockResolvedValue([BURN]);
@@ -812,13 +867,15 @@ it("announces a fold and hands the caret to the deck's card when the pane closes
   expect(within(swapped).getByRole("heading", { level: 2 })).toHaveTextContent("Loading…");
   expect(within(swapped).queryByText(/printings/i)).not.toBeInTheDocument();
 
-  act(() => arrive(BOLT_DETAIL));
-  // And the deck's mark is plain text again once the list is back: the sentence belongs to the
-  // write, not to the row.
-  expect(await within(swapped).findByText("This deck uses this printing")).toBeInTheDocument();
+  // `M10_DETAIL` and not the card the pane came from: a `c2` read answers `c2`, and which row
+  // the list draws as the one in front of the reader now follows from that.
+  act(() => arrive(M10_DETAIL));
+  // And the row's own mark is back once the list is. Two marks, two places, two facts: the badge
+  // says which printing the deck holds, the live region above says what the write did to it.
+  expect(await within(swapped).findByText("In deck")).toBeInTheDocument();
 
-  // What a browser does to a control that disables itself and jsdom does not: the caret is on
-  // `<body>` by the time the pane is re-keyed.
+  // What a real window leaves behind and jsdom does not model on its own: the re-key unmounted
+  // the row the press came from, so by now the caret is on nothing a reader put it on.
   (document.activeElement as HTMLElement).blur();
   await waitFor(() =>
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument(),
@@ -862,10 +919,27 @@ it("hands the caret back to the deck's card after a swap", async () => {
 
   expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live");
   // The row the swap rebuilt, on the printing the deck now holds — a *row*, so it is read by
-  // its set and number rather than by the art the other view draws.
-  await waitFor(() => expect(screen.getByText("M10 · 146")).toBeInTheDocument());
+  // its set and number rather than by the art the other view draws. Read off the deck's own card
+  // and not off the screen: the pane followed the swap onto that printing, so its facts line says
+  // the same two words about the same piece of cardboard, and an unscoped query would be
+  // satisfied by either surface.
+  //
+  // Scoped to the card's `<li>` rather than to its button, because the stack's data line is a
+  // **sibling** of the button and not a child of it (`CardStack.tsx`, "It is outside the button
+  // on purpose" — inside, its text was swallowed by the button's `aria-label` and the printing
+  // had no reader at all). Scoping to the button passed until that moved and then failed here
+  // with the set still plainly on screen, which is the tell for this whole class of miss: the
+  // card is the object this assertion is about, so the card is what it should have been reading.
+  await waitFor(() =>
+    expect(
+      within(
+        screen.getByRole("button", { name: /^Lightning Bolt/ }).closest("li") as HTMLElement,
+      ).getByText("M10 · 146"),
+    ).toBeInTheDocument(),
+  );
 
-  // What a browser does to a control that disables itself for a write, and jsdom does not.
+  // What a real window leaves behind and jsdom does not model on its own: the re-key unmounted
+  // the row the press came from, so the caret is on nothing.
   (document.activeElement as HTMLElement).blur();
 
   await userEvent.keyboard("{Escape}");
