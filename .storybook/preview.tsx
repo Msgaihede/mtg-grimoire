@@ -104,12 +104,15 @@ function FakeWorld({
  * render — `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Everything else on every other docs page is isolated in-process, which
- * is what keeps the catalogue readable: **40 of the 47 story files still render inline** —
- * re-counted 2026-08-12 with `Settings/MarketplacePanel`, and the count had rotted twice over
- * (it read "30 of 34" against 44 files). The fifth non-inline file is
- * `DeckSettingsDialog.stories.tsx`, which carries the same parameter for an unrelated reason of
- * its own: its scrim is `fixed inset-0` and would cover the whole docs page rather than its own
- * block.
+ * is what keeps the catalogue readable: **41 of the 49 story files still render inline** —
+ * re-counted 2026-08-14 with `Decks/QuickAdd`, and the count has now rotted three times over
+ * (it read "30 of 34" against 44 files, then "40 of 47" against 48 — where the 40 was right and
+ * only the total was stale, which is the harder kind to notice). **The other four non-inline
+ * files carry the same parameter for reasons of their own**: `DeckSettingsDialog`,
+ * `CreateDeckDialog` and `ImportDeckDialog` each have a `fixed inset-0` scrim that rendered
+ * inline would cover the whole docs page rather than its own block, and `CardZoomIndicator`
+ * declares it on **one story** rather than on the file, so that pressing Zoom in on the docs
+ * page cannot leave a pulse behind in the page's own store.
  */
 const withFake: Decorator = (Story, context) => {
   // **Here and not in `installWorld`, and not inside `FakeWorld`'s memo either.** A global is

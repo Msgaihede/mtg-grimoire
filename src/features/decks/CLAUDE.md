@@ -308,7 +308,100 @@ price | type`). An **inactive category stays its own group in all three grouping
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
 - The editor's five full-window surfaces (Import, Categories & tags, History, Theory diff, Deck
   settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
-  rungs and two `"inner"` peers open at once are not ordered at all.
+  rungs and two `"inner"` peers open at once are not ordered at all. The format check rides in the
+  same union, so at most one of its six registrations is ever enabled.
+
+## The quick add
+
+`QuickAdd.tsx` — the toolbar field, its dropdown and its status line, one component. `DeckEditor`
+keeps only the *decision*: which pile the add lands in (`targetCategoryId`) and the write that
+puts it there. `QuickAdd.test.tsx` covers the field itself; the Escape hand-off below is pinned in
+`DeckEditor.test.tsx`, because that one is about the ladder rather than about this control. The
+longer-form record of the two hand-rolled comboboxes and their shared panel is
+[frontend-design.md](../../../docs/reference/frontend-design.md).
+
+- **It is a shortcut over the docked panel's wall, not a second way of choosing a printing.** The
+  search is `collapse: true`, so every suggestion is the newest printing of that name — the same
+  one the panel offers first for the same text. A reader who cares which printing they get has the
+  panel open beside them, so this field never grows a set column or a printing picker.
+  `MAX_SUGGESTIONS` is **five**, and the ceiling is the reader's rather than the backend's: a list
+  long enough to need a scrollbar has stopped being a shortcut and started being the wall again.
+- **Three routes reach one write, and the third is the one that looks removable.** Enter on the
+  highlighted suggestion, a click on a row, and — inside the debounce window, before any
+  suggestion exists — a one-shot `limit: 1` search. That third route is the field's **original**
+  behaviour and must not be deleted: the debounce is `DEBOUNCE_MS` (300ms, the same one the three
+  list views use), and a reader who types a whole name and presses Enter inside it has no row to
+  take. Losing it would make the dropdown a regression for exactly the readers who are fastest at
+  this. It is also where the miss comes from — “No card found for …”, said in words and with the
+  typed text kept, because the next action there is to correct it rather than to type the next
+  card. Both requests are the same search differing only in `limit`, which is what keeps the
+  top suggestion and the fallback's one hit the same card.
+- **Enter takes a row only while the rows answer what is in the field _now_.** `fresh` is
+  `debouncedText === text.trim() && !suggestions.isPlaceholderData`; when it is false Enter falls
+  through to the one-shot search, which asks about the text that is actually there. The bug this
+  prevents is adding the top hit for `sol r` while the field says `sol ring` — the debounce opens
+  that window on every keystroke, so it is a real case rather than a theoretical one.
+  `keepPreviousData` (there so the list does not blink empty between letters) is what makes the
+  second clause necessary, and it is also why the rows are read off `text` rather than
+  `debouncedText`: clearing the field changes the key to `""`, which the query is `enabled: false`
+  for, so the last five rows would hang under an empty box for the rest of the session.
+- **The Escape rung is `enabled: listOpen`, never `enabled: open`.** With the caret in a quick add
+  whose list is closed, the press belongs to the card detail pane, which listens on `window` in the
+  bubble phase — a capture-phase listener here would consume it and close nothing at all.
+  `DeckEditor.test.tsx`'s "lets Escape through to the card pane when no layer of its own is open"
+  focuses this very field and asserts the press arrives with `defaultPrevented` false. Escape here
+  closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
+  in the whole time, so the hook's focus-hand-back clause has nothing to do.
+- **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
+  above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
+  as the docked panel's set filter. Every one of the editor's five surfaces is opened by pressing a
+  toolbar button, pressing a button takes the focus out of this field, and the root's `onBlur`
+  closes the list on the way. **That is the whole of what makes a third rung unnecessary**, so a
+  future surface opened without moving the caret — a hotkey, an auto-open — breaks it, and the fix
+  is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope.
+- **The query carries no `marketplace`, and that is a documented exception** to the app's rule that
+  every price-bearing query carries it and has it in the key. A row draws a name, a mana cost and a
+  set code and no price at all, so a currency switch has nothing to change about it, and putting
+  the marketplace in the key would refetch five names for nothing every time one happened. The
+  exception is valid only for as long as the rows stay priceless.
+- **The caret never leaves the field, and two small things are what make that true**:
+  `aria-activedescendant` moves the highlight instead of the focus — which is why the dropdown is
+  a listbox and not a row of buttons, since a reader typing a name must not have to Tab into the
+  answers to take one — and a row's `onMouseDown` refuses the focus a click would otherwise take,
+  without which the click blurs the input, `onBlur` closes the list and the press lands on
+  nothing. The highlight then follows **both** `onPointerMove` and `onMouseMove`, because the
+  mouse and the keyboard must not disagree about which row Enter would take: React synthesises
+  enter/leave from over/out and never listens for `pointerenter` at all, so a move event is the
+  honest one.
+- **The field is named for where the add lands, and a row is named by its own content.** The
+  label is `Quick add a card to <pile>`, or bare `Quick add a card` under `AUTO_CATEGORY`, where
+  there is no one answer because the pile is per card, so the name says only what it can promise
+  — "Quick add a card to Auto (by card type)" would name a *setting* rather than what pressing it
+  does. `DeckEditor.test.tsx` addresses the field by both names, so a reworded label is a suite
+  failure. A row carries **no `aria-label`**: its name is the card's name, the cost's `sr-only`
+  tokens and the set code, and a label carrying only the card's name would make the row
+  indistinguishable from the docked panel's tile for the same card — an ambiguity that is real,
+  because both are on screen at once.
+- **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against the real 116 703-card corpus): `sol` drew **5** rows with row 0 `aria-selected` and
+  `aria-activedescendant` on it. The panel computes `z-index: 30` (`LAYER.popup`),
+  `position: absolute` and `transform-origin: 0px 0px`; its left edge is **285** against the
+  field's **285** and its top **199** against the field's bottom **195** — the `mt-1` — at 288px
+  wide, with no right overflow and `documentElement.scrollLeft` **0**. Two ArrowDowns moved the
+  highlight to index **2** with `document.activeElement` still the field, and Enter added *that*
+  row rather than the top one, filed under `Creature` by its type line. A click on the fourth row
+  added it, left the caret in the field, and drew the colour-identity rule break on the new card —
+  so the click goes the same write-and-validate route the rest of the editor does. The miss read
+  `No card found for “counterspellgoblin”.` with the field's text kept. **The Escape ladder holds
+  one press per layer**: with the card pane open, the first press closed the list and left the
+  pane, keeping the caret in the field, and the second closed the pane. At **1024** the field is
+  208px and neither it nor the status line clips (`body.scrollWidth` 1024). The console recorder
+  caught **5** entries and no error or warning.
+- **Two things the pass did not cover.** Reduced motion on this panel was not emulated — it is the
+  same `popup` preset inside the same `PopupPanel` as the set filter, whose reduction is already
+  measured, so this would be re-measuring a shared component rather than this one. And the
+  freshness guard is **unit-tested only**: reproducing a stale list live means winning a 300ms
+  race by hand, which is what a test with a controlled clock is for.
 
 ## Known open bugs
 
