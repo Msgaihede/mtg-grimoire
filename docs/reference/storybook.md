@@ -9,6 +9,15 @@ pages** — counted off `storybook-static/index.json`, which is the only place t
 per-deck-view-memory `main` merged in**: 434 entries, 386 `story`, 48 `docs`, 50 distinct
 `importPath`s.
 
+**That figure is one low from the moment the borderless-stacks `main` (`cf13568`) merges in, and
+the +1 is deliberately not written into the headline.** That commit adds one story —
+`PinnedSideboard`, into `StackView.stories.tsx`, a file that already existed — so the arithmetic
+says 387 across the same 49 files and 48 docs pages, and arithmetic is exactly what the paragraphs
+below record being wrong about. `main`'s own copy of this headline is stale by the same story for
+the same reason: it was measured before that commit landed. **The number here moves on a rebuild
+and on nothing else** — re-derive all four figures off a fresh `build-storybook` and let the ones
+that did not move say so.
+
 The eleven over the 375 that `main` carried this morning arrived in three shapes, and the shapes
 are the point. `Decks/QuickAdd`'s **six** came in a story file that did not exist before, so the
 file, docs-page and `importPath` counts moved with them, as they had the last time a whole file

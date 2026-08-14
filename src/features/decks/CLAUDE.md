@@ -165,7 +165,12 @@ panel, nothing written until Import). The Rust half and every measurement:
 
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
-price | type`). An **inactive category stays its own group in all three grouping modes**.
+price | type`). An **inactive category stays its own group in all three grouping modes**, and it
+  stays that group _whole_: `buildGroups` appends it carrying its own `kind`, so a switched-off
+  Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
+  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
+  views' Sideboard rail — still sees a sideboard in the two modes that otherwise have no categories
+  in them, which is the right answer in both cases and is a special case in neither.
 - **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
   switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
   one holding cards and `live` is the column that fills as the reader acquires them. Reading
@@ -233,6 +238,32 @@ price | type`). An **inactive category stays its own group in all three grouping
   measures the scroller and passes the height), and a second reading of the same box answers a frame
   behind the layout it is reacting to. The widths, and the law behind all three of these bullets:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **The rail is a plain flex child and nothing about it is sticky**, which is the one thing to read
+  before reinstating anything. It was briefly `sticky right-0` over an opaque `bg-bg` at
+  `LAYER.raised` with a leftward seam shadow, and all four existed for a single reason: to hold the
+  rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
+  downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
+  shadow draws a permanent divider across a layout in which nothing moves. `ml-auto` is the whole
+  mechanism that is left. The rail therefore carries `SIDEBOARD_ATTR` **only**: `STACK_COLUMN_ATTR`
+  means "a box `packColumns` produced", and the rail is by construction the one box it never saw,
+  so a sweep counting columns goes on counting what the packer decided. `views.test.tsx` asserts
+  those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
+  no other test would notice.
+- **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a commander is one card
+  and a companion is one card, and railing either would spend a column's width on a pile that is
+  read at a glance. What it prevents at the other end is a drag with no destination on screen: the
+  Sideboard sorts last, so packed it was the far end of the run, and a card dragged out of the main
+  deck had nowhere to be let go of. The rail is drawn only when a `side` group exists, and **that
+  condition is real for a story and not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard
+  into every deck, a category group draws whether or not anything is in it, and a predefined pile
+  cannot be deleted — so under `category` the rail is there from the moment a deck is created, empty
+  or not. **It costs `stackColumnWidth(zoom)` beside the flow** — 224px at 1×, 434px at 2×, both
+  derived from that one function — which at 2× on a 1280px window is a third of the width standing
+  beside a pile that on a new deck holds nothing. The wrap is what makes that bearable rather than
+  what removes it: below one column plus the rail, the rail takes its own line instead. **The sticky
+  rail's live figures went with the sticky rail** — the `position: sticky`, `z-index: 10` and
+  occlusion readings taken on 2026-08-14 measured the one-commit implementation this branch
+  replaced, and nothing about the wrapping layout has been driven in the window yet.
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,
@@ -258,12 +289,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
-- **`CardStack` is arithmetic, not taste.** The card's height is _derived_ — a Magic card's aspect
-  applied to the fixed column width, plus the data line less its rise, **319px** — and the
+- **`CardStack` is arithmetic, not taste.** The card's height is _derived_: a Magic card's aspect
+  applied to the card's own width gives **293** of image, its two hairlines make that **295**, and
+  the data line less its rise makes **319px**. The
   collapsed **−285px** margin leaves a **34px** reveal, a legibility floor for the overlaid tag
   rather than a fraction. The list gets a fixed `stackHeight(n) = 34(n−1) + 319 + 8`, and the open
   card's margin turns −285 into +8: a **293px** push-down of every later card, out of a box whose
-  height does not change.
+  height does not change. **Those two hairlines are the card's own and they still paint**:
+  `STACK_CARD_BORDER` is a length with two owners, and the pair that stopped painting on
+  2026-08-14 is the group `<section>`'s, one level up in `stackColumnWidth`.
 - **The stack's controls are revealed by the card being _open_, never by `group-hover:`**
   (`revealedWhenOpen`). A collapsed card's only hittable part is its 34px strip, so hovering it
   used to reveal a control bar hundreds of pixels below, behind three other cards. They are a
@@ -288,7 +322,36 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
-  of a card. Scaling the two independently agrees at 1× and drifts at every other stop.
+  of a card. Scaling the two independently agrees at 1× and drifts at every other stop. 210 + 12 +
+  2 = **224** at 1×, which is the `14rem` this replaced, exactly. **The `border` term is the
+  `<section>`'s own hairline and it is `border-transparent`** (see the next bullet): a border box
+  that paints nothing still occupies its 1px either side, so clearing the colour cost this sum
+  nothing — while **deleting the class** would draw every card 2px wider than `stackCardWidth()`
+  says it is, which is the one number the whole of `CardStack` is derived from.
+- **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
+  2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
+  a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
+  `border-dashed border-border bg-surface/40` inactive. A column of card faces is already a
+  rectangle with a hard edge, so an outline around it framed a frame, and fifteen of them read as a
+  form rather than as a deck. **The cost is the one signal that told the two states apart**, so an
+  inactive pile now says so three ways and an active pile says nothing at all: the wash, the dimmed
+  name beside `GroupHeader`'s `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`.
+  The drag marks needed no rework — `DROP_RING` is `ring-2`, and a ring is a box shadow **outside**
+  the border box, so the highlight never read the border it appears to sit on. One thing to know if
+  the lift ever regresses in switched-off piles only: **`opacity-60` makes that `<ul>` a stacking
+  context**, and the `<ul>` is what takes `LAYER.raised` when a card opens.
+  **Measured in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  1280×800): every `<section>` computed `border-width: 1px` with `border-color: rgba(0, 0, 0, 0)` —
+  the box survives, the line does not — the inactive pile computed a `0.6`-alpha wash with its
+  `<ul>` at `opacity: 0.6` against an active pile's transparent and `1`, and during a drag every
+  eligible pile computed its ring while only the pile under the pointer added `DROP_OVER`'s gold
+  and the drag source added neither. Full figures:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **`opacity-60` cannot be checked on an _empty_ pile — `CardStack` returns null for a group with
+  no cards**, so a switched-off empty pile has no `<ul>` in the DOM at all and a probe reports it
+  absent rather than 0.6. Move a card in before reading that signal (this cost the 2026-08-14 pass
+  a read on the Maybeboard). An empty pile carries the other two signals only: the wash and the
+  `INACTIVE` marker.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -311,6 +374,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   293px from where they are going: it reads as the card jumping in front and the stack catching
   up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
   this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+  **`LAYER.raised` has one occupant in this view and that is deliberate**: the rail took the same
+  rung for as long as it was an opaque sticky column, which made the two orderable only by document
+  order. It is a plain flex child now and asks for no z-index at all, so an open card's list is the
+  only thing raised here and there is nothing for it to be ordered against.
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
   lift was observable from neither.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach

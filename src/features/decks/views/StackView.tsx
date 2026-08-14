@@ -21,9 +21,18 @@ import { GroupHeader } from "./GroupHeader";
 /**
  * The group section's own `p-1.5`, one side — 6px, read off the class below.
  *
- * It does not zoom, and neither does the card's border: padding and a hairline are chrome around
- * a card rather than part of one, and a reader who asks for bigger cards is not asking for a
- * thicker gutter. That is why {@link stackColumnWidth} adds them rather than scaling 224.
+ * It does not zoom, and neither does the hairline beside it: padding and a border are chrome
+ * *around* a card rather than part of one, and a reader who asks for bigger cards is not asking
+ * for a thicker gutter. That is why {@link stackColumnWidth} adds them rather than scaling 224.
+ *
+ * **That hairline is the section's own and it is `border-transparent` at rest** (changed
+ * 2026-08-14 — `StackGroup` has the whole of why). It used to be called "the card's border" here,
+ * which was wrong even before it stopped painting: `STACK_CARD_BORDER` is a length, and the two
+ * edges the sum below reserves are drawn by the `<section>`, not by anything inside it. A border
+ * that paints nothing still occupies its 1px, so the box the arithmetic depends on is intact —
+ * but that is only true while the *class* survives. Clearing the colour is the change that was
+ * made; deleting the class is the one that would make every card 2px wider than
+ * `stackCardWidth()` says it is.
  */
 const SECTION_PADDING = 6;
 
@@ -42,6 +51,12 @@ const SECTION_PADDING = 6;
  * own aspect ratio was computed from. Derived, the two cannot disagree at any stop on the ladder.
  *
  * At 1× it is 210 + 12 + 2 = 224, which is the `14rem` this replaced, exactly.
+ *
+ * **The `2 × STACK_CARD_BORDER` term is the `<section>`'s own hairline, and it is transparent.**
+ * It is a real 1px of border box either side whether or not a line is painted in it, so the
+ * width did not move when `StackGroup` stopped drawing the outline. Worth stating because the
+ * term now names a length nobody can see: it is a *box*, not a decoration, and it is what keeps
+ * the card inside filling exactly {@link stackCardWidth}.
  */
 export function stackColumnWidth(zoom: number): number {
   return stackCardWidth(zoom) + 2 * SECTION_PADDING + 2 * STACK_CARD_BORDER;
@@ -53,6 +68,12 @@ export function stackColumnWidth(zoom: number): number {
  * only claim worth pinning is that it decided rather than dropped everything into one box.
  * `DropIndicator`'s `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for
  * the same reason.
+ *
+ * **The Sideboard's rail is deliberately not one of these.** This attribute means "a box
+ * `packColumns` produced", and the rail is by construction the one box it did not: it is taken
+ * out of the packer's input, so a sweep that counts columns is counting what the pack decided
+ * and must not find it. It carries `SIDEBOARD_ATTR` (`columns.ts`) alone — one name, shared with
+ * `TextView`, which has no columns of this kind to be confused with.
  */
 export const STACK_COLUMN_ATTR = "data-stack-column";
 
@@ -120,10 +141,13 @@ export function StackView({
   // chrome at every stop on the ladder. A px number in an inline style rather than the `14rem`
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
-  // The Sideboard never enters the pack: it is lifted out here and drawn in the rail below, so
-  // `packColumns` is handed a shorter list and its contract — greedy, in the reader's own
-  // order, never reordering — is untouched. Splitting *after* packing would mean pulling a
-  // group out of a column somebody else is already sharing, and re-flowing the rest.
+  // **The split happens before the pack, and it has to.** `packColumns` fills a column in the
+  // reader's own order and never re-orders anything, so a sideboard left in that stream lands
+  // in whichever column happened to have room for it. A rail held against the right edge is not
+  // a column the packer may put anything in, so it is taken out of the packer's *input* rather
+  // than pulled back out of its answer — which would mean lifting a group out of a column
+  // somebody else is already sharing and re-flowing the rest. Why `kind === "side"` is the whole
+  // test, and why there is no grouping-mode check beside it: {@link splitSideboard}.
   const { flow, sideboard } = splitSideboard(groups);
   // The pack has to see the zoom too — a taller stack is fewer groups to a column. Wrapped
   // rather than passed by name, because `packColumns` takes a measurement of one item and knows
@@ -168,8 +192,10 @@ export function StackView({
           width and scrolling sideways. `min-w-0`/`flex-1` cannot say it — they describe how a
           box shares slack, not the width at which it must stop sharing. `flex-wrap` is what
           sends the column that will not fit onto the next line, and `items-start` keeps a column
-          its own height: stretched, a switched-off pile's dashed border would grow to the
-          tallest thing on its line and read as an empty box nobody drew.
+          its own height: stretched, a switched-off pile's `bg-surface/60` wash would grow to the
+          tallest thing on its line and read as an empty box nobody drew. (It was the dashed
+          outline that made this obvious, until 2026-08-14 took the outline away — the wash it
+          left behind stretches exactly as far.)
 
           **No `content-start` here, on purpose.** This box is a flex item of a line the outer
           `items-start` never stretches, so its height is exactly its content's, there is no free
@@ -267,15 +293,32 @@ function StackGroup({
       // stop Tab has to travel through.
       {...deckGroupProps(group.categoryId)}
       className={cn(
-        "relative rounded-lg p-1.5",
-        // A switched-off pile is drawn as a dashed outline over the faintest of
-        // washes: present, reachable, and visibly not part of the deck.
-        group.isActive
-          ? "border border-border"
-          : "border border-dashed border-border bg-surface/40",
-        // `AppShell`'s pair, as in the other three views — a ring rather than this column's own
-        // border colour, so the dashed edge that says "switched off" is not overwritten by the
-        // mark that says "drop here".
+        // **`border-transparent`, and it is not the same thing as having no border.** The card
+        // inside fills this section's content box, and `stackColumnWidth` is
+        // `stackCardWidth(zoom) + 2·SECTION_PADDING + 2·STACK_CARD_BORDER` — that last term is
+        // *this* hairline. Drop the class and the content box grows by 2px, so every card paints
+        // 2px wider than `stackCardWidth()`, which is the one number the whole `CardStack` file's
+        // arithmetic is derived from; nothing would go red and every card in the view would be
+        // very slightly the wrong shape. Transparent keeps the box and paints nothing, which is
+        // the whole of what was wanted here: a pile of cards on the desk, not a pile of cards in
+        // a box. See {@link SECTION_PADDING}.
+        "relative rounded-lg border border-transparent p-1.5",
+        // A switched-off pile is a wash and nothing else now. It used to be a *dashed* outline
+        // over a fainter one (`bg-surface/40`), and the dash was the signal — which only worked
+        // while every other pile carried a solid outline for it to differ from. With no outline
+        // anywhere the dash had nothing to be different from, so the wash goes up and takes the
+        // whole job. It is still one of three things saying it: this, `GroupHeader`'s dimmed name
+        // and `INACTIVE` chip, and the stack's own `opacity-60` below. An active pile carries
+        // none of the three, which is the right asymmetry — being in the deck is the default, and
+        // being switched off is the fact worth spending marks on.
+        !group.isActive && "bg-surface/60",
+        // `AppShell`'s pair, as in the other three views, and **the border going away changed
+        // nothing here.** A `ring` is a box shadow drawn *outside* the border box, so the drop
+        // affordance never depended on there being a line to draw it against or to overwrite —
+        // it is painted in the same place, at the same width, on a section whose own edge is now
+        // invisible. Said out loud because it is the first thing a reader will suspect: taking an
+        // outline away from a drop target looks exactly like the change that would have broken
+        // one, and this is not it.
         eligible && DROP_RING,
         over && DROP_OVER,
       )}
@@ -302,6 +345,20 @@ function StackGroup({
           onSelect={onSelect}
           actions={actions}
           zoom={zoom}
+          // The third of the three signals a switched-off pile carries — the wash on the section
+          // and `GroupHeader`'s dimmed name and `INACTIVE` chip are the other two. Card art is the
+          // loudest thing in this view by a wide margin, so a pile whose *chrome* says "not in
+          // the deck" while its cards read at full strength says it twice as quietly as it meant
+          // to. 60 % is far enough back to sort at a glance and near enough to still read.
+          //
+          // **`opacity` below 1 makes this `<ul>` a stacking context**, and that `<ul>` is exactly
+          // the element that takes `LAYER.raised` when a card in it opens. The lift survives it —
+          // what comes forward over the groups below is the whole raised list, and the raised
+          // list *is* this new context's root, so it moves as one — but this is the first thing
+          // to check if that lift ever regresses on an inactive pile. It is the only place in
+          // this view where a stacking context appears out of a property that is not a z-index,
+          // and `layers.ts`' sweep cannot see it.
+          className={group.isActive ? undefined : "opacity-60"}
         />
       )}
     </section>

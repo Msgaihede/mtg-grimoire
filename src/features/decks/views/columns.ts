@@ -58,6 +58,13 @@ export function packColumns<T>(
  * reason `STACK_COLUMN_ATTR` is one: which side of the desk a group was drawn on is a *layout*
  * and says nothing to a reader who cannot see it, so there is no role to give it and no
  * accessible name to search by.
+ *
+ * **The rail carries this and nothing else.** It is not also a `STACK_COLUMN_ATTR` box: that
+ * attribute means "a box `packColumns` produced", and the rail is by construction the one box it
+ * did not — the split above runs *before* the pack. One element answering both would make every
+ * sweep that counts columns count a box the packer never made. The name is unprefixed for the
+ * same reason it lives here: `TextView` draws the same rail, and a `STACK_`-prefixed constant in
+ * that file would be the wrong word in the right place.
  */
 export const SIDEBOARD_ATTR = "data-sideboard-rail";
 
@@ -71,12 +78,24 @@ export const SIDEBOARD_ATTR = "data-sideboard-rail";
  * pack, which is the failure this whole arrangement exists to remove.
  *
  * Generic on a structural `{ kind }` rather than on `CardGroup`, so this file stays what its
- * header says it is. A **derived** group — "Mana value 3", a heading and nothing more — carries
- * `kind: null` and therefore flows. That is the whole of what grouping by mana value or type
- * changes here: the buckets flow, and the rail is drawn whenever a `side` group still arrives —
- * which one does the moment the reader has switched the Sideboard **off**, since `buildGroups`
- * appends an inactive category as itself, `kind` and all. The mode is not a thing this function
- * can see, and must not become one.
+ * header says it is.
+ *
+ * **`kind === "side"` is the whole test, and there is deliberately no grouping-mode check beside
+ * it** — not because the other two modes cannot produce a rail, but because `kind` is already the
+ * honest answer in all three.
+ *
+ * Under `Group by mana value` and `Group by type`, `buildGroups` buckets only the *active* cards,
+ * and each bucket it invents carries `kind: null` — "Mana value 3" has no rules role, so it can
+ * never be pinned. But the derived arm does not stop there: it appends every **switched-off** pile
+ * as itself, `categoryGroup` and all, so a Sideboard the reader has switched off arrives in those
+ * modes still carrying `kind: "side"` and this split still sends it to the rail. That is the right
+ * answer — it is the same pile, it is still a drop target, and `buildGroups` was already sending
+ * it to the right-hand end of the list — and reading it off `kind` is what gets it right for free.
+ *
+ * A mode check would be a second place to state what `CardGroup` already carries, and it would get
+ * exactly that case wrong: it would flow a pile that ought to stay in the rail, in the two modes
+ * where it is the only category on the desk. `groupBy` is also a deck concept, and this is the one
+ * file here whose whole discipline is not knowing what a deck is.
  *
  * Order is preserved inside both halves. `packColumns` is handed `flow` and its whole constraint
  * is the reader's own order, so a split that reordered would break the packer's contract from
