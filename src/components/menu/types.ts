@@ -7,11 +7,18 @@ import type { LucideIcon } from "lucide-react";
  * A menu is **data**, not markup: every caller builds a `MenuItem[]` and the panel draws it.
  * That is what keeps a right-click's rows the same shape wherever the reader opens one — a card
  * in the collection wall, a row in a table, a tile in the deck editor — and what lets the
- * keyboard model (roving caret, type-ahead, submenu open/close) be written once against the
- * array rather than once per surface.
+ * keyboard model (roving caret, submenu open/close) be written once against the array rather
+ * than once per surface.
  *
- * `id` is the row's identity for React keys, the caret and type-ahead. It is unique **within
- * one menu level** rather than globally; a submenu's items are their own list.
+ * **There is no type-ahead, and that absence is load-bearing rather than a gap to fill.** This
+ * comment claimed one until 2026-08-14, which was worse than a stale word: `ContextMenu`'s
+ * argument for yielding `ArrowUp`/`ArrowDown` to a field inside a `lazy` body rests on printable
+ * keys reaching that field, so an agent who read the model here and "restored" the missing
+ * feature would take the arrows back off the caret it was typing in. The panel's `onKeyDown`
+ * handles the caret keys and returns for everything else; see the note at that switch.
+ *
+ * `id` is the row's identity for React keys and for the caret. It is unique **within one menu
+ * level** rather than globally; a submenu's items are their own list.
  */
 export type MenuItem = MenuAction | MenuRadio | MenuSubmenu | MenuLazy | MenuSeparator;
 

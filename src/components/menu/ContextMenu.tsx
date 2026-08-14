@@ -82,7 +82,20 @@ interface RowsContext {
   closeSubmenu: (rowDepth: number) => void;
   /** Hand focus back, close the menu, then do the thing. */
   run: (onSelect: () => void) => void;
-  /** Close the whole menu and hand focus nowhere — a lazy panel's `onDone`. */
+  /**
+   * Hand focus back and close, with no thing to do — a lazy panel's `onDone`, for a body that
+   * finishes *without* a row being chosen.
+   *
+   * **It hands the caret back, and until 2026-08-14 it did not.** The reader who presses `Add`
+   * in "Tag card → New tag…" has acted as deliberately as the reader who picks an existing tag
+   * two rows above it, and that row goes through {@link run} — so a panel whose halves disagreed
+   * about the caret dropped it on `<body>` for one of them. This is {@link run} minus the action,
+   * and that is the whole of the difference between them.
+   *
+   * Not to be confused with an **outside press**, which closes and deliberately hands the caret
+   * to nobody: that path calls `onClose` directly and is untouched by this. A reader who clicks
+   * elsewhere has said where they want to be.
+   */
   close: () => void;
 }
 
@@ -398,7 +411,12 @@ export function ContextMenu({
         onClose();
         onSelect();
       },
-      close: onClose,
+      // `run` with nothing to run. See the declaration for why the hand-back belongs here too,
+      // and why an outside press — which calls `onClose` directly — is not this.
+      close: () => {
+        opener?.focus();
+        onClose();
+      },
     }),
     [openPath, opener, onClose],
   );

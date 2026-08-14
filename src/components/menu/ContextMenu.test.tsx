@@ -685,6 +685,45 @@ describe("ContextMenu", () => {
     return Content;
   }
 
+  /**
+   * A lazy body that finishes *without* a row — "Tag card ▸ New tag… ▸ Add" — hands the caret
+   * back exactly as a row does.
+   *
+   * The two halves of that one panel used to disagree. Its tag rows are drawn by `MenuRows`, so
+   * they go through `ctx.run` and put the caret back on the card; the `Add` button beside them
+   * called `onDone`, which was a bare `onClose`, and dropped it on `<body>`. A reader pressing
+   * `Add` has acted as deliberately as one picking an existing tag two rows above it, so
+   * `ctx.close` is `run` with nothing to run.
+   *
+   * This sits at the primitive rather than in `deckCardMenu.test.tsx` because that is where the
+   * fix is — and because the builder's own test renders the body standalone with a `vi.fn()`
+   * `onDone`, where there is no panel and no opener for a lost caret to be lost *from*. That is
+   * the shape of test this defect hid behind for the whole branch.
+   */
+  it("hands the caret back when a lazy body finishes without a row", async () => {
+    const user = userEvent.setup();
+    function Content({ onDone }: { onDone: () => void }) {
+      return (
+        <>
+          <input aria-label="New tag" defaultValue="" />
+          <button type="button" onClick={onDone}>
+            Add
+          </button>
+        </>
+      );
+    }
+    open([{ kind: "lazy", id: "tag", label: "Tag card", Content }]);
+    const target = screen.getByRole("button", { name: "target" });
+    rightClick(target);
+    await screen.findByRole("menu");
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(target).toHaveFocus();
+  });
+
   it("gives the caret keys to a text field inside a panel", async () => {
     const user = userEvent.setup();
     tagField();
