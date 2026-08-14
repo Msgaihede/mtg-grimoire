@@ -74,11 +74,20 @@ export const Default: Story = {
     await expect(canvas.getByLabelText("Format")).toHaveValue("modern");
     await expect(canvas.getByLabelText("Folder")).toHaveValue("");
     // The caption beside the label, not the option inside the select — both say the words, and
-    // only one of them is the deck's own state. The dialog's arrival is waited out here rather
-    // than on the reads above, because this is the play's one visibility claim — see
-    // {@link FRAME_WAIT}.
+    // only one of them is the deck's own state.
+    //
+    // **`waitFor`, because this dialog is a `motion` surface**: its first painted frame carries
+    // its `initial`, so `toBeVisible` is false for everything inside it until the next frame —
+    // the rule `src/CLAUDE.md` states and the reason an assertion about content in a newly
+    // opened overlay cannot be a bare `expect`. It passed as one for exactly as long as nothing
+    // else was awaiting on the way in; the oracle-tag reads a deck now makes were enough to
+    // move it a frame, and jest-dom prints the failing element with `maxDepth: 0`, so it
+    // reported an empty `<p>` and looked for all the world like missing data. The dialog now
+    // sits inside `DeckDialog`'s scrim as well, which is one more animated element again — so
+    // the wait is given {@link FRAME_WAIT} rather than the default, for the reason that
+    // constant records: under suite load a frame is not the only thing being waited on.
     const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
-    await waitFor(async () => await expect(caption.getByText("Top level")).toBeVisible(), {
+    await waitFor(() => expect(caption.getByText("Top level")).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
   },

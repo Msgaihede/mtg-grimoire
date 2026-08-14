@@ -854,6 +854,37 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * What the docked panel's **format filter** opens on — this deck's format, or `null` for
+   * `Any format`.
+   *
+   * **`spec.hasLegalityData` is the fence, and it is the seeded cell rather than a list of the
+   * two keys it happens to be false for.** `filters.rs` looks a format key up in
+   * `legalities::bit()` and, for a key that build has never heard of, pushes the literal SQL
+   * `0` — no rows, deliberately, so an unknown format cannot quietly answer with the whole
+   * corpus. `LEGALITY_KEYS` is 23 keys and has never carried `casual` or `limited`: those two
+   * are pseudo-formats, `format_specs` rows seeded `has_legality_data = 0`, judged against no
+   * card pool at all. So defaulting a Casual deck's panel to `casual` would draw an empty wall
+   * with nothing on screen saying why — and `casual` is what every deck is born in, so that is
+   * the ordinary case rather than the edge one. Reading the cell is also what keeps this from
+   * being a second copy of the seed: a hard-coded pair of keys, or a guess from the spelling,
+   * would have to be corrected here on the day a third pseudo-format is seeded.
+   *
+   * `null` in the two states where there is no spec to read, and it is the right answer in
+   * both: while `useFormatSpecs` is still in flight, and for a deck whose format has left the
+   * seed (`decks.format_key` is deliberately not a foreign key, so that state can exist). A
+   * panel opening on `Any format` is a working panel the reader can narrow themselves; one
+   * opening on a filter the backend cannot answer is a wall of nothing.
+   *
+   * `spec.displayName` rather than `row.formatName`, because the spec is what the fence already
+   * required — one source cannot disagree with itself, and the deck row carries its own copy of
+   * the name.
+   */
+  const searchFormatDefault = useMemo(
+    () => (row && spec?.hasLegalityData ? { value: row.formatKey, label: spec.displayName } : null),
+    [row, spec],
+  );
+
+  /**
    * How many rows the two lists disagree about — a **row** count, which is what "cards differ"
    * means to a reader looking at a list of cards.
    *
@@ -1445,6 +1476,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             categories={categories}
             targetCategoryId={targetCategoryId}
             onTargetCategoryChange={setTargetCategoryId}
+            defaultFormat={searchFormatDefault}
             roomy={roomForPanel}
           />
         </div>

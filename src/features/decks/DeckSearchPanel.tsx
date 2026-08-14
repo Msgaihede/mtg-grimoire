@@ -6,7 +6,7 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
-import { useCardSearch } from "@/features/search/useCardSearch";
+import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
@@ -135,6 +135,28 @@ export interface DeckSearchPanelProps {
   targetCategoryId: number;
   onTargetCategoryChange: (categoryId: number) => void;
   /**
+   * The format the filter row's Format select **opens** on — the open deck's, handed down
+   * rather than read here, for the reason {@link DeckSearchPanelProps.categories} is: the
+   * editor already holds the deck row and the `format_specs` row beside it, and a second
+   * component reading the open deck's format beside the one that already has it is how a panel
+   * starts filtering for a format the editor is not showing.
+   *
+   * **A default, never a constraint.** It seeds `useCardSearch`'s `format` state and reaches
+   * nothing else: `Any format` stays first in the list, the reader may move the select to any
+   * format including one this deck is not legal in, and the card they then press Add on is
+   * added. A card the format does not allow is `validation/engine.ts`'s `RULE BREAK` to draw —
+   * a search that refused to show it would be this panel enforcing a rule the engine owns, and
+   * would make a deliberate trip out of the format (a sideboard, a proxy, a deck about to be
+   * re-formatted) impossible rather than merely marked.
+   *
+   * `null` and absent both mean **Any format**, and that is a working panel rather than a
+   * degraded one. It has to be: the editor's answer is `null` while the format seed is still
+   * loading, and `null` again for a deck whose format has no legality data to filter by at all
+   * — a key `search_cards` does not recognise draws an empty wall with nothing on screen to
+   * explain it.
+   */
+  defaultFormat?: FormatFilterOption | null;
+  /**
    * Whether the editor has room to draw this open — measured, not guessed (see
    * `DeckEditor`'s `DECK_FLOOR`).
    *
@@ -174,6 +196,7 @@ export function DeckSearchPanel({
   categories,
   targetCategoryId,
   onTargetCategoryChange,
+  defaultFormat,
   roomy = true,
 }: DeckSearchPanelProps) {
   /**
@@ -363,7 +386,12 @@ export function DeckSearchPanel({
           {@link OpenPanel}. One `{shown && …}` where there were five, which is what makes the
           search a thing the reader asks for rather than a thing every deck pays for. */}
       {shown && (
-        <OpenPanel add={add} categories={categories} targetCategoryId={targetCategoryId} />
+        <OpenPanel
+          add={add}
+          categories={categories}
+          targetCategoryId={targetCategoryId}
+          defaultFormat={defaultFormat}
+        />
       )}
     </section>
   );
@@ -389,8 +417,20 @@ function OpenPanel({
   add,
   categories,
   targetCategoryId,
-}: Pick<DeckSearchPanelProps, "add" | "categories" | "targetCategoryId">) {
-  const search = useCardSearch();
+  defaultFormat,
+}: Pick<DeckSearchPanelProps, "add" | "categories" | "targetCategoryId" | "defaultFormat">) {
+  // The deck's format seeds the Format select and nothing else — the hook owns what a default
+  // does to filter state, this panel owns only handing it the deck's answer. See
+  // {@link DeckSearchPanelProps.defaultFormat} for why that is a seed rather than a fence.
+  //
+  // **The seed is applied on mount, and this component mounts on the press** — so a reader who
+  // opens the panel, changes the Format filter and then collapses it gets the deck's format
+  // back on the next open, rather than the filter they left. That is the same throw-away rule
+  // the doc above states for every other piece of this panel's state, and it is the right one
+  // here for a reason of its own: a *default* the reader has to re-clear on every open would be
+  // a fence, which is exactly what `defaultFormat` promises not to be — but a default that
+  // silently stopped applying after the first open would be a seed that only worked once.
+  const search = useCardSearch({ defaultFormat });
   const { query, rows, searchKey } = search;
 
   // Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
