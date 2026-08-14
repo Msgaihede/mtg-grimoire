@@ -100,20 +100,28 @@ function FakeWorld({
  * not expose the initializer it was given, and the store's actions close over that one store's
  * `set`, so a second instance of it cannot be built from `.storybook/` — it would take an edit
  * to component source, which this branch does not have. So the store is reset per story on the
- * canvas and left alone on a docs page, and the four story files that **write** it during
- * render — `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
+ * canvas and left alone on a docs page, and the story files that **write** it during render —
+ * `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
- * its own module graph. Everything else on every other docs page is isolated in-process, which
- * is what keeps the catalogue readable: **43 of the 51 story files still render inline** —
- * re-derived 2026-08-14 on the merged tree, from the built index *and* from source, which is the
- * only way this figure has ever been right. The count has now rotted three times over (it read
- * "30 of 34" against 44 files, then "40 of 47" against 48 — where the 40 was right and only the
- * total was stale, which is the harder kind to notice). **The other four non-inline
- * files carry the same parameter for reasons of their own**: `DeckSettingsDialog`,
- * `CreateDeckDialog` and `ImportDeckDialog` each have a `fixed inset-0` scrim that rendered
- * inline would cover the whole docs page rather than its own block, and `CardZoomIndicator`
- * declares it on **one story** rather than on the file, so that pressing Zoom in on the docs
- * page cannot leave a pulse behind in the page's own store.
+ * its own module graph. Most of the catalogue is isolated in-process instead, which is what
+ * keeps it readable.
+ *
+ * **There is no longer a count here, and its deletion is the fix rather than a gap.** This
+ * paragraph used to carry "43 of the 51 story files still render inline" and it rotted three
+ * times over — "30 of 34" against 44 files, then "40 of 47" against 48, where the 40 was right
+ * and only the total was stale, which is the harder kind to notice. `.storybook/CLAUDE.md`'s rule
+ * is the general form: **a count is a fact about a _tree_**, so every open branch has its own and
+ * none is the one being shipped. Measure it at the moment of need — `npm run build-storybook`,
+ * then `storybook-static/index.json`.
+ *
+ * **The other files carrying the same parameter do so for reasons of their own**, and the reasons
+ * are what is worth writing down: `DeckSettingsDialog`, `CreateDeckDialog`, `ImportDeckDialog` and
+ * `ExportDialog` each draw a `fixed inset-0` scrim that rendered inline would cover the whole docs
+ * page rather than its own block; `ContextMenu` draws a `fixed` panel at `LAYER.popup` for the
+ * same reason, and needs the frame twice over, since a per-story iframe is also a fake world per
+ * story — which a press handler, unlike a `queryFn`, is not otherwise bound to; and
+ * `CardZoomIndicator` declares it on **one story** rather than on the file, so that pressing Zoom
+ * in on the docs page cannot leave a pulse behind in the page's own store.
  */
 const withFake: Decorator = (Story, context) => {
   // **Here and not in `installWorld`, and not inside `FakeWorld`'s memo either.** A global is
