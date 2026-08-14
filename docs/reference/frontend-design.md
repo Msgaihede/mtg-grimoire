@@ -859,17 +859,66 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     order the query produced — `list_sets` newest-first, `format_specs_list` by a seeded
     `sort_order`, deck categories by the reader's own drag — and each of those is still the
     right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
-  - **A pinned row stays pinned, outside the sort**: `Any format`, `Any set`, the disabled
-    `Custom…` a table-header sort leaves behind, `Auto (by what it does)`, `Top level`.
+  - **A pinned row stays pinned, outside the sort**: `Any card`, `Any format`, `Any set`, the
+    disabled `Custom…` a table-header sort leaves behind, `Auto (by what it does)`, `Top level`.
     `CategoriesDialog`'s `are deleted with it` is pinned **last** — the destructive answer is
-    not allowed to become the default by alphabet. (A sixth, the deck card's permanent `Move…`
+    not allowed to become the default by alphabet. (A seventh, the deck card's permanent `Move…`
     verb, went with that select on 2026-08-14.)
+  - **The search's format select pins _two_ rows, and their order is a ladder rather than an
+    alphabet** (2026-08-14): `Any card`, then `Any format`, then the sorted formats — widest to
+    narrowest. `Any card` is what the `Unplayable` chip beside this select became; the bullet
+    below this block says why the two controls became one.
   - **Two exemptions, and they are the whole list.** A **grade scale** — card condition runs
     Near Mint → Damaged, and alphabetised it would open on "Damaged". And an order **the
     reader arranged themselves** — a deck's categories are drag-sorted in `CategoriesDialog`
     and rendered in that order by all four deck views, so an alphabetical dropdown would
     disagree with the columns beside it. Both carry a comment at the site saying so, because
     the next sweep for unsorted selects will otherwise "fix" them.
+
+- **The search's `Unplayable` chip is a row of its format select now** (2026-08-14) — one control
+  where there were two, `FilterBar.tsx` plus `useCardSearch.ts`'s `ANY_CARD` and `formatParams`.
+  The chip sent `playableOnly: undefined` and the select sent a `legalities` key, and the two were
+  moving one axis in opposite directions: `Any format` already means "legal in at least one of
+  Scryfall's 23 formats", so the chip's only reachable effect was to widen *that* row. Pressed
+  with a format picked it did nothing at all — a card legal in Modern is legal somewhere — and
+  the state it appeared to promise, "Modern **and** the art cards", is a filter contradicting
+  itself. Three rows say the whole thing once, widest first: `Any card`, `Any format`, then one
+  named format.
+  - **The default did not move.** `Any format` is where the select opens and what the search has
+    always sent (`playableOnly: true`), so no wall changed shape — see the search stories'
+    43 → 41 → 38 → 33 arithmetic, which is unchanged.
+  - **`playableOnly` rides with a named format too**, which is what makes the rows nest rather
+    than overlap. It narrows nothing there, and sending it means one expression answers all three
+    rows with no fourth combination to reach. `formatParams` is the only place that branch is
+    written, and both the page's payload and the facet request spread it — two copies are how a
+    wall of cards and the counts greying the chips beside it come to describe different corpora.
+  - **Two behaviours reversed with the merge, both deliberately.** The row is now **counted by
+    Reset all and cleared by it**; the chip was neither, on the argument that it said what there
+    is to look *through* rather than what to look for. That argument belonged to the chip, and a
+    select the reset can only half-clear is worse than either. `allPrintings` keeps it and is
+    the only control on the row that still does.
+  - **`unfiltered` deliberately does *not* count it**, which is the one place the two numbers
+    disagree about the same value. That flag captions an empty wall — "waiting for the sync"
+    against "your search missed" — and `Any card`'s result set is a **superset** of `Any format`'s,
+    so an empty answer to it still proves the database is empty. `formatIsReaderSet` carries the
+    arm.
+  - **The sentinel is `"any-card"`, and the hyphen is the fence.** It shares a namespace with
+    Scryfall's `legalities` keys and with `format_specs.key`, and neither has ever carried one —
+    they are single lowercase words (`standardbrawl`, `paupercommander`, `oldschool`). Equality
+    against the value is therefore enough, and no flag has to travel beside it.
+  - **A `<select>` whose value matches no option now falls back to the *widest* row.** React
+    never assigns `select.value`; `react-dom` walks the options setting `selected` and on no match
+    picks the first that is not disabled — which used to be `Any format` and is now `Any card`.
+    That is the deck panel's seeded-format case (a Brawl or Oathbreaker key `FORMATS` does not
+    carry), and it fails further than it did: the control would read "every card" over a filtered
+    wall rather than merely the wrong filter. The hook seeding `formats` with the caller's key is
+    still the whole fix.
+  - **Neither pinned row carries a `title`, and the labels stay two words for a measured reason.**
+    A `title` on an `<option>` is not drawn by Windows' native dropdown, so the sentence explaining
+    that "any card" means art cards, tokens and emblems could only ever be read by a screen
+    reader. And a `<select>` is as wide as its widest option, on a row that has to survive the
+    deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
+    label would be paid for in that column at every width.
 
 ## Vendored components and tokens
 
