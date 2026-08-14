@@ -2,37 +2,64 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **387 stories across 49 story files, 48 docs
+`npm run storybook` · `npm run build-storybook`. **389 stories across 49 story files, 48 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 50th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the column-overflow branch **with the
-borderless-stacks and deck-stats-band `main` merged in**: 435 entries, 387 `story`, 48 `docs`, 50
-distinct `importPath`s.
+**Measured 2026-08-14** off a fresh `build-storybook` on the merge commit being shipped — the
+column-overflow branch with the X-mana-category `main` (PR #43) merged in: **437 entries, 389
+`story`, 48 `docs`, 50 distinct `importPath`s.** **Only the first two moved**; the docs-page, story
+file and `importPath` counts are re-derived off that same index and unchanged, which is what they
+are supposed to say on a merge where no story file arrived.
 
 **An earlier draft of this headline said 386 and added a paragraph explaining that it was one low,
 because `cf13568`'s `PinnedSideboard` had not been counted yet and arithmetic said 387.** The
-arithmetic was right this time. That is not why the number here is 387: it is 387 because the tree
-was rebuilt and the index read. **Writing down a figure you have reasoned to, alongside a note
-saying it is the figure you reasoned to, is still not a measurement** — and this file is four
-paragraphs of branches whose arithmetic was also nearly right. Re-derive all four figures off a
-fresh `build-storybook` on the merge commit you are shipping, and let the ones that did not move
-say so.
+arithmetic was right that time. That is never why a number here is right: it is right because the
+tree was rebuilt and the index read. **Writing down a figure you have reasoned to, alongside a note
+saying it is the figure you reasoned to, is still not a measurement** — and this page is a column
+of branches whose arithmetic was also nearly right. Re-derive all five — stories, entries, docs
+pages, story files, `importPath`s — off a fresh `build-storybook` on the merge commit you are
+shipping, and let the ones that did not move say so.
 
-The twelve over the 375 that `main` carried this morning arrived in three shapes, and the shapes
-are the point. `Decks/StackView`'s `PinnedSideboard` is the twelfth, from the borderless-stacks
-branch, and it went into a file that already existed. `Decks/QuickAdd`'s **six** came in a story file that did not exist before, so the
-file, docs-page and `importPath` counts moved with them, as they had the last time a whole file
-arrived. `Decks/Editor`'s **one** — `ReopensOnThePlan`, the deck that reopens on the tab, grouping
-and sort it was left on — and the deck views' **four** — `WrappedColumns` and `SideboardRail` in
-each of `StackView` and `TextView` — went into files that already existed, so they move the story
-and entry totals and nothing else. **Which shape a branch is does not tell you which figures to
-re-derive**: re-derive all of them, and let the ones that did not move say so.
+**This figure was measured twice in one hour and moved between them**, on the `origin/main` side of
+this merge, which is the strongest form of the lesson below: the first build of that tree answered
+**384** (432 entries), and a further `main` — PR #46's stack-border work, adding stories to a file
+that already existed — took it to **385** without moving the file or docs-page counts. A branch
+that sits open while `main` advances does not have a story total; it has one *per merge*.
 
-**This headline has now conflicted on three consecutive merges of `main`, and every resolution
-was a rebuild rather than an addition.** All three happened to agree with the arithmetic
-afterwards. That agreement is not the reason to trust them: the paragraph below is a branch that
-trusted the arithmetic and was wrong, and the one under that is two branches that were each right
-about a tree nobody was shipping.
+**Both sides of this merge measured honestly, and neither figure survived it — the fourth time
+running.** This branch built **387** across 49 files with the borderless-stacks and
+deck-stats-band `main` merged in (435 entries, 387 `story`, 48 `docs`, 50 distinct `importPath`s),
+and `origin/main` carried **385** across 49 files once PR #43 was in it (433 entries, 385 `story`,
+48 `docs`, 50 `importPath`s). Each was right about its own tree; the tree that ships is the merge
+of the two and is neither — the same shape as the merge before it, where the X-mana-category branch
+built **383** across 49 files against the then-`main` (431 entries) and the per-deck-view-memory
+branch built **382** against that same base (430 entries). **This headline has now conflicted on
+four consecutive merges of `main`, and every resolution was a rebuild rather than an addition.**
+All four happened to agree with the arithmetic afterwards. That agreement is not the reason to
+trust them: further down this page a branch trusted the arithmetic and was wrong (`369 + 6 = 375`
+against a tree of 374), and below that two branches wrote the same `416 entries, 369 story` into
+the same paragraph within an hour, each right about a tree nobody was shipping.
+
+Each side's delta is kept because it says where the stories came from, and neither is a licence to
+add. **381** was the quick-add `main` every branch in this merge started from, and the fourteen
+over the 375 that `main` carried that morning arrived in three shapes, and the shapes are the
+point. `Decks/QuickAdd`'s **six** came in a story file that did not exist before — they are what
+took `main` from 375 to 381 — so the file, docs-page and `importPath` counts moved with them, as
+they had the last time a whole file arrived. Eight went into files that already existed, so they
+move the story and entry totals and nothing else: `Decks/DeckStats`' **two** on the
+X-mana-category side — `ManaCurveWithX` and `ManaCurveSplitX`, the pair the X mana category is
+measured over, one deck drawn twice with nothing between them but the toggle, which take that file
+from seven stories to nine and it already had a docs page; `Decks/Editor`'s **one**,
+`ReopensOnThePlan`, the deck that reopens on the tab, grouping and sort it was left on;
+`Decks/StackView`'s **one**, `PinnedSideboard`, from the borderless-stacks branch; and this
+branch's **four** — `WrappedColumns` and `SideboardRail` in each of `StackView` and `TextView`.
+The third shape moves nothing at all: **a rewritten story is invisible to every count on this
+page.** The X branch's other three story files changed stories they already had
+(`Components/FilterChips`' mana-value pair gained the X chip, `Decks/DeckEditor`'s `GroupAndSort`
+gained the `Split X` control, `Search/Page`'s `Empty` gained a paragraph), and none of that reaches
+a figure here. That branch alone, before it took `main` in, was **372**. **Which shape a branch is
+does not tell you which figures to re-derive**: re-derive all of them, and let the ones that did
+not move say so.
 
 **That 375 was itself measured twice on 2026-08-14, on two trees, and meant two different
 things**: 375 across **48** files on the game-changer branch (422 entries, 47 docs, 49
@@ -91,13 +118,17 @@ can go missing from the prose while the story total still looks plausible.
 **47 of the 49 are `autodocs`**, plus `.storybook/DesignSystem.mdx`: the tag is declared per
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
-(Re-derived 2026-08-14 from the built index rather than carried forward: `47 + 1 mdx = 48` docs
-pages against 49 story files, and the two opting out are still the same two. **The line above it
-and this parenthetical disagreed for one merge** — the headline had been updated to 47-of-49
-while the arithmetic under it still read `46 + 1 mdx = 47` against 48 files, which was true one
-merge earlier. A derived count went stale two terms at a time while the term that names it, 47
-autodocs, stayed right, inside the very sentence that says not to carry one forward. Two branches
-found it independently, which is the only reason it did not survive a third merge.)
+(Re-derived on the merged tree 2026-08-14, from source and from the built index rather than from
+either side of the merge: **47 autodocs + 1 `.mdx` = 48 docs pages**, against 49 story files, and
+the two opting out are still `CategoriesPanel` and `TheoryDiffDialog` — checked by grepping the
+tag, and by reading back the two story `importPath`s the index has no `docs` entry for, rather
+than by subtracting. Every term held this merge, which is the only sort of "unchanged" worth
+writing down. **The line above it and this parenthetical disagreed for one merge** — the headline
+had been updated to 47-of-49 while the arithmetic under it still read `46 + 1 mdx = 47` against 48
+files, which was true one merge earlier. A derived count went stale two terms at a time while the
+term that names it, 47 autodocs, stayed right, inside the very sentence that says not to carry one
+forward. Two branches found it independently, which is the only reason it did not survive a third
+merge.)
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a
@@ -124,6 +155,13 @@ found it independently, which is the only reason it did not survive a third merg
   failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
   with every map **empty** rather than zeroed, and the filter row leaves every control live on
   it. The fake has no warm-up of its own, so it is the only way a story can stand there.
+  **One field of that response is not a map and has no empty to send**: `manaX` — the mana row's
+  X chip — is a count, so the cold handler answers `0`, which is character for character what a
+  warm response sends for "no X cards in this search". `ready: false` is the whole of what tells
+  those two apart, so this fault is the only place a story can prove the X chip stays live rather
+  than merely showing a row with no counts on it. A scalar added to `FacetResponse` later needs
+  the same line here and the same reasoning; see
+  [search-faceting.md](search-faceting.md).
   Counting the list is worth doing when one is added: this line said _four_ for three faults'
   worth of drift, because a prose-only edit routes to neither CI job and nothing goes red.
   **`deckMeta` is the one that refuses
@@ -163,17 +201,22 @@ found it independently, which is the only reason it did not survive a third merg
   story** rather than in its meta, because only that story writes `cardZoom` and the four beside
   it take their figure as an argument — so what the frame buys there is that pressing Zoom in on
   the docs page cannot leave a pulse behind in the page's own store. The other **39 docs pages
-  render inline** (47 autodocs pages less the seven framed wholesale and that one framed in
-  part). The arithmetic changed under this figure without moving it — it was `45 − 7` on
-  2026-08-12 and `46 − 7 − 1` before the quick-add merge, which took it to the `47 − 7 − 1` it
-  reads today, which is exactly the way a derived count goes stale while still looking right. The
-  column-overflow merge is the opposite case: four stories into two story files that already
-  existed, framing nothing, so **both** terms held and the 39 is re-derived rather than carried.
-  Re-derive it from `inline: false` in source, as this was (re-checked 2026-08-14 on the merged
-  tree: still the same **eight** files — `Decks/QuickAdd` was a ninth story file and framed
-  nothing, which is why only the total moved then, and nothing this merge adds frames either);
-  a new story file that writes the store needs the same parameter or its docs page shows one
-  story's view under every heading.
+  render inline** — `47 − 7 − 1`, the 47 autodocs pages the merged tree's index counted less the
+  seven framed wholesale and the one framed in part. **The framed side of that subtraction is
+  settled and is not a build number**: re-checked in source on the merged tree 2026-08-14
+  (`inline: false` under `src/**/*.stories.tsx`), still the same **eight** files — seven framing
+  in a meta (`AppShell`, `CardDetailPane`, `CollectionPage`, `SearchPage`, `CreateDeckDialog`,
+  `DeckSettingsDialog`, `import/ImportDeckDialog`) and `CardZoomIndicator` framing one story.
+  Every story file that arrived across the 2026-08-14 merges frames nothing — `Decks/QuickAdd`
+  was a ninth story file and framed none of its six, which is why only the total moved then — so
+  only the minuend has ever moved. **The arithmetic has changed under this figure without moving
+  it, twice** — `45 − 7` on 2026-08-12, `46 − 7 − 1` before the 2026-08-14 merges, `47 − 7 − 1`
+  after the first of them — which is exactly the way a derived count goes stale while still
+  looking right: **every term moved and the figure did not**. This merge is the opposite case and
+  is not a third: every story it adds goes into a story file that already existed and frames
+  nothing, so **both** terms held and the 39 is re-derived rather than carried. Re-derive it,
+  never carry it. A new story file that writes the store needs the same parameter or its docs
+  page shows one story's view under every heading.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
@@ -195,30 +238,42 @@ found it independently, which is the only reason it did not survive a third merg
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**296** plays today, in a file of **299** tests — the other three are its own;
+  (**298** plays today, in a file of **301** tests — the other three are its own;
   `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the file's own
   structure for the second — one `it` per play, plus the glob tripwire and the two
-  mounted-together stories — both re-derived 2026-08-14 on the merge commit being shipped).
+  mounted-together stories — both re-derived 2026-08-14 on the merge commit being shipped. The
+  `plays + 3` relation has held on every measurement it has ever had, which is exactly the reason
+  to take the second number off the file's structure or off `vitest run src/stories.test.tsx`'s
+  own summary rather than off the relation: a relation that has always held is the one nobody
+  checks the day it stops.)
+  This is what puts a story's own claim inside `npm run verify` — `build-storybook` compiles
+  stories, it never plays them. `composeStories` **snapshots project annotations at call time**,
+  so `setProjectAnnotations` must run before it, at module scope; after the scan it is a no-op and
+  the failure is a story running with no decorator.
+
   **This pair has rotted or conflicted on every measurement it has ever had** — 264/267, then
-  270/273, then 279/282 and 283/286 on two branches at once, then 291/294, and now these.
+  270/273, then 279/282 and 283/286 on two branches at once, then 291/294 on one side of the
+  2026-08-14 merges and 292 plays on the other, **293/296** on the merge of those two, **294/297**
+  one `main` later the same hour, **296/299** on this branch's previous merge, and now these. The
+  shape never changes: 264/267 was written against a tree already answering 269/272, and 270/273
+  against one already answering 278, and twice the branch that found the drift had contributed
+  almost none of it — prose-only rot rather than anyone's carelessness.
 
-  **Two of those sides could not both be right, and neither predicted the merge.** One had
-  measured 283 and accounted for it as `277 + Decks/QuickAdd`'s six; the other had measured 285
-  and accounted for it as its own base plus one. Their merged tree answered **291**, which was
-  neither side's figure and neither side's arithmetic — because each was counting a base the other
-  had already moved. **So do not reconcile the deltas; rebuild and count.** A number here is a
-  claim about a _tree_, and the only tree that matters is the merge commit you are shipping.
+  **And no side of a merge has ever predicted the merge.** On 2026-08-14 one branch measured 283
+  plays and accounted for them as `277 + Decks/QuickAdd`'s six, another measured 285 and accounted
+  for them as its own base plus one, and their merge answered **291** — neither figure and neither
+  arithmetic, because each was counting a base the other had already moved. The X-mana-category
+  branch then measured **280** at `09ea7db` and its own merge with `main` answered **292**, more
+  than either side plus the other's visible delta. Nobody can check that after the fact. **So do
+  not reconcile the deltas; rebuild and count.** A number here is a claim about a *tree*, and the
+  only tree that matters is the merge commit you are shipping.
 
-  **And it rots faster than the story totals above for a structural reason, not a careless one:
+  **And it rots faster than every figure above it for a structural reason, not a careless one:
   no build produces it.** Every figure in the headline falls out of `storybook-static/index.json`,
   and the index knows nothing about plays — so a branch can rebuild, re-derive the story total,
   the entries, the files and the docs pages correctly off a fresh index, and leave this line
   untouched, which is exactly what the commit carrying 429/381/48/50 did while its own tree
-  grepped to 290. The grep has to be run as deliberately as the build. This is what puts a story's
-  own claim inside `npm run verify` — `build-storybook` compiles stories, it never plays them.
-  `composeStories` **snapshots project annotations at call time**, so `setProjectAnnotations` must
-  run before it, at module scope; after the scan it is a no-op and the failure is a story running
-  with no decorator.
+  grepped to 290. The grep has to be run as deliberately as the build.
 - It `vi.mock`s two of the three aliases, and **the third (`@/lib/images`) must never be
   mocked.** `vi.mock` matches the _resolved id_, so it resolves to the same `src/lib/images.ts`
   that the fake's own `export *` resolves to, and the factory imports the module it stands in

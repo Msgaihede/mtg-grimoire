@@ -55,6 +55,18 @@ pub struct CardIndex {
     pub colors: [BitSet; 6],
     /// 0–7 exact, 8 is "8 or more", 9 is "no mana value at all".
     pub mana: [BitSet; Self::MANA_BUCKETS],
+    /// Printings whose printed cost carries an `{X}` — [`crate::filters::CardFilters::mana_x`]'s
+    /// bitset, mirroring that filter's `mana_cost LIKE '%{X}%'`.
+    ///
+    /// **A field of its own and not an eleventh bucket, because the two are different kinds of
+    /// thing.** [`Self::mana`] is a *partition*: every printing lands in exactly one of its
+    /// slots (or, for a fraction below 8, in none), which is what lets a bucket be counted by a
+    /// single `and_count` and what makes [`Self::MANA_BUCKETS`] a closed list. X is an
+    /// *overlay*: a card is in its mana-value bucket **and**, if its cost is variable, in here
+    /// too — `{X}{B}{B}{B}` is `mana[3]` and `mana_x` at once, because Scryfall scores X as 0
+    /// when it computes `cmc`. Widening `MANA_BUCKETS` to make room would put a card in two
+    /// buckets of a partition and quietly double every total counted over it.
+    pub mana_x: BitSet,
     /// One per [`crate::legalities::LEGALITY_KEYS`] entry, same order.
     pub formats: Vec<BitSet>,
     /// Printings with a **non-zero** `legal_mask` — playable in at least one format.
@@ -100,13 +112,15 @@ impl CardIndex {
     /// and a backfill that rewrote all 116 695 rows: the page layout scanned here is that
     /// rewrite's, which may be more or less fragmented than a synced database's. The spec
     /// left this figure *estimated* at "467 ms for five
-    /// columns, and the real read wants about fifteen"; the read as built wants **six**
-    /// (`rowid`, `set_code`, `cmc`, `color_identity`, `legal_mask`, `is_paper`), which is
-    /// where the estimate's headroom went. Comfortably inside the ~1.5 s at which the spec
-    /// would have spent its fallback — a covering index for this read — so that stays
+    /// columns, and the real read wants about fifteen"; the read as built wants **seven**
+    /// (`rowid`, `set_code`, `cmc`, `color_identity`, `legal_mask`, `is_paper`, `mana_cost`),
+    /// which is where the estimate's headroom went. **The 767 ms was measured at six** — the
+    /// X overlay added `mana_cost` afterwards and nobody has re-timed it, so read that figure
+    /// as a floor rather than as this read's cost. Comfortably inside the ~1.5 s at which the
+    /// spec would have spent its fallback — a covering index for this read — so that stays
     /// unspent. It is a full table scan today and no existing index changes that:
-    /// `idx_cards_collapse` carries every column named here **except `set_code`**, and one
-    /// missing column is the whole of it.
+    /// `idx_cards_collapse` carries neither `set_code` nor `mana_cost`, and one missing column
+    /// is the whole of it.
     ///
     /// 1 047 set codes rather than the 986 the module docs quote, because those are the
     /// *paper* sets (986 exactly, re-measured on the same snapshot) and this array covers
@@ -151,6 +165,7 @@ impl CardIndex {
             paper,
             colors: std::array::from_fn(|_| BitSet::new(capacity)),
             mana: std::array::from_fn(|_| BitSet::new(capacity)),
+            mana_x: BitSet::new(capacity),
             formats: (0..crate::legalities::LEGALITY_KEYS.len())
                 .map(|_| BitSet::new(capacity))
                 .collect(),
@@ -162,7 +177,8 @@ impl CardIndex {
 
         let mut seen: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
         let mut stmt = conn.prepare(
-            "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper FROM cards",
+            "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper, mana_cost
+               FROM cards",
         )?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
@@ -173,6 +189,10 @@ impl CardIndex {
             let identity: Option<String> = row.get(3)?;
             let mask: Option<i64> = row.get(4)?;
             let paper: bool = row.get(5)?;
+            // Nullable, and a NULL cost carries no `{X}` — the same answer the SQL gives, where
+            // `NULL LIKE '%{X}%'` is NULL rather than false. Read as `Option` so a row with no
+            // printed cost is a miss instead of a `rusqlite` type error that fails the build.
+            let mana_cost: Option<String> = row.get(6)?;
 
             ix.all.set(doc);
             if paper {
@@ -227,6 +247,15 @@ impl CardIndex {
             };
             if let Some(bucket) = bucket {
                 ix.mana[bucket].set(doc);
+            }
+
+            // **On top of the bucket above, never instead of it.** The X chip is an overlay:
+            // `{X}{B}{B}{B}` is `mana[3]` *and* `mana_x`, because Scryfall counts X as 0 in
+            // `cmc`. Substring rather than parse, mirroring
+            // [`crate::filters::VARIABLE_COST_LIKE`] character for character — the SQL and this
+            // bitset answer the same question or the chip greys out over results that exist.
+            if mana_cost.is_some_and(|c| c.contains("{X}")) {
+                ix.mana_x.set(doc);
             }
 
             let mask = mask.unwrap_or(0) as u64;
@@ -523,6 +552,52 @@ mod tests {
         assert!(
             ix.mana[8].contains(doc(&conn, "8")),
             "but `cmc >= 8.0` does return a fraction, so this one has a bucket"
+        );
+    }
+
+    /// **X is an overlay on the buckets, not a bucket.** `mana` is a partition and `mana_x` is
+    /// not, which is the whole reason it is a field of its own: Scryfall scores X as 0 when it
+    /// computes `cmc`, so `{X}{B}{B}{B}` is mana value 3 — it has to be in `mana[3]` *and* in
+    /// `mana_x`, or the two chips disagree about a card that satisfies both.
+    ///
+    /// The NULL row is the second half. `cards.mana_cost` is nullable, and the SQL this mirrors
+    /// answers `NULL LIKE '%{X}%'` — which is NULL, not true — so a printing with no printed
+    /// cost belongs in neither set. Reading the column as a bare `String` would have been a
+    /// `rusqlite` error on exactly that row and would have failed the whole build.
+    #[test]
+    fn a_variable_cost_is_in_its_mana_bucket_and_in_the_x_overlay_at_once() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,mana_cost,
+                is_paper,raw)
+             VALUES ('5','Crux of Fate','ktk','1','en','normal',3.0,'{X}{B}{B}{B}',1,'{}'),
+                    ('6','Plain Cost','ktk','2','en','normal',3.0,'{1}{B}{B}',1,'{}'),
+                    ('7','No Cost At All','ktk','3','en','normal',3.0,NULL,1,'{}')",
+            [],
+        )
+        .unwrap();
+        let ix = CardIndex::build(&conn).unwrap();
+
+        let variable = doc(&conn, "5");
+        assert!(
+            ix.mana[3].contains(variable),
+            "X costs nothing towards `cmc`, so the card is still mana value 3"
+        );
+        assert!(ix.mana_x.contains(variable), "and it is in the overlay too");
+
+        assert!(ix.mana[3].contains(doc(&conn, "6")));
+        assert!(
+            !ix.mana_x.contains(doc(&conn, "6")),
+            "the same mana value with no `{{X}}` is in the bucket alone"
+        );
+        assert!(
+            !ix.mana_x.contains(doc(&conn, "7")),
+            "and a NULL cost is a miss, exactly as `NULL LIKE …` is not true"
+        );
+        assert_eq!(
+            ix.mana_x.count(),
+            1,
+            "the fixture's four rows carry no cost"
         );
     }
 

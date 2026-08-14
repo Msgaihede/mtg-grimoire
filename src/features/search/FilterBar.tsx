@@ -12,7 +12,7 @@ import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { colorDisabled, facetTitle, optionDisabled } from "./facets";
+import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
 import { FORMATS, type CardSearch } from "./useCardSearch";
 
@@ -136,6 +136,15 @@ export function FilterBar({
         }
         // The chip hands its own label back, so "8 or more" is spelled in one place.
         title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
+        xSelected={search.manaX}
+        onToggleX={search.toggleManaX}
+        // `manaX` is a **field** of the facet response beside `manaValues` rather than a key
+        // inside it, so this reads a bare count — and `countDisabled` is the same rule the
+        // nine chips to its left grey by rather than a second one written next to it. Rust
+        // counts it off the same `Skip::Mana` base, so X greys when and only when its
+        // neighbours would: because nothing in this search has one.
+        xDisabled={countDisabled(facets?.manaX, search.manaX)}
+        xTitle={(label) => facetTitle(label, facets?.manaX)}
       />
 
       <SetCombobox selected={search.sets} onToggle={search.toggleSet} counts={facets?.sets} />

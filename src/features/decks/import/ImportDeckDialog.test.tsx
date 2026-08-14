@@ -123,6 +123,7 @@ const DECK: DeckRow = {
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
+  separateXGroup: false,
   updatedAt: 1_800_000_000,
 };
 

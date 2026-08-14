@@ -885,13 +885,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     );
   }, [deck.cards, filter, tagIds]);
 
+  /**
+   * Whether the `{X}` spells get a heading of their own — **the deck's, not this editor's.**
+   *
+   * `decks.separate_x_group` (schema v13), so it survives closing the deck and is answered per
+   * deck rather than per session: a storm list where half the spells are `{X}` reads quite
+   * differently from an aggro deck with one Fireball in it. Which is why it is not `useState`
+   * beside `groupBy` and `sortBy` — those two are how the reader is looking *now* and are
+   * deliberately thrown away with the editor.
+   *
+   * `false` while the read is in flight and for a deck that has gone: the editor's frame renders
+   * before `deck_get` answers, and a grouping is not a thing to hold up on a boolean.
+   */
+  const separateX = row?.separateXGroup === true;
+
   const groups = useMemo(
     // No currency any more: the rows this groups arrived priced at the selected marketplace,
     // because that marketplace is in `useDeck`'s query key. A switch therefore changes
     // `deck.cards` itself and this recomputes over the new answer, rather than picking a
     // different field out of the old one.
-    () => buildGroups(shown, categories, groupBy, sortBy),
-    [shown, categories, groupBy, sortBy],
+    () => buildGroups(shown, categories, groupBy, sortBy, separateX),
+    [shown, categories, groupBy, sortBy, separateX],
   );
 
   /**
@@ -1256,6 +1270,31 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 </option>
               ))}
             </select>
+
+            {/* A modifier of the select it stands beside, so it lives inside that cluster's
+                `gap-1.5` rather than out in the toolbar's `gap-x-4` — and it is drawn **only**
+                under Mana value, because there is nothing for it to say about a deck grouped by
+                category or by type. A control that persists across a grouping it has no effect
+                on is a control the reader has to remember the scope of.
+
+                **Its state is the deck's, written through the same `update` the Built toggle
+                writes** — one `deck_update`, no `deck_cards` row touched, and a refusal lands in
+                the banner above with every other write of this editor's, because the refusal
+                rule lives on the mutation's single definition and never on a call site.
+
+                The whole sentence is the chip's `title`, which `ToggleChip` also makes its
+                accessible name: "Split X" alone is a control naming a thing rather than an
+                action, and the name has to stand up read out of context — a screen reader gets
+                no select beside it. It begins with the visible label all the same (WCAG 2.5.3),
+                so the chip is still addressable by what is written on it. */}
+            {groupBy === "manaValue" && (
+              <ToggleChip
+                label="Split X"
+                pressed={separateX}
+                title="Split X — give cards with X in their cost a group of their own, instead of counting X as zero"
+                onClick={() => deck.update.mutate({ separateXGroup: !separateX })}
+              />
+            )}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1476,8 +1515,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           {/* Every number over the same rows the view is drawn from — one query, so a curve and
               a legality panel can never disagree. Unfiltered on purpose: the toolbar's filter
               narrows what is *shown*, and a deck's mana curve is a fact about the deck rather
-              than about what is on screen. */}
-          <DeckStats cards={deck.cards} marketplace={marketplace} send={deck.missingToWishlist} />
+              than about what is on screen.
+
+              `separateX` is the same value `buildGroups` was handed above, and handing it to both
+              from one place is the point: a curve counting `{X}{B}{B}{B}` as 3 beside a column
+              headed "Mana value X" would be two surfaces answering one question about one deck
+              two ways. It is drawn here whichever grouping is up, unlike the chip that sets it —
+              the deck's answer does not stop being true because the reader went back to looking
+              at their categories. */}
+          <DeckStats
+            cards={deck.cards}
+            marketplace={marketplace}
+            send={deck.missingToWishlist}
+            separateXGroup={separateX}
+          />
         </section>
       )}
 

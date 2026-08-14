@@ -28,6 +28,13 @@ deliberately**: no screenshots are stored.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
+- **`indexCold`'s response answers every map with an *empty* one and every scalar with `0`, and
+  only the first of those is self-describing.** An empty map makes every lookup miss, and a miss
+  is the `undefined` the filter row fails open on. `FacetResponse.manaX` — the X chip's count —
+  is a number with no empty to take, so the cold handler sends `0`, which is exactly what a warm
+  response sends for "no X cards here". **`ready: false` is the whole of what separates them**;
+  a scalar added to that response later needs the same `0` and the same paragraph. Full
+  reasoning: [docs/reference/search-faceting.md](../docs/reference/search-faceting.md).
 - **`starter` seeds both price feeds**, derived from the corpus rather than written out:
   `marketplacePrices` is the fake's `marketplace_prices`, so a story can select Card Kingdom or
   Mana Pool and see *different numbers* rather than the same ones under a new label. Every
@@ -44,6 +51,13 @@ deliberately**: no screenshots are stored.
 - **A fixture more than one story file needs lives in `.storybook/fake/fixtures.ts`.** A CSF file
   cannot own one — every non-default export is indexed as a story. Not in `cards.ts`: that file is
   generated wholesale.
+- **The corpus has exactly one `{X}` printing** — Agadeem's Awakening (`znr 90`,
+  `{X}{B}{B}{B}`, mana value 3, `modal_dfc` with a land on the back). A story about the X mana
+  chip, the deck editor's `Split X` toggle or the tenth curve bar has to reach that printing or
+  it draws a heading over nothing. Its mana value being 3 is the useful part rather than an
+  accident: `fixtures.ts`'s `deckGroups` puts a second mana-value-3 card beside it, so switching
+  the split on moves it **out of a bucket that survives** — a curve whose `3` column vanished
+  with the card would leave a reader unable to tell a re-filing from a disappearance.
 - **Art is synthetic by default**, with a Live toolbar switch, so a checkout with no network
   renders every story exactly as one with it. **No card image bytes are committed.**
 - Note for searching: ripgrep treats `.storybook/fake/db.ts` as binary, so "no matches" there is a
@@ -62,8 +76,9 @@ deliberately**: no screenshots are stored.
   measured 359 correctly against their own base and the merged tree was 365: a count is a
   measurement of a *tree*, so taking either side of that conflict would have shipped a figure
   true of no checkout. The same trap eats derived counts — "38 docs pages render inline" was
-  `45 − 7` and is now `46 − 7 − 1`, unchanged in value and stale in every term. Re-derive from
-  the built index and from source, never from the last number plus your own diff.
+  `45 − 7` and then `46 − 7 − 1`, unchanged in value and stale in every term; it reads **39**
+  and `47 − 7 − 1` on the tree of 2026-08-14. Re-derive from the built index and from source,
+  never from the last number plus your own diff.
 - **Every drag is held in `try { … } finally { await held.cancel(); }`, and every assertion about
   a drag's result goes through `waitFor`.** A throw mid-drag leaks pdnd's one global drag flag into
   the _next_ story, which is why one broken assertion reported two failures.
