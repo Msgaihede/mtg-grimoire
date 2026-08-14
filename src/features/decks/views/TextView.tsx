@@ -83,6 +83,20 @@ export function TextView({
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
+  /**
+   * How tall a packed column is allowed to get before the pack opens the next one — **a
+   * readable target, not a measurement of the box this view is drawn in** (changed 2026-08-14).
+   *
+   * `DeckEditor` used to pass the desk row's observed height, back when that row had one: the
+   * view was letterboxed in a scroller and packing to its height was what filled it. The row is
+   * as tall as this view now, so that number would be an input this view's own output decides —
+   * a taller list packs taller columns, which makes the desk taller, which raises the target,
+   * which repacks. The editor passes nothing and the default stands.
+   *
+   * 640 is about thirty lines at this view's 22px pitch, which is what makes a column worth
+   * reading; past it the pack opens another and the wrapping box takes it down a line. It stays
+   * a prop because a story is allowed to ask for narrow columns to show what packing does.
+   */
   columnHeight?: number;
   className?: string;
 }) {
@@ -95,23 +109,29 @@ export function TextView({
   const columns = packColumns(flow, groupHeight, columnHeight);
 
   return (
-    // Scrolls **down**, and sideways only when a single 300px column will not fit the desk at
-    // all. Columns used to run off the right edge — `packColumns` opens the next one to the
+    // Grows **down**, and scrolls sideways only when a single 300px column will not fit the desk
+    // at all. Columns used to run off the right edge — `packColumns` opens the next one to the
     // right, so a fifteen-category deck was wider than the window and the reader got an X
     // scrollbar across the whole desk, which is the thing the editor's 1024px floor exists to
-    // prevent, arriving by a route that floor never measured. `overflow-auto` stays rather than
-    // becoming `overflow-y-auto`: clipping a card name is worse than a scrollbar in the one case
-    // that can still produce one.
+    // prevent, arriving by a route that floor never measured.
     //
-    // `content-start` is on this box because this is the box the editor gives a height to — a
-    // `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as the scroller and not as
-    // tall as its lines. The moment the rail wraps there are two of those lines, and
-    // `align-content`'s initial `normal` is a **stretch** that shares the leftover height out
-    // between them, hanging the rail in the middle of the desk under a short list. `items-start`
-    // aligns an item inside its line and can say nothing about this.
+    // **The Y scrollbar this box used to draw is gone too** (changed 2026-08-14). It was
+    // `overflow-auto` in a desk of a fixed height, so a list with more columns than one line
+    // holds was letterboxed inside the deck builder with the editor's own scrollbar beside it.
+    // This box is given no height now: the columns wrap, it grows to hold every line of them,
+    // and `DeckEditor`'s page scroller is the only thing that scrolls. `overflow-x-auto` keeps
+    // the one case that genuinely needs a scrollbar contained here rather than letting it reach
+    // the page — and it can never produce a Y one, because a box with no height of its own is
+    // never taller than its own content.
+    //
+    // `content-start` stays for the host that *does* hand this view height to spare — the
+    // Storybook decorator, not the editor. The moment the rail wraps there are two flex lines in
+    // a box taller than both, and `align-content`'s initial `normal` is a **stretch** that shares
+    // the leftover height out between them, hanging the rail in the middle of the desk under a
+    // short list. `items-start` aligns an item inside its line and can say nothing about this.
     <div
       className={cn(
-        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-auto",
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-x-auto",
         className,
       )}
     >

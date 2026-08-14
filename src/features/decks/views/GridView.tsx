@@ -132,9 +132,18 @@ export function GridView({
   return (
     // Down the page rather than across it: a wall wraps, so the columns the other two views
     // pack into are the window's own width here.
+    //
+    // **And "the page" is now literally the page** (changed 2026-08-14): this box is given no
+    // height and grows to hold every group, so a deck taller than the window scrolls
+    // `DeckEditor`'s one page scroller rather than a second scrollbar drawn inside the deck
+    // builder. `overflow-x-auto` rather than nothing at all, for `StackView`'s reason — a single
+    // tile at 2× is wider than a narrow desk, and the overhang has to stop here rather than
+    // reach the page, where it would be an X scrollbar across the whole app. It implies
+    // `overflow-y: auto`, which can never find anything to scroll in a box with no height of
+    // its own.
     <div
       ref={scrollRef}
-      className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-auto", className)}
+      className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-x-auto", className)}
     >
       {groups.map((group) => (
         <GridGroup

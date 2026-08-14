@@ -139,9 +139,13 @@ Every one of these has its measurement and its story in
   edge and its floor is `MIN_PANEL_WIDTH_PX`, **206**, so the narrowest content box a filter
   control has to survive is ~193 rather than ~371. Wrapping is what makes that free — a wrapped
   group's min-content is one chip — and it is why the drag needed no change to `FilterBar`. A flex item cannot shrink below its own min-content, so an unwrapped row just
-  hangs out of the panel, and `DeckEditor`'s section is `overflow-y-auto` — which computes
+  hangs out of the panel, and `DeckEditor`'s page section is `overflow-y-auto` — which computes
   `overflow-x` to **`auto`** — so the overhang becomes a horizontal scrollbar across the whole
-  deck builder. That is the one thing the 1024px floor forbids, and it arrives with **no test
+  deck builder. (That section is the *only* scroller in the editor since 2026-08-14: the deck's
+  three wall views were given a height of their own and now grow instead — see
+  [`features/decks/CLAUDE.md`](features/decks/CLAUDE.md). Nothing here moves; the section itself
+  is unchanged and an overhang still reaches it.)
+  That is the one thing the 1024px floor forbids, and it arrives with **no test
   going red and nothing on screen naming the culprit**. It shipped: `ManaValueChips` was nine
   `size-9` chips at `9 × 36 + 8 × 4` = 356 and fitted, the **X chip** made it ten at 396 against
   a ~371 content box, and the editor overflowed by **25px at every window width** — 1042 vs 1017

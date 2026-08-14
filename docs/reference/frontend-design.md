@@ -746,9 +746,11 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   each drop a scrollbar the row's arithmetic had not counted. The fix is `flex-wrap` on the packed row: the column that will not fit goes below the line
   and the reader scrolls **down**, which every deck view already does. `packColumns` is
   untouched by it — the wrap is a property of the box the columns are laid in, not of how they
-  were filled — and `overflow-auto` stays rather than narrowing to `overflow-y-auto`, since one
-  column zoomed past the desk's own width genuinely is wider than its box and clipping a card is
-  worse than a scrollbar the reader asked for. Wrapping is what makes that the rare case.
+  were filled — and an `overflow` on that axis stays, since one column zoomed past the desk's own
+  width genuinely is wider than its box and clipping a card is worse than a scrollbar the reader
+  asked for. Wrapping is what makes that the rare case. (It was `overflow-auto` at the time and
+  is `overflow-x-auto` since the deck-builder entry two bullets down, which took the *vertical*
+  scrollbar out of these views entirely; the horizontal reasoning here is what survived.)
 - **Wrapping fixed the direction and not the filling, and `StackView` gave up packing the same
   day.** The bullet above is about a run that went sideways; what it left standing is that
   `packColumns` fills to a **height** while the desk's scarce axis is **width**. The two are
@@ -834,6 +836,61 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     **13 columns** are a ceiling for that seeded deck rather than a reading of it today. Nothing
     has been re-driven. The widths and both thresholds are untouched either way: they are
     arithmetic about one column, and a column is the same width whoever made the pile in it.
+- **Wrapping down is only half an answer while the box it wraps inside has a height: the deck
+  builder scrolled *inside itself*, and the fix was to stop giving the views one** (found and
+  fixed 2026-08-14, driven at `npm run tauri dev`, a **debug** build, at 1280×800 and 1024×600).
+  The two entries above take a run that went sideways and turn it into a run that goes down —
+  which is right, and leaves the reader looking at a wall of cards in a letterbox: the view was
+  a `flex-1` item of a `min-h-0` desk with `overflow-auto` on it, so the piles wrapped down
+  inside a box exactly as tall as the desk, and the editor's own page scrollbar sat beside that
+  box's. Two scrollbars an inch apart, moving different things, with nothing on screen saying
+  which a wheel was about to turn. **Three of the four views are given no height at all now** —
+  stacks, grid and text grow to hold their content, the desk row grows with them, and the page
+  scroller (which has been there since the stats became a band) is the one thing in the editor
+  that scrolls.
+  - **Measured on a seeded 132-card, 17-pile Commander deck at 1280×800.** Stacks: the view
+    box **7 123px** with `scrollHeight - clientHeight` of **0**, in a page of **702** visible
+    against **7 635** of content. Grid **4 270**, text **1 765** (which packs to a fixed
+    readable target and wraps, so it is the shortest of the three), all three with **0** internal
+    scroll. `page.scrollWidth - clientWidth`, `main`'s and the document's were **0** at every
+    reading — the sideways rule the entries above establish is untouched.
+  - **The table is the exception and it is a difference in kind.** `VirtualTable` mounts the rows
+    in view and holds a spacer open for the rest, so a scrollport is what it *is*; given no height
+    it was measured at **2 781px** with its own scroller *and* the page's — the two-scrollbar
+    screen this change exists to remove, arriving by the opposite route. It keeps the bounded desk
+    row: **384** with **2 397** of scroll inside it and **194** of page, which is exactly what it
+    read before.
+  - **`min-h-96` on the desk row was silently capping the whole thing, and only the live pass
+    could show it.** A flex item's automatic minimum size is what stops it being squeezed below
+    its content, and a `min-height` *number* replaces that `auto`. With the class still on the
+    row, the deck drew **2 783px** of piles in a desk box of **384** — the piles paint and the
+    page counted them, so it looked correct, while the price strip and the stats band were laid
+    out from the foot of the 384 (over the deck, not under it) and `position: sticky` clamped the
+    search panel to a 384px containing block. Moved one level in, onto the view box, it floors
+    without capping: the row then read **2 783** and the strip and band came back under the deck.
+    **jsdom cannot referee this** — it has no layout engine, so every box is 0 and the whole
+    class of defect is invisible to the suite.
+  - **The search panel is pinned rather than stretched, and its height is measured because CSS
+    cannot answer it.** A sibling of a 7 000px row would be drawn 7 000px tall, scrolling its own
+    search field away and mounting tiles nobody can see; `100%` is the deck's height and a
+    viewport unit is wrong by the app chrome above the scroller. So `sticky top-0 self-start`
+    plus a height of *the scroller's visible height less however much of the desk still sits
+    below its top*, recomputed on scroll behind a rAF. Read at six scroll positions on the
+    7 635px page: **489px** tall at rest (the window under the header), **589** at scrollTop 100,
+    **702** — the whole window — from 213 on, with the panel's bottom edge flush to the
+    scrollport's (`0px`) at every one of them, and its own wall never scrolling the page.
+  - **The remove tray goes `sticky bottom-0` for the length of a drag**, because the price strip
+    it is drawn on is now at the foot of however tall the deck is. Probed mid-flight on a
+    7 601px page with the reader at the top: the strip's bottom flush with the scrollport's
+    (`0px`), the tray reading `Remove from deck` at **673px** of a **702px** window, **29px**
+    tall, and `document.elementFromPoint` at its centre landing **on the tray** — so a drop aimed
+    there reaches it rather than the pile painted underneath.
+  - **The one horizontal case the entries above reserve still behaves, and is still contained.**
+    `overflow-x-auto` replaces `overflow-auto` on all three views: it implies `overflow-y: auto`,
+    which can never find anything to scroll in a box with no height of its own. At 1280×800 and
+    2× zoom the rail simply wraps and nothing overflows either axis; at **1024×600** and 2×, a
+    448px column in a 346px view overflowed by **88px** — inside the view, with the page, `main`
+    and the document all at **0**.
 - **The X scrollbar that pass declared gone came back through the docked panel, and it was a
   filter row 25px too wide** (found and fixed 2026-08-14, driven on the reader's own deck at
   `npm run tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain

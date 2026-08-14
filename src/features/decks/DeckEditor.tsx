@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import {
   dropTargetForElements,
@@ -102,7 +102,7 @@ const CONTROL =
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
  * way to its rail.
  *
- * The rule is "the narrowest thing yields first", one level up from the views, which scroll.
+ * The rule is "the narrowest thing yields first", one level up from the views, which wrap.
  * Three docked columns do not fit in a 1024px window: sidebar, padding, the card pane and the
  * panel come to 1044 before the deck gets a pixel, and the deck was measured at **2px** before
  * this existed, which reads as a rendering fault rather than as a squeeze.
@@ -151,6 +151,34 @@ const DESK_GAP = 16;
  * the stats band is the first thing this editor has ever stacked *below* the deck rather than
  * beside it.
  *
+ * **It is a floor and no longer also a ceiling, and it moved off the desk row to say so**
+ * (2026-08-14). The row used to be exactly as tall as whatever the page could spare, never less
+ * than this and never more, and the deck's view scrolled inside it — the
+ * scrollbar-in-the-deck-builder this floor's own arithmetic was written around. The views grow
+ * now, so this says only how short the deck may get: four nearly empty piles still draw a desk
+ * one card tall, rather than a strip of headings with the price line under it.
+ *
+ * **It is on the view and not on the row, and that is the whole of the bug it fixed.** The row
+ * is `flex-1` — `flex: 1 1 0%` — inside the page, and a flex item's automatic minimum size is
+ * what stops it being squeezed below its content. `min-h-96` *replaces* that `auto`: with a
+ * number there the row has no content-based minimum left, so it takes the free space, floors at
+ * 384, and lets a taller deck spill out of it. Measured in the shipped window on a 132-card,
+ * 17-pile deck at 1280×800, with the class still on the row: the deck drew **2 783px** of piles
+ * in a desk box of **384**. It *looked* right — the piles paint, and the page counted them, so
+ * the editor scrolled to 2 996 — and two things behind it were wrong. The price strip and the
+ * stats band were laid out from the foot of the 384, i.e. over the deck rather than under it;
+ * and `position: sticky` is clamped to its containing block, so the search panel could follow
+ * the reader for 384px and was then dragged off the top of the window with the box it was in.
+ * On the view the number is a `min-height` on a stretched flex item, which floors it without
+ * capping it — the row is then as tall as the view, and the row's own `auto` minimum is back.
+ *
+ * **`cn` puts it before the table branch's `min-h-0` on purpose**: they are one tailwind-merge
+ * group, the later wins, and the virtualised table has to keep the squeezable box it has always
+ * had. A floor under a scrollport would be a floor under a scrollbar.
+ *
+ * Everything below is the measurement 384 came from and the reasoning for the page scroller,
+ * both of which stand.
+ *
  * **384px, and it is a measurement rather than a taste**: a stack group holding one card is
  * exactly that tall in the shipped window — 6px of column padding, a 43px group heading, the
  * 319px card, `stackHeight`'s 8px tail and 6px more padding. One whole card is the floor because
@@ -171,8 +199,10 @@ const DESK_GAP = 16;
  * one scroll down. (847 is the figure that stood here before that pass, taken on an earlier
  * sitting and not on this deck — the pair above is the like-for-like one.) Rather than cut one
  * of them, the section is
- * `overflow-y-auto`: the deck holds 384, the band draws whole, and the last ~145px of it is one
- * scroll away. At 1920×1080 nothing scrolls and the deck takes the surplus (**519px**). A band
+ * `overflow-y-auto`: the deck holds at least 384, the band draws whole, and whatever does not
+ * fit is one scroll away. At 1920×1080 a deck that fits does not scroll at all and takes the
+ * surplus (**519px**); a deck that does not fit is now what pushes the band down the page, where
+ * before it was the band pushing the deck into a letterbox of its own. A band
  * that shrank instead was measured at **92px** with 229px of charts inside it, which is a
  * scrollbar over a chart nobody can read — the thing `DeckStats` refuses when it wraps rather
  * than truncates.
@@ -515,11 +545,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** The row the deck and the panel share, and the only width either of them can be judged
    *  against — the window's own is three layouts away from it. */
   const deskRef = useRef<HTMLDivElement>(null);
-  /** The box the current view draws into — the one scroller a drag may have to move inside to
-   *  reach its target, and the height the two column-packing views are told to pack to. */
-  const viewRef = useRef<HTMLDivElement>(null);
+  /* There is no ref on the box the view draws into, and its absence is the 2026-08-14 change
+     stated in one line: that box was the editor's scroller and the thing a drag auto-scrolled,
+     and it is neither now — three of the four views grow to hold their content, the page takes
+     the scroll, and the table's own scrollport is `VirtualTable`'s, one element further in than
+     any ref here could reach. */
+  /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
+  const dockRef = useRef<HTMLDivElement>(null);
   const trayRef = useRef<HTMLDivElement>(null);
-  const [desk, setDesk] = useState({ width: 0, height: 0 });
+  /**
+   * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
+   * (2026-08-14).
+   *
+   * The row's height is its content's now, so a number read off it is a number this component's
+   * own output decides. Its one reader was `TextView`'s `columnHeight`, which would have packed
+   * taller columns into a taller desk into a taller pack; the view takes a fixed readable target
+   * instead and this measurement is about the axis the desk really does have to share.
+   */
+  const [deskWidth, setDeskWidth] = useState(0);
   /**
    * How wide the window is, for the half-of-it cap on the docked panel's drag.
    *
@@ -706,11 +749,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // which is a different list under a different query key.
   }, [faceKey]);
 
-  // How much room the three things on the desk have between them, and how tall they are. A
-  // window resize changes it, and so does the card pane opening and closing beside the whole
-  // view — neither of which this component would otherwise hear about, which is why it is an
-  // observer and not a prop (`CardGrid`'s arrangement). Re-run when the deck lands, because the
-  // element being measured does not exist until then.
+  // How much room the two things on the desk have between them. A window resize changes it, and
+  // so does the card pane opening and closing beside the whole view — neither of which this
+  // component would otherwise hear about, which is why it is an observer and not a prop
+  // (`CardGrid`'s arrangement). Re-run when the deck lands, because the element being measured
+  // does not exist until then.
   const hasRow = row !== null;
   //
   // The window's own width is read in the same callback rather than through a second listener:
@@ -722,11 +765,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (!el) return;
     const measure = () => setViewport(document.documentElement.clientWidth);
     const observer = new ResizeObserver(([entry]) => {
-      setDesk({ width: entry.contentRect.width, height: entry.contentRect.height });
+      setDeskWidth(entry.contentRect.width);
       measure();
     });
     observer.observe(el);
-    setDesk({ width: el.clientWidth, height: el.clientHeight });
+    setDeskWidth(el.clientWidth);
     measure();
     return () => observer.disconnect();
   }, [hasRow]);
@@ -744,7 +787,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const maxPanelWidth = Math.min(
     viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
-    desk.width > 0 ? desk.width - DESK_GAP - DECK_FLOOR : Number.POSITIVE_INFINITY,
+    deskWidth > 0 ? deskWidth - DESK_GAP - DECK_FLOOR : Number.POSITIVE_INFINITY,
   );
 
   /**
@@ -762,7 +805,70 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * nothing changes: there is no room for a card, so there is no room for a card search, and the
    * rail says so in words.
    */
-  const roomForPanel = desk.width === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
+  const roomForPanel = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
+
+  /**
+   * Hold the docked search panel against the top of the page and draw it exactly as tall as the
+   * part of the page that is on screen.
+   *
+   * **This exists because the desk stopped having a height** (2026-08-14). The deck's views grow
+   * to hold their piles now, so the desk row is as tall as the deck is — 3 000px for a large
+   * one — and the panel is its sibling. Left to the flex row's own `stretch` it would be drawn
+   * 3 000px tall too: its search field and its "Add to" select would scroll off the top with the
+   * deck's header, its virtualised wall would mount tiles for a wall nobody can see at once, and
+   * the reader would be dragging cards from a control at the top of the page to a pile near the
+   * bottom of it. Pinned instead, the search stays exactly where it was while the deck scrolls
+   * past it, which is what the column is *for*.
+   *
+   * `sticky top-0` is the pinning and CSS does all of it; the height is the part CSS cannot
+   * answer. `100%` of this row is the deck's height, and a viewport unit is wrong by the app
+   * chrome above the scroller — so the number is measured: the scroller's visible height, less
+   * however much of the desk row still sits below its top. Scrolled past, that term is zero and
+   * the panel is the full height of the window; at rest it is the window under the header, which
+   * is where the panel is drawn anyway. Both ends exact, and no second scrollbar in either.
+   *
+   * `useLayoutEffect` rather than `useEffect`: the panel's wall is a `min-h-0 flex-1` child, so
+   * an unsized dock draws it at nothing, and after paint is one frame too late to avoid the
+   * reader seeing that. **jsdom has no layout engine and answers `0` to every one of these
+   * reads**, which is why a zero height is left unset rather than written — a `height: 0px` here
+   * would be a real collapse in the one environment that cannot see it.
+   *
+   * The rAF is coalescing, not animation: a scroll fires far more often than a frame, and the
+   * work is two `getBoundingClientRect`s. The observer covers a window resize and the card pane
+   * opening beside the editor; a scroll covers everything the reader does. The one gap is the
+   * refusal banner growing in above the desk, which moves the row's top without resizing either
+   * observed box — worth ~34px for the length of one animation, on a surface that has just
+   * refused a write.
+   */
+  useLayoutEffect(() => {
+    const page = editorRef.current;
+    const dock = dockRef.current;
+    const deskEl = deskRef.current;
+    if (!page || !dock || !deskEl) return;
+
+    let frame = 0;
+    const size = () => {
+      frame = 0;
+      const visible = page.clientHeight;
+      if (visible === 0) return;
+      const below = deskEl.getBoundingClientRect().top - page.getBoundingClientRect().top;
+      dock.style.height = `${Math.max(0, visible - Math.max(0, below))}px`;
+    };
+    const schedule = () => {
+      if (frame === 0) frame = requestAnimationFrame(size);
+    };
+
+    size();
+    page.addEventListener("scroll", schedule, { passive: true });
+    const observer = new ResizeObserver(schedule);
+    observer.observe(page);
+    observer.observe(deskEl);
+    return () => {
+      if (frame !== 0) cancelAnimationFrame(frame);
+      page.removeEventListener("scroll", schedule);
+      observer.disconnect();
+    };
+  }, [hasRow]);
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -1024,13 +1130,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     });
   }, [trayShown, applyDrop]);
 
-  // A pile can be off the bottom of the view while a card is in the air over it — the stack's
-  // columns wrap down the page rather than running off its right-hand edge, and the grid runs
-  // down it too, so every view here is taller than its box before it is wider. This scrolls the
-  // view when the drag nears its edge: the one motion in here, and the platform's own idea of a
-  // drag rather than the app's.
+  // A pile can be off the bottom of the window while a card is in the air over it — the stack's
+  // piles wrap down rather than running off the right-hand edge, and the grid runs down too, so
+  // every view here is taller than the window before it is wider. This scrolls when the drag
+  // nears an edge: the one motion in here, and the platform's own idea of a drag rather than the
+  // app's.
+  //
+  // **Registered on the page rather than on the view** (changed 2026-08-14, with the growing
+  // desk). It used to be `viewRef`, which was then the scroller; three of the four views have no
+  // scroller now, and the box that has to move to bring a pile — or the remove tray under the
+  // deck — under the pointer is the editor's own. The table is the exception in both shapes and
+  // is unchanged by the move: its scroller is `VirtualTable`'s, one element further in than
+  // either of these, so neither registration ever reached it.
   useEffect(() => {
-    const element = viewRef.current;
+    const element = editorRef.current;
     if (!element) return;
     return autoScrollForElements({ element });
   }, [hasRow]);
@@ -1261,7 +1374,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // add a card to the deck the reader is looking at.
     selectedCardId,
     landed,
-    className: "min-h-0",
+    // No `className`, and the `min-h-0` that was here went with the desk's height (2026-08-14):
+    // it said "this view may be squeezed below its content", which is the sentence that made the
+    // deck builder scroll inside itself. `TableView` — the one view that still wants it — carries
+    // it on its own root, where a virtualiser's scrollport belongs.
   };
 
   return (
@@ -1274,13 +1390,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // because the desk is not the only place a reader clicks when they mean nothing: the
       // toolbar's empty half and the strip under the deck are the same gesture.
       onClick={dropSelection}
-      // **The one scroller in this view that is the *page*, and it is new** — see
+      // **The page, and since 2026-08-14 the *only* scroller in this editor** — see
       // {@link DECK_HEIGHT_FLOOR}. The deck, the price strip and the stats band together want
       // more height than a 1280×800 window has, and none of the three may be cut, so the column
-      // scrolls: the deck sits at its floor with the band's tail one scroll below it, and at a
-      // taller window nothing moves at all. The header and the toolbar scroll away with it,
-      // which is what makes this the page rather than a frame — the deck's own view keeps its
-      // scroller inside, and a wheel spent there is spent there first.
+      // scrolls: the header and the toolbar scroll away with it, which is what makes this the
+      // page rather than a frame.
+      //
+      // What changed is the sentence that used to end that paragraph — "the deck's own view
+      // keeps its scroller inside, and a wheel spent there is spent there first". It does not,
+      // and it was the defect: a deck with more piles than the window was tall was letterboxed
+      // in a box of the desk's height with this scrollbar beside it, and nothing on screen said
+      // which of the two a wheel was about to move. The views grow instead — piles overflow
+      // down and the box expands — so a deck of any size is one column of one page with one
+      // scrollbar. The two things that had leaned on the old arrangement come with it: the
+      // search panel is pinned rather than stretched (the dock effect) and the remove tray
+      // sticks to the foot of the window for the length of a drag (the price strip). The
+      // virtualised table is the one view still given a height, because a virtualiser is a
+      // scrollport by construction.
       className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
       {/**
@@ -1758,34 +1884,85 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // have taken theirs. What the deck *adds up to* is no longer in this row; it is the band
         // under it, which trades no width with either of these — and no height either, until the
         // window is too short for both, where {@link DECK_HEIGHT_FLOOR} says which gives way.
-        <div ref={deskRef} className={cn("flex flex-1 gap-4", DECK_HEIGHT_FLOOR)}>
-          <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
-            {/* No `columnHeight`: this view packs nothing any more — every pile is a flex item
-                that wraps on width, so the desk's height is not an input to its layout. `TextView`
-                below still packs and still takes it. */}
+        <div
+          ref={deskRef}
+          // `min-h-96` on **this** box is what holds a flex item to the page's leftover height
+          // rather than to its content — see {@link DECK_HEIGHT_FLOOR}, where that is written
+          // out — so it belongs to the one view that wants to be held: the virtualised table.
+          // For the three that grow it is one level in, on the view box, where it floors without
+          // capping. Measured with it left here: the table drew its own scrollbar *and* the page
+          // drew one, which is the two-scrollbar screen this whole change is about.
+          className={cn("flex flex-1 gap-4", view === "table" && DECK_HEIGHT_FLOOR)}
+        >
+          {/**
+           * The box the deck is drawn in, and **it is given no height** — which is the whole of
+           * the 2026-08-14 change and the reason the paragraphs above read the way they do.
+           *
+           * It was `min-h-0 … overflow-auto`, a scroller of exactly the desk's height. That is
+           * what put a scrollbar *inside* the deck builder the moment a deck had more piles than
+           * the window was tall: a wall of cards in a letterbox, the editor's own scrollbar
+           * beside it, and no way to tell from the screen which of the two a wheel was about to
+           * move. `min-h-0` is what did it, not `overflow` — it is the line that tells the flex
+           * row this box may be squeezed below its content, and with it gone the row is as tall
+           * as the deck, the page is as tall as the row, and the page scroller is the one thing
+           * in this editor that scrolls. Piles overflow **down**, and the container grows.
+           *
+           * **The table is the exception, and it is a difference in kind rather than a case to
+           * tidy away.** `VirtualTable` mounts the rows in view and holds the scrollbar open to
+           * the height of the rest; a scrollport is what it *is*, and a virtualiser given no
+           * height renders every row of the deck. So that one view keeps the arrangement this
+           * div used to carry for all four, and the three walls — stacks, grid, text — grow.
+           */}
+          <div
+            className={cn(
+              "min-w-0 flex-1",
+              DECK_HEIGHT_FLOOR,
+              view === "table" && "flex min-h-0 flex-col overflow-auto",
+            )}
+          >
+            {/* Neither `columnHeight` nor a measured height reaches a view any more. `StackView`
+                packs nothing — every pile is a flex item that wraps on width — and `TextView`
+                still packs, to a fixed readable target rather than to the desk, which is as tall
+                as its own answer now. See that prop's own note. */}
             {view === "stacks" && <StackView {...viewProps} />}
             {view === "table" && <TableView {...viewProps} />}
-            {view === "text" && <TextView {...viewProps} columnHeight={desk.height || undefined} />}
+            {view === "text" && <TextView {...viewProps} />}
             {view === "grid" && <GridView {...viewProps} />}
           </div>
 
-          <DeckSearchPanel
-            add={deck.addCard}
-            onAdded={markLanded}
-            categories={categories}
-            targetCategoryId={targetCategoryId}
-            onTargetCategoryChange={setTargetCategoryId}
-            defaultFormat={searchFormatDefault}
-            roomy={roomForPanel}
-            maxWidth={maxPanelWidth}
-          />
+          {/* The panel's dock — `sticky` so the search stays put while a deck taller than the
+              window scrolls past it, `self-start` so the row's own `stretch` does not draw it as
+              tall as the deck, and `flex` so the panel inside fills whatever height the effect
+              above measures for it. Every word of why: that effect. */}
+          <div ref={dockRef} className="sticky top-0 flex shrink-0 self-start">
+            <DeckSearchPanel
+              add={deck.addCard}
+              onAdded={markLanded}
+              categories={categories}
+              targetCategoryId={targetCategoryId}
+              onTargetCategoryChange={setTargetCategoryId}
+              defaultFormat={searchFormatDefault}
+              roomy={roomForPanel}
+              maxWidth={maxPanelWidth}
+            />
+          </div>
         </div>
       )}
 
       {/* The strip under the deck. Spec §5: a price is never shown without saying how old it
           is — once, here, rather than as a tooltip on every one of sixty cards. And, while a
-          card is in the air, the way out of the deck, drawn over it. */}
-      <div className="relative shrink-0">
+          card is in the air, the way out of the deck, drawn over it.
+
+          **`sticky bottom-0` while a card is in the air, and only then** (2026-08-14). The deck
+          grows down the page now, so this strip — and the remove tray drawn on it — is at the
+          foot of however tall the deck is, which for a large one is a long way below the window.
+          The drag auto-scroll would carry the reader there eventually; a drop target that has to
+          be *travelled to* is not the same affordance as one that is simply there. Stuck to the
+          bottom of the page for the length of the drag, it is, and the tray keeps its exact
+          `-top-3` relationship to the strip because the strip is what moved. Out of a drag the
+          class is gone and the strip sits in the flow under the deck, which is where a line
+          saying how old the prices are belongs. */}
+      <div className={cn("relative shrink-0", dragging && "sticky bottom-0")}>
         <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
 
         {dragging && (
