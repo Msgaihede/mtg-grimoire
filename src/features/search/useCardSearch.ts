@@ -43,6 +43,51 @@ export interface FormatFilterOption {
 }
 
 /**
+ * The format filter's widest row: **every card, including the printings no format allows** —
+ * art series, tokens, emblems, memorabilia.
+ *
+ * A value of the format select rather than a chip beside it, because the two controls were
+ * asking one question. `Any format` already means "legal in at least one of Scryfall's
+ * formats", so the old `Unplayable` chip's only reachable job was to widen *that* row: pressing
+ * it with a format picked did nothing at all, because a card legal in Modern is legal
+ * somewhere by definition. Three rows in one list say the whole thing once — everything,
+ * everything playable, or one named format — and the state that used to mean "Modern, and also
+ * the art cards" is gone rather than hidden.
+ *
+ * **The hyphen is what makes it safe.** This value shares a namespace with the `legalities`
+ * keys the backend filters by and with the `format_specs.key`s the deck editor seeds from, and
+ * neither has ever carried one: they are single lowercase words (`standardbrawl`,
+ * `paupercommander`, `oldschool`). So no real format can collide with the sentinel, and
+ * {@link formatParams} can tell them apart by equality rather than by a second flag travelling
+ * beside the value.
+ */
+export const ANY_CARD = "any-card";
+
+/**
+ * The two things the one format select decides: which `legalities` key the backend narrows to,
+ * and whether the printings no format allows are in the corpus at all.
+ *
+ * `playableOnly` rides with **every** row but `Any card`, the named formats included, and that
+ * is not belt-and-braces — it is what makes the three rows nest. A card legal in Modern is
+ * legal somewhere, so the flag cannot narrow a format row any further; sending it anyway means
+ * one expression answers all three rows, and there is no fourth combination for a reader to
+ * reach.
+ *
+ * Both fields are **absent rather than `false`** on `Any card`, which is the request every
+ * other caller of `search_cards` sends: `playableOnly` is omitted-means-false (the opposite of
+ * `paperOnly` beside it — see `SearchRequest.playableOnly`), so "show them" is no filter at
+ * all, and spelling it out would make the payload lie about intent.
+ *
+ * Exported because it is the whole of the mapping and both the page's payload and the facet
+ * request are built from it — two copies of this branch are how a wall of cards and the counts
+ * greying its chips come to describe different corpora.
+ */
+export function formatParams(selection: string): { format?: string; playableOnly?: true } {
+  if (selection === ANY_CARD) return {};
+  return { format: selection || undefined, playableOnly: true };
+}
+
+/**
  * Which direction one press on each column asks for first.
  *
  * Descending on price, because "highest first" is what clicking a money column means, and
@@ -95,6 +140,12 @@ export function cycleTriState(current: boolean | undefined, first: boolean): boo
 /** Everything {@link activeFilterCount} counts — every filter the search view offers. */
 export interface FilterState {
   text: string;
+  /**
+   * The format select's whole value: `""` for `Any format`, {@link ANY_CARD} for `Any card`,
+   * or a `legalities` key. Two of those three are "no format filter" and only one of them is
+   * the default, which is why the count below tests for a non-empty string rather than for a
+   * format.
+   */
   format: string;
   colors: readonly string[];
   sets: readonly string[];
@@ -117,6 +168,10 @@ export interface FilterState {
 export function activeFilterCount(f: FilterState): number {
   return [
     f.text.trim().length > 0,
+    // **`Any card` counts, and it is the one row here that *widens*.** This number captions
+    // Reset all and answers "how much would pressing this change" — reset puts the select back
+    // on `Any format`, so a reader sitting on `Any card` really does have one thing that press
+    // would clear. A count that read zero there would caption a button that changes the wall.
     f.format.length > 0,
     f.colors.length > 0,
     f.sets.length > 0,
@@ -237,6 +292,10 @@ export function useCardSearch(
   // switch re-asks.
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
+  // The format select's whole value, which is three kinds of thing in one string: `""` is
+  // `Any format` and the default, {@link ANY_CARD} is `Any card`, anything else is a
+  // `legalities` key. {@link formatParams} is the only place that branch is written.
+  //
   // Seeded from the caller's default rather than from `""`, so the first request the panel
   // makes is already the filtered one — an empty seed corrected afterwards would send the
   // unfiltered search first and answer it, which is a wall of illegal cards and a second round
@@ -284,16 +343,16 @@ export function useCardSearch(
   // cards exist" is the question a search box is asked, and "which printings exist" is the
   // question the card detail pane answers.
   const [allPrintings, setAllPrintings] = useState(false);
-  // The other half of "which cards exist" — and, like `allPrintings`, a statement about the
-  // shape of the corpus rather than a refinement of it, so it sits outside `resetAll` and
-  // outside `activeFilterCount` beside it.
-  //
-  // Off is the default and off means *hidden*: a card legal in no format at all is an art
-  // card, a token, an emblem or a piece of memorabilia, and a search for `lightning bolt`
-  // that answers with three of them above the card is a search answering the wrong question.
-  // `paperOnly` has hidden the digital printings on exactly this reasoning since the command
-  // existed; this is the same rule for the printings no format allows.
-  const [unplayable, setUnplayable] = useState(false);
+  // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
+  // to off-and-hidden. It is the format select's `Any card` row now — one control, because the
+  // chip and the select were narrowing and widening the same axis and `Modern plus the art
+  // cards` was a state nothing wanted. Two things changed with it, both deliberate: the row is
+  // **counted by Reset all and cleared by it**, where the chip was neither (it was filed beside
+  // `allPrintings` as a statement about the corpus), and it can no longer be on at the same time
+  // as a named format. The reason for the default is unchanged and is what `Any format` still
+  // means: a card legal in no format at all is an art card, a token, an emblem or a piece of
+  // memorabilia, and a search for `lightning bolt` that answers with three of them above the
+  // card is a search answering the wrong question.
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -313,6 +372,12 @@ export function useCardSearch(
     "cards",
     "search",
     debouncedText,
+    // **Two request fields in one segment, and it is exact rather than lossy.** The select
+    // decides `format` *and* `playableOnly`, and its three values map to three distinct strings
+    // — `""`, `"any-card"`, a key — so this segment alone tells every reachable request apart.
+    // There used to be a second `unplayable ? "unplayable" : "playable"` segment beside it; it
+    // went with the chip, because a key carrying the same fact twice is one that can carry it
+    // twice differently.
     format,
     colorsParam ?? "",
     setsParam?.join(",") ?? "",
@@ -333,10 +398,6 @@ export function useCardSearch(
     // *rows*, not a different order over the same rows, so the two modes must never answer
     // each other from cache.
     allPrintings ? "all" : "collapsed",
-    // Different *rows* again, for the same reason `allPrintings` is spelled rather than
-    // stringified: the two modes are two answers and neither may be served from the other's
-    // cached pages.
-    unplayable ? "unplayable" : "playable",
     // **On every search, not only a price-ordered one.** The marketplace decides what the
     // Price column *contains* now, not merely how it is ordered — Card Kingdom's numbers come
     // out of a different table from TCGplayer's — so two marketplaces are two answers to the
@@ -351,7 +412,9 @@ export function useCardSearch(
         // Blank strings are dropped rather than sent: the backend treats them as unset
         // anyway, and sending them would make the request payload lie about intent.
         text: debouncedText || undefined,
-        format: format || undefined,
+        // `format` and `playableOnly` together, from the one select that decides both. See
+        // {@link formatParams} — including why a named format sends `playableOnly` too.
+        ...formatParams(format),
         colors: colorsParam,
         sets: setsParam,
         manaValues: manaParam,
@@ -377,13 +440,8 @@ export function useCardSearch(
         collapse: allPrintings ? undefined : true,
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
-        // ways to get it wrong.
-        //
-        // `playableOnly` is the opposite and is sent for exactly that reason: **its** default
-        // is false, because every other caller of `search_cards` omits it and none of them
-        // wants an art card dropped out of a list. So this view has to say so, and says it by
-        // absence in the other direction — pressed means "show them", which is no filter.
-        playableOnly: unplayable ? undefined : true,
+        // ways to get it wrong. `playableOnly` is the neighbour with the opposite default and
+        // rides up with `format` above, for the reason written at {@link formatParams}.
         limit: PAGE_SIZE,
         offset: pageParam,
       }),
@@ -406,7 +464,12 @@ export function useCardSearch(
    */
   const facetReq: FacetRequest = {
     text: debouncedText || undefined,
-    format: format || undefined,
+    // Spelled through the same {@link formatParams} the page's payload is, so the counts
+    // greying this row's chips and the wall those chips filter can never describe different
+    // corpora. `playableOnly` is a filter the facets must carry (unlike `collapse`): it decides
+    // which printings exist for this search, so a count taken without it would offer a set or a
+    // mana value that only art cards satisfy.
+    ...formatParams(format),
     colors: colorsParam,
     sets: setsParam,
     manaValues: manaParam,
@@ -415,10 +478,6 @@ export function useCardSearch(
     // `false` would mint a second key for the search an untouched row has always had.
     manaX: manaX || undefined,
     owned,
-    // A filter the facet counts must carry, unlike `collapse`: it decides which printings
-    // exist for this search, so a count taken without it would offer a set or a mana value
-    // that only art cards satisfy. Spelled exactly as the page's payload spells it.
-    playableOnly: unplayable ? undefined : true,
   };
   const facets = useCardFacets(facetReq);
 
@@ -461,11 +520,27 @@ export function useCardSearch(
   // nothing, and an empty answer would be captioned "waiting for the sync" rather than "your
   // search missed". Telling those two apart would take remembering the press, which buys a
   // caption in a case that also needs the database to be empty.
-  const formatIsReaderSet = format !== "" && format !== defaultFormatValue;
+  //
+  // **`Any card` is not reader-set either, and that arm is about arithmetic rather than about
+  // intent.** It is the one row of this select that *widens*: its result set is a superset of
+  // `Any format`'s, so an empty answer to it with nothing else on still proves the database is
+  // empty rather than that the search missed — which is exactly the distinction this flag is
+  // read for. Counting it would caption a cold database's empty wall "try another word", and
+  // there is no other word.
+  const formatIsReaderSet =
+    format !== "" && format !== ANY_CARD && format !== defaultFormatValue;
 
   return {
     text,
     setText,
+    /**
+     * The format select's whole value — `""` (`Any format`, the default), {@link ANY_CARD}
+     * (`Any card`), or a `legalities` key.
+     *
+     * One string for what used to be a select and a chip: it decides both `format` and
+     * `playableOnly`, through {@link formatParams}. The two rows that are not formats are the
+     * two pinned above the sorted list in `FilterBar`, and the widest of them is first.
+     */
     format,
     setFormat,
     /**
@@ -507,16 +582,6 @@ export function useCardSearch(
     allPrintings,
     toggleAllPrintings: () => setAllPrintings((on) => !on),
     /**
-     * Show the printings no format allows — art series, tokens, emblems, memorabilia.
-     *
-     * `false` is the default, and it means they are **hidden**. Like {@link allPrintings}
-     * this is a statement about which corpus the search runs over rather than a refinement
-     * of the answer, so it is absent from {@link activeFilterCount} and survives `resetAll`:
-     * clearing what you are looking for should not also change what there is to look through.
-     */
-    unplayable,
-    toggleUnplayable: () => setUnplayable((on) => !on),
-    /**
      * How many kinds of filter are on — the number on the Reset all badge.
      *
      * **Counts a default format, and the asymmetry with `unfiltered` below is deliberate.**
@@ -550,6 +615,12 @@ export function useCardSearch(
      * it captions. The clear also sticks — the re-seed guard above compares against
      * `appliedDefaultFormat`, which this does not touch, so the default returns when the deck's
      * format changes and never a render later on its own.
+     *
+     * **That one line now also puts `Any card` back to `Any format`**, which the old `Unplayable`
+     * chip deliberately survived. The chip was outside this because it was a statement about the
+     * corpus rather than a filter; as a row of the format select it is neither outside nor
+     * special, and a reset that left the select where it was would be the one control this
+     * button cannot clear.
      */
     resetAll: () => {
       setText("");
