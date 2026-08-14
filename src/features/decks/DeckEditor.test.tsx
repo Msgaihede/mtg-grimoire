@@ -3293,6 +3293,33 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
+   * **The table's band has to *declare* that it grew, or it paints over the card row below it.**
+   *
+   * Its rows are absolutely positioned at a height the virtualiser was told, so a field that
+   * appears inside one without an `extraHeight` overlaps its neighbour by exactly its own
+   * height — which is the failure `TableView`'s own `Row` comment already warns about for the
+   * reconciler's band, arriving here by a different route. jsdom lays nothing out, so the
+   * overlap itself is invisible to this suite; the **declared** height is not, and it is the
+   * number the browser would use.
+   *
+   * 44 is `TABLE_ROW_HEIGHT`, 92 is that plus `RENAME_HEIGHT` — asserted as the pair, because a
+   * band that was always tall would be as wrong as one that never grew.
+   */
+  it("makes the table's band taller while its pile is being renamed", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+
+    const band = () => screen.getByText("Main deck").closest("[role=row]") as HTMLElement;
+    expect(band().style.height).toBe("44px");
+
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    await screen.findByLabelText("Rename Main deck");
+
+    expect(band().style.height).toBe("92px");
+  });
+
+  /**
    * A derived heading is not a category: nothing about "Mana value 1" can be renamed, switched
    * off or deleted, and `deckGroupMenuProps` refuses its `null` id before a builder is reached.
    *
