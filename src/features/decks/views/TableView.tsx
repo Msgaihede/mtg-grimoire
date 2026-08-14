@@ -30,10 +30,12 @@ import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
   deckCardProps,
+  deckCardSelectedProps,
   DeckCardControls,
   deckGroupMenuProps,
   deckGroupProps,
   deckGroupRename,
+  LandedMark,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
@@ -80,6 +82,7 @@ export function TableView({
   onSelect,
   actions,
   selectedCardId,
+  landed,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -99,6 +102,9 @@ export function TableView({
   actions?: DeckCardActions;
   /** Which card the open pane is about, so its row says so. */
   selectedCardId?: string | null;
+  /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
+   *  landed. See `cardControl`'s `LandedMark`. */
+  landed?: ReadonlyMap<number, number>;
   className?: string;
 }) {
   const editable = actions?.setQuantity !== undefined;
@@ -312,9 +318,13 @@ export function TableView({
         marketplace={marketplace}
         actions={actions}
         onDrop={drop}
+        selected={
+          row.kind === "card" && selectedCardId != null && row.card.cardId === selectedCardId
+        }
+        landedKey={row.kind === "card" ? landed?.get(row.card.id) : undefined}
       />
     ),
-    [columns.length, marketplace, actions, drop],
+    [columns.length, marketplace, actions, drop, selectedCardId, landed],
   );
 
   return (
@@ -358,6 +368,8 @@ function DeckTableRow({
   marketplace,
   actions,
   onDrop,
+  selected,
+  landedKey,
 }: {
   props: RowRenderProps;
   row: Row;
@@ -366,6 +378,18 @@ function DeckTableRow({
   marketplace: Marketplace;
   actions?: DeckCardActions;
   onDrop?: DeckCardActions["drop"];
+  /**
+   * This row is the card the pane is open on.
+   *
+   * **The surface colour is still `VirtualTable`'s** — `isSelected` above draws it, the same
+   * quiet `bg-surface` all three of the app's tables use. What this carries is the *attribute*,
+   * so the four views answer "which card is picked" the same way from a test and from a probe in
+   * the shipped window. See `cardControl`'s `SELECTED_ATTR`.
+   */
+  selected: boolean;
+  /** The nonce this row's last add was given, or `undefined` — `undefined` for a band, which
+   *  is a heading and never a thing that lands. The mark's `key`, so a second add replays it. */
+  landedKey?: number;
 }) {
   const { attach, over, eligible } = useCategoryDrop(row.group.categoryId, onDrop);
   const dragRef = useDeckCardDrag(
@@ -401,6 +425,7 @@ function DeckTableRow({
       // The caret's way home after a printing swap, on the row because the row is what takes
       // focus in this table (`VirtualTable` owns the click, Enter and Space on it).
       {...deckCardProps(row.card)}
+      {...deckCardSelectedProps(selected)}
       // The row is this view's card, so the menu hangs on the row. **Chained rather than
       // spread**, and that is the one place the other three views differ from this one: the row
       // already carries `VirtualTable`'s own `onKeyDown`, which is Enter and Space opening the
@@ -424,6 +449,12 @@ function DeckTableRow({
           is a target here, so the line lands on the row under the pointer rather than on the
           band; that is what this view has instead of a column edge. */}
       {over && <DropIndicator />}
+
+      {/* The landed mark, over the row it belongs to. A row here is already absolutely
+          positioned by the virtualiser, so an `inset-0` overlay needs no `relative` adding — and
+          this view's rows are the one place the mark is over *text* rather than over art, which
+          is what the wash's low alpha is for. */}
+      {landedKey !== undefined && <LandedMark key={landedKey} />}
     </div>
   );
 }

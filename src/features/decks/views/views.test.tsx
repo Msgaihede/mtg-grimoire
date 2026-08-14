@@ -19,7 +19,13 @@ import { dragOnto } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
 import { stackCardWidth } from "../CardStack";
-import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
+import {
+  CARD_BODY_ATTR,
+  DECK_GROUP_ATTR,
+  LANDED_ATTR,
+  SELECTED_ATTR,
+  type DeckCardActions,
+} from "../cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { RAIL_ATTR } from "./columns";
@@ -210,6 +216,9 @@ interface ViewProps {
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** The two marks a card can carry beside its own facts — see the sweep that asserts them. */
+  selectedCardId?: string | null;
+  landed?: ReadonlyMap<number, number>;
 }
 
 describe.each(VIEWS)("$name", ({ render: renderView }) => {
@@ -438,6 +447,60 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     // Stamped whether or not the card can be edited: opening a card from a deck is what puts
     // the swap on offer, and that is true of a view drawn read-only.
     expect(slots.length).toBe(4);
+  });
+
+  /**
+   * **Which card the pane is open on, said the same way by all four.**
+   *
+   * The mark itself differs and has to: a ring around a card face, a lifted surface on a 22px
+   * line, `VirtualTable`'s own quiet row colour. What must not differ is the answer to "which
+   * one", which is why this sweeps an attribute rather than a class — a class is a recipe, and
+   * a test that asserted `ring-accent` would go red the day the ring became an outline.
+   *
+   * By `cardId`, so a printing filed in two piles is marked in both. Sol Ring is in one here,
+   * which is what makes the count a claim.
+   */
+  it("marks the card the pane is open on", () => {
+    render(renderView({ groups: GROUPS, marketplace: TCG, selectedCardId: "c-Sol Ring" }));
+
+    const marked = [...document.querySelectorAll(`[${SELECTED_ATTR}]`)];
+    expect(marked).toHaveLength(1);
+    expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
+      DECK_CARD_ATTR,
+      deckCardSlot(RAMP.id, "c-Sol Ring"),
+    );
+  });
+
+  it("marks nothing when the pane is open on a card this deck does not hold", () => {
+    render(renderView({ groups: GROUPS, marketplace: TCG, selectedCardId: "c-Black Lotus" }));
+
+    expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
+  });
+
+  /**
+   * **Where the card landed, for the ten seconds after it did.**
+   *
+   * Keyed by `deck_cards.id` rather than by the printing, which is the difference that matters:
+   * `deck_add_card` folds, so what the reader wants pointed at is the *row* the write landed in
+   * — one pile, not every pile holding that card.
+   */
+  it("marks a card that has just landed", () => {
+    render(
+      renderView({
+        groups: GROUPS,
+        marketplace: TCG,
+        landed: new Map([[CARDS[0].id, 1]]),
+      }),
+    );
+
+    const marks = [...document.querySelectorAll(`[${LANDED_ATTR}]`)];
+    expect(marks).toHaveLength(1);
+    expect(marks[0].closest(`[${CARD_BODY_ATTR}], [role="row"]`)).not.toBeNull();
+  });
+
+  it("marks nothing when nothing has landed", () => {
+    draw();
+    expect(document.querySelectorAll(`[${LANDED_ATTR}]`)).toHaveLength(0);
   });
 
   /** Where the caret goes when a card leaves a pile under it. Only a *category* group is a
@@ -1419,7 +1482,11 @@ describe("GridView tiles", () => {
       expect(tile().style.width).toBe(`${scaled(150, zoom)}px`);
       // The size is inline, never a class — see this block's own note. Read as whole class
       // names rather than as a substring, which `overflow-hidden` would otherwise answer.
-      expect(tile().className.split(" ").filter((c) => c.startsWith("w-"))).toEqual([]);
+      expect(
+        tile()
+          .className.split(" ")
+          .filter((c) => c.startsWith("w-")),
+      ).toEqual([]);
       cleanup();
     }
 
@@ -1626,7 +1693,9 @@ describe("TableView", () => {
         actions={{ setQuantity: vi.fn(), drop: vi.fn() }}
       />,
     );
-    expect(fixed(screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement)).toBe(35.5);
+    expect(fixed(screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement)).toBe(
+      35.5,
+    );
   });
 
   /**

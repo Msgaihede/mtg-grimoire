@@ -12,15 +12,19 @@ import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
+  deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
   deckCardProps,
+  deckCardSelectedProps,
   DeckCardControls,
   deckGroupMenuProps,
   deckGroupProps,
   deckGroupRename,
   FOCUS,
+  LandedMark,
   REVEALED_ON_CARD,
+  SELECTED_ROW,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
@@ -63,6 +67,8 @@ export function TextView({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
   columnHeight = 640,
   className,
 }: {
@@ -74,6 +80,26 @@ export function TextView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
+  /** The printing the pane is open on. A line has no room for a ring around a card face, so it
+   *  says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of gold on it. */
+  selectedCardId?: string | null;
+  /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
+   *  `LandedMark`. */
+  landed?: ReadonlyMap<number, number>;
+  /**
+   * How tall a packed column is allowed to get before the pack opens the next one — **a
+   * readable target, not a measurement of the box this view is drawn in** (changed 2026-08-14).
+   *
+   * `DeckEditor` used to pass the desk row's observed height, back when that row had one: the
+   * view was letterboxed in a scroller and packing to its height was what filled it. The row is
+   * as tall as this view now, so that number would be an input this view's own output decides —
+   * a taller list packs taller columns, which makes the desk taller, which raises the target,
+   * which repacks. The editor passes nothing and the default stands.
+   *
+   * 640 is about thirty lines at this view's 22px pitch, which is what makes a column worth
+   * reading; past it the pack opens another and the wrapping box takes it down a line. It stays
+   * a prop because a story is allowed to ask for narrow columns to show what packing does.
+   */
   columnHeight?: number;
   className?: string;
 }) {
@@ -86,23 +112,29 @@ export function TextView({
   const columns = packColumns(flow, groupHeight, columnHeight);
 
   return (
-    // Scrolls **down**, and sideways only when a single 300px column will not fit the desk at
-    // all. Columns used to run off the right edge — `packColumns` opens the next one to the
+    // Grows **down**, and scrolls sideways only when a single 300px column will not fit the desk
+    // at all. Columns used to run off the right edge — `packColumns` opens the next one to the
     // right, so a fifteen-category deck was wider than the window and the reader got an X
     // scrollbar across the whole desk, which is the thing the editor's 1024px floor exists to
-    // prevent, arriving by a route that floor never measured. `overflow-auto` stays rather than
-    // becoming `overflow-y-auto`: clipping a card name is worse than a scrollbar in the one case
-    // that can still produce one.
+    // prevent, arriving by a route that floor never measured.
     //
-    // `content-start` is on this box because this is the box the editor gives a height to — a
-    // `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as the scroller and not as
-    // tall as its lines. The moment the rail wraps there are two of those lines, and
-    // `align-content`'s initial `normal` is a **stretch** that shares the leftover height out
-    // between them, hanging the rail in the middle of the desk under a short list. `items-start`
-    // aligns an item inside its line and can say nothing about this.
+    // **The Y scrollbar this box used to draw is gone too** (changed 2026-08-14). It was
+    // `overflow-auto` in a desk of a fixed height, so a list with more columns than one line
+    // holds was letterboxed inside the deck builder with the editor's own scrollbar beside it.
+    // This box is given no height now: the columns wrap, it grows to hold every line of them,
+    // and `DeckEditor`'s page scroller is the only thing that scrolls. `overflow-x-auto` keeps
+    // the one case that genuinely needs a scrollbar contained here rather than letting it reach
+    // the page — and it can never produce a Y one, because a box with no height of its own is
+    // never taller than its own content.
+    //
+    // `content-start` stays for the host that *does* hand this view height to spare — the
+    // Storybook decorator, not the editor. The moment the rail wraps there are two flex lines in
+    // a box taller than both, and `align-content`'s initial `normal` is a **stretch** that shares
+    // the leftover height out between them, hanging the rail in the middle of the desk under a
+    // short list. `items-start` aligns an item inside its line and can say nothing about this.
     <div
       className={cn(
-        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-auto",
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-x-auto",
         className,
       )}
     >
@@ -131,6 +163,8 @@ export function TextView({
                 violations={violations}
                 onSelect={onSelect}
                 actions={actions}
+                selectedCardId={selectedCardId}
+                landed={landed}
               />
             ))}
           </div>
@@ -164,6 +198,8 @@ export function TextView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
+              selectedCardId={selectedCardId}
+              landed={landed}
             />
           ))}
         </div>
@@ -180,12 +216,17 @@ function TextGroup({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** Handed through to the lines — see {@link TextView}'s own props. */
+  selectedCardId?: string | null;
+  landed?: ReadonlyMap<number, number>;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
 
@@ -223,6 +264,8 @@ function TextGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
+              selected={card.cardId === selectedCardId}
+              landedKey={landed?.get(card.id)}
             />
           ))}
         </ul>
@@ -245,11 +288,18 @@ function TextRow({
   ruleBreakText,
   onSelect,
   actions,
+  selected,
+  landedKey,
 }: {
   card: DeckCard;
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** This is the card the pane is open on. */
+  selected: boolean;
+  /** The nonce this line's last add was given, or `undefined`. The mark's `key`, so a second
+   *  add replays the fade. */
+  landedKey: number | undefined;
 }) {
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
 
@@ -257,16 +307,24 @@ function TextRow({
     // The controls are drawn *over* the end of the line rather than in it, so this view stays
     // what it is for: a decklist you read down, at 22px a line, with no room spent on chrome
     // that is only wanted on the one card being edited.
-    // The whole line, the controls drawn over its tail included — a right-click anywhere on it
-    // is a question about this card, and the keydown reaches here from the caret wherever it
-    // sits inside the row.
+    //
+    // The body mark is on the line rather than on the button inside it, so the control bar
+    // drawn over the line's tail counts as part of the card — see `cardControl`'s
+    // `CARD_BODY_ATTR`.
+    //
+    // The menu handlers go on the whole line, the controls drawn over its tail included — a
+    // right-click anywhere on it is a question about this card, and the keydown reaches here from
+    // the caret wherever it sits inside the row. Same element as the body mark, and for the same
+    // reason: what the reader is pointing at is the line.
     // `FOCUS` because this is where the caret lands when the line's menu closes —
     // `deckCardMenuProps` is what makes the element focusable, and a hand-back the reader cannot
     // see is half a hand-back. It traces the same box the button inside it fills, so the two
     // rings are the same ring drawn from either side.
     <li
       ref={dragRef}
+      {...deckCardBodyProps()}
       {...deckCardMenuProps(card, actions)}
+      {...deckCardSelectedProps(selected)}
       className={cn("group relative rounded", FOCUS)}
     >
       <button
@@ -282,6 +340,10 @@ function TextRow({
           "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
           ruleBreakText !== null && "bg-destructive/5",
           FOCUS,
+          // Last, so the picked row's surface wins over the rule break's pink wash — a line can
+          // be both, and the question the reader is asking when they clicked it is "which one
+          // am I reading", not "is this one legal".
+          selected && SELECTED_ROW,
         )}
       >
         <span className="w-4 shrink-0 text-right font-mono text-[0.6875rem] tabular-nums text-dim">
@@ -309,6 +371,12 @@ function TextRow({
           REVEALED_ON_CARD,
         )}
       />
+
+      {/* Over the whole line, which here is the whole card: there is no art to light up, so the
+          mark is a lit row with a hairline round it. `rounded` matches the button's own corner
+          — the mark is laid over the line rather than around it, so the two edges have to be
+          the same shape. */}
+      {landedKey !== undefined && <LandedMark key={landedKey} className="rounded" />}
     </li>
   );
 }

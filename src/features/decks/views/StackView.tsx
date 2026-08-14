@@ -103,6 +103,8 @@ export function StackView({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -114,6 +116,12 @@ export function StackView({
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
   actions?: DeckCardActions;
+  /** The printing the pane is open on — the picked card wears a gold ring, and in this view it
+   *  is also what the pile rests open on. See {@link CardStack}. */
+  selectedCardId?: string | null;
+  /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
+   *  landed. Handed down whole, like `violations`. */
+  landed?: ReadonlyMap<number, number>;
   className?: string;
 }) {
   // **`deck`, and `GridView` reads this same key on purpose.** The two are one deck drawn two
@@ -129,11 +137,14 @@ export function StackView({
   // is the whole of why `cardZoom` stopped being one number.
   const cardZoom = useAppStore((s) => s.cardZoom.deck);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Ctrl+wheel, on the element that scrolls: this view is the whole desk, and a wheel event
-  // bubbles from whichever card the pointer is over up to here — including from the gaps between
-  // the piles, which belong to no card at all. A native non-passive listener is what the hook
-  // is for; React's own wheel listeners are passive and could not `preventDefault`, so WebView2
-  // would zoom the entire window underneath the cards.
+  // Ctrl+wheel, on the box the whole view is drawn in: a wheel event bubbles from whichever card
+  // the pointer is over up to here — including from the gaps between the piles, which belong to
+  // no card at all — and this is also the rect the zoom badge is anchored to. A native
+  // non-passive listener is what the hook is for; React's own wheel listeners are passive and
+  // could not `preventDefault`, so WebView2 would zoom the entire window underneath the cards.
+  //
+  // The ref's name predates 2026-08-14, when this box stopped scrolling down and became a box
+  // that simply grows; it is still the element the gesture belongs on, for the two reasons above.
   //
   // The literal `"deck"` is the same key the read above takes and the same one `GridView` passes,
   // for the reason written there: the gesture and the geometry have to name one section, and the
@@ -161,9 +172,19 @@ export function StackView({
     // Down is also where a lifted card at the foot of a pile has always had to go, so there
     // is one direction to scroll rather than two.
     //
-    // `overflow-auto` and not `overflow-y-auto`: one column at 2× really is wider than a narrow
-    // desk, and clipping a card is worse than a scrollbar the reader asked for by zooming.
-    // Wrapping is what makes that the rare case instead of the ordinary one.
+    // **And down means the *page*, not this box** (changed 2026-08-14). This root used to be
+    // `overflow-auto` inside a bounded desk, so a deck with more piles than the window was tall
+    // got a second scrollbar *inside* the deck builder — a wall of cards in a letterbox, with the
+    // editor's own scrollbar beside it and nothing saying which one a wheel would move. It is
+    // `overflow-x-auto` now and it is given no height at all: the piles wrap, the box grows to
+    // hold every line of them, the desk row grows with it and `DeckEditor`'s page scroller is the
+    // one thing that scrolls. **The X axis keeps its scrollbar and that is not an oversight** —
+    // one column at 2× really is wider than a narrow desk, clipping a card is worse than a
+    // scrollbar the reader asked for by zooming, and the alternative is that overhang reaching
+    // the *page* and putting an X scrollbar across the whole app, which the 1024px floor forbids.
+    // It costs nothing while it is not needed: `overflow-x-auto` computes `overflow-y` to `auto`
+    // too, and a box with no height of its own is never taller than its own content, so the Y
+    // scrollbar this pair implies can never have anything to scroll.
     //
     // The `flex-wrap` *here* is what decides the narrow desk. With the flowing box below
     // refusing to go under one column wide, a desk too narrow to hold a column beside the rail
@@ -171,18 +192,23 @@ export function StackView({
     // its own box in either axis**. That rule used to be stated on a `DEFAULT_COLUMN_HEIGHT` the
     // editor passed a measured height into; the height is gone and the rule outlived it.
     //
-    // `content-start` belongs on *this* box and only here, because this is the box with height
-    // to spare: `DeckEditor` renders it as a `flex-1` item of a `min-h-0 flex-col` parent, so
-    // its height is the scroller's rather than its content's. Once the rail has wrapped, that
-    // makes two flex lines in a box taller than both — and `align-content`'s initial `normal`
-    // behaves as **stretch**, dealing the slack out between them. A freshly created deck — four
-    // nearly empty piles, one short line — would draw that line at the top and the Sideboard
-    // floating a couple of hundred pixels under it with nothing in between. `items-start` cannot
-    // prevent it: that aligns an item within its line, never the lines within the box.
+    // `content-start` belongs on *this* box and only here, because this is the only box here
+    // that a host can hand height to spare. `DeckEditor` no longer does — it gives this view no
+    // height, which is the change above — but a host that draws it in a box of its own still
+    // can, and the Storybook decorator's `h-[42rem]` is exactly that. Once the rail has wrapped
+    // there are two flex lines in a box taller than both, and `align-content`'s initial `normal`
+    // behaves as **stretch**, dealing the slack out between them: a freshly created deck — four
+    // nearly empty piles, one short line — draws that line at the top and the Sideboard floating
+    // a couple of hundred pixels under it with nothing in between. `items-start` cannot prevent
+    // it: that aligns an item within its line, never the lines within the box.
+    //
+    // `flex-1` is inert in the editor for the same reason — the page hands this view a plain
+    // block to fill — and is kept because it is the sentence a host in a *row* reads: it is how
+    // the view takes its share of the width, which is the axis this box has ever shared.
     <div
       ref={scrollRef}
       className={cn(
-        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-auto pb-2",
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto pb-2",
         className,
       )}
     >
@@ -224,6 +250,8 @@ export function StackView({
             violations={violations}
             onSelect={onSelect}
             actions={actions}
+            selectedCardId={selectedCardId}
+            landed={landed}
             zoom={cardZoom}
             flowWidth={columnWidth}
           />
@@ -265,6 +293,8 @@ export function StackView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
+              selectedCardId={selectedCardId}
+              landed={landed}
               zoom={cardZoom}
             />
           ))}
@@ -287,6 +317,8 @@ function StackGroup({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
   zoom,
   flowWidth,
 }: {
@@ -295,6 +327,9 @@ function StackGroup({
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** Handed through to the stack — see {@link StackView}'s own props. */
+  selectedCardId?: string | null;
+  landed?: ReadonlyMap<number, number>;
   /** The zoom this pile's box was sized from, handed straight through to the stack so the two
    *  are the same number rather than two reads of one store. */
   zoom: number;
@@ -385,6 +420,8 @@ function StackGroup({
           violations={violations}
           onSelect={onSelect}
           actions={actions}
+          selectedCardId={selectedCardId}
+          landed={landed}
           zoom={zoom}
           // The third of the three signals a switched-off pile carries — the wash on the section
           // and `GroupHeader`'s dimmed name and `INACTIVE` chip are the other two. Card art is the

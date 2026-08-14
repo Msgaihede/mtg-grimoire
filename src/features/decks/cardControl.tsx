@@ -98,6 +98,202 @@ export const FOCUS_INSET =
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /**
+ * **Picked**: this is the card the detail pane is open on.
+ *
+ * `ring-2 ring-accent`, which is `components/CardArt`'s `selected` recipe character for
+ * character — the deck editor is answering the same question the search wall answers, and a
+ * reader who has learned "gold ring means the pane is about this one" on one wall must not have
+ * to learn a second vocabulary two clicks away. Gold means *state* as a ring and *focus* as an
+ * outline everywhere in this app; this is the ring.
+ *
+ * It goes on the card's outermost element rather than on its face, so it stands **outside** the
+ * card's own border and is never confused with the destructive edge a rule break draws.
+ */
+export const SELECTED_CARD = "ring-2 ring-accent";
+
+/**
+ * How a card says it is the picked one, for anything that has to find it **after the fact**.
+ *
+ * `CardStack`'s `STACK_OPEN_ATTR` one floor over, for its reason and with the same two readers:
+ * a test, and `scripts/cdp.mjs --probe` in the shipped window. The mark itself is a class, and a
+ * class is a *recipe* — a test that asserted `ring-accent` would go red the day the ring became
+ * an outline, which is a change to how this looks and not to what it means. This is what it
+ * means, and it is what `views/views.test.tsx` sweeps all four views for.
+ *
+ * On the same element as the visual mark in each view, which is the card's body in three of them
+ * and the row in the table.
+ */
+export const SELECTED_ATTR = "data-deck-card-selected";
+
+/** What a picked card spreads, and nothing at all when it is not picked — an attribute that is
+ *  present-or-absent rather than `"true"`/`"false"`, so a query for it needs no value. */
+export function deckCardSelectedProps(selected: boolean) {
+  return selected ? { [SELECTED_ATTR]: "" } : {};
+}
+
+/**
+ * The same question for the landed mark: which cards are inside their ten seconds.
+ *
+ * It sits on {@link LandedMark} itself rather than on the card, because the mark is what an
+ * expiry removes — so `[data-deck-landed]` answers "is it still saying so" rather than "was it
+ * added at some point", which is the only version of the question worth asking.
+ */
+export const LANDED_ATTR = "data-deck-landed";
+
+/**
+ * The same fact on a **line** rather than on a card face — `TextView`'s 22px rows.
+ *
+ * A 2px ring around a 22px row is a box drawn around a word, so the weight comes down and the
+ * surface comes up: the row lifts to `bg-surface` (which is what its own hover does, so the
+ * picked row reads as permanently hovered) with a hairline of gold on it. `ring-inset`, because
+ * the rows are flush against one another and an outset ring is drawn over its neighbours.
+ *
+ * `TableView` is deliberately **not** here: `VirtualTable` already owns what a picked row looks
+ * like across all three tables in the app (`bg-surface text-text`, a quiet surface rather than
+ * gold — forty rows are on screen and the one being read is already beside the pane), and this
+ * editor is not the place to make one table disagree with the other two.
+ */
+export const SELECTED_ROW = "bg-surface ring-1 ring-inset ring-accent";
+
+/**
+ * **Landed**: how long a card the reader has just added goes on saying so.
+ *
+ * Ten seconds, because the gesture that adds a card happens in the docked search panel and the
+ * card lands somewhere in a deck the reader is not looking at — the mark has to survive the trip
+ * their eye makes from one to the other, twice, with a moment to be sure at the end of it.
+ *
+ * **This number is also in `src/index.css`**, as `--animate-card-landed`'s duration, and the two
+ * halves are genuinely two consumers rather than a copy: the stylesheet fades the mark and this
+ * unmounts it. `cardControl.test.ts` reads the stylesheet and fails if they drift. It is not in
+ * `src/lib/motion.ts` and must not be moved there — that module is a three-tier scale capped at
+ * 260ms and `motion.test.ts` enforces the cap, correctly, because everything in it is a
+ * *transition*. This is a mark that decays, which is a different kind of thing.
+ */
+export const LANDED_MS = 10_000;
+
+/**
+ * The mark itself: a wash and a hairline over the card, fading to nothing over
+ * {@link LANDED_MS}.
+ *
+ * ## Why it is parchment and not gold
+ *
+ * Gold is taken. It is focus, it is {@link SELECTED_CARD}, and it is both halves of the drop
+ * affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`) — so a gold mark on a card the reader has
+ * just added would be a fourth meaning for one colour, on the very surface where the other three
+ * are all in play. Red is the rule break's and green would be a five-colour token used for
+ * something that is not mana, which the visual direction forbids in as many words. What is left,
+ * and what is right anyway, is the app's own text colour: a card that has just landed **lights
+ * up** rather than being tinted, which is what a highlight has meant since somebody first ran a
+ * marker over a page.
+ *
+ * ## Why it is a border and not a ring
+ *
+ * The mark has to be legible **from the middle of a stack**, where a card shows only the 34px of
+ * its own printed title bar that its successor has not painted over. An outset ring is drawn on
+ * the card's outside edge, where the next card covers three of its four sides; a border on an
+ * `inset-0` overlay is drawn *inside* the face, so what survives into that strip is a bright
+ * hairline across the card's top and 34px down each side, with the wash lighting the strip
+ * between them. That is the difference between "somewhere in this pile" and "this one".
+ *
+ * `aria-hidden`, and it is decoration in the strict sense: an add is a write the reader just
+ * made, the deck's own list is what confirms it, and nothing here says anything a screen reader
+ * has not already been told by the button that made it.
+ *
+ * **Re-mount it to replay it.** A CSS animation runs once per element, so a second add of a card
+ * that is still glowing has to be a different element — the caller passes the nonce it was given
+ * as `key`. See `DeckEditor`'s `useRecentAdds`.
+ *
+ * **The corner is the caller's**, and it is square here rather than inherited: `rounded-[inherit]`
+ * emits **no rule at all** — Tailwind validates an arbitrary `rounded-*` as a length and drops a
+ * bare keyword — so the mark would have had square corners crossing a rounded card with nothing
+ * going red. Every surface knows the radius of the box it lays this over, so it passes it.
+ */
+export function LandedMark({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      {...{ [LANDED_ATTR]: "" }}
+      className={cn(
+        // Over the whole card and hittable by nothing: the card under it is a button, and a
+        // mark that swallowed a press for ten seconds would be worse than no mark at all.
+        "pointer-events-none absolute inset-0",
+        // **Top-weighted, and that is the reveal strip's doing rather than taste.** A flat wash
+        // strong enough to find in a 34px strip is a wash that whites out the open card, and one
+        // gentle enough for the open card is invisible in the strip — measured both ways in
+        // Storybook over CDP (2026-08-14). The gradient answers both: 35 % where the strip is,
+        // 10 % by the card's foot. It is the same trade `CARD_MARKS_STRIP`'s own scrim makes one
+        // element away, which is the precedent for spending a gradient here at all.
+        "border-2 border-text bg-gradient-to-b from-text/35 to-text/10",
+        // `animate-none` under reduced motion leaves the mark at full strength for its ten
+        // seconds and then takes it away with the element — the information survives, only the
+        // fade goes. Nothing here moves, so there is nothing else to reduce.
+        "animate-card-landed motion-reduce:animate-none",
+        className,
+      )}
+    />
+  );
+}
+
+/**
+ * How a card says "the click that landed in here was on **me**", for a listener that is nowhere
+ * near it.
+ *
+ * The editor clears the selection on a click that missed every card ({@link keepsSelection}),
+ * and it listens at the top of the view because the alternative is a handler on every gap
+ * between every pile. A card is mostly a `<button>` and a button is easy to recognise — but not
+ * all of it is: the stack card's data line stands *outside* its button (it is announced text
+ * rather than a mark, which is the whole reason it is out there), and the grid tile's control
+ * bar is a positioned span with padding around its stepper. Clicking either of those is clicking
+ * the card, and a rule built out of `button` alone would deselect it.
+ *
+ * So the card's outermost element says so. It is a second attribute rather than {@link
+ * DECK_CARD_ATTR} moved outward, because that one is the *caret's* way home and has to stay on
+ * the focusable element; these are two questions with two answers that happen to be about one
+ * card.
+ */
+export const CARD_BODY_ATTR = "data-deck-card-body";
+
+/** What a card's outermost element spreads to be one. See {@link CARD_BODY_ATTR}. */
+export function deckCardBodyProps() {
+  return { [CARD_BODY_ATTR]: "" };
+}
+
+/**
+ * Everything a click can land on inside the deck editor without meaning "I am done with that
+ * card".
+ *
+ * A card ({@link CARD_BODY_ATTR}), a table row (which is the table's card), and anything the
+ * reader is *operating* — a control, a field, an option, a modal. What is left over is the
+ * desk: the gap between two piles, a group's padding, the blank under a short column. That is
+ * what a reader clicks when they mean nothing at all, and it is the one gesture this app has
+ * for putting a card down.
+ */
+const KEEPS_SELECTION = [
+  `[${CARD_BODY_ATTR}]`,
+  '[role="row"]',
+  '[role="option"]',
+  '[role="listbox"]',
+  '[role="dialog"]',
+  "button",
+  "a",
+  "input",
+  "select",
+  "textarea",
+  "label",
+].join(", ");
+
+/**
+ * Whether a click that reached the editor's root landed on something that keeps the selection.
+ *
+ * `closest` rather than a comparison, because the target is whatever leaf the pointer was over
+ * — the glyph inside a button, the truncated span inside a row — and the question is always
+ * about the thing that leaf belongs to.
+ */
+export function keepsSelection(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(KEEPS_SELECTION) !== null;
+}
+
+/**
  * What a deck card's control is called.
  *
  * It begins with the card's **name**, which is the visible label — WCAG 2.5.3 asks that of any
