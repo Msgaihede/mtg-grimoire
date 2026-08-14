@@ -168,8 +168,9 @@ describe("dropWrite", () => {
     expect(dropWrite(CARD, { kind: "remove" })).toBeNull();
   });
 
-  /** The row's drag: every copy moves, which is what `deck_move_card` does and what the row
-   *  menu's "Move to" already means. */
+  /** The row's drag: every copy moves, which is what `deck_move_card` does — and since
+   *  2026-08-14 this is the **only** way a reader moves a card between piles, the card's own
+   *  `Move…` select having been removed. */
   it("moves a deck row into the category it was dropped on", () => {
     expect(dropWrite(ROW, { kind: "category", categoryId: SIDE })).toEqual({
       write: "move",

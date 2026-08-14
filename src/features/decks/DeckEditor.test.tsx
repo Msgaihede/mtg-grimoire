@@ -717,38 +717,23 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The click path a move needs, and the one that is not a layer.
+   * **There is no click path to a move any more, and the drag is the whole of it** (2026-08-14).
    *
-   * A native `<select>` rather than the anchored row menu it replaces: the browser draws it in
-   * its own layer, so it needs no rung in the editor's Escape union, no z-index and no focus
-   * hand-back — three things the old menu had to get right and this cannot get wrong.
+   * The card carried a native `Move…` `<select>` listing every other pile of the deck; it was
+   * removed whole, with a different control expected later. Two tests went with it — the
+   * selection itself, and the one pinning that a card is never offered the pile it is already in
+   * — and this is what replaces both: the control is gone from the editor, not merely from the
+   * view module that drew it.
+   *
+   * `deck_move_card` is still reached, by a drop; `DeckEditor drag and drop` below is where that
+   * is driven, and `dnd.ts` is where the refusals it used to share with the select now live.
    */
-  it("moves a card between categories from its own control", async () => {
+  it("offers no move control on a card in the deck", async () => {
     await open();
 
-    await userEvent.selectOptions(
-      screen.getByLabelText("Move Lightning Bolt out of Main deck"),
-      String(SIDE),
-    );
-
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live");
-    // The caret follows the card to the pile that now has it.
-    await waitFor(() => expect(group("Sideboard")).toHaveFocus());
-  });
-
-  /** A card cannot be moved to the pile it is already in — `deck_move_card` would touch the
-   *  deck, reallocate and bump `updated_at` to leave the list exactly as it was. */
-  it("does not offer a card its own category as a move target", async () => {
-    await open();
-
-    const select = screen.getByLabelText("Move Lightning Bolt out of Main deck");
-    expect([...within(select).getAllByRole("option")].map((o) => o.textContent)).toEqual([
-      "Move…",
-      "Sideboard",
-      "Commander",
-      "Companion",
-      "Maybeboard",
-    ]);
+    expect(screen.queryByLabelText(/^Move Lightning Bolt/)).toBeNull();
+    expect(screen.queryByRole("option", { name: "Move…" })).toBeNull();
+    expect(deckMoveCard).not.toHaveBeenCalled();
   });
 
   /** Three ways to read the same list, and the deck decides which one answers the question in
@@ -1976,18 +1961,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Three of the family's six writes have no control in this view as it stands — the printing
-   * swap is pressed on the **card pane**, which is a sibling of this editor rather than part of
-   * it, and `setQuantity`/`moveCard` lost their controls when the rebuilt views replaced the
-   * category columns that carried a stepper and a "Move to" menu.
+   * One of the family's six writes has no control in this view — the printing swap is pressed
+   * on the **card pane**, which is a sibling of this editor rather than part of it.
    *
-   * None of the three can honestly be tested from here, and the swap is tested where the two
-   * components meet: `App.test.tsx`'s "says a refused swap in the pane, and the deck behind it
-   * goes with it". What actually carries a pane-fired refusal back to this view is not this
-   * file's `newest` list at all — two `useMutation` call sites share no state — but the
-   * `onError` invalidation on the mutation's single definition (`useDeck.ts`). The entries in
-   * `lastOfAny` stay as the belt to those braces, for the day a control in this view fires one
-   * of the three.
+   * It cannot honestly be tested from here, and it is tested where the two components meet:
+   * `App.test.tsx`'s "says a refused swap in the pane, and the deck behind it goes with it".
+   * What actually carries a pane-fired refusal back to this view is not this file's `newest`
+   * list at all — two `useMutation` call sites share no state — but the `onError` invalidation
+   * on the mutation's single definition (`useDeck.ts`). Its entry in `lastOfAny` stays as the
+   * belt to those braces, for the day a control in this view fires it.
+   *
+   * `moveCard` used to be named here beside it and no longer is: the `Move…` select that fired
+   * it is gone, but a **drop** fires the same mutation through `applyDrop`, so the entry is live
+   * coverage rather than a placeholder.
    */
 
   /** A refused write is said in the app's own words, where the reader is looking. */
@@ -2043,9 +2029,10 @@ describe("DeckEditor drag and drop", () => {
   });
 
   /**
-   * A card dropped on another pile is the move select's write by another route — the same
-   * command, and the same hand-off afterwards: the card the reader was holding has left, so the
-   * caret goes to the pile that now has it.
+   * A card dropped on another pile is `deck_move_card`, and **since 2026-08-14 this is the only
+   * route to it** — it used to be the move select's write by another road. The hand-off is the
+   * same one the stepper's zero makes: the card the reader was holding has left the pile it was
+   * in, so the caret goes to the pile that now has it.
    */
   it("moves a card into the group it was dropped on, and hands the caret to it", async () => {
     await open();
