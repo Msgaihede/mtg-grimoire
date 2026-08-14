@@ -3467,6 +3467,54 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
+   * **A refusal belongs to the press that produced it, and the next press has not been made yet.**
+   *
+   * The sentence above is drawn off `meta.deleteCategory.isError`, and that observer is the
+   * **editor's** — unlike `CategoriesDialog`'s, which lives in a body `DeckDialog` unmounts, it
+   * outlives every open of this layer. So a refused delete left the mutation in `isError` and the
+   * next `Delete…` mounted its body already holding the alert: `role="alert"` announces on
+   * insertion, and the reader was told that a delete they never attempted, on a pile it was never
+   * about, had failed. `DecksPage`'s `decks.create.reset()`/`folders.create.reset()` before a
+   * dialog is opened are the precedent this follows.
+   *
+   * **Two opens, on two piles, is what makes this a test of the reset**: one open can only ever
+   * prove the sentence appears, which the case above already does. And the absence is asserted
+   * only after the second dialog has been made to *paint* — a `motion` surface's first frame
+   * carries its `initial`, so "nothing there yet" and "nothing there" look alike, and without the
+   * settle this would pass against the unfixed code.
+   */
+  it("opens a second delete dialog with no refusal from the first still in it", async () => {
+    const removal = category(6, "Removal", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, removal]));
+    deckCategoryList.mockResolvedValue([...CATEGORIES, removal]);
+    deckCategoryDelete.mockRejectedValue("The database is busy");
+    await open();
+
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const first = await screen.findByRole("dialog", { name: /Delete “Main deck”/ });
+    await userEvent.click(
+      within(first).getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
+    );
+    await within(first).findByText(/Could not delete that category/);
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await rightClickGroup(removal.id);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const second = await screen.findByRole("dialog", { name: /Delete “Removal”/ });
+    await waitFor(() =>
+      expect(
+        within(second).getByRole("button", { name: /Delete “Removal”|Move .* and delete/ }),
+      ).toBeVisible(),
+    );
+
+    expect(within(second).queryByRole("alert")).toBeNull();
+    expect(within(second).queryByText(/Could not delete that category/)).toBeNull();
+  });
+
+  /**
    * **The caret goes back to the pile, for all three rows that open a full-window surface.**
    *
    * A menu row has no control to return to, and `DeckDialog` focuses its own panel and restores

@@ -831,6 +831,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const setCategoryActive = meta.setCategoryActive.mutate;
   const renameCategory = meta.renameCategory.mutate;
   const renamePending = meta.renameCategory.isPending;
+  /**
+   * **The delete confirmation's sentence has to be cleared when the confirmation opens**, and
+   * `reset` is what does it — `DecksPage`'s `decks.create.reset()`/`folders.create.reset()`
+   * before each of its dialogs, for exactly this reason.
+   *
+   * This observer is the **editor's**, so it outlives every open of the `deleteCategory` layer —
+   * unlike the meta dialogs', which live in a body `DeckDialog` unmounts and start clean by
+   * construction. Without this a refused delete left the mutation in `isError`, and the next
+   * `Delete…` drew its `role="alert"` on mount: a sentence *announced on insertion*, about a
+   * press the reader had not made, naming a pile it was never about.
+   *
+   * **It clears the editor's own banner too, and that is right rather than incidental.** The
+   * banner speaks for the newest of {@link writes}, this is one of them, and a reader opening the
+   * question again is starting the write over — a stale refusal outliving the attempt that
+   * produced it is the same bug one rung out.
+   *
+   * Stable for the component's life, like every `mutate` above it: TanStack binds `reset` on the
+   * observer, so putting it in a dependency list costs the menu memo nothing.
+   */
+  const resetCategoryDelete = meta.deleteCategory.reset;
   const createTagFor = useCallback(
     (card: DeckCard, name: string) => {
       void startTagCreate({ name, color: DEFAULT_TAG_COLOR.token })
@@ -1498,14 +1518,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           openExport: ({ categoryId: id }) =>
             openLayer({ kind: "export", categoryId: id }, () => focusDeckGroup(id)),
           setActive: (pile, isActive) => setCategoryActive({ id: pile.id, isActive }),
-          askDelete: (pile) =>
+          // **The refusal from the last time is cleared on the way in**, because the confirmation
+          // draws its own sentence off an observer this file holds and the layer opens with that
+          // sentence already in it otherwise. See {@link resetCategoryDelete} — and note the
+          // reset belongs *here* rather than in `openLayer`, which is the union's switch and has
+          // no business knowing which arm carries a mutation.
+          askDelete: (pile) => {
+            resetCategoryDelete();
             openLayer({ kind: "deleteCategory", categoryId: pile.id }, () =>
               focusDeckGroup(pile.id),
-            ),
+            );
+          },
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
-    [menu, menuKey, categories, deck.cards, openLayer, setCategoryActive],
+    [menu, menuKey, categories, deck.cards, openLayer, setCategoryActive, resetCategoryDelete],
   );
 
   /**
