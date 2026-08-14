@@ -230,13 +230,30 @@
   --color-rarity-rare: #bfa35a;
   --color-rarity-mythic: #e86a33;
 
-  /* The mana line's sweep while a sync has no denominator — the app's one *keyframed* loop,
+  /* The mana line's sweep while a sync has no denominator — the app's one *repeating* loop,
      and the only animation that runs without a reader having done anything. It used to be
      described here as "the one animation in the app", which stopped being true the day
      `src/lib/motion.ts` landed: enter and exit animations now run on drawers, dialogs,
-     popups, status lines and the deck stack. What is still true is that this is the only
-     `@keyframes` in the file and the only thing that repeats. */
+     popups, status lines and the deck stack. It was then "the only `@keyframes` in the file",
+     which stopped being true when `card-landed` arrived below. What is still true, and is the
+     part worth keeping, is that it is the only thing here that repeats. */
   --animate-mana-sweep: mana-sweep 1.6s ease-in-out infinite;
+
+  /* How a deck card the reader has just added says so, and **the one timing in this app that
+     `src/lib/motion.ts` may not hold**. That module's whole discipline is a three-tier scale
+     capped at 260ms, and `motion.test.ts` walks its namespace and fails any duration off the
+     scale or over the cap — correctly, because those are *transitions*, things the pixels do
+     on the way between two states. This is not one. It is a mark that decays: ten seconds is
+     how long a reader has to look up from the search panel, find where their card landed, and
+     still be told. So it lives here, and `LANDED_MS` in `features/decks/cardControl.tsx` is
+     the same ten seconds spelled in TypeScript, because the mark is also *unmounted* when it
+     expires. `cardControl.test.ts` reads this file and fails if the two ever disagree.
+
+     Held at full for the first fifth, then linear to nothing. A fade that starts the instant
+     the card lands is at 80 % before the eye has arrived; two seconds of hold is what makes
+     the other eight readable as "this one, still". `forwards` so the last frame sticks for the
+     few milliseconds between the animation ending and the mark being taken out of the DOM. */
+  --animate-card-landed: card-landed 10s linear forwards;
 }
 
 /* Motion, as tokens — the same three durations and three curves `src/lib/motion.ts` hands to
@@ -283,6 +300,20 @@
   }
   100% {
     transform: translateX(200%);
+  }
+}
+
+/* See `--animate-card-landed` above for the ten seconds and the hold. Opacity only: the mark
+   is a wash and a hairline drawn over a card that is not moving, so there is nothing here for
+   `prefers-reduced-motion` to reduce — the consumer still writes `motion-reduce:animate-none`,
+   which leaves the mark at full strength for its ten seconds and then takes it away. */
+@keyframes card-landed {
+  0%,
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 

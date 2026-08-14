@@ -25,6 +25,7 @@ import {
   stackHeight,
   stackImageHeight,
 } from "./CardStack";
+import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
 
@@ -489,6 +490,147 @@ describe("CardStack flip-through", () => {
 
     unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * The pile's **resting state**, which used to be "closed" and is now "the picked card".
+ *
+ * The defect it fixes needs no fake clock to state: a reader clicks a card to read it in the
+ * pane docked beside the deck, moves the pointer off the stack to get there, and the card they
+ * are reading about drops back into the pile. The card pane is open on it, the deck says
+ * nothing.
+ */
+describe("CardStack selection", () => {
+  const mountPicked = (cardId: string | null) =>
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" selectedCardId={cardId} />);
+
+  it("rests on the picked card rather than on a closed pile", () => {
+    mountPicked(CARDS[1].cardId);
+
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[1]);
+  });
+
+  /** Still exactly one, which is the property the whole geometry note at the top of
+   *  `CardStack.tsx` is arithmetic about — two open cards would push the tail of the pile twice
+   *  as far over whatever is drawn below it. */
+  it("opens nothing at all when the picked card is in another pile", () => {
+    mountPicked("c-Somewhere Else");
+
+    expect(openCards()).toHaveLength(0);
+  });
+
+  /**
+   * The mark is an attribute rather than a class assertion on purpose — see `SELECTED_ATTR`.
+   * One card carries it, and it is the same card the pile is resting open on.
+   */
+  it("marks the picked card, and only it", () => {
+    mountPicked(CARDS[2].cardId);
+
+    const marked = list().querySelectorAll(`[${SELECTED_ATTR}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toBe(items()[2]);
+    expect(openCard()).toBe(items()[2]);
+  });
+
+  /** Nothing picked is the old behaviour exactly, which is what keeps every other case in this
+   *  file a claim about the flip-through rather than about the selection. */
+  it("marks nothing and opens nothing when no card is picked", () => {
+    mountPicked(null);
+
+    expect(list().querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
+    expect(openCards()).toHaveLength(0);
+  });
+});
+
+describe("CardStack landed mark", () => {
+  const mountLanded = (landed: ReadonlyMap<number, number>) =>
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" landed={landed} />);
+
+  /**
+   * **Inside the card's face, which is the whole of why it can be found in a fanned pile.**
+   *
+   * A collapsed card is overlapped by its successor by all but the 34px of its own printed title
+   * bar, and that strip is the top of the face. A mark drawn on the card's outer element instead
+   * would have three of its four edges painted over by the next card, and the reader would be
+   * told a card had landed somewhere in this pile without being told which one.
+   */
+  it("draws the mark inside the card's face, where a collapsed card still shows it", () => {
+    mountLanded(new Map([[CARDS[1].id, 1]]));
+
+    const marks = list().querySelectorAll(`[${LANDED_ATTR}]`);
+    expect(marks).toHaveLength(1);
+    expect(items()[1].contains(marks[0])).toBe(true);
+    expect(marks[0].closest("button")).not.toBeNull();
+  });
+
+  /**
+   * **A second add of the same card has to be a new element, or nothing happens on screen.**
+   *
+   * The fade is a CSS animation and a CSS animation runs once per element — so a card still
+   * glowing from its first copy would take a second one in silence: the count goes up and the
+   * card the reader was told to look at does not so much as blink. The nonce in the map is
+   * passed straight through as React's `key` for exactly this, and element identity is the only
+   * honest way to ask about it.
+   */
+  it("replays the mark when the same card lands again", () => {
+    const { rerender } = mountLanded(new Map([[CARDS[1].id, 1]]));
+    const first = list().querySelector(`[${LANDED_ATTR}]`);
+
+    rerender(
+      <CardStack cards={CARDS} label="Ramp" currency="usd" landed={new Map([[CARDS[1].id, 2]])} />,
+    );
+
+    const second = list().querySelector(`[${LANDED_ATTR}]`);
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+  });
+
+  it("draws nothing when nothing has landed", () => {
+    mountLanded(new Map());
+
+    expect(list().querySelectorAll(`[${LANDED_ATTR}]`)).toHaveLength(0);
+  });
+});
+
+describe("CardStack selection and the pointer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const tick = async (ms: number) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
+  /**
+   * **The hover wins while there is one, and what it falls back to is the picked card.**
+   *
+   * Both halves matter and only the second is new. A reader running down a pile has to be able
+   * to look at a card that is not the one they picked — otherwise picking one would freeze the
+   * flip-through — and when they stop, the pile has to go back to the card the pane is about
+   * rather than to nothing.
+   */
+  it("lets the pointer open a neighbour, and comes back to the picked card", async () => {
+    render(
+      <CardStack cards={CARDS} label="Ramp" currency="usd" selectedCardId={CARDS[0].cardId} />,
+    );
+    expect(openCard()).toBe(items()[0]);
+
+    arriveOn(items()[2]);
+    await tick(STACK_OPEN_DWELL_MS);
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[2]);
+
+    leaveStack(items()[2]);
+    await tick(STACK_CLOSE_DELAY_MS);
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[0]);
   });
 });
 

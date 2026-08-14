@@ -49,7 +49,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `body.scrollWidth` was **1265** — the same figure the 2026-08-13 pass recorded. At 1024 with the
   pane open it rails, which is what `DECK_FLOOR`'s table has always said it does.
   **A trap this pass walked into**: `setDeviceMetricsOverride` survives the socket that set it,
-  so a `size 1024 768` earlier in the run had the *next* check reading a railed panel at what
+  so a `size 1024 768` earlier in the run had the _next_ check reading a railed panel at what
   looked like 1280 — a regression that was not one. Read `innerWidth` in the same expression as
   anything width-dependent; the harness contract says to end a run with an explicit `size 1280 800`
   and this is the failure that rule is about.
@@ -227,7 +227,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   caption and the search table's `×132 printings` cell are inline text, where the sign is what
   tells a count from a set number. `CardGrid`'s `topLeft` is consequently the one corner with no
   backing under it — a chip behind a banner frames a frame — while `badge` (bottom-left) keeps
-  the wall's felt, so the wall still owns the *corner* and owns nothing about the paint.
+  the wall's felt, so the wall still owns the _corner_ and owns nothing about the paint.
   **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/tagColors.ts` to `CountTag`'s
   own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no tags at all, so
   the neutral fill is a fact about the mark rather than about that palette.
@@ -242,7 +242,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `z-index: 1` — the two surfaces are one box, which is the claim the whole change rests on and
   the only one a screenshot could not settle. **The name coverage did not move**: 25px plus the
   4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
-  always lost. **One arm was not driven** — the *coloured* tag, since the deck to hand carried no
+  always lost. **One arm was not driven** — the _coloured_ tag, since the deck to hand carried no
   tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
@@ -270,7 +270,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   as another arrives — and it never covered the case the deck editor creates, where two card
   sections are on screen **at the same time**. A reader zooming the docked search column was
   resizing the deck laid out beside it, and those are two different questions asked in the same
-  second: *how big are the cards I am browsing* against *how big is my deck laid out*. The
+  second: _how big are the cards I am browsing_ against _how big is my deck laid out_. The
   cross-surface convenience is what the split costs, and it is the smaller loss — a reader who zooms
   the search wall and then opens a deck now finds the deck at whatever they last left it at, which
   is the same promise ("the size I asked for") read per section instead of per app. Each section
@@ -308,11 +308,11 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column now answers all
   ten, strictly increasing, and stays centred throughout:
 
-  | zoom | 0.5 | 0.67 | 0.75 | 0.9 | 1 | 1.1 | 1.25 | 1.5 | 1.75 | 2 |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | tile | 75 | 101 | 113 | 135 | 150 | 165 | 188 | 225 | 263 | 300 |
-  | columns | 3 | 3 | 2 | 2 | 2 | 1 | 1 | 1 | 1 | 1 |
-  | gutter | 41 | 2 | 46 | 24 | 9 | 83 | 71 | 53 | 34 | 15 |
+  | zoom    | 0.5 | 0.67 | 0.75 | 0.9 | 1   | 1.1 | 1.25 | 1.5 | 1.75 | 2   |
+  | ------- | --- | ---- | ---- | --- | --- | --- | ---- | --- | ---- | --- |
+  | tile    | 75  | 101  | 113  | 135 | 150 | 165 | 188  | 225 | 263  | 300 |
+  | columns | 3   | 3    | 2    | 2   | 2   | 1   | 1    | 1   | 1    | 1   |
+  | gutter  | 41  | 2    | 46   | 24  | 9   | 83  | 71   | 53  | 34   | 15  |
 
   The page-width search wall behaves the same way — 991px of wall gave 170/187/213/255/298/340
   across the first six stops, at 5/5/4/3/3/2 columns and 47/4/52/101/37/150px of gutter. **The
@@ -320,6 +320,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   on the scroller), which is the same carve-out the 2026-08-14 zoom pass recorded: the handler and
   the arithmetic downstream of it were exercised, the `preventDefault`/WebView2 page-zoom
   suppression was not re-proved.
+
 - **The remainder is split either side rather than left at the right edge, and that is the half
   of the old argument that survived.** A one-sided gutter of up to a whole tile really does read
   as a column that failed to draw — the original reason for stretching. Centred, the same pixels
@@ -342,7 +343,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   the reader is actually choosing. It is the other half of the same complaint the zoom fixes —
   bigger cards need somewhere to go, and the answers are zoom out, or widen the column.
   - **Two bounds, and each is wrong on its own.** `min(half the window, what the desk can spare
-    over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pane open the
+over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pane open the
     desk is **602**, so the deck's floor gives **394** while half the window is 632 and says
     nothing; with the pane closed the desk is **1002**, the floor would allow 794, and the
     half-window cap holds the column to **632**. Both were driven to their stops and held.
@@ -363,15 +364,15 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     window" on it.
   - **The width is the reader's and is never written by the environment.** It is `useState` in the
     panel's root — per editor-open like `open`, not remembered past the deck — and the caps clamp
-    what is *drawn* rather than what was asked for, so a window narrowed and widened again gives
+    what is _drawn_ rather than what was asked for, so a window narrowed and widened again gives
     the column back. It outlives a collapse and a railing because it lives in the root rather than
     in `OpenPanel`.
   - **Driven with a real pointer, which needed a new harness command.** `cdp.mjs` had `drag` (the
     HTML5 drag controller) and `hover`, and neither presses a button and moves. `pull <css> <dx>
-    [dy]` does — `mousePressed` → stepped `mouseMoved` with the button held → `mouseReleased` —
+[dy]` does — `mousePressed` → stepped `mouseMoved` with the button held → `mouseReleased` —
     and the reason it had to be real is `setPointerCapture`: a `dispatchEvent(new PointerEvent(…))`
     out of an `eval` names a pointer id that was never active, so the capture throws
-    `NotFoundError` *inside* the handler and the pass fails on the harness rather than on the page.
+    `NotFoundError` _inside_ the handler and the pass fails on the harness rather than on the page.
     A 200px pull took the panel 384 → **584** and the wall from two columns to **three** at the
     same zoom, which is the feature in one measurement. `ArrowLeft`/`ArrowRight`/`Home`/`End` were
     added to `KEYS` for the keyboard half and drove it 206 → 278 → 632 → 206 with focus staying on
@@ -436,7 +437,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   hand on a real mouse — [live-ui-verification.md](live-ui-verification.md) says why.
   **The trap in checking any of this: `opacity-60` is unobservable on an _empty_ pile.**
   `CardStack` returns null for a group with no cards, so a switched-off empty pile has no `<ul>` in
-  the DOM at all and a probe reports *absent* rather than 0.6. The Maybeboard read exactly that way
+  the DOM at all and a probe reports _absent_ rather than 0.6. The Maybeboard read exactly that way
   on the first pass and the figure above needed a card moved into it first. The wash and
   `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
   the argument for having three.
@@ -455,7 +456,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   drawn in the flow", and the rail's piles are by construction the ones that never reach it, so a
   sweep that counts the deck's own piles must not find them; the name is unprefixed because
   `TextView` draws the same rail, and it
-  is spelled for the *rail* rather than for the Sideboard because the Sideboard is no longer the
+  is spelled for the _rail_ rather than for the Sideboard because the Sideboard is no longer the
   only thing in it. It is rendered only when a `side` **or** `maybe` group exists, which is a real
   condition for a story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES`
   seeds both into every deck, an empty category group is drawn for each (neither of them is one of
@@ -532,7 +533,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   row went with the reason it was written for, which was that a centred pill in a full-width row
   scales about its own middle.
 - **The rect is measured during the render that detects the pulse, not in an effect, and that is
-  correct rather than a shortcut.** A section's *box* does not move when the zoom steps — only its
+  correct rather than a shortcut.** A section's _box_ does not move when the zoom steps — only its
   contents resize — so the pre-commit rect is already the right answer, and the badge's first
   painted frame is in the right corner. An effect would cost a frame with the badge somewhere else,
   on a surface that is only up for `ZOOM_QUIET_MS` in the first place. The anchor is set beside
@@ -541,7 +542,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `lib/useDelayedFlag.ts`.
 - **The anchor and the split are measured in the shipped window — 2026-08-14,
   `npm run tauri build -- --debug --no-bundle`, a debug build at 1280×800**, driven over
-  `scripts/cdp.mjs` against the real corpus. (Two things in this group were *not* driven; the last
+  `scripts/cdp.mjs` against the real corpus. (Two things in this group were _not_ driven; the last
   bullet of the four says which.) **The badge lands on the zoomed section's corner exactly.** On the search wall the scroller's rect read `top 190 / right 1260` and the badge painted
   at `top 198 / right 1252` — both edges inset by `ZOOM_BADGE_INSET` and neither off by a pixel. The
   pill computed `position: fixed`, `z-index: 30` (`LAYER.popup`), `pointer-events: none` and a
@@ -573,12 +574,12 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   has to **state** one — and the test helper stated `window.innerWidth`, which is precisely the
   expression the bug was made of. **That is worse than blindness: the suite pinned the defect as
   the expected answer and certified it.** The assertion looks like it is checking where the badge
-  is anchored and is checking nothing, and it would have gone red against the *fix*. The general
+  is anchored and is checking nothing, and it would have gone red against the _fix_. The general
   trap, for whoever writes the next one: **a stated-viewport test proves only that the code agrees
   with the number the test stated**, so state a width that is not the expression under test, or
   accept that the question is a live one. Anything else positioned `fixed` from a measured rect
   owes the same distinction.
-- **What was *not* driven here, stated plainly.** The gesture was dispatched as a **synthetic**
+- **What was _not_ driven here, stated plainly.** The gesture was dispatched as a **synthetic**
   `WheelEvent` with `ctrlKey` on a card and left to bubble to the section root. That exercises the
   listener, the store and the whole render path — `dispatchEvent` returned `false`, so something did
   call `preventDefault` — but a synthetic event is not a trusted input event, so **the
@@ -587,7 +588,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   this branch either, so no story here has been previewed.
 - **The wheel listener is a native `addEventListener` with `{ passive: false }`, never React's
   `onWheel`.** React registers `wheel` as passive on the root container, and a passive listener's
-  `preventDefault()` is defined to do nothing — so the zoom would step *and* WebView2 would apply
+  `preventDefault()` is defined to do nothing — so the zoom would step _and_ WebView2 would apply
   its own ctrl+wheel page zoom on top, scaling the whole window out from under a reader who asked
   one grid of cards to get bigger. The same `preventDefault` is what suppresses trackpad pinch,
   which arrives with `ctrlKey` set and nobody touching a key.
@@ -645,10 +646,10 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   **The argument is width, and it is the desk row's own number.** At the app's own 1280×800 with
   the card pane docked that row measures **602px** (`DeckEditor`'s `DECK_FLOOR`), so the 384px
   search panel plus its 16px gap leave the deck **202px** — one stack column. A drawer that is
-  merely *consulted* took its width out of the deck for as long as it was up and gave the deck
+  merely _consulted_ took its width out of the deck for as long as it was up and gave the deck
   nothing back; centred over a scrim, the deck keeps the whole desk underneath it.
   **The card search column stays docked, and that is the other half of the rule.** It is the one
-  surface here that is worked *out of*: its tiles are drag sources into the deck's own category
+  surface here that is worked _out of_: its tiles are drag sources into the deck's own category
   columns beside it, so a scrim would end the drag path and cover the card pane a reader flips
   printings in. What changed for it is its default — `DeckSearchPanel` opens **collapsed** now,
   because the same 602/384/202 arithmetic says an open-by-default panel charged every reader one
@@ -656,7 +657,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   deck starts with the whole desk and one press on the rail gets the wall back. The choice is the
   component's own `useState` and deliberately not a `useAppStore` field: it is per editor-open and
   not remembered, on the same line `searchView`/`collectionView` sit the other side of
-  — those are session-wide answers about the *app*. (`cardZoom` was named in that group until
+  — those are session-wide answers about the _app_. (`cardZoom` was named in that group until
   2026-08-14 and is a third thing now: session-scoped like those two, but one number per card
   **section**, so this panel's own wall zooms apart from the desk beside it — see the zoom entry
   above.)
@@ -740,7 +741,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   an X scrollbar across the whole desk. Same failure as the popup above, from the other
   direction — and it is the one route `DECK_FLOOR` never measured: **192
   is the width the deck side is _guaranteed_, and it does not hold even one column**, because
-  that floor was written for how the desk row is *divided* and never for what the pack does
+  that floor was written for how the desk row is _divided_ and never for what the pack does
   inside the view's share of it. It has only ever moved away from holding one: 224 → 208 → 192,
   each drop a scrollbar the row's arithmetic had not counted. The fix is `flex-wrap` on the packed row: the column that will not fit goes below the line
   and the reader scrolls **down**, which every deck view already does. `packColumns` is
@@ -751,13 +752,13 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
 - **Wrapping fixed the direction and not the filling, and `StackView` gave up packing the same
   day.** The bullet above is about a run that went sideways; what it left standing is that
   `packColumns` fills to a **height** while the desk's scarce axis is **width**. The two are
-  independent, so the number of columns tracked the *window's height*: at 1280×800 a six-pile
+  independent, so the number of columns tracked the _window's height_: at 1280×800 a six-pile
   Commander deck packed to roughly the six the desk had room for and looked correct, and on a tall
   screen the same deck packed to **three** — three full-height columns with the right half of the
   desk blank. The reader who reported it had found it by browser zoom, since zooming out is
   another way to buy CSS pixels of height, and it read as "it works if you zoom in enough". A pack
   cannot answer this: the column count would have to come from the width, at which point the
-  columns *are* the wrap. So `StackView`'s flowing half is a plain `flex flex-wrap` of one
+  columns _are_ the wrap. So `StackView`'s flowing half is a plain `flex flex-wrap` of one
   `stackColumnWidth(zoom)` box per pile (`gap-x-4 gap-y-5`, the two gaps the packed layout already
   used between and within columns), in `splitRail`'s order, and the desk's height reaches the
   layout nowhere — `columnHeight`, `DEFAULT_COLUMN_HEIGHT` and the view's `groupHeight` are all
@@ -796,7 +797,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   a seeded 16-category deck — twelve named piles plus the four predefined), and the two
   derived thresholds came back exact:
   - **No horizontal scrollbar at any width tested.** `document.body.scrollWidth ===
-    clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched itself at
+clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched itself at
     every one — 602 = 602 at 1280, 1257 at 1920, 331 at 1024. It scrolls **down** instead:
     **5888px** at 1280 against a 384px box.
   - **The rail's wrap threshold is the arithmetic, to the pixel.** The text view's rail wrapped
@@ -813,7 +814,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     At 2× in a 1024px window a single 434px column does not fit the 331px view, and the
     overflow is **103px inside the deck view** — `document.body` never moved. The app does not
     slide under the reader; one panel scrolls, which is the failure the popup rule above
-    forbids only for the *page*.
+    forbids only for the _page_.
   - **What the live pass found that no test could**: at the app's own 1280×800 with the search
     panel docked the view is 602px, and the rail's 224 plus the gap leave **362 — one column**.
     A 13-column deck is therefore thirteen lines and fifteen screens of scrolling, where the
@@ -824,7 +825,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     re-measured.** Every width and every threshold here is untouched by it — the rail is one
     column wide whether it holds one pile or two, so 224, 434, 464, 624, 884 and the 362 that
     leaves one column all still say exactly what they said. What the second pile changes is the
-    rail's *height* and, by one group, what is left to flow: the **5888px** scroll and the
+    rail's _height_ and, by one group, what is left to flow: the **5888px** scroll and the
     **13-column** deck were read with the Maybeboard still packed among the twelve named piles.
     Read those two as facts about that run rather than about today's layout.
   - **It predates `deck_categories.origin` as well, and that caveat runs the same way.** Every
@@ -848,7 +849,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   a second line inside the panel and is unchanged in the two full-width filter bars, where it
   already fitted. After it, `scrollWidth === clientWidth` at both widths and the document had no
   sideways scroller at all. **The general rule this is an instance of**: a row of fixed-width
-  controls is sized by the *narrowest* surface that draws it, and in this app that is the 384px
+  controls is sized by the _narrowest_ surface that draws it, and in this app that is the 384px
   docked panel — never the filter bar it was designed in. Nothing goes red when a tenth chip is
   added, so `FilterChips.test.tsx` now holds the arithmetic beside the wrap.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
@@ -907,7 +908,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   where there were two, `FilterBar.tsx` plus `useCardSearch.ts`'s `ANY_CARD` and `formatParams`.
   The chip sent `playableOnly: undefined` and the select sent a `legalities` key, and the two were
   moving one axis in opposite directions: `Any format` already means "legal in at least one of
-  Scryfall's 23 formats", so the chip's only reachable effect was to widen *that* row. Pressed
+  Scryfall's 23 formats", so the chip's only reachable effect was to widen _that_ row. Pressed
   with a format picked it did nothing at all — a card legal in Modern is legal somewhere — and
   the state it appeared to promise, "Modern **and** the art cards", is a filter contradicting
   itself. Three rows say the whole thing once, widest first: `Any card`, `Any format`, then one
@@ -922,10 +923,10 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     wall of cards and the counts greying the chips beside it come to describe different corpora.
   - **Two behaviours reversed with the merge, both deliberately.** The row is now **counted by
     Reset all and cleared by it**; the chip was neither, on the argument that it said what there
-    is to look *through* rather than what to look for. That argument belonged to the chip, and a
+    is to look _through_ rather than what to look for. That argument belonged to the chip, and a
     select the reset can only half-clear is worse than either. `allPrintings` keeps it and is
     the only control on the row that still does.
-  - **`unfiltered` deliberately does *not* count it**, which is the one place the two numbers
+  - **`unfiltered` deliberately does _not_ count it**, which is the one place the two numbers
     disagree about the same value. That flag captions an empty wall — "waiting for the sync"
     against "your search missed" — and `Any card`'s result set is a **superset** of `Any format`'s,
     so an empty answer to it still proves the database is empty. `formatIsReaderSet` carries the
@@ -934,7 +935,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     Scryfall's `legalities` keys and with `format_specs.key`, and neither has ever carried one —
     they are single lowercase words (`standardbrawl`, `paupercommander`, `oldschool`). Equality
     against the value is therefore enough, and no flag has to travel beside it.
-  - **A `<select>` whose value matches no option now falls back to the *widest* row.** React
+  - **A `<select>` whose value matches no option now falls back to the _widest_ row.** React
     never assigns `select.value`; `react-dom` walks the options setting `selected` and on no match
     picks the first that is not disabled — which used to be `Any format` and is now `Any card`.
     That is the deck panel's seeded-format case (a Brawl or Oathbreaker key `FORMATS` does not
@@ -947,6 +948,49 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     reader. And a `<select>` is as wide as its widest option, on a row that has to survive the
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
+
+## The two marks a deck card carries: picked, and just landed
+
+Added 2026-08-14. The rules and the routing live in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); this is the design argument
+and what driving it found.
+
+- **Picked is `ring-2 ring-accent`, which is `components/CardArt`'s `selected` recipe unchanged.**
+  A deck card and a search tile answer the same question — _is the pane about this one_ — and the
+  deck editor draws both walls at once, the desk and the docked search column. Two vocabularies
+  eight inches apart is the failure to avoid, so there is one.
+- **Landed is parchment, not gold, and the reason is arithmetic rather than taste.** Gold is
+  already spent four ways on this one surface: keyboard focus, the picked ring, and both halves of
+  the drop affordance (`DROP_RING` / `DROP_OVER`). Red is the rule break's edge. Green would be a
+  five-colour token spent on something that is not mana, which the direction doc forbids in as many
+  words. `--color-text` is what is left, and it is the right answer anyway: a card that has just
+  arrived should read as **lit up** rather than as tinted.
+- **It is drawn _inside_ the card's face, and that is the requirement rather than a detail.** The
+  brief was "visible from the middle of a stack". A collapsed card shows only the 34px of its own
+  printed title bar that its successor has not painted over, so a ring on the card's outer box has
+  three of its four sides covered; a border on an `inset-0` overlay inside the face leaves a bright
+  hairline across the top and 34px down each side, with the wash lighting the strip between them.
+- **The wash is top-weighted, and both flat versions were tried and rejected in the same pass**
+  (Storybook over CDP, headless Edge on 9333, 2026-08-14 — the `app` lock was held by another
+  worktree). A flat `bg-text/15` was **invisible** in the reveal strip at a glance and only findable
+  once the neighbouring card was moved away; a flat wash strong enough for the strip whites out an
+  open card, which is 293px of it. `bg-gradient-to-b from-text/35 to-text/10` answers both, and it
+  is the same trade `CARD_MARKS_STRIP`'s own scrim makes one element away — which is the precedent
+  for spending a gradient here at all, against the direction's "no gradients".
+- **The border went from `border-text/70` to full `border-text` for the same reason**: at 70 % the
+  hairline sits immediately inside the picked card's gold ring and the two blur into one edge. At
+  full strength the card reads as gold outside, parchment inside.
+- **What that pass could not show is the mark over card art.** The Storybook fake draws no
+  pictures, so every screenshot above is the app-drawn no-image frame — a flat dark card, which is
+  the _worst_ case for a white wash and the best case for a white hairline. Over a real `grid`
+  image the wash has more to lift and the hairline has a printed black border to sit on. **Not
+  driven in the shipped window.**
+- **The ten seconds are in `src/index.css` (`--animate-card-landed`) and in `LANDED_MS`, and
+  `cardControl.test.ts` compares them.** They are not in `src/lib/motion.ts` and must not be moved
+  there: that module is a three-tier scale capped at 260ms and `motion.test.ts` fails any duration
+  off it, correctly — everything in it is a _transition_, and this is a mark that decays. Held at
+  full for the first fifth, then linear to nothing: a fade that starts the instant the card lands
+  is at 80 % before the eye has arrived.
 
 ## Vendored components and tokens
 

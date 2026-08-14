@@ -12,12 +12,16 @@ import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
 import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
+  deckCardBodyProps,
   deckCardName,
   deckCardProps,
+  deckCardSelectedProps,
   DeckCardControls,
   deckGroupProps,
   FOCUS,
+  LandedMark,
   REVEALED_ON_CARD,
+  SELECTED_ROW,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
@@ -60,6 +64,8 @@ export function TextView({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
   columnHeight = 640,
   className,
 }: {
@@ -71,6 +77,12 @@ export function TextView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
+  /** The printing the pane is open on. A line has no room for a ring around a card face, so it
+   *  says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of gold on it. */
+  selectedCardId?: string | null;
+  /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
+   *  `LandedMark`. */
+  landed?: ReadonlyMap<number, number>;
   columnHeight?: number;
   className?: string;
 }) {
@@ -128,6 +140,8 @@ export function TextView({
                 violations={violations}
                 onSelect={onSelect}
                 actions={actions}
+                selectedCardId={selectedCardId}
+                landed={landed}
               />
             ))}
           </div>
@@ -161,6 +175,8 @@ export function TextView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
+              selectedCardId={selectedCardId}
+              landed={landed}
             />
           ))}
         </div>
@@ -177,12 +193,17 @@ function TextGroup({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** Handed through to the lines — see {@link TextView}'s own props. */
+  selectedCardId?: string | null;
+  landed?: ReadonlyMap<number, number>;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
 
@@ -212,6 +233,8 @@ function TextGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
+              selected={card.cardId === selectedCardId}
+              landedKey={landed?.get(card.id)}
             />
           ))}
         </ul>
@@ -234,11 +257,18 @@ function TextRow({
   ruleBreakText,
   onSelect,
   actions,
+  selected,
+  landedKey,
 }: {
   card: DeckCard;
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** This is the card the pane is open on. */
+  selected: boolean;
+  /** The nonce this line's last add was given, or `undefined`. The mark's `key`, so a second
+   *  add replays the fade. */
+  landedKey: number | undefined;
 }) {
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
 
@@ -246,7 +276,16 @@ function TextRow({
     // The controls are drawn *over* the end of the line rather than in it, so this view stays
     // what it is for: a decklist you read down, at 22px a line, with no room spent on chrome
     // that is only wanted on the one card being edited.
-    <li ref={dragRef} className="group relative">
+    //
+    // The body mark is on the line rather than on the button inside it, so the control bar
+    // drawn over the line's tail counts as part of the card — see `cardControl`'s
+    // `CARD_BODY_ATTR`.
+    <li
+      ref={dragRef}
+      {...deckCardBodyProps()}
+      {...deckCardSelectedProps(selected)}
+      className="group relative"
+    >
       <button
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
@@ -260,6 +299,10 @@ function TextRow({
           "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
           ruleBreakText !== null && "bg-destructive/5",
           FOCUS,
+          // Last, so the picked row's surface wins over the rule break's pink wash — a line can
+          // be both, and the question the reader is asking when they clicked it is "which one
+          // am I reading", not "is this one legal".
+          selected && SELECTED_ROW,
         )}
       >
         <span className="w-4 shrink-0 text-right font-mono text-[0.6875rem] tabular-nums text-dim">
@@ -287,6 +330,12 @@ function TextRow({
           REVEALED_ON_CARD,
         )}
       />
+
+      {/* Over the whole line, which here is the whole card: there is no art to light up, so the
+          mark is a lit row with a hairline round it. `rounded` matches the button's own corner
+          — the mark is laid over the line rather than around it, so the two edges have to be
+          the same shape. */}
+      {landedKey !== undefined && <LandedMark key={landedKey} className="rounded" />}
     </li>
   );
 }

@@ -120,11 +120,11 @@ just made; it now asks all of them.
   `CreateDeckDialog` merges `onChange` into a draft and **does not pass `onCommit` at all**:
   there is nothing to write until Create.
 - **`useDeckField` is the edit host's hook, not the form's** (`useDeckField.ts`, moved out
-  whole). It holds the draft, commits on blur, and commits again on the dialog's *close* rather
+  whole). It holds the draft, commits on blur, and commits again on the dialog's _close_ rather
   than its unmount — the panel outlives the flag by the length of its fade, and a write waiting
   on an animation races the editor's teardown. The form is controlled and knows none of this.
 - **`deck_create` takes a whole deck now**, so the create dialog is one command and one
-  transaction. Four of its rules are *not* `deck_update`'s — no `coalesce`, so an absent
+  transaction. Four of its rules are _not_ `deck_update`'s — no `coalesce`, so an absent
   `folderId` really is the top level; `coverKind` is not settable; theory **moves** nothing (the
   patch route's `move_live_into_theory` has no live list to act on at birth); and a
   birth is **one** audit row however many fields it was born with. All four, and the reasons:
@@ -137,7 +137,7 @@ just made; it now asks all of them.
   first other change — and they close two real cases: a format that left the seed (`format_key`
   is deliberately not a foreign key, and migrations re-seed `format_specs`), and **the one launch
   where `format_specs` has not answered yet**, where the picker is `[]` and both dialogs already
-  fall back to a single `Casual` option. That last arm is what makes the *value* fall back with
+  fall back to a single `Casual` option. That last arm is what makes the _value_ fall back with
   them, and it is why no fallback rendering had to change. **Commander rather than
   `DEFAULT_FORMAT` for a reader with no history**, because `casual` answers a different question
   — "this deck was given no format" — and is `decks.format_key`'s DDL default, which stays what
@@ -159,7 +159,7 @@ just made; it now asks all of them.
   belongs to prose.
 - **The cover picker searches every printing, not just the deck's own cards**
   (`DeckCoverPicker`). One grid, two modes: an empty search box offers the deck's cards, a query
-  offers results. It exists because a deck being *created* has no cards to take art from, and it
+  offers results. It exists because a deck being _created_ has no cards to take art from, and it
   improves the settings dialog for free. `collapse: false` because different printings are
   different art and collapsing hides the choice being made; `playableOnly: false` because art
   series and tokens are some of the best crops and a cover is not a card you cast.
@@ -170,7 +170,7 @@ just made; it now asks all of them.
   picture. At create there is no `DeckRow` to read one from, so the host fetches it with
   `card_detail` — the credit arrives with the picture and never before it.
 - **The upload arm is the one thing a create cannot do in one call**, because
-  `deck_set_cover_image` takes a path *and a deck id*. It runs after the create; if it is
+  `deck_set_cover_image` takes a path _and a deck id_. It runs after the create; if it is
   refused, the dialog holds the deck it made, says so, and turns its button into **Open deck** —
   a created deck is never lost, and pressing again never makes a second one.
 - **`CAPTION` and `FIELD` live in `formFields.ts`**, not in `cardControl.tsx`: that module's
@@ -242,18 +242,18 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   `useDeckImport`'s `resolve` mutation, after `deck_import_resolve` and in the **same**
   `mutationFn` — **one** `oracleTagsForPrintings` over the deduped matched ids for the whole list,
   never one per line. Putting it there rather than in the planner is what closes the tally-flicker
-  hole *by construction*: the dialog crosses to step two in that mutation's `onSuccess`, so the
+  hole _by construction_: the dialog crosses to step two in that mutation's `onSuccess`, so the
   preview is never reached holding only the printings and there is no window in which a type-line
   tally is on screen waiting to be redrawn. A refused tag read files the whole list by type line
   and never costs the reader their paste. The Rust half and every measurement:
-[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+  [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
 
 - **One parser for every export, and every rule in it is a _per-line_ rule.** A format detector
   would have to choose a reader before it had read anything, and would be wrong about exactly the
   lists somebody has edited by hand. So an unfamiliar mixture is read line by line rather than
   refused whole.
 - **`//` is a comment only at the _start_ of a line.** `1 Branchloft Pathway // Boulderloft
-  Pathway` is one card and there are seven such names in the reference list alone, so a `//` found
+Pathway` is one card and there are seven such names in the reference list alone, so a `//` found
   anywhere else is part of the name and must never be cut.
 - **The line splitter takes CRLF, a lone LF _and a lone CR_.** `/\r?\n/` — the obvious spelling —
   treats a carriage return on its own as nothing and `.` does not cross one, so a CR-only paste
@@ -302,7 +302,7 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   measured 2026-08-12, the reference list previewed as **`117 cards · 6 categories`** with
   `Creature 56` and no Commander row while `deck_get` after the import read **7 categories**,
   `Creature 55`, `Commander 1`. Worst on the **`automatic`** arm, where the reader presses
-  nothing — the dialog printed *"Krenko, Mob Boss goes in the command zone"* directly above a
+  nothing — the dialog printed _"Krenko, Mob Boss goes in the command zone"_ directly above a
   tally filing him under `Creature`. `fromFile` was the one arm that agreed, because there the
   card already carries the Commander category name. The split `toImportItems`' doc calls
   deliberate is still right ("the plan is what the preview draws _while_ they are still
@@ -337,7 +337,7 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   chips beside it. **`text-xs` stays where it is, and that is the load-bearing half**:
   `FILTER_CONTROL` carries `text-sm`, but the header's actions block is **692px** at max-content
   and 14px glyphs put it near **760**, against the ~1017px a 1280×800 window leaves — the row is
-  `flex-wrap`, so it does not overflow, it *wraps*, and a wrapped header costs 44px of deck
+  `flex-wrap`, so it does not overflow, it _wraps_, and a wrapped header costs 44px of deck
   height at the app's own default size. That is the regression `NAME_FLOOR` exists to keep out.
   Height was the axis with room; width was not.
   **Driven 2026-08-14** (`npm run tauri dev`, a debug build, at 1280×800 and 1920×1080): with the
@@ -404,7 +404,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   default and the filter opens on `Any format`. Naming those keys here instead would be a second
   copy of a cell the seed already carries, in a table that grows by migration.
   **The default re-seeds when the deck's format changes, and survives `resetAll` only until it
-  does.** The hook compares against the default it last *applied* rather than against `format`,
+  does.** The hook compares against the default it last _applied_ rather than against `format`,
   which is what makes all three halves true at once: the header's `Deck format` select re-points
   the panel beside it, a default that **arrives late** still lands (`useFormatSpecs` is a query, so
   on the first deck opened in a session the panel mounts before the seed has answered), and
@@ -451,7 +451,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
   interesting part.** The editor is already showing what the reader picked; this write only makes
   it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
-  back the three fields it *restores from* a beat after the press, which is how a second press
+  back the three fields it _restores from_ a beat after the press, which is how a second press
   made inside that beat gets undone by the first one's echo. It is also outside `DeckEditor`'s
   refused-write family on purpose — **that family is writes to what is _in_ the deck**, and this
   one changes no card — so its failure is silent, the cost being a deck that reopens on its old
@@ -607,7 +607,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   across the whole desk. That is the one thing the 1024px floor forbids, reached by the one route
   `DECK_FLOOR` never measured: **192** is the width the deck side is _guaranteed_, and it does not
   hold even one column — nor did the 208 it dropped from, nor the 224 before that. That floor
-  governs how the desk row is *divided*; it has never said anything about what happens inside
+  governs how the desk row is _divided_; it has never said anything about what happens inside
   the view's share of it. The row is a `flex-wrap` container now, so a box that will not fit goes
   **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
   rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
@@ -617,7 +617,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   rare case contained to the view rather than the page — every figure in
   [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **`Stacks` does not pack at all any more: every pile is a flex item of one wrapping box**
-  (changed 2026-08-14, later the same day). Wrapping fixed the *sideways* run and left the other
+  (changed 2026-08-14, later the same day). Wrapping fixed the _sideways_ run and left the other
   half of the same bug standing, because `packColumns` fills a column to a **height** and knows
   nothing about the desk's **width**. So a tall window packed a six-pile deck into three tall
   columns and left half the desk blank beside them, while the same deck in a shorter window spread
@@ -632,14 +632,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   and a line of text is not. **The price is a ragged foot**: a line is as tall as its tallest pile,
   so a 40-card Creature stack beside three one-card piles leaves space under the short ones that
   the pack would have filled. That was the trade taken deliberately — reading order is now
-  left-to-right in the order the reader sorted, which is what a `sortOrder` is *for*, and unspent
+  left-to-right in the order the reader sorted, which is what a `sortOrder` is _for_, and unspent
   width was the complaint.
 - **`STACK_ATTR` (`data-deck-stack`) marks one pile in the flow**, and it replaced
   `STACK_COLUMN_ATTR` (`data-stack-column`), which meant "a box `packColumns` produced". It sits on
   `StackGroup`'s own `<section>` — there is no wrapper box left — beside the inline
   `width`/`flex: 0 0 Npx` it draws at. **The rail's piles carry neither**, and the `flex` half is
   why that is load-bearing rather than tidy: the rail is `flex-col`, so a basis on a child there
-  would be read down the main axis and become a *height*. It pairs with `RAIL_ATTR`
+  would be read down the main axis and become a _height_. It pairs with `RAIL_ATTR`
   (`data-deck-rail`) — the two boxes a pile can be in, named the same way.
 - **The rail costs a column of flow, and at the app's own window that is the column.** Measured
   live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
@@ -698,7 +698,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   mechanism that is left. The rail therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
   `STACK_ATTR` means "a pile drawn in the flow", and the rail's piles are by construction the ones
   that never reach it, so a sweep counting the deck's own piles goes on counting those. The
-  constant is spelled for the *rail* rather than for the Sideboard, because the Sideboard is no
+  constant is spelled for the _rail_ rather than for the Sideboard, because the Sideboard is no
   longer the only thing in it. `views.test.tsx` asserts
   those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
   no other test would notice.
@@ -756,6 +756,65 @@ price | type`). An **inactive category stays its own group in all three grouping
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
+- **A card carries two marks beyond its own facts — _picked_ and _landed_ — and they are one
+  vocabulary across all four views** (`cardControl.tsx`, 2026-08-14). Picked is the card the detail
+  pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character
+  `components/CardArt`'s `selected` recipe, because the deck is answering the same question the
+  search wall answers and a reader must not have to learn two vocabularies two clicks apart. Landed
+  is a card the reader has just added, for **ten seconds, fading the whole way**. Both are keyed the
+  way the question is asked: picked by `cardId` (a pane is open on a _printing_, so a card filed in
+  two piles is marked in both — `TableView` already did this and the other three now agree), landed
+  by `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
+  worth pointing at. `TextView` says picked as `SELECTED_ROW` and `TableView` keeps
+  `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
+  agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
+  sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
+- **The landed mark is parchment and it is drawn _inside_ the card's face, and both halves are the
+  requirement rather than a preference.** Gold is taken four times over on this one surface —
+  focus, the picked ring, and both halves of the drop affordance (`AppShell`'s
+  `DROP_RING`/`DROP_OVER`) — red is the rule break's, and green would be a five-colour token spent
+  on something that is not mana, which the visual direction forbids in as many words. What is left
+  is `--color-text`: a card that has just arrived **lights up** rather than being tinted. Inside the
+  face, because the mark has to be legible **from the middle of a stack**, where a card shows only
+  the 34px of its own printed title bar that its successor has not painted over — an outset ring
+  there has three of its four sides covered, while a border on an `inset-0` overlay leaves a bright
+  hairline across the card's top and a lit strip under it. `rounded-[inherit]` **emits no rule at
+  all** (Tailwind validates an arbitrary `rounded-*` as a length and drops a bare keyword), so each
+  surface passes the radius of the box it lays the mark over.
+- **The ten seconds live in `src/index.css` _and_ in `LANDED_MS`, and `cardControl.test.ts` is what
+  holds them together.** They are two consumers rather than a copy — the stylesheet fades the mark
+  (`--animate-card-landed`, held at full for the first fifth then linear to nothing) and the
+  constant unmounts it — and no expression can compute one from the other. **It is deliberately not
+  in `src/lib/motion.ts`**: that module is a three-tier scale capped at 260ms and `motion.test.ts`
+  fails any duration off it, correctly, because everything in it is a _transition_. This is a mark
+  that decays. The map's **value is a nonce, not a timestamp**, and it is passed straight through
+  as React's `key`: a CSS animation runs once per element, so a second add of a card still glowing
+  would otherwise land in silence.
+- **Every add path in the editor marks a row, and the panel needs a callback to do it.** The quick
+  add and every drop go through `DeckEditor`'s `addTo`, which passes a per-call `onSuccess` — per
+  call rather than on the mutation, because `useDeck.addCard`'s own `onSuccess` answers for every
+  surface that borrows the hook, including `useSidebarDrops` with no editor on screen. The docked
+  panel holds the mutation and presses it itself (which is what makes its Add button never
+  disabled), so it takes `onAdded` and hands the row back. `useRecentAdds` holds one timer per row,
+  restarted on each press, so a card added three times in five seconds glows once for ten seconds
+  from the last press. The import is deliberately outside all of this: 117 lit cards is not a mark.
+- **A click on the desk puts the card down, and putting it down closes the pane** — one listener on
+  the editor's root, `keepsSelection` deciding what counts. The two facts are one: the ring means
+  "the pane is about this card", so a mark outliving the pane is a ring around nothing and a pane
+  outliving the mark is a pane about a card the deck is not pointing at. The test is "not a card and
+  not a control" rather than "not a button", because a card is **more than its button** — the stack
+  card's data line is a sibling of it and the grid tile's control bar is a positioned span — which
+  is why the outermost element of a card carries `CARD_BODY_ATTR`. Without that test the listener
+  would undo the very press that made the selection: the card's own handler and this one run in the
+  same event.
+- **In `Stacks` the picked card is also the pile's _resting_ state** — `openIndex ?? selectedIndex`
+  in `CardStack`. The hover still wins while there is one, so the flip-through is unchanged; what
+  changed is what it falls back to. Reading a card in the pane used to mean watching it drop back
+  into the pile the moment the pointer left the stack. **Still exactly one card open**, which the
+  whole geometry note below is arithmetic about, and **still no dependency of `stackHeight` on any
+  of it**. The cost is real and is paid knowingly: a picked card in the middle of a tall pile pushes
+  its tail 293px out of the box for as long as it is picked, over whatever is on the next flex line
+  — which is what the flip-through already did on hover, now held rather than transient.
 - **`CardStack` is arithmetic, not taste.** The card's height is _derived_: a Magic card's aspect
   applied to the card's own width gives **293** of image, its two hairlines make that **295**, and
   the data line less its rise makes **319px**. The
@@ -900,7 +959,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   the two of them draw with. Those three and `DeckSettingsDialog` — **four** surfaces — are built
   on one shell, `DeckDialog.tsx`; the editor's other two full-window overlays (Import cards, the
   theory difference) were never drawers, still carry their own copy of that chrome and are the
-  next two to move onto the shell. **Five** is only the count of *toolbar buttons*. The
+  next two to move onto the shell. **Five** is only the count of _toolbar buttons_. The
   reason for all of it is the desk row: every one of these is **consulted** — read, or
   edited and shut — and a right-hand drawer took the width it needed out of the deck for as long
   as it was up while giving the deck nothing. The card search column stayed a docked sidebar
@@ -911,7 +970,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   gets the wall back. **Its body is mounted on the reader's press and merely _hidden_ when the
   editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
   choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
-  filters and format away on a *resize* — opening the card pane at 1024 was enough. Never opened
+  filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
   is still nothing mounted, which is what keeps the search off a deck nobody searched from.
   The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
@@ -944,7 +1003,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 ## The quick add
 
 `QuickAdd.tsx` — the toolbar field, its dropdown and its status line, one component. `DeckEditor`
-keeps only the *decision*: which pile the add lands in (`targetCategoryId`) and the write that
+keeps only the _decision_: which pile the add lands in (`targetCategoryId`) and the write that
 puts it there. `QuickAdd.test.tsx` covers the field itself; the Escape hand-off below is pinned in
 `DeckEditor.test.tsx`, because that one is about the ladder rather than about this control. The
 longer-form record of the two hand-rolled comboboxes and their shared panel is
@@ -987,7 +1046,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
   as the docked panel's set filter. Every one of the editor's six full-window surfaces is opened
   by pressing a button — five of them in the toolbar (`Import cards · Categories · Tags · History
-  · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
+· Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
   — pressing a button takes the focus out of this field, and the root's `onBlur` closes the list
   on the way. **That is the whole of what makes a third rung unnecessary**, so a
   future surface opened without moving the caret — a hotkey, an auto-open — breaks it, and the fix
@@ -1009,7 +1068,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **The field is named for where the add lands, and a row is named by its own content.** The
   label is `Quick add a card to <pile>`, or bare `Quick add a card` under `AUTO_CATEGORY`, where
   there is no one answer because the pile is per card, so the name says only what it can promise
-  — "Quick add a card to Auto (by what it does)" would name a *setting* rather than what pressing it
+  — "Quick add a card to Auto (by what it does)" would name a _setting_ rather than what pressing it
   does. `DeckEditor.test.tsx` addresses the field by both names, so a reworded label is a suite
   failure. A row carries **no `aria-label`**: its name is the card's name, the cost's `sr-only`
   tokens and the set code, and a label carrying only the card's name would make the row
@@ -1021,7 +1080,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   `position: absolute` and `transform-origin: 0px 0px`; its left edge is **285** against the
   field's **285** and its top **199** against the field's bottom **195** — the `mt-1` — at 288px
   wide, with no right overflow and `documentElement.scrollLeft` **0**. Two ArrowDowns moved the
-  highlight to index **2** with `document.activeElement` still the field, and Enter added *that*
+  highlight to index **2** with `document.activeElement` still the field, and Enter added _that_
   row rather than the top one, filed under `Creature` by its type line. A click on the fourth row
   added it, left the caret in the field, and drew the colour-identity rule break on the new card —
   so the click goes the same write-and-validate route the rest of the editor does. The miss read

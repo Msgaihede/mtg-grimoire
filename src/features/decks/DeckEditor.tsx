@@ -21,7 +21,14 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
-import { DECK_CARD_VARIANT, focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
+import {
+  DECK_CARD_VARIANT,
+  focusDeckGroup,
+  FOCUS,
+  keepsSelection,
+  LANDED_MS,
+  type DeckCardActions,
+} from "./cardControl";
 import { CategoriesDialog } from "./CategoriesDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
@@ -275,6 +282,92 @@ type Layer =
   | { kind: "import" }
   | null;
 
+/** A `setTimeout` handle, as this project's DOM-only lib types one. */
+type Timer = ReturnType<typeof setTimeout>;
+
+/** Nothing has landed — one stable identity, so a view's memo does not see a new empty map on
+ *  every render of the editor. `CardStack`'s `NONE_LANDED` is the same idea one floor down. */
+const NOTHING_LANDED: ReadonlyMap<number, number> = new Map();
+
+/** What {@link useRecentAdds} answers with. */
+interface RecentAdds {
+  /** `deck_cards.id` → the nonce that add was given, for every card still inside its ten
+   *  seconds. Handed to all four views whole, the way `violations` is. */
+  landed: ReadonlyMap<number, number>;
+  /** A card just landed in this row. The id is `EntryChange.id` — what the add answered. */
+  markLanded: (entryId: number) => void;
+}
+
+/**
+ * Which cards have just been added, and for how much longer they say so.
+ *
+ * ## Why the row id, and not the printing
+ *
+ * `deck_add_card` **folds**: adding a card the deck already holds does not make a second row, it
+ * increments the one that is there. `EntryChange.id` is the row either way — the one it created
+ * or the one it folded into — which is exactly the thing the reader wants pointed at, and it is
+ * what every view already keys its cards by (`DeckCard.id`). A `cardId` would light the same
+ * printing in *every* pile that holds it, which is wrong for the one question this answers:
+ * where did **this** copy go.
+ *
+ * ## Why there is a nonce as well as a timer
+ *
+ * The fade is a CSS animation (`--animate-card-landed`), and a CSS animation runs once per
+ * element. So a second add of a card that is still glowing has to hand the mark a new React key
+ * or nothing happens on screen — the reader presses Add, the deck's number goes up, and the card
+ * they were told to look at does not so much as blink. The value in the map is that key. It is a
+ * counter rather than a timestamp because `Date.now()` twice in one tick is one number.
+ *
+ * ## Why a timer at all, when the animation ends by itself
+ *
+ * Two reasons, and neither is the fade. The mark has to **leave the DOM**, or a session's worth
+ * of adds is a session's worth of invisible overlays sitting on cards; and the map has to empty,
+ * or nothing above ever goes back to `NOTHING_LANDED`. {@link LANDED_MS} is the same ten seconds
+ * the stylesheet fades over — see it for why the number is in two places and what holds them
+ * together.
+ */
+function useRecentAdds(): RecentAdds {
+  const [landed, setLanded] = useState<ReadonlyMap<number, number>>(NOTHING_LANDED);
+  // Neither is a thing to draw, and writing one must never schedule a render of its own —
+  // `CardStack`'s `useFlipThrough` keeps its two timers in a ref for the same reason.
+  const nonce = useRef(0);
+  const timers = useRef(new Map<number, Timer>());
+
+  // Read out of the ref here rather than in the cleanup, which is what the hooks lint asks for
+  // and is honest besides: the map is created by this hook and never replaced.
+  useEffect(() => {
+    const running = timers.current;
+    return () => {
+      for (const timer of running.values()) clearTimeout(timer);
+      running.clear();
+    };
+  }, []);
+
+  const markLanded = useCallback((entryId: number) => {
+    nonce.current += 1;
+    const stamp = nonce.current;
+    const running = timers.current;
+    // At most one timer per row: a card added three times in five seconds glows once, for ten
+    // seconds from the last press, rather than going dark while the reader is still pressing.
+    const pending = running.get(entryId);
+    if (pending !== undefined) clearTimeout(pending);
+    running.set(
+      entryId,
+      setTimeout(() => {
+        running.delete(entryId);
+        setLanded((was) => {
+          const next = new Map(was);
+          next.delete(entryId);
+          return next.size === 0 ? NOTHING_LANDED : next;
+        });
+      }, LANDED_MS),
+    );
+    setLanded((was) => new Map(was).set(entryId, stamp));
+  }, []);
+
+  return { landed, markLanded };
+}
+
 /**
  * One deck, open for editing.
  *
@@ -372,6 +465,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * quick-add field said so in its own label.
    */
   const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
+
+  /**
+   * Which cards have just arrived, so the deck can point at them for ten seconds.
+   *
+   * Held here rather than in a view, because the three surfaces that add a card — the quick-add
+   * field, a drop onto a pile, and the docked panel's own Add button — are all *this*
+   * component's or its children's, and the four views that draw the mark are all below it. It is
+   * also the reason the panel takes an `onAdded`: it presses the editor's mutation itself
+   * (`add={deck.addCard}`), so the one add path that does not run through {@link addTo} has to
+   * hand its answer back.
+   */
+  const { landed, markLanded } = useRecentAdds();
 
   /**
    * The remembered triple this editor has already put on screen, so the restore below honours a
@@ -736,6 +841,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * instead and `useDeck`'s `addCard` names the pile (`autoCategoryFor`). A drop always passes a
    * real id — pointing at a column is naming one — so the auto arm is the click path's alone,
    * and a caller with a real id may pass no type line at all.
+   *
+   * **The per-call `onSuccess` is where the landed mark comes from, and it has to be per call.**
+   * The mutation's own `onSuccess` is `useDeck`'s invalidate and belongs to every surface that
+   * borrows the hook — the sidebar's drop target adds to a deck with no editor on screen. What
+   * is wanted here is the *row* the add answered with, which is the one thing only the caller
+   * can do something with. TanStack runs both, the definition's first.
    */
   const addTo = useCallback(
     (cardId: string, categoryId: number, typeLine?: string | null) =>
@@ -743,8 +854,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         categoryId === AUTO_CATEGORY
           ? { cardId, typeLine: typeLine ?? null, quantity: 1 }
           : { cardId, categoryId, quantity: 1 },
+        { onSuccess: (change) => markLanded(change.id) },
       ),
-    [writeAdd],
+    [writeAdd, markLanded],
   );
 
   /**
@@ -840,6 +952,33 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const actions = useMemo<DeckCardActions>(
     () => ({ setQuantity, drop: applyDrop }),
     [setQuantity, applyDrop],
+  );
+
+  /**
+   * Putting the card down: a click anywhere in this editor that was not on a card and not on a
+   * control clears the selection.
+   *
+   * **Clearing the selection closes the pane, because they are the same fact.** The gold ring
+   * means "this is the card the pane is about" here exactly as it does on the search wall
+   * (`components/CardArt`), so a mark that outlived the pane would be a ring around a card
+   * nothing is open on, and a pane that outlived the mark would be a pane about a card the deck
+   * is no longer pointing at. There is one piece of state and this is how a reader ends it —
+   * the pane's own ✕ and Escape being the other two.
+   *
+   * One listener at the top of the view rather than one per gap, and {@link keepsSelection} is
+   * what makes that safe: the card that was just clicked is *inside* the click that bubbles up
+   * here, so without the test every selection would be undone by the press that made it.
+   *
+   * The early return on `null` is not an optimisation — `setSelectedCardId(null)` also clears
+   * `paneDeckContext`, and writing a store slice on every click on the desk would re-render the
+   * pane's whole subtree for nothing.
+   */
+  const dropSelection = useCallback(
+    (event: React.MouseEvent) => {
+      if (selectedCardId === null || keepsSelection(event.target)) return;
+      setSelectedCardId(null);
+    },
+    [selectedCardId, setSelectedCardId],
   );
 
   // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
@@ -1115,6 +1254,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     violations,
     onSelect: openCard,
     actions,
+    // The two marks a card can carry here, in the four views that draw them. `selectedCardId` is
+    // the store's — every surface in the app that opens a card writes it, so a card opened from
+    // the panel beside the deck marks the deck's own copy of it too, which is the true answer to
+    // "which card is the pane about". `landed` is this editor's alone: nothing outside it can
+    // add a card to the deck the reader is looking at.
+    selectedCardId,
+    landed,
     className: "min-h-0",
   };
 
@@ -1123,6 +1269,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ref={editorRef}
       tabIndex={-1}
       aria-label={row ? `Deck editor: ${row.name}` : "Deck editor"}
+      // Putting the card down — see {@link dropSelection}, which is where the "not on a card,
+      // not on a control" test lives. On the whole editor rather than on the deck's own view,
+      // because the desk is not the only place a reader clicks when they mean nothing: the
+      // toolbar's empty half and the strip under the deck are the same gesture.
+      onClick={dropSelection}
       // **The one scroller in this view that is the *page*, and it is new** — see
       // {@link DECK_HEIGHT_FLOOR}. The deck, the price strip and the stats band together want
       // more height than a 1280×800 window has, and none of the three may be cut, so the column
@@ -1613,13 +1764,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 that wraps on width, so the desk's height is not an input to its layout. `TextView`
                 below still packs and still takes it. */}
             {view === "stacks" && <StackView {...viewProps} />}
-            {view === "table" && <TableView {...viewProps} selectedCardId={selectedCardId} />}
+            {view === "table" && <TableView {...viewProps} />}
             {view === "text" && <TextView {...viewProps} columnHeight={desk.height || undefined} />}
             {view === "grid" && <GridView {...viewProps} />}
           </div>
 
           <DeckSearchPanel
             add={deck.addCard}
+            onAdded={markLanded}
             categories={categories}
             targetCategoryId={targetCategoryId}
             onTargetCategoryChange={setTargetCategoryId}
