@@ -113,7 +113,16 @@ function Test-LockLive($lock) {
     if (-not $lock) { return $false }
     if (-not $lock.pid) {
         if (-not $lock.since) { return $false }
-        try { $since = [DateTimeOffset]::Parse($lock.since) } catch { return $false }
+        # A **cast**, not `::Parse`, for the same reason `Test-SameProcess` casts `started`
+        # 20 lines down: `ConvertFrom-Json` hands these back as `DateTime`, already shifted
+        # to local time. `::Parse` takes a string, so PowerShell rendered that `DateTime`
+        # with the *current culture* first — and on any machine whose short date is not
+        # `MM/dd/yyyy` the result ("08/14/2026 17:07:10") is not a date that culture can
+        # read. It threw, `catch` answered `$false`, and a lock acquired one second ago was
+        # reported stale: the whole ten-minute grace window below was dead on arrival, and
+        # a second agent could take the `app` lock out from under a cold `tauri dev` build.
+        # Invisible on a US-culture CI runner, which is exactly where the test passes.
+        try { $since = [DateTimeOffset]$lock.since } catch { return $false }
         $age = ([DateTimeOffset]::UtcNow - $since).TotalMinutes
         return $age -lt $UnadoptedGraceMinutes
     }

@@ -23,6 +23,20 @@ function Run() {
     return @{ out = $out; code = $LASTEXITCODE }
 }
 
+# The same, with a culture forced on the child. `-File` cannot set one, so the child takes a
+# `-Command` that sets the culture and then calls the script - no loss, because lock.ps1
+# exits at the end of every action, so one child was always one action. The `try` around the
+# assignment is for a runtime built with invariant globalization only, where naming a culture
+# throws; there the check degrades to the ambient culture rather than erroring.
+function RunCultured([string]$Culture, [string[]]$ScriptArgs) {
+    # Quote the values, never the `-Parameter` names - a quoted `'-What'` binds as a
+    # positional argument and the script refuses it.
+    $quoted = ($ScriptArgs | ForEach-Object { if ($_ -like '-*') { $_ } else { "'$_'" } }) -join ' '
+    $prelude = "try { [Threading.Thread]::CurrentThread.CurrentCulture = '$Culture' } catch { }"
+    $out = & pwsh -NoProfile -Command "$prelude; & '$lock' $quoted" 2>&1 | Out-String
+    return @{ out = $out; code = $LASTEXITCODE }
+}
+
 $sleepers = @()
 function NewSleeper() {
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 300' -WindowStyle Hidden -PassThru
@@ -224,6 +238,29 @@ try {
         (Run release app) | Out-Null
         $p.WaitForExit(10000) | Out-Null
         Assert ($null -eq (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) 'legacy lock did not stop its process'
+    }
+
+    # The grace window is the one place `Test-LockLive` reads a date, and it read it with
+    # `::Parse`, which takes a *string* - so PowerShell first rendered the `DateTime` that
+    # `ConvertFrom-Json` produces using the **current culture**. Under any culture whose short
+    # date is not `MM/dd/yyyy`, "08/14/2026 17:07:10" is not a date that culture can read:
+    # `Parse` threw, `catch` answered "stale", and a lock acquired one second earlier was free
+    # for the taking. That is the ten-minute window gone, and with it the thing it exists for -
+    # a second agent launching the app during a cold `tauri dev` build, which is silent both
+    # ways (exit 0, no window).
+    #
+    # `a second acquire of the same lock is refused` above already catches this, but only on a
+    # machine that is *already* in such a culture - it failed on the Danish-locale dev machine
+    # and passed on the US-culture CI runner, for the same commit. This one carries the culture
+    # with it, so CI catches it too.
+    Check 'an un-adopted lock is still HELD under a non-US culture' {
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+        $r1 = RunCultured 'da-DK' @('acquire', 'app', '-What', 'cultured-first')
+        Assert ($r1.code -eq 0) "first acquire exited $($r1.code): $($r1.out)"
+        $r2 = RunCultured 'da-DK' @('acquire', 'app', '-What', 'cultured-second')
+        Assert ($r2.code -eq 1) "expected HELD (exit 1), got $($r2.code): $($r2.out)"
+        Assert ($r2.out -match 'HELD') "no HELD line: $($r2.out)"
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
     }
 } finally {
     foreach ($p in $sleepers) {
