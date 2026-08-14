@@ -16,7 +16,8 @@ with code 0, no window and no stderr — the `running-the-app` skill owns that p
 
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
-`drag <source css> <target css>` · `hover <css> [--rest ms] [--probe expr]` ·
+`drag <source css> <target css>` · `pull <css> <dx> [dy]` ·
+`hover <css> [--rest ms] [--probe expr]` ·
 `size 1024 768 "<expr>"` ·
 `media prefers-reduced-motion reduce "<expr>"` · `shot out.png [w h]` · `console out.jsonl`
 (stays attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that
@@ -103,6 +104,26 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   and the editor scrolls differently); the trap is not. Scroll the target into view first and
   hit-test the point (`document.elementFromPoint(...)` inside the target) before believing a
   centre.
+- **`pull <css> <dx> [dy] [--steps n] [--probe expr]`** is a pointer **pressed** and moved:
+  `mousePressed` → stepped `mouseMoved` with the button held → `mouseReleased`. It is the sibling
+  of `drag` for everything that is not an HTML5 drag — `drag` intercepts the browser's drag
+  controller, this drives raw pointer events — and the deck editor's search-panel resize handle is
+  the first caller. **The reason it has to be real is `setPointerCapture`**: a
+  `dispatchEvent(new PointerEvent(…))` out of an `eval` names a pointer id that was never active,
+  so the capture throws `NotFoundError` *inside* the handler, and the pass fails on the harness
+  while reading exactly like a failure of the page. A `mousePressed` from here makes the id active
+  and the capture legal. Its probe is read twice like `hover`'s — `during` is the last held frame,
+  `after` is what survived the release, and a handle that follows the pointer and springs back
+  reads as working from either one alone. **A run that dies mid-pull leaves the button down**, and
+  the next `pull` is what clears it (its own press/release pair), so an unexplained "the page is
+  dragging on its own" after a failed command is that and not the app.
+  **Its `--probe` is one shell argument and nested double quotes break it silently**: a probe
+  written with `\"` inside a PowerShell double-quoted string splits into extra positionals, `dy`
+  becomes `NaN`, and CDP rejects the call with `Failed to deserialize params.y` — measured. Single
+  quotes only, inside.
+- **`key` knows `ArrowLeft`/`ArrowRight`/`Home`/`End`** as well as Escape, Enter, Tab and the
+  vertical arrows. The four were added for the app's one `separator`, whose whole keyboard contract
+  is them; `rawKeyDown` is the right event for all of these, which is `press`'s distinction below.
 - **`hover <css> [--from x,y] [--rest ms] [--probe expr]`** is a real dwell — `mouseMoved`
   events, so React synthesises `onMouseEnter`/`onMouseLeave` from Chromium's own hover
   pipeline and a `dispatchEvent` out of `eval` proves nothing. Two facts it cost a session to

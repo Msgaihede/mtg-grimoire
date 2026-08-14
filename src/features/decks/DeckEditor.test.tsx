@@ -372,6 +372,11 @@ afterAll(() => {
  * therefore as room — so the narrow case cannot be reached without saying how wide things are.
  * `clientWidth` is what the desk is measured with, since the `ResizeObserver` in `test-setup`
  * is a no-op.
+ *
+ * **`document.documentElement` inherits this too**, so the editor's other measurement — the
+ * window, for the half-of-it cap on the docked panel's width — reads the same number. That is
+ * harmless where the deck's own floor is the tighter of the two caps, which it is at every width
+ * these tests use; {@link viewport} is how the other one is reached.
  */
 function desk(px: number) {
   const original = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
@@ -384,6 +389,28 @@ function desk(px: number) {
     if (original && !Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth")) {
       Object.defineProperty(Element.prototype, "clientWidth", original);
     }
+  };
+}
+
+/**
+ * Pretend the *window* is `px` wide, independently of {@link desk}.
+ *
+ * An **own** property on `document.documentElement`, which is what makes the two separable: a
+ * value defined on the element itself shadows the one `desk` puts on `HTMLElement.prototype`, so
+ * a test can say "a 2000px desk in a 1000px window" and mean it. Which is the only way to reach
+ * the half-the-window cap, since it never binds while the two numbers are equal — the deck's
+ * floor is tighter than half the row at every width below 416.
+ *
+ * `documentElement.clientWidth` rather than `window.innerWidth`, because that is what the editor
+ * reads and why: `innerWidth` counts the classic vertical scrollbar and the layout does not.
+ */
+function viewport(px: number) {
+  Object.defineProperty(document.documentElement, "clientWidth", {
+    configurable: true,
+    get: () => px,
+  });
+  return () => {
+    delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
   };
 }
 
@@ -1543,11 +1570,23 @@ describe("DeckEditor", () => {
    * narrowest thing gives way first.
    *
    * 376 is what a 1024px window leaves this row with the card pane docked beside the view
-   * (measured at 361 once the page's own scrollbar is out); 592 is `DECK_FLOOR` plus the panel
-   * and the `gap-4` between them — the exact width at which both fit again, so the pair of
-   * tests pins the floor to the pixel. (608 while the floor was 208, and 604 in the previous
-   * editor, whose desk row was `gap-3`. The floor dropped to 192 when the stats band made the
-   * editor a scroller and the row started paying for a second scrollbar.)
+   * (measured at 361 once the page's own scrollbar is out); **414** is `DECK_FLOOR` plus the
+   * panel's *minimum* and the `gap-4` between them — the exact width at which both fit again, so
+   * the pair of tests pins the floor to the pixel.
+   *
+   * **414 rather than 592, since the panel became draggable** (2026-08-14). The threshold was
+   * `DECK_FLOOR` plus the panel's one fixed width, 192 + 384 + 16; a panel with a range is asked
+   * whether its *narrowest* useful width fits instead — `MIN_PANEL_WIDTH_PX` (206), one card and
+   * its chrome — which is 192 + 206 + 16. Across the 178px between the two the panel now draws
+   * squeezed rather than railing, and at 414 exactly the deck sits on its floor to the pixel.
+   * (592 while the panel was fixed; 608 while `DECK_FLOOR` was 208, and 604 in the previous
+   * editor, whose desk row was `gap-3`.)
+   *
+   * `desk()` patches `HTMLElement.prototype.clientWidth`, which `document.documentElement`
+   * inherits — so the window reads as the same number, and the half-of-it cap on the panel's
+   * drag is `floor(414/2)` = 207, one pixel *above* what the deck's floor allows. Which cap
+   * binds is therefore the deck's at these widths, and that is the one this pair is about; the
+   * other has a test of its own below.
    */
   it("falls back to the rail when the deck and the panel cannot both fit", async () => {
     const restore = desk(376);
@@ -1574,7 +1613,7 @@ describe("DeckEditor", () => {
   });
 
   it("draws the panel at the width where the deck still clears its floor", async () => {
-    const restore = desk(592);
+    const restore = desk(414);
     try {
       await open();
 
@@ -1582,6 +1621,9 @@ describe("DeckEditor", () => {
       expect(screen.getByRole("button", { name: "Search cards" })).not.toHaveAttribute(
         "aria-disabled",
       );
+      // Squeezed to its minimum rather than drawn at the 384 it opens with, which is what
+      // leaves the deck exactly its 192: 414 − 16 − 206.
+      expect(screen.getByRole("region", { name: "Add cards" })).toHaveStyle({ width: "206px" });
     } finally {
       restore();
     }
@@ -1589,7 +1631,7 @@ describe("DeckEditor", () => {
 
   /** And one pixel under it is the rail — the floor is a number, not a feeling. */
   it("gives way one pixel below that", async () => {
-    const restore = desk(591);
+    const restore = desk(413);
     try {
       await open();
 
@@ -1604,6 +1646,34 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * The panel's drag is capped by two numbers and this is the second of them — **half the
+   * window**, which is the one that binds on a wide monitor. There the deck's floor would allow
+   * the search column most of the app: at a 2000px desk it can spare 1792, and a card search
+   * three quarters of the way across the deck builder has stopped being a column beside the deck
+   * and become the view.
+   *
+   * The two are reached apart here because they cannot be told apart otherwise — `desk()` moves
+   * the window with the row, and below 416px of desk the deck's floor is always the tighter of
+   * them. A 2000px desk in a 1000px window is where only this one can be answering.
+   */
+  it("caps the panel's drag at half the window, however much the desk could spare", async () => {
+    const restoreDesk = desk(2000);
+    const restoreViewport = viewport(1000);
+    try {
+      await open();
+      await openSearchPanel();
+
+      expect(screen.getByRole("separator", { name: "Resize card search" })).toHaveAttribute(
+        "aria-valuemax",
+        "500",
+      );
+    } finally {
+      restoreViewport();
+      restoreDesk();
+    }
+  });
+
+  /**
    * **Two things share the desk row, and the stats band is not one of them.** It was: the
    * rebuild put a 280px aside between the view and the panel and subtracted it from this floor,
    * so a reader who opened Stats at a width where the deck and the panel both fit lost the
@@ -1611,7 +1681,7 @@ describe("DeckEditor", () => {
    * pair of tests above is the whole of the arithmetic — this one holds the band to that.
    */
   it("keeps the panel open beside a deck at the floor, stats and all", async () => {
-    const restore = desk(592);
+    const restore = desk(414);
     try {
       await open();
 

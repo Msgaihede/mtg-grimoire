@@ -31,18 +31,29 @@ export interface GridCard {
 }
 
 /**
- * Narrowest a tile is allowed to get, in px — the number that decides how many columns
- * fit. Tiles then share out whatever is left over (see {@link tileWidthFor}), so this is
- * a floor rather than the width. A `grid` image is 488 px wide, so even a stretched tile
- * is a downscale, never a blowup.
+ * How wide a tile is at 100%, in px — **the width itself, not a floor** (changed 2026-08-14).
  *
- * The **base** the reader's zoom scales rather than the floor itself: the wall hands
- * `columnsFor` a floor of `scaled(this, cardZoom)`, so ctrl+wheel moves the column count and
- * the tiles follow. At the top of the zoom range (2×) the floor is 340 px, comfortably inside
- * the 488 px image — a *stretched* tile can pass it on a wall too narrow for a second column,
- * which is one soft picture at the far end of the range rather than a wall of them.
+ * The reader's zoom multiplies this and the answer is what a tile is drawn at:
+ * `scaled(this, cardZoom)`. How many fit across is then a consequence rather than an input —
+ * `columnsFor` divides the wall by it — and whatever the last column does not use is split
+ * either side of the row ({@link sideGutterFor}).
+ *
+ * **This reverses the arrangement that was here until 2026-08-14**, where the zoom moved a
+ * *floor*, the floor moved the column count, and the tiles then stretched to share out the
+ * leftover so the wall reached both edges. Flush was the argument and it cost the gesture its
+ * meaning: a stretched tile's width is a function of the **column count**, which is a step
+ * function of the zoom, so most stops drew exactly what the stop before them drew. Measured on
+ * the deck editor's docked column — 331px of wall, a 150px base — the ten stops of `ZOOM_STEPS`
+ * collapsed to **three** distinct card widths: 102, 102, 159, 159, 159, 331, 331, 331, 331, 331.
+ * Seven of the ten gestures moved nothing on screen, which reads as an app that has stopped
+ * listening. Sized directly, the same column answers all ten.
+ *
+ * A `grid` image is 488px wide, so 2× (340px here, 300px in the deck panel) is still a
+ * downscale — the only way to pass it is {@link tileWidthFor}'s clamp on a wall too narrow for
+ * one whole tile, which is one soft picture at the far end of the range rather than a wall of
+ * them.
  */
-const TILE_MIN_WIDTH = 170;
+const TILE_BASE_WIDTH = 170;
 
 /** Gap between tiles, matching the `gap-3` used elsewhere. */
 const GAP = 12;
@@ -66,28 +77,60 @@ const CAPTION_HEIGHT = 28;
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
- * How many tiles fit across `width`.
+ * How many tiles of `tileWidth` fit across `width`, counting the gap between them.
  *
  * At least one, always: a container measured at 0 (jsdom, or the frame before layout
  * settles) would otherwise divide the row count by zero and hand the virtualizer
- * `Infinity` rows.
+ * `Infinity` rows. That floor is also what makes the clamp in {@link tileWidthFor}
+ * necessary — one column is asserted even where one does not fit.
  */
-export function columnsFor(width: number, minWidth: number = TILE_MIN_WIDTH): number {
-  return Math.max(1, Math.floor((width + GAP) / (minWidth + GAP)));
+export function columnsFor(width: number, tileWidth: number = TILE_BASE_WIDTH): number {
+  return Math.max(1, Math.floor((width + GAP) / (tileWidth + GAP)));
 }
 
 /**
- * How wide each of those tiles is: the leftover shared out, not the minimum.
+ * How wide each of those tiles is drawn: **the size asked for**, capped by the wall itself.
  *
- * A fixed width leaves up to one whole tile's worth of empty container at the right edge
- * — a wall of art with a 180 px gutter down one side, which reads as a rendering fault
- * rather than a layout. Stretching keeps the art flush to both edges at every window
- * size, and 5:7 is preserved because only the width is ever set.
+ * The cap is the only arithmetic here, and it covers exactly one case — a wall too narrow for
+ * one whole tile, where {@link columnsFor} has already floored at a column that does not fit.
+ * Without it a 300px tile in a 206px column overflows sideways, and the deck editor is
+ * `overflow-y-auto`, which computes `overflow-x` to `auto` — so it would become a horizontal
+ * scrollbar across the whole deck builder, the one thing the app's 1024px floor forbids. Floored
+ * rather than rounded so the clamped tile can never be the half-pixel wider that starts it.
+ *
+ * At two columns or more the cap cannot bind, by construction: `columnsFor` only counts a column
+ * it has the width for.
+ *
+ * **This used to share the leftover out instead**, stretching every tile so the wall reached
+ * both edges. See {@link TILE_BASE_WIDTH} for the measurement that ended it, and
+ * {@link sideGutterFor} for where the leftover goes now.
  */
-export function tileWidthFor(width: number, minWidth: number = TILE_MIN_WIDTH): number {
-  if (width <= 0) return minWidth;
-  const columns = columnsFor(width, minWidth);
-  return (width - (columns - 1) * GAP) / columns;
+export function tileWidthFor(width: number, tileWidth: number = TILE_BASE_WIDTH): number {
+  if (width <= 0) return tileWidth;
+  return Math.min(tileWidth, Math.floor(width));
+}
+
+/**
+ * What the row does not use, halved — the padding put either side of it, so the tiles sit
+ * centred in the wall rather than packed against its left edge.
+ *
+ * A tile is its own size now rather than a share of the row, so up to one whole tile plus a gap
+ * can be left over. Against one edge that reads as a rendering fault — which is the argument
+ * the old stretching layout was built on, and it is still true of a *one-sided* remainder. Split
+ * in two it reads as a margin: the wall stays symmetrical at every zoom, and what the reader
+ * gave up for bigger cards is visible on both sides instead of looking like a column that failed
+ * to draw.
+ *
+ * It is padding on the **row** rather than on the box around it for two reasons. The box is
+ * what the `ResizeObserver` measures, so padding there would feed back into the width this is
+ * computed from; and a part-full last row has to line up with the full rows above it, which
+ * `justify-center` would break by centring three tiles under six.
+ */
+export function sideGutterFor(width: number, tileWidth: number = TILE_BASE_WIDTH): number {
+  if (width <= 0) return 0;
+  const columns = columnsFor(width, tileWidth);
+  const drawn = tileWidthFor(width, tileWidth);
+  return Math.max(0, (width - (columns * drawn + (columns - 1) * GAP)) / 2);
 }
 
 /**
@@ -116,7 +159,7 @@ export function CardGrid<T extends GridCard>({
   action,
   tileRef,
   dragPayload,
-  minTileWidth = TILE_MIN_WIDTH,
+  baseTileWidth = TILE_BASE_WIDTH,
 }: {
   rows: T[];
   onSelect: (cardId: string) => void;
@@ -232,23 +275,22 @@ export function CardGrid<T extends GridCard>({
    */
   dragPayload?: (card: T) => DragPayload;
   /**
-   * Narrowest a tile may get here, overriding {@link TILE_MIN_WIDTH}.
+   * How wide a tile is here at 100%, overriding {@link TILE_BASE_WIDTH}.
    *
-   * For the one wall that is not a page-width wall: the deck editor's docked panel is 384px,
-   * and 384 is **331** once the panel's own left padding (12), the scrollbar (17) and this
-   * wall's padding (24) are off it — measured at 330 in the running window, and 23 short of
-   * two 170px tiles. At the standard floor the column drew one 330px card per row at 490px of
+   * For the one wall that is not a page-width wall: the deck editor's docked panel opens at
+   * 384px, and 384 is **331** once the panel's own left padding (12), the scrollbar (17) and
+   * this wall's padding (24) are off it — measured at 330 in the running window, and 23 short of
+   * two 170px tiles. At the standard size the column drew one 330px card per row at 490px of
    * height, inside a wall 341px tall: less than a whole card, ever. The arithmetic looked fine
    * until the scrollbar and the panel's own padding were counted.
    *
-   * A floor, not a width: tiles still share out the leftover ({@link tileWidthFor}), and the
-   * `grid` image is 488px wide, so a smaller floor is a deeper downscale and never a blowup.
+   * The `grid` image is 488px wide, so a smaller base is a deeper downscale and never a blowup.
    *
-   * The reader's zoom scales *this* rather than {@link TILE_MIN_WIDTH}, so a wall given a lower
-   * floor zooms by the same factor as a page-width one — 150 at 2× is 300, which is a 331px
-   * column drawing one card, and that is the honest answer rather than a narrower card.
+   * The reader's zoom scales *this* rather than {@link TILE_BASE_WIDTH}, so a wall given a
+   * smaller base zooms by the same factor as a page-width one — 150 at 2× is 300, which is one
+   * card in a 331px column with 31px of gutter split either side of it.
    */
-  minTileWidth?: number;
+  baseTileWidth?: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -299,20 +341,26 @@ export function CardGrid<T extends GridCard>({
   // listeners passively at the root and could not.
   useCardZoomGesture(scrollRef, zoomSection);
 
-  // The zoom moves the **floor**, not the tiles. Raise the narrowest a tile may be and fewer
-  // columns fit, so each one grows — and `tileWidthFor` still shares the leftover out, so the
-  // wall stays flush to both edges at every zoom instead of growing a gutter as it grows tiles.
-  // Scaling the given floor rather than the constant is what keeps the deck panel's 150 honest:
-  // that column zooms by the same factor as a page-width wall does.
+  // The zoom sizes **the tile**, and the column count is what falls out of it: however many of
+  // that size fit across the wall with the gap between them is however many are drawn, and the
+  // remainder is split either side. Scaling the given base rather than the constant is what
+  // keeps the deck panel's 150 honest — that column zooms by the same factor as a page-width
+  // wall does.
+  //
+  // **It used to move a floor and let the tiles stretch to fill the row**, which made the drawn
+  // size a function of the column count and therefore a step function of the zoom: on the deck
+  // panel's 331px column, seven of the ten stops on the ladder drew exactly what the stop before
+  // them drew. `TILE_BASE_WIDTH` carries the measurement.
   //
   // The other way to do this would be `transform: scale()` on the tiles, and it is wrong three
   // times over: it resamples the art, it leaves the column count at 1× so the wall no longer
   // reflows to the window, and it tells the virtualiser a row is a height it is not.
-  const floor = scaled(minTileWidth, cardZoom);
+  const tileSize = scaled(baseTileWidth, cardZoom);
 
-  const columns = columnsFor(width, floor);
+  const columns = columnsFor(width, tileSize);
   const rowCount = Math.ceil(rows.length / columns);
-  const tileWidth = tileWidthFor(width, floor);
+  const tileWidth = tileWidthFor(width, tileSize);
+  const gutter = sideGutterFor(width, tileSize);
 
   // The caption grows with the tiles — a card at 2× under the same 28px strip reads as a card
   // that has outgrown its label — but never shrinks below them, and that asymmetry is arithmetic
@@ -387,7 +435,16 @@ export function CardGrid<T extends GridCard>({
             // the popup with the tiles below it. `:has` keeps that fact where the stacking
             // context is, rather than threading "is a popup open in me" up through a tile.
             className={cn("absolute inset-x-0 top-0 flex gap-3", LAYER.raisedWhenPopupOpen)}
-            style={{ height: tileHeight, transform: `translateY(${v.start}px)` }}
+            // The gutter is padding on **every** row rather than `justify-center` on them, so a
+            // part-full last row still lines its tiles up under the full rows above it — three
+            // tiles centred under six is a wall that looks like it lost its grid. See
+            // `sideGutterFor` for why it is not on the box around them either.
+            style={{
+              height: tileHeight,
+              transform: `translateY(${v.start}px)`,
+              paddingLeft: gutter,
+              paddingRight: gutter,
+            }}
           >
             {rows.slice(v.index * columns, v.index * columns + columns).map((card, i) => (
               // Keyed by slot rather than by card id: two pages fetched either side of a

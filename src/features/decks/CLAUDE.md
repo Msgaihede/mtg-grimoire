@@ -873,6 +873,32 @@ price | type`). An **inactive category stays its own group in all three grouping
   filters and format away on a *resize* — opening the card pane at 1024 was enough. Never opened
   is still nothing mounted, which is what keeps the search off a deck nobody searched from.
   The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
+- **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
+  `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
+  `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded
+  by `min(half the window, what the desk can spare over DECK_FLOOR)` and floored at
+  `MIN_PANEL_WIDTH_PX` (**206**: one 150px card plus the panel's border and padding, the wall's,
+  and the wall's 15px scrollbar). It is the other half of the same complaint the zoom fixes —
+  `CardGrid` sizes a tile from the reader's zoom and fits however many the wall holds, so bigger
+  cards mean fewer of them and the two answers are zoom out or widen the column.
+  - **The width is `useState` in this panel's root, beside `open`**, so it is per editor-open and
+    deliberately not remembered — the same answer, for the same reason, as whether the panel is
+    open at all. It **does** survive a collapse and a railing, because `OpenPanel` is what
+    unmounts and the root is not.
+  - **The caps clamp what is _drawn_ and never what was asked for.** A window narrowing, or a card
+    pane opening beside the editor, is not the reader changing their mind, so it may not overwrite
+    what they chose — write the clamped number into state instead and every momentary squeeze is
+    permanent. A drag writes clamped, because there the bound is the edge they are pushing against.
+  - **The rail's threshold is the panel's _minimum_ now, not its opening width**, which moved it
+    from a desk of **592** to **414**. Across those 178px the panel draws squeezed rather than
+    railing; driven at a desk of 450 it took 242 and left the deck exactly its 192. Below 414
+    nothing changed — no room for a card is no room for a card search, and the disclosure still
+    refuses in words.
+  - **`DeckEditor` owns both measurements and hands down one number.** `maxWidth` is the editor's
+    because the editor is what has the desk's `ResizeObserver` and the window's own width, which it
+    reads as `document.documentElement.clientWidth` in the same callback — `innerWidth` would count
+    the editor's page scrollbar and cap the panel 8px too wide (632 vs 640, measured). Every figure
+    is in [frontend-design.md](../../../docs/reference/frontend-design.md).
 
 ## The quick add
 

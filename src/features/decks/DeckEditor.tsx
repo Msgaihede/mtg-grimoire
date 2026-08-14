@@ -24,7 +24,7 @@ import { newestWrite, writeFailure } from "@/lib/writes";
 import { DECK_CARD_VARIANT, focusDeckGroup, FOCUS, type DeckCardActions } from "./cardControl";
 import { CategoriesDialog } from "./CategoriesDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
-import { AUTO_CATEGORY, DeckSearchPanel, PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
@@ -388,6 +388,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const viewRef = useRef<HTMLDivElement>(null);
   const trayRef = useRef<HTMLDivElement>(null);
   const [desk, setDesk] = useState({ width: 0, height: 0 });
+  /**
+   * How wide the window is, for the half-of-it cap on the docked panel's drag.
+   *
+   * `document.documentElement.clientWidth` rather than `window.innerWidth`, which is this app's
+   * rule wherever a viewport width is used for anything: `innerWidth` counts the classic vertical
+   * scrollbar and the layout does not — 1280 against 1265, measured — and the editor is a
+   * scroller, so this surface always has one. `0` is jsdom, which has no layout engine at all,
+   * and is read below as "not measured" rather than as a window of no width.
+   */
+  const [viewport, setViewport] = useState(0);
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /** The format check's chip, which owns its own trigger ref because `ValidationPanel` draws
@@ -570,25 +580,57 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // observer and not a prop (`CardGrid`'s arrangement). Re-run when the deck lands, because the
   // element being measured does not exist until then.
   const hasRow = row !== null;
+  //
+  // The window's own width is read in the same callback rather than through a second listener:
+  // this row is `flex-1` inside the page, so nothing can change the window's width without
+  // changing the desk's, and one observer answering both keeps the two numbers from being a
+  // frame apart.
   useEffect(() => {
     const el = deskRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(([entry]) =>
-      setDesk({ width: entry.contentRect.width, height: entry.contentRect.height }),
-    );
+    const measure = () => setViewport(document.documentElement.clientWidth);
+    const observer = new ResizeObserver(([entry]) => {
+      setDesk({ width: entry.contentRect.width, height: entry.contentRect.height });
+      measure();
+    });
     observer.observe(el);
     setDesk({ width: el.clientWidth, height: el.clientHeight });
+    measure();
     return () => observer.disconnect();
   }, [hasRow]);
+
+  /**
+   * The widest the docked panel may be drawn or dragged — the smaller of two caps that bind at
+   * different window sizes, and `Infinity` while neither has been measured.
+   *
+   * **Half the window**, because a search column that can take three quarters of the app has
+   * stopped being a column; and **whatever the desk can spare over `DECK_FLOOR`**, because the
+   * deck is what the width is being taken from. Neither is redundant: at 1280 with the card pane
+   * docked the desk is 602, so half the window is 640 — wider than the whole row — and only the
+   * floor says anything; at 1920 with the pane closed the floor would allow ~1462 and only the
+   * half-window cap is holding the column to a column.
+   */
+  const maxPanelWidth = Math.min(
+    viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
+    desk.width > 0 ? desk.width - DESK_GAP - DECK_FLOOR : Number.POSITIVE_INFINITY,
+  );
 
   /**
    * Whether the panel may draw itself open, or has to fall back to its rail.
    *
    * `0` is "not measured yet" and reads as room: the first paint of a wide window should not
    * flash a rail, and the observer answers on the same frame.
+   *
+   * **Measured against the panel's _minimum_ now, not against its opening width** (changed
+   * 2026-08-14, with the drag). The threshold used to be `DECK_FLOOR` plus a fixed 384 — 592 of
+   * desk — because 384 was the only width the panel had; a panel that can be dragged has a range
+   * instead, so the question is whether the narrowest useful one fits. `MIN_PANEL_WIDTH_PX` is
+   * one card and its chrome (206), which puts the threshold at **414** and gives the reader a
+   * squeezed search column across the 178px of desk width that used to rail outright. Below it
+   * nothing changes: there is no room for a card, so there is no room for a card search, and the
+   * rail says so in words.
    */
-  const roomForPanel =
-    desk.width === 0 || desk.width - (PANEL_WIDTH_PX + DESK_GAP) >= DECK_FLOOR;
+  const roomForPanel = desk.width === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -1531,6 +1573,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             onTargetCategoryChange={setTargetCategoryId}
             defaultFormat={searchFormatDefault}
             roomy={roomForPanel}
+            maxWidth={maxPanelWidth}
           />
         </div>
       )}

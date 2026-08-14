@@ -251,6 +251,94 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   of ctrl-flagged wheel events in the single digits, dozens a second. The ladder makes the unit the
   **gesture**. It also keeps the value exact — `zoom * 1.1` applied and undone eight times is
   0.9999999999999998, which formats as "100%" while sizing every tile a hair off.
+- **The zoom sizes the _tile_, and the column count is what falls out of it** (changed
+  2026-08-14). `CardGrid` draws a tile at `scaled(baseTileWidth, cardZoom)` exactly, fits however
+  many of that size the wall holds, and splits the remainder either side of the row
+  (`sideGutterFor`). **It used to scale a _floor_ and stretch the tiles to fill the row**, so the
+  wall reached both edges at every window size — flush was the whole argument, and it cost the
+  gesture its meaning. A stretched tile's width is a function of the **column count**, which is a
+  step function of the zoom, so most stops drew exactly what the stop before them drew. Measured
+  on the deck editor's docked column, whose wall is **330px** in the running window, the ten stops
+  of `ZOOM_STEPS` collapsed to **three** distinct card widths — 102, 102, 159, 159, 159, 331, 331,
+  331, 331, 331. Seven gestures in a row that moved nothing, which reads as an app that has
+  stopped listening rather than as a wall that is already right. **Driven in the shipped window
+  2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column now answers all
+  ten, strictly increasing, and stays centred throughout:
+
+  | zoom | 0.5 | 0.67 | 0.75 | 0.9 | 1 | 1.1 | 1.25 | 1.5 | 1.75 | 2 |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | tile | 75 | 101 | 113 | 135 | 150 | 165 | 188 | 225 | 263 | 300 |
+  | columns | 3 | 3 | 2 | 2 | 2 | 1 | 1 | 1 | 1 | 1 |
+  | gutter | 41 | 2 | 46 | 24 | 9 | 83 | 71 | 53 | 34 | 15 |
+
+  The page-width search wall behaves the same way — 991px of wall gave 170/187/213/255/298/340
+  across the first six stops, at 5/5/4/3/3/2 columns and 47/4/52/101/37/150px of gutter. **The
+  wheel was dispatched synthetically on both** (`dispatchEvent(new WheelEvent(…, {ctrlKey: true}))`
+  on the scroller), which is the same carve-out the 2026-08-14 zoom pass recorded: the handler and
+  the arithmetic downstream of it were exercised, the `preventDefault`/WebView2 page-zoom
+  suppression was not re-proved.
+- **The remainder is split either side rather than left at the right edge, and that is the half
+  of the old argument that survived.** A one-sided gutter of up to a whole tile really does read
+  as a column that failed to draw — the original reason for stretching. Centred, the same pixels
+  read as a margin: the wall is symmetrical at every zoom, and what the reader traded for bigger
+  cards is visible on both sides. It is padding on **every row** rather than `justify-center` on
+  them, because a part-full last row has to line its tiles up under the full rows above it — three
+  tiles centred under six is a wall that has lost its grid — and it is not on the box around the
+  rows because that box is what the `ResizeObserver` measures, so padding there would feed back
+  into the width it is computed from.
+- **`tileWidthFor` caps at the wall, and the cap covers exactly one case.** `columnsFor` floors at
+  one column whatever the arithmetic says, so a reader zooming a narrow column past its own width
+  would otherwise be handed a tile wider than its box — and the deck editor is `overflow-y-auto`,
+  which computes `overflow-x` to `auto`, so a 300px card in a 206px column is a horizontal
+  scrollbar across the whole deck builder. That is the one thing the 1024px floor forbids, and it
+  arrives with nothing on screen naming the culprit. At two columns or more the cap cannot bind,
+  by construction.
+- **The deck editor's search column is draggable from its left edge** (2026-08-14) —
+  `DeckSearchPanel`'s `ResizeHandle`, an ARIA window splitter: `role="separator"`,
+  `aria-orientation="vertical"`, a `tabIndex`, and `aria-valuenow`/`min`/`max` in **px**, the unit
+  the reader is actually choosing. It is the other half of the same complaint the zoom fixes —
+  bigger cards need somewhere to go, and the answers are zoom out, or widen the column.
+  - **Two bounds, and each is wrong on its own.** `min(half the window, what the desk can spare
+    over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pane open the
+    desk is **602**, so the deck's floor gives **394** while half the window is 632 and says
+    nothing; with the pane closed the desk is **1002**, the floor would allow 794, and the
+    half-window cap holds the column to **632**. Both were driven to their stops and held.
+    **632 rather than 640 because the viewport is `document.documentElement.clientWidth`**, which
+    is 1265 with the editor's page scrollbar out — `innerWidth` would have read 1280 and given
+    640, which is this file's `innerWidth`-vs-`clientWidth` rule turning up in a second place.
+  - **The minimum is one card, 206px** (`MIN_PANEL_WIDTH_PX`) — a 150px tile plus the panel's
+    border and padding (13), the wall's (26) and the wall's scrollbar (**15**, measured; an older
+    note here guessed 17). Driven at that width the wall measured **152px**: one tile with a pixel
+    either side.
+  - **That minimum is also the rail's threshold now, and it moved the threshold 592 → 414.** The
+    editor used to ask whether `DECK_FLOOR` plus the panel's one fixed 384 fitted; a panel with a
+    range is asked whether its narrowest useful width does. Across the 178px between the two the
+    panel draws squeezed instead of railing — driven at a desk of **450**, it took **242** and left
+    the deck exactly its **192**, with a whole card still on the wall and no horizontal overflow.
+    Below it nothing changed: at 1024 with the card pane docked the desk is **346**, and the panel
+    is 36px of rail, `aria-disabled`, with "Not enough room — close the card details or widen the
+    window" on it.
+  - **The width is the reader's and is never written by the environment.** It is `useState` in the
+    panel's root — per editor-open like `open`, not remembered past the deck — and the caps clamp
+    what is *drawn* rather than what was asked for, so a window narrowed and widened again gives
+    the column back. It outlives a collapse and a railing because it lives in the root rather than
+    in `OpenPanel`.
+  - **Driven with a real pointer, which needed a new harness command.** `cdp.mjs` had `drag` (the
+    HTML5 drag controller) and `hover`, and neither presses a button and moves. `pull <css> <dx>
+    [dy]` does — `mousePressed` → stepped `mouseMoved` with the button held → `mouseReleased` —
+    and the reason it had to be real is `setPointerCapture`: a `dispatchEvent(new PointerEvent(…))`
+    out of an `eval` names a pointer id that was never active, so the capture throws
+    `NotFoundError` *inside* the handler and the pass fails on the harness rather than on the page.
+    A 200px pull took the panel 384 → **584** and the wall from two columns to **three** at the
+    same zoom, which is the feature in one measurement. `ArrowLeft`/`ArrowRight`/`Home`/`End` were
+    added to `KEYS` for the keyboard half and drove it 206 → 278 → 632 → 206 with focus staying on
+    the handle and the editor not scrolling under the presses.
+  - **The grip is drawn on hover and focus only.** At rest the edge is the hairline the panel
+    already had — a permanent handle down it would be a second line saying one thing. Measured:
+    `cursor: col-resize`, `touch-action: none`, and `transition-property: opacity` unemulated
+    against **`none`** under `prefers-reduced-motion: reduce` (with `transition-duration` still
+    reading `0.15s`, which is the false failure this file's harness rule warns about, reproduced
+    again).
 - **Anywhere a scaled budget contains unscaled chrome, the budget floors rather than scales:**
   `max(base, scaled(base, zoom))`. Three surfaces landed on this independently. `CardGrid`'s 28px
   caption is set by the 24px quick-add button inside it, so a plain 0.5× gives a 14px strip under a

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -179,6 +179,9 @@ interface Props {
   targetCategoryId: number;
   roomy: boolean;
   defaultFormat?: FormatFilterOption | null;
+  /** The editor's cap on the drag. Absent is `Infinity`, which is what a story and the first
+   *  paint both get — see the prop's own doc. */
+  maxWidth?: number;
 }
 
 function Harness({
@@ -203,12 +206,13 @@ function panel({
   // it has no format to seed the search with — the annotation is what keeps the other cases
   // assignable.
   defaultFormat = null as FormatFilterOption | null,
+  maxWidth = undefined as number | undefined,
   onTargetCategoryChange = vi.fn(),
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  let props: Props = { categories, targetCategoryId, roomy, defaultFormat };
+  let props: Props = { categories, targetCategoryId, roomy, defaultFormat, maxWidth };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
       <Harness {...p} onTargetCategoryChange={onTargetCategoryChange} />
@@ -838,5 +842,151 @@ describe("DeckSearchPanel", () => {
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     expect(prefetchImages).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The panel's own width, which the reader owns from its left edge.
+ *
+ * Every number here is a px width read off the `<section>`'s inline style. The panel is a fixed
+ * column in a flex row, so that style *is* what it measures — there is no layout engine under
+ * these tests to disagree with it, and none is needed: the arithmetic is the component's.
+ */
+describe("DeckSearchPanel resizing", () => {
+  const column = () => screen.getByRole("region", { name: "Add cards" });
+  const handle = () => screen.getByRole("separator", { name: "Resize card search" });
+
+  /**
+   * One pointer event with a real `clientX` on it.
+   *
+   * Built as a `MouseEvent` rather than through `fireEvent.pointerDown`, for the reason
+   * `src/test-drag.ts` builds its own: jsdom ships no `PointerEvent`, so Testing Library's
+   * pointer helpers fall back to a plain `Event` and the coordinate never arrives — the drag
+   * would read `undefined` and the panel would be `NaN` wide, which `toHaveStyle` reports as a
+   * missing style rather than as the wrong one. React dispatches on the event's **type**, not on
+   * its class, so a `MouseEvent` named `pointermove` reaches `onPointerMove` carrying the
+   * `clientX` a mouse event has natively.
+   */
+  const pointer = (type: string, clientX: number) => {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, button: 0 });
+    Object.defineProperty(event, "pointerId", { value: 1 });
+    fireEvent(handle(), event);
+  };
+
+  /** A whole drag: press at `from`, move to `to`, let go. Leftward is wider. */
+  const drag = (from: number, to: number) => {
+    pointer("pointerdown", from);
+    pointer("pointermove", to);
+    pointer("pointerup", to);
+  };
+
+  it("opens at its default width and grows as the edge is pulled left", async () => {
+    await openPanel();
+    expect(column()).toHaveStyle({ width: "384px" });
+
+    drag(900, 800);
+
+    expect(column()).toHaveStyle({ width: "484px" });
+    // The value the separator reports is the width, so a screen reader hears the same number the
+    // panel is drawn at rather than a percentage of something it cannot see.
+    expect(handle()).toHaveAttribute("aria-valuenow", "484");
+  });
+
+  /** And narrower the other way, down to the one card `MIN_PANEL_WIDTH_PX` is measured from. */
+  it("stops at one card's width however far the edge is pushed right", async () => {
+    await openPanel();
+
+    drag(900, 1600);
+
+    expect(column()).toHaveStyle({ width: "206px" });
+    expect(handle()).toHaveAttribute("aria-valuemin", "206");
+  });
+
+  /**
+   * The editor's cap, which is the deck's floor and half the window in one number. The drag is
+   * refused at it rather than allowed and corrected afterwards: a reader pulling past the edge
+   * sees the panel stop, which is what an edge is.
+   */
+  it("stops at the width the editor allows however far the edge is pulled left", async () => {
+    await openPanel({ maxWidth: 500 });
+
+    drag(900, 200);
+
+    expect(column()).toHaveStyle({ width: "500px" });
+    expect(handle()).toHaveAttribute("aria-valuemax", "500");
+  });
+
+  /**
+   * **The cap corrects what is drawn and never what was asked for**, which is the whole of
+   * "reopens at the last valid width". The window narrowing, or a card pane opening beside the
+   * editor, is not the reader changing their mind — so when the room comes back, so does their
+   * column. Holding the clamped number instead makes every momentary squeeze permanent.
+   */
+  it("gives the reader's width back when the room returns", async () => {
+    const view = await openPanel();
+
+    drag(900, 600);
+    expect(column()).toHaveStyle({ width: "684px" });
+
+    // The card pane opens beside the editor and the desk has 300px to spare.
+    view.update({ maxWidth: 300 });
+    expect(column()).toHaveStyle({ width: "300px" });
+
+    // And closes again.
+    view.update({ maxWidth: undefined });
+    expect(column()).toHaveStyle({ width: "684px" });
+  });
+
+  /**
+   * A collapse throws the *search* away — `OpenPanel` unmounts, and that is deliberate — but not
+   * the column it was drawn in. The width lives in the root beside `open` for exactly this: a
+   * reader who sized this panel for the job, shut it, and opened it again is not asking to start
+   * from 384.
+   */
+  it("reopens at the width the reader left it at", async () => {
+    await openPanel();
+
+    drag(900, 700);
+    expect(column()).toHaveStyle({ width: "584px" });
+
+    const toggle = screen.getByRole("button", { name: "Search cards" });
+    await userEvent.click(toggle);
+    expect(screen.queryByRole("separator", { name: "Resize card search" })).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(column()).toHaveStyle({ width: "584px" });
+  });
+
+  /**
+   * The keyboard half, which is not an extra: a caret cannot perform a drag, and a resize that
+   * only a pointer can reach is a layout choice taken away from anyone who does not use one.
+   * Left widens and right narrows, matching the pointer — the key moves the *separator*.
+   */
+  it("moves with the arrow keys and jumps to either end with Home and End", async () => {
+    await openPanel({ maxWidth: 500 });
+    handle().focus();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(column()).toHaveStyle({ width: "408px" });
+
+    await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+    expect(column()).toHaveStyle({ width: "360px" });
+
+    await userEvent.keyboard("{Home}");
+    expect(column()).toHaveStyle({ width: "206px" });
+
+    await userEvent.keyboard("{End}");
+    expect(column()).toHaveStyle({ width: "500px" });
+  });
+
+  /**
+   * There is nothing to resize in the rail, and an edge to pull on it would be an affordance for
+   * a width the editor has already refused. The panel says why in words on its disclosure
+   * instead — see the railing tests above.
+   */
+  it("draws no handle when the editor has railed it", async () => {
+    await openPanel({ roomy: false });
+
+    expect(screen.queryByRole("separator", { name: "Resize card search" })).not.toBeInTheDocument();
   });
 });

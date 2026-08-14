@@ -163,11 +163,12 @@ type Story = StoryObj<typeof meta>;
 /**
  * The search wall: every fixture printing, edge to edge and scrolling.
  *
- * How many fit across is a function of the container and nothing else — `columnsFor` divides the
- * measured width by a 170px floor plus the gap, and `tileWidthFor` then shares the leftover out
- * so the art stays flush to both edges. A fixed width would leave up to one whole tile's worth of
- * empty container down one side, which reads as a rendering fault rather than as a layout. This
- * canvas is capped at 46rem, so resize the Storybook window and the count moves with it.
+ * How many fit across is a function of the container and the reader's zoom — `columnsFor` divides
+ * the measured width by the drawn tile width plus the gap, and `sideGutterFor` splits whatever is
+ * left over either side of the row so the wall stays centred. This canvas is capped at 46rem, so
+ * resize the Storybook window and the count moves with it. (The tiles used to *stretch* to fill
+ * the row instead; `TILE_BASE_WIDTH` carries the measurement that ended it — flush edges made the
+ * drawn size a step function of the column count, so seven of the ten zoom stops moved nothing.)
  *
  * **Tiles are visible to a `play` here, and the column count still is not.** jsdom lays nothing
  * out, so `@tanstack/react-virtual` would measure the scroller at 0px and render no tiles at
@@ -176,7 +177,7 @@ type Story = StoryObj<typeof meta>;
  * measures its own rows container with `clientWidth` and a `ResizeObserver` (`CardGrid`'s effect
  * over `rowsRef`), and `src/test-setup.ts` stubs `ResizeObserver` to a no-op. So under
  * Vitest the width stays 0, `columnsFor` floors at **one** column, and every tile is
- * `TILE_MIN_WIDTH` wide. Tiles exist to be asserted about; how many fit across is still a claim
+ * `TILE_BASE_WIDTH` wide. Tiles exist to be asserted about; how many fit across is still a claim
  * only a browser can settle, which is why {@link InTheDockedPanel} — the one story on this page
  * that is *about* the column count — carries no `play`.
  */
@@ -457,7 +458,7 @@ export const LongNames: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     for (const art of canvasElement.querySelectorAll("img")) fireEvent.error(art);
-    // The longest name in the fixture, drawn in a frame `TILE_MIN_WIDTH` (170px) wide under
+    // The longest name in the fixture, drawn in a frame `TILE_BASE_WIDTH` (170px) wide under
     // Vitest. Whether three lines hold it is a question for a browser — `line-clamp` is CSS,
     // and jsdom applies none — so what is pinned here is that the name is *drawn* rather than
     // dropped, and that the cap is on the element that carries it.
@@ -470,14 +471,14 @@ export const LongNames: Story = {
 /**
  * The deck editor's docked search panel, at the width it actually has.
  *
- * 384px (`w-96`) is **331** by the time the panel's own left padding (12), the scrollbar (17)
- * and this wall's own padding (24) are off it — measured at 330 in the running window, and 23
- * short of two of the standard 170px tiles. At the standard floor the column drew one 330×490
- * card per row inside a wall 341px tall: less than a whole card, ever. `DeckSearchPanel`'s
- * `TILE_FLOOR` drops the floor to **150**, at which the same 331 is two 159px tiles.
+ * 384px is that panel's **opening** width — the reader may drag its edge — and 384 is **331** by
+ * the time the panel's own left padding (12), the scrollbar (17) and this wall's own padding (24)
+ * are off it: measured at 330 in the running window, and 23 short of two of the standard 170px
+ * tiles. At the standard size the column drew one 330×490 card per row inside a wall 341px tall:
+ * less than a whole card, ever. `DeckSearchPanel`'s `TILE_BASE` drops it to **150**, at which the
+ * same 331 is two tiles with 19px of gutter split either side.
  *
- * A floor, not a width: tiles still share out the leftover, and the `grid` image is 488px wide,
- * so a smaller floor is a deeper downscale and never a blowup.
+ * The `grid` image is 488px wide, so a smaller base is a deeper downscale and never a blowup.
  *
  * That panel's tiles carry `"search-card"` through the lower-level `tileRef` seam rather than
  * through `dragPayload` — **one or the other, never both**. They do not compose: the tile runs
@@ -486,7 +487,7 @@ export const LongNames: Story = {
  * `draggable` on the same element" for every tile on the wall.
  */
 export const InTheDockedPanel: Story = {
-  args: { rows: ALL, minTileWidth: 150 },
+  args: { rows: ALL, baseTileWidth: 150 },
   // Width only. A story's own decorators run *inside* the meta's, so this box sits in the
   // 34rem-tall column above and takes its height from it — two nested boxes each setting a
   // height would leave the inner one deciding and the outer one lying.

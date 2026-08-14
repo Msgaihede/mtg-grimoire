@@ -39,10 +39,12 @@ function Panel({
   deckId,
   roomy = true,
   defaultFormat = null,
+  maxWidth,
 }: {
   deckId: number;
   roomy?: boolean;
   defaultFormat?: FormatFilterOption | null;
+  maxWidth?: number;
 }) {
   const deck = useDeck(deckId);
   const [picked, setPicked] = useState<number>(AUTO_CATEGORY);
@@ -54,6 +56,7 @@ function Panel({
       onTargetCategoryChange={setPicked}
       defaultFormat={defaultFormat}
       roomy={roomy}
+      maxWidth={maxWidth}
     />
   );
 }
@@ -428,5 +431,54 @@ export const Busy: Story = {
         "Try that again in a moment.",
     );
     await expect(within(panel).getByText("33 cards")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The column's left edge, as something to pull on.
+ *
+ * The panel opens at its 384px default and the reader drags the hairline to trade width with the
+ * deck beside it — which is the answer to the other half of the same complaint the zoom fixes.
+ * `CardGrid` sizes a tile from the reader's zoom and fits however many of that size the wall
+ * holds, so at 2× a 384px column draws **one** 300px card; the way to see two is to zoom back
+ * down *or* to widen the column, and this is the second of those.
+ *
+ * **Hover the edge to see the grip.** At rest it is the hairline the panel already had — the one
+ * piece of chrome it adds — because a permanent handle down a border this app spent care making
+ * quiet would be a second line saying the same thing. The cursor is `col-resize` across a 9px
+ * strip that straddles the border, 4px of it out in the desk's own gap.
+ *
+ * `maxWidth` is the editor's answer and is hard-coded here at 620 — in the app it is
+ * `min(half the window, what the desk can spare over DECK_FLOOR)`, and a story has neither a desk
+ * nor a window to derive it from. The box is 700px wide so there is somewhere to drag *to*; every
+ * other story on this page uses the 420px box the panel's default width fits exactly.
+ *
+ * **The drag itself is not asserted here and the play does not attempt it.** jsdom ships no
+ * `PointerEvent`, so a `userEvent.pointer` on this handle carries no `clientX` and the resize
+ * reads `undefined` — `DeckSearchPanel.test.tsx` drives it with a hand-built `MouseEvent` for
+ * exactly that reason, and what *this* story pins is the part a play can honestly settle: the
+ * separator is there, it is a tab stop, and it reports the range the editor gave it.
+ */
+export const Resizable: Story = {
+  args: { maxWidth: 620 },
+  decorators: [
+    (Story) => (
+      <div className="flex h-[640px] w-[700px] justify-end">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Search cards" }));
+
+    const handle = canvas.getByRole("separator", { name: "Resize card search" });
+    await expect(handle).toHaveAttribute("aria-orientation", "vertical");
+    await expect(handle).toHaveAttribute("aria-valuenow", "384");
+    await expect(handle).toHaveAttribute("aria-valuemin", "206");
+    await expect(handle).toHaveAttribute("aria-valuemax", "620");
+    // A caret can reach it, which is the half of this a pointer-only handle would have lost:
+    // there is no other control anywhere that sets this width.
+    await expect(handle).toHaveAttribute("tabindex", "0");
   },
 };
