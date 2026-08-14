@@ -733,10 +733,16 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
   about the _deck_ — the quantity tag, the Game Changer banner, `RULE BREAK`. Under it goes the
   data line with facts about the _printing_. `QuantityTag` merges the tag and the copy count into
-  one mark: the count printed on the tag's own colour, grey (`UNTAGGED_COLOR`) when there is no
-  tag, so gold stays something a tag says. `TagDot` is unchanged on the other three views. It
-  costs ~34px of printed name, knowingly; the app-drawn frame insets its own name band by
-  exactly that width so a name _this app_ wrote is never clipped.
+  one mark: the count printed on the tag's own colour, grey when there is no tag, so gold stays
+  something a tag says. `TagDot` is unchanged on the other three views. It costs ~34px of printed
+  name, knowingly; the app-drawn frame insets its own name band by exactly that width so a name
+  _this app_ wrote is never clipped.
+  **The box that mark is drawn in is `components/CountTag.tsx` and no longer this folder's**
+  (2026-08-14): the slant, the 22px height, the mono face, the `aria-hidden` and the bare number.
+  The search wall counts printings with the same object, so the grey moved with it —
+  `NEUTRAL_COUNT_PAINT` is what `UNTAGGED_COLOR` became, and `QuantityTag` now passes `paint` for
+  a tagged card and nothing at all for an untagged one. What stayed here is what makes this one a
+  _tag_: the colour, the two-fact sentence in its `title`, and `LAYER.overlappingMark`.
 - **The data line is a sibling of the button, not a child** — so unlike every mark over the art
   its text is genuinely announced rather than swallowed by the button's `aria-label`. It is the
   card's foot: a 28px bar under the face, ridden **4px** up so the face's clipped corners cover

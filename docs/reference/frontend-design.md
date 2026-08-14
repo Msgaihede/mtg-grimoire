@@ -216,6 +216,34 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cardDraggable` being registered on the tile's outer wrapper. No keyboard handler is owed —
   a corner duplicates what the caption already states and opens what the button opens, and a
   second tab stop per tile would be forty extra presses across a wall to reach nothing new.
+- **The printing count is the deck editor's quantity tag now, and it dropped its `×`**
+  (2026-08-14). It was `×N` in the wall's own `bg-bg/85` chip; it is `components/CountTag` — the
+  filled banner cut off at a slant that the deck stack has drawn copies-in-a-pile with since
+  2026-08-13 — in the neutral grey, because a printing count has no tag to take a colour from.
+  One object for both statements: a mark the eye finds before it reads the card only works if the
+  two are the same shape, and a number laid on a card had been drawn two ways in one app. The
+  `×` went with the chip — a banner in a corner already says "this many", and the sign was a
+  second glyph in a 22px box. **A count laid _beside_ a card keeps its `×`**: `OwnedBadge` in the
+  caption and the search table's `×132 printings` cell are inline text, where the sign is what
+  tells a count from a set number. `CardGrid`'s `topLeft` is consequently the one corner with no
+  backing under it — a chip behind a banner frames a frame — while `badge` (bottom-left) keeps
+  the wall's felt, so the wall still owns the *corner* and owns nothing about the paint.
+  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/tagColors.ts` to `CountTag`'s
+  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no tags at all, so
+  the neutral fill is a fact about the mark rather than about that palette.
+  **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  1280×800, against the real 116 703-card corpus): a tile's corner computed `background-color:
+rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.02 85)`,
+  `clip-path: polygon(0px 0px, 100% 0px, calc(100% - 10px) 100%, 0px 100%)`,
+  `aria-hidden="true"`, and text `2` / `4` with **no `×`**. It measures **25 × 22** inset **4px**
+  top and left of a **170 × 238** tile, overflowing neither edge, and its wrapper computed
+  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own tags on
+  the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
+  `z-index: 1` — the two surfaces are one box, which is the claim the whole change rests on and
+  the only one a screenshot could not settle. **The name coverage did not move**: 25px plus the
+  4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
+  always lost. **One arm was not driven** — the *coloured* tag, since the deck to hand carried no
+  tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
