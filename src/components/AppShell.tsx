@@ -18,6 +18,7 @@ import {
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import { CardToDeckProvider, useCardToDeck } from "@/features/card/cardMenu";
 import { readDragData } from "@/features/decks/dnd";
 import {
   ACTIVITY_DELAY_MS,
@@ -105,6 +106,19 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // it the place a card can be dropped from any view — the Search wall and the deck editor
   // never coexist, so without this a card found in Search has nowhere to go.
   const drops = useSidebarDrops();
+  /**
+   * **The app's one deck-add-from-a-card-menu, mounted here for `useSidebarDrops`' reason and
+   * one more.**
+   *
+   * The reason it shares: a card menu is opened on ten surfaces, and a write that has to
+   * outlive the menu has to be mounted somewhere that outlives it too. The extra reason: it is
+   * mounted **once** rather than per surface, so the sentence a refusal leaves has one place to
+   * be drawn and therefore one place to be forgotten. Every surface below reaches
+   * `addToDeck` through the provider around this tree and never sees `error` at all —
+   * `useAddCardToDeck` throws without that provider, so a surface wired without this line fails
+   * on its first render rather than swallowing the reader's adds.
+   */
+  const cardToDeck = useCardToDeck();
   // Here rather than in a view, because it is about the whole cache and this is the one
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
@@ -132,8 +146,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // observer's `useMutation`. A mutation's state is shared with nobody; a keyed one can be read
   // from anywhere, which is what lets a sibling component describe a job this one never started.
   const { refreshing: refreshingFeed, feeds, progress: feedProgress } = useMarketplace();
-  const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace
-    .label;
+  const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace.label;
   useRegisterActivity(syncActivity(progress, busy));
   useRegisterActivity(marketplaceFeedActivity(refreshingLabel ?? null, feedProgress));
   // **Started somewhere else again, and usually by nobody**: `oracle_tags::refresh_if_due`
@@ -150,8 +163,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg text-text">
-      {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
+    <CardToDeckProvider value={cardToDeck}>
+      <div className="flex h-screen overflow-hidden bg-bg text-text">
+        {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
           bigger in every direction except the obvious one** (2026-08-14). The entries grew —
           44px rows, 16px labels, 20px icons — and the column they sit in did not, because
           `main` is what a wider sidebar takes the width out of and the deck editor is measured
@@ -161,55 +175,88 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           size, which is precisely the failure `DECK_FLOOR`'s two drops (224 → 208 → 192) exist
           to prevent. Widening this column is therefore a change to `DeckEditor`'s arithmetic
           first and a change to the sidebar second. */}
-      <nav
-        aria-label="Views"
-        className="flex w-52 shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3"
-      >
-        {NAV.map(({ id, label, Icon }) => (
-          <NavItem
-            key={id}
-            label={label}
-            Icon={Icon}
-            active={id === activeView}
-            onSelect={() => setActiveView(id)}
-            dragging={drops.dragging}
-            drop={id === "decks" || id === "wishlist" ? drops[id] : null}
-          />
-        ))}
-      </nav>
+        <nav
+          aria-label="Views"
+          className="flex w-52 shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3"
+        >
+          {NAV.map(({ id, label, Icon }) => (
+            <NavItem
+              key={id}
+              label={label}
+              Icon={Icon}
+              active={id === activeView}
+              onSelect={() => setActiveView(id)}
+              dragging={drops.dragging}
+              drop={id === "decks" || id === "wishlist" ? drops[id] : null}
+            />
+          ))}
+          {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
+            entry's report line above.**
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* The data directory is the app's one piece of hidden state — it silently falls
+            That line's subject is narrower than it looks: `SidebarDrop.report` is documented as
+            "what just happened **here**", and `useSidebarDrops` says "a drop reports where the
+            reader dropped it" — it is about a card let go *on this entry*, which is where the
+            reader's cursor was. A menu add happened at the card, several hundred pixels away,
+            and never touched this entry.
+
+            The mechanical objection is the decisive one. That report clears itself after
+            `REPORT_MS` and on the next drag; this one stands until the reader arms another add.
+            Two lifetimes in one slot — `drops.decks.report ?? cardToDeck.error` — would hide a
+            live refusal behind a drop's sentence and then **bring it back** four seconds later,
+            when the drop's timer expired. A sentence returning from the dead under a nav item is
+            worse than either message alone, and no ordering of the `??` fixes it: the other way
+            round, one refusal suppresses every drop report until the next menu add.
+
+            So: its own region, its own subject, and `role="alert"` rather than `status` because
+            this only ever holds a refusal.
+
+            **Mounted only when there is something to say, unlike the report line above it.**
+            That line is a `status` — polite, and a polite region that first appears with its
+            sentence already inside it announces nothing, which is why it is always there and
+            `sr-only` while empty. An `alert` is the other case: announcing on insertion is what
+            the role is for, and it is what the sync banner further down already relies on. It
+            also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
+            makes every such query in this app ambiguous whether or not it has any text in it.
+            The geometry is the report line's, which was measured for exactly this push. */}
+          {cardToDeck.error !== null && (
+            <p role="alert" className="px-3 pt-1 text-xs leading-tight text-destructive">
+              {cardToDeck.error}
+            </p>
+          )}
+        </nav>
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* The data directory is the app's one piece of hidden state — it silently falls
             back to AppData when the folder beside the exe is not writable, and spec §3
             asks for an indicator of which one is live. The ribbon hangs it as a tooltip
             on the line that already summarises the database. */}
-        <Ribbon
-          title={title}
-          statusLine={statusLine(status)}
-          dataDir={status?.dataDir}
-          imageStoreFailures={status?.imageStoreFailures}
-          busy={busy}
-          upToDate={upToDate}
-          hasError={error !== null}
-          onRefresh={refresh}
-          activity={activity}
-          activityVisible={activityVisible}
-          updateVersion={update.status?.available?.version ?? null}
-          updateInstallable={update.action !== "unavailable"}
-          onOpenUpdate={() => setActiveView("settings")}
-        />
+          <Ribbon
+            title={title}
+            statusLine={statusLine(status)}
+            dataDir={status?.dataDir}
+            imageStoreFailures={status?.imageStoreFailures}
+            busy={busy}
+            upToDate={upToDate}
+            hasError={error !== null}
+            onRefresh={refresh}
+            activity={activity}
+            activityVisible={activityVisible}
+            updateVersion={update.status?.available?.version ?? null}
+            updateInstallable={update.action !== "unavailable"}
+            onOpenUpdate={() => setActiveView("settings")}
+          />
 
-        {/* Given the whole screen when the database is empty, so it needs the error and
+          {/* Given the whole screen when the database is empty, so it needs the error and
             the retry action too: it covers the ribbon, Refresh button included. */}
-        <SyncProgress
-          progress={progress}
-          cardCount={status?.cardCount ?? null}
-          error={error}
-          busy={busy}
-          onRetry={refresh}
-        />
+          <SyncProgress
+            progress={progress}
+            cardCount={status?.cardCount ?? null}
+            error={error}
+            busy={busy}
+            onRetry={refresh}
+          />
 
-        {/* The banner grows into place rather than shoving the whole view down by its height
+          {/* The banner grows into place rather than shoving the whole view down by its height
             the instant a sync fails.
 
             **Two elements, and the split is load-bearing.** `statusLine` animates `height` to
@@ -219,23 +266,24 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             and the colours live on the child; the animated wrapper is height and
             `overflow-hidden` and nothing else. It is also where `role="alert"` stays, on the
             element that holds the sentence, so nothing about the announcement moved. */}
-        <AnimatePresence initial={false}>
-          {error && (
-            <motion.div {...statusLineMotion} className="shrink-0 overflow-hidden">
-              <div
-                role="alert"
-                className="flex items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-base text-destructive"
-              >
-                <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-                <span className="min-w-0">{error}</span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {error && (
+              <motion.div {...statusLineMotion} className="shrink-0 overflow-hidden">
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-base text-destructive"
+                >
+                  <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0">{error}</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        <main className="min-h-0 flex-1 overflow-auto p-5">{children}</main>
+          <main className="min-h-0 flex-1 overflow-auto p-5">{children}</main>
+        </div>
       </div>
-    </div>
+    </CardToDeckProvider>
   );
 }
 
