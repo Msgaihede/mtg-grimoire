@@ -8,6 +8,7 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import {
   MENU_MIN_HEIGHT,
+  MENU_MIN_WIDTH,
   PANEL_CLASS,
   ROW_CLASS,
   placeSubmenu,
@@ -81,8 +82,11 @@ export function Submenu({
     const row = rowRef.current;
     const panel = panelRef.current;
     if (!open || !row || !panel) return;
+    // Both axes measured, and both clamped to the floor rather than *replaced* by it: a panel is
+    // measured after it mounts, and under jsdom every box reads a hard `0`.
     const next = placeSubmenu(
       row.getBoundingClientRect(),
+      Math.max(panel.offsetWidth, MENU_MIN_WIDTH),
       Math.max(panel.offsetHeight, MENU_MIN_HEIGHT),
     );
     setPlacement((prev) =>

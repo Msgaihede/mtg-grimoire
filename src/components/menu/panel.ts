@@ -191,9 +191,21 @@ export interface SubmenuPlacement {
   origin: string;
 }
 
-export function placeSubmenu(row: DOMRect, height: number): SubmenuPlacement {
-  const toLeft =
-    row.right + MENU_MIN_WIDTH + MENU_EDGE_GUTTER > document.documentElement.clientWidth;
+/**
+ * **Both axes take a measurement, and the width used to take {@link MENU_MIN_WIDTH} instead.**
+ *
+ * That constant is the floor a measurement is *clamped* to — "the smallest room a menu can ever
+ * need is the room it promises to take" — and it is not the room this panel takes.
+ * {@link PANEL_CLASS} sets `min-w-56` with no `max-w`, and {@link ROW_CLASS}'s labels are
+ * `truncate`, i.e. `white-space: nowrap`, which makes a panel's min-content equal its
+ * max-content: a panel holding a long deck name really is wider than 224 and **cannot shrink to
+ * it**. Deciding the flip against the floor therefore reads "it fits" about a panel that does
+ * not, and the overflow is unreachable rather than merely ugly — the ancestor is `fixed` and this
+ * module has no `max-h`, no `max-w` and no `overflow` anywhere, so nothing clips it and nothing
+ * scrolls to it.
+ */
+export function placeSubmenu(row: DOMRect, width: number, height: number): SubmenuPlacement {
+  const toLeft = row.right + width + MENU_EDGE_GUTTER > document.documentElement.clientWidth;
   const upward = row.top + height + MENU_EDGE_GUTTER > document.documentElement.clientHeight;
   return {
     // Whole literals, all four of them, for the reason `ORIGIN` is written out.
