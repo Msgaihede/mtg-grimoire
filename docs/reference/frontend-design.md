@@ -134,7 +134,38 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   finish somewhere else. The stack is its one caller: a `FinishMark` on the data line beside the
   price says the word better than a fourth badge in a corner the rule break and the quantity tag
   are already competing for. What must never happen is _neither_ — a sheen with nothing naming
-  it is decoration, which is the whole of why the chip existed.
+  it is decoration, which is the whole of why the chip existed. **It governs the crown too**,
+  since the chip is the only thing a crown can be drawn as and the stack has its banner instead.
+- **One game changer, three drawings, and the difference is room rather than meaning.** The deck
+  stack stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a
+  card is 295px tall; the other three deck views abbreviate to `GameChangerBadge`'s gold `GC`
+  where a cell has a column; and a search card gets `components/GameChangerMark`, **the banner's
+  crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
+  is a sticker over the picture the reader came to look at. `text-pie-gold` in all three: the spec
+  is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
+  must never be confusable, and the destructive colour belongs to the second. It shares the finish
+  chip rather than taking a corner of its own — **a card fact and a printing fact in one box**,
+  since a card can be either, both or neither. Nothing derives it: the backend flattens
+  `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
+  struct is a `bool`).
+- **`pointer-events` inherits, so a `<title>` inside anything `pointer-events-none` is a
+  tooltip nobody can ever see — and it fails silently.** `FoilOverlay`'s chip sat under the
+  overlay's `none` from the day it was written, so `FinishMark`'s `<title>` had never once
+  been shown over card art: a tooltip is drawn by the element the pointer _hits_, and nothing
+  in that subtree was hittable. The chip now takes `pointer-events-auto` on its own while the
+  full-bleed sheen keeps `none`; it sits _inside_ the enclosing button on all three surfaces
+  that have one, so a click on it bubbles and opens the card exactly as a click on the art
+  does. `data-card-marks` is the handle a test finds it by — a hit target is otherwise
+  invisible to the DOM, which is why this went unnoticed through a green suite.
+- **`CardGrid`'s two corner marks take their own clicks now, and that is the price of their
+  tooltips.** The owned badge (bottom-left) and the printing count (top-left) are _siblings_
+  of the tile's button, so `pointer-events-none` was what let a press fall through to the art
+  and kept the tile one click target. But they are abbreviations — `×3`, a filled heart —
+  whose plain-words tooltip is the whole point of hovering them, so each takes its own events
+  and calls `onSelect` itself: same behaviour, now hoverable. The drag is unaffected,
+  `cardDraggable` being registered on the tile's outer wrapper. No keyboard handler is owed —
+  a corner duplicates what the caption already states and opens what the button opens, and a
+  second tab stop per tile would be forty extra presses across a wall to reach nothing new.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's
@@ -220,13 +251,62 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   effect and wrong in name. Measured 2026-08-11 in the shipped window: the scrim computes to
   `z-45`, one Escape closes the overlay and leaves the card pane open, a second closes the pane,
   and each hands focus back to the control that opened it.
-- **An anchored popup near the right of a row is pinned to its trigger's _right_ edge.**
+- **A popup is pinned to, and grows from, the corner nearest its trigger's own edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
   picker did: 288px of listbox opening from a trigger at the end of the filter row put it
   **174px past a 1280px window** (measured), and the page slid left, sidebar and all, the
-  moment its own `scrollIntoView` ran. `right-0`, the same decision as
-  `AddToCollection`'s `align="end"`.
+  moment its own `scrollIntoView` ran. So `SetCombobox` is `right-0` with
+  `origin-top-right`, the same decision as `AddToCollection`'s `align="end"` — and **the
+  mirror of it is equally wrong**. The deck editor's quick add sits at the _left_ end of its
+  toolbar row, where that pair would hang a panel wider than the field out to the left of
+  the field that produced it, away from the edge it has room at; it takes `left-0` with
+  `origin-top-left`. The origin follows the pin, which is the one thing `lib/motion.ts`'s
+  `popup` leaves to whoever anchors it: a listbox that grows from a corner it is not
+  attached to reads as unrelated to the control that opened it. Both spellings are written
+  out whole, for the scanner reason above.
+- **Two comboboxes here are hand-rolled, and the CSP is the reason.** The set filter
+  (`features/search/SetCombobox.tsx`) and the deck editor's quick add
+  (`features/decks/QuickAdd.tsx`) are plain absolutely-positioned listboxes in the same
+  stacking context as their trigger, never portalled popovers: the shipped `csp` is
+  `style-src 'self'`, and every portalled overlay primitive injects a runtime `<style>` the
+  moment it opens — Radix's pull in `react-remove-scroll`. **`devCsp` carries
+  `'unsafe-inline'` and the shipped `csp` does not**, so the failure passes `tauri dev`,
+  Storybook and jsdom and breaks only in a packaged build, exactly like
+  `AnimatePresence mode="popLayout"`. The ARIA wiring is the whole of what the dependency
+  would have supplied: `role="combobox"` on the _field_, `aria-expanded` and
+  `aria-controls`, and `aria-activedescendant` moving the highlight while the caret stays
+  put — which is what lets a reader take a row without Tabbing into the list. Both files
+  build option ids from a module-scope `optionId(id, i)`, so the id an option carries and
+  the id `aria-activedescendant` points at are one spelling rather than two that happen to
+  agree; a mismatch is invisible to the eye and total to a screen reader, which simply
+  announces nothing.
+- **Both draw their panel in `components/PopupListbox`'s `PopupPanel`, and what is shared is
+  an inert guard.** `AnimatePresence` keeps the element it was last handed while that
+  element leaves, so an exiting panel goes on rendering the props of the render in which it
+  was still open — including its `className` — and a flag read upstairs can therefore never
+  reach it. `PopupPanel` reads `useIsPresent` _inside_ the presence, which is the only place
+  the answer changes, and turns the leaving panel `aria-hidden` and `pointer-events-none`.
+  Without it every dismissal a popup has — Escape, the outside-mousedown listener, `onBlur`
+  — comes down with the open flag while the panel is still painted and hit-testable for the
+  length of the fade: a press landing on a listbox that can no longer close itself, and a
+  second, stale copy of its list in the accessibility tree. One component rather than two
+  inline `motion.div`s, so the guard cannot drift between them.
+- **What the two do not share is deliberate.** `SetCombobox` opens from a disclosure button,
+  focuses a search field of its own and hands the caret back on Escape; the quick add _is_
+  the field, so its Escape closes the list and moves nothing. `SetCombobox` scrolls the
+  active option into view because it renders up to 50 rows; the quick add caps at five,
+  which are all visible at once, so it has no such effect and needs none. And the quick add
+  registers its `"inner"` Escape rung on _the list being up_ rather than on its own open
+  flag, because a toolbar field with no list under it owes the press to the card detail
+  pane, which listens on `window` in the bubble phase. Its deck-side rules — the three
+  routes to one write, the freshness guard, the missing `marketplace` — are in
+  `src/features/decks/CLAUDE.md`. **Driven in the shipped window 2026-08-14** (`tauri dev`,
+  debug, 1280×800): the panel computes `z-index: 30` and `transform-origin: 0px 0px`, its
+  left edge sits on the field's to the pixel (285/285), nothing overflowed right and
+  `scrollLeft` stayed 0 — and Escape closed the list while leaving the card pane open, then
+  closed the pane on the second press. Every figure is in
+  `src/features/decks/CLAUDE.md`.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

@@ -83,10 +83,13 @@
  *    {@link foldRank} keeps a whole name ahead of a front face, which is the half that decides
  *    which printing a name lands on.
  *
- * Deliberately *not* on that list: `everUncommon`, `power`/`toughness`, `priceUsd` and
- * `isPaper` are **read off their columns**. They are facts the generator took from the full
- * 116 k-row corpus, and re-deriving any of them over a 43-row fixture would answer a question
- * about the fixture while looking like an answer about the card.
+ * Deliberately *not* on that list: `everUncommon`, `gameChanger`, `power`/`toughness`,
+ * `priceUsd` and `isPaper` are **read off their columns**. They are facts the generator took
+ * from the full 116 k-row corpus, and re-deriving any of them over a 43-row fixture would
+ * answer a question about the fixture while looking like an answer about the card.
+ * `gameChanger` is the one most tempting to re-derive — a list of names is short enough to
+ * type — and a hand-typed list is exactly how a fake starts disagreeing with the Commander
+ * Format Panel's.
  *
  * Nothing here is `async`: these are synchronous functions, and the fake `invoke` in
  * `core.ts` is what makes a command a promise. That keeps `db.test.ts` free of `await` on
@@ -1312,6 +1315,12 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary 
     layout: c.layout,
     oracleId: c.oracleId,
     finishes: c.finishes,
+    // The column, read straight through and never re-derived from a list of names — an
+    // **oracle**-level fact, so every printing agrees and {@link collapseToCards} inherits
+    // the representative's like `rarity`, with no aggregate needed to make a group agree
+    // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
+    // from `cards`, so it can never be the orphan that field's `null` is for.
+    gameChanger: c.gameChanger,
     ownedQuantity: ownedOfPrinting(db, c.id),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own

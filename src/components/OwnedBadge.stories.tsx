@@ -13,7 +13,11 @@ const meta = {
           "What the reader already has, and what they said they wanted — said on the card " +
           "itself. A quantity is data, so it is the mono face on a plain surface: no green, " +
           "no “owned” pill. The heart is the sidebar's own wishlist icon, filled, so the " +
-          "mark on a search result and the entry in the nav are visibly the same thing.",
+          "mark on a search result and the entry in the nav are visibly the same thing.\n\n" +
+          "**Hover it and it says in words what it says in glyphs** — the same two sentences " +
+          "its `sr-only` spans carry, joined into one `title`. `×3` beside a filled heart is " +
+          "shorthand a sighted reader has to be told once, and two tooltips 4px apart over " +
+          "one badge would flicker between them.",
       },
     },
   },
@@ -45,8 +49,17 @@ export const Owned: Story = { args: { owned: 3 } };
 export const Wishlisted: Story = { args: { owned: 0, wishlisted: true } };
 
 /** Owning some and still wanting more is an ordinary state, not a contradiction: a wish is
- *  finish-aware and a count is not. */
-export const Both: Story = { args: { owned: 2, wishlisted: true } };
+ *  finish-aware and a count is not — and it is the case that proves the badge says both facts
+ *  on hover rather than only the one the pointer happens to be over. */
+export const Both: Story = {
+  args: { owned: 2, wishlisted: true },
+  play: async ({ canvasElement }) => {
+    await expect(canvasElement.querySelector("[title]")).toHaveAttribute(
+      "title",
+      "2 in your collection · On your wishlist",
+    );
+  },
+};
 
 /** `tabular-nums` is why this is worth a story — four figures must not shove the card frame
  *  around as the count climbs. */

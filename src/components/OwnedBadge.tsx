@@ -27,8 +27,19 @@ export function OwnedBadge({
   className?: string;
 }) {
   if (owned <= 0 && !wishlisted) return null;
+  // The two sentences this badge makes, written once and said twice — as `sr-only` text, which
+  // is how a screen reader gets them, and joined into a `title`, which is how a pointer does.
+  // `×3` beside a filled heart is two glyphs of shorthand, and a reader who can see it still
+  // has to be told once which count that is and whose list the heart means. One tooltip rather
+  // than one per half: the halves sit 4px apart, and two would flicker between them.
+  const ownedSentence = `${owned} in your collection`;
+  const wishSentence = "On your wishlist";
+  const hint = [owned > 0 ? ownedSentence : null, wishlisted ? wishSentence : null]
+    .filter((sentence) => sentence !== null)
+    .join(" · ");
   return (
     <span
+      title={hint}
       className={cn(
         "inline-flex shrink-0 items-center gap-1 font-mono text-xs tabular-nums text-text",
         className,
@@ -37,13 +48,13 @@ export function OwnedBadge({
       {owned > 0 && (
         <>
           <span aria-hidden="true">×{owned}</span>
-          <span className="sr-only">{owned} in your collection</span>
+          <span className="sr-only">{ownedSentence}</span>
         </>
       )}
       {wishlisted && (
         <>
           <Heart className="size-3 shrink-0 fill-current" aria-hidden="true" />
-          <span className="sr-only">On your wishlist</span>
+          <span className="sr-only">{wishSentence}</span>
         </>
       )}
     </span>

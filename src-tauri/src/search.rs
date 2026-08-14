@@ -170,6 +170,20 @@ pub struct CardSummary {
     /// (`oracle_id` is most of it), so a 50-row page carries ~2.5 KB more. That is the whole
     /// price of the trade the brief declined; it buys a correct entry on every surface.
     pub finishes: Option<String>,
+    /// One of the cards the Commander bracket system counts as a **game changer** — the
+    /// wall and the table draw a crown from it, beside the foil and etched finish marks.
+    ///
+    /// An **oracle-level** fact, not a property of the cardboard: every printing of a card
+    /// agrees, so a collapsed row takes it from the representative printing's own `c.`
+    /// column like `rarity` or `type_line`, and no aggregate is needed to make the group
+    /// agree with itself.
+    ///
+    /// `bool` and not `Option<bool>`, though `cards.game_changer` is nullable: a NULL there
+    /// means *not on the list* — the column is only ever set for the cards Wizards named —
+    /// so it is read as an `Option` and flattened here rather than handed to TypeScript as a
+    /// third state every crown would have to fence. Same reading, and the same flattening, as
+    /// [`crate::deck_import::ImportMatch::game_changer`].
+    pub game_changer: bool,
     /// Copies the collection holds of **this printing**, across every finish and
     /// condition. `0` rather than `Option`: "you own none of these" is a fact, not an
     /// absence, and a badge that has to distinguish `null` from `0` is a badge with a bug
@@ -736,6 +750,12 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
              SELECT c.id, g.nm, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
                     c.oracle_id, c.finishes,
+                    -- `c.`, not an aggregate: being a game changer is a fact about the
+                    -- oracle card, so every printing in the group already agrees and the
+                    -- representative's own column is the group's answer. Position 12 in
+                    -- **both** branches — the two share one row mapping, and only the three
+                    -- collapse-only aggregates may follow it.
+                    c.game_changer,
                     coalesce((SELECT sum(e.quantity) FROM collection_entries e
                                JOIN cards k ON k.id = e.card_id
                               WHERE k.oracle_id = c.oracle_id), 0),
@@ -751,7 +771,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
-                    c.oracle_id, c.finishes,
+                    c.oracle_id, c.finishes, c.game_changer,
                     coalesce((SELECT sum(e.quantity) FROM collection_entries e
                                WHERE e.card_id = c.id), 0),
                     EXISTS (SELECT 1 FROM wishlist_entries w
@@ -787,22 +807,29 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             layout: row.get(9).map_err(|e| e.to_string())?,
             oracle_id: row.get(10).map_err(|e| e.to_string())?,
             finishes: row.get(11).map_err(|e| e.to_string())?,
-            owned_quantity: row.get(12).map_err(|e| e.to_string())?,
-            wishlisted: row.get(13).map_err(|e| e.to_string())?,
+            // Read as an `Option` and flattened: the column is nullable and a NULL means
+            // "not on the list". A bare `row.get::<_, bool>` is not a `false` there, it is
+            // an `InvalidColumnType` that fails the whole search.
+            game_changer: row
+                .get::<_, Option<bool>>(12)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(false),
+            owned_quantity: row.get(13).map_err(|e| e.to_string())?,
+            wishlisted: row.get(14).map_err(|e| e.to_string())?,
             // Uncollapsed, a row is a printing: it stands for one, and the "range" is its own
             // price. Collapsed, the three ride on the group step's aggregates.
             printings: if collapse {
-                row.get(14).map_err(|e| e.to_string())?
+                row.get(15).map_err(|e| e.to_string())?
             } else {
                 1
             },
             price_low: if collapse {
-                row.get(15).map_err(|e| e.to_string())?
+                row.get(16).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
             price_high: if collapse {
-                row.get(16).map_err(|e| e.to_string())?
+                row.get(17).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
@@ -1494,6 +1521,7 @@ mod tests {
                 layout: "normal".into(),
                 oracle_id: Some("o-bolt".into()),
                 finishes: Some(r#"["nonfoil","foil"]"#.into()),
+                game_changer: true,
                 owned_quantity: 0,
                 wishlisted: false,
                 printings: 1,
@@ -1514,6 +1542,7 @@ mod tests {
                     "manaCost": null, "price": 400.5,
                     "layout": "normal",
                     "oracleId": "o-bolt", "finishes": "[\"nonfoil\",\"foil\"]",
+                    "gameChanger": true,
                     "ownedQuantity": 0, "wishlisted": false,
                     "printings": 1,
                     "priceLow": 400.5, "priceHigh": 400.5
@@ -3117,6 +3146,63 @@ mod tests {
         // nonfoil: the caller reads `None` as "unknown" and offers its own default.
         assert_eq!(helix.finishes, None);
         assert_eq!(helix.oracle_id, None);
+    }
+
+    /// The crown the search wall and table draw beside the finish marks, on the row rather
+    /// than behind a per-tile round trip — as `finishes` and `oracle_id` are, and for the
+    /// same reason.
+    ///
+    /// Both query shapes, because they are two different select lists feeding one row
+    /// mapping: a column added to only one of them, or added at a different position, comes
+    /// back as another column's value rather than as an error. And all three states of a
+    /// **nullable** column, because a NULL here means *not on the list* — reading it as a
+    /// bare `bool` is not a `false`, it is an `InvalidColumnType` that fails the search.
+    #[test]
+    fn results_say_which_cards_are_game_changers() {
+        let conn = seeded();
+        // Rhystic Study is the printing the bulk fixture publishes `"game_changer": true`
+        // for (`cm1 15` — see `card_row`'s test); Sol Ring is the explicit `false`, and the
+        // third row leaves the column unwritten, as every hand-seeded fixture here does.
+        for (id, name, gc) in [
+            ("gc1", "Rhystic Study", Some(1)),
+            ("gc2", "Sol Ring", Some(0)),
+            ("gc3", "Unwritten Card", None),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                    oracle_id,game_changer,raw)
+                 VALUES (?1,?2,'cm1',?1,'en','normal',1,?1,?3,'{}')",
+                rusqlite::params![id, name, gc],
+            )
+            .unwrap();
+        }
+
+        for collapse in [None, Some(true)] {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    collapse,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let flag = |id: &str| r.items.iter().find(|c| c.id == id).unwrap().game_changer;
+            assert!(flag("gc1"), "a named card wears the crown ({collapse:?})");
+            assert!(!flag("gc2"), "and an ordinary card does not ({collapse:?})");
+            assert!(
+                !flag("gc3"),
+                "a NULL is `not on the list`, never a third state ({collapse:?})"
+            );
+            assert!(!flag("1"), "the fixture's own rows too ({collapse:?})");
+
+            // The neighbours on either side of the new column still land in their own
+            // fields — the failure a shifted index actually produces.
+            let bolt = r.items.iter().find(|c| c.id == "1").unwrap();
+            assert_eq!(bolt.name, "Lightning Bolt", "{collapse:?}");
+            assert_eq!(bolt.owned_quantity, 0, "{collapse:?}");
+            assert!(!bolt.wishlisted, "{collapse:?}");
+        }
     }
 
     /// A wish pinned to one printing badges *that* printing, and not its siblings — which

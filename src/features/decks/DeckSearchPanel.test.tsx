@@ -59,6 +59,26 @@ const BOLT: CardSummary = {
   printings: 1,
   priceLow: 400.5,
   priceHigh: 400.5,
+  gameChanger: false,
+};
+
+/**
+ * A card on the Commander game-changer list, which Bolt is not.
+ *
+ * Its own row rather than a flag on `BOLT`, because the point of the crown is that it tells two
+ * cards apart on one wall — and because every other test in this file reads the unmarked tile.
+ */
+const RHYSTIC_STUDY: CardSummary = {
+  ...BOLT,
+  id: "2",
+  name: "Rhystic Study",
+  setCode: "pcy",
+  setName: "Prophecy",
+  collectorNumber: "45",
+  typeLine: "Enchantment",
+  manaCost: "{2}{U}",
+  oracleId: "o-rhystic",
+  gameChanger: true,
 };
 
 const page = (items: CardSummary[]): SearchResponse => ({
@@ -370,6 +390,31 @@ describe("DeckSearchPanel", () => {
     panel();
 
     expect(await screen.findByText("×3")).toBeInTheDocument();
+  });
+
+  /**
+   * The crown, on the one wall a Commander deck is actually built out of.
+   *
+   * `gameChanger` is a fact about the *card*, so this panel says it exactly as the search view
+   * does — a card marked on one wall and bare on the other would be the reader learning that the
+   * mark means something about the view. Named rather than shaped: the mark's accessible name is
+   * the whole of what a screen reader gets from a 12px glyph.
+   *
+   * And it lands on the card it is about. Two tiles on one wall is the only arrangement that can
+   * catch a mark drawn per *wall* instead of per card, which a callback closing over the wrong
+   * row would be — the same failure `tileRef` is asked about above.
+   */
+  it("crowns a game changer, and leaves the tile beside it unmarked", async () => {
+    searchCards.mockResolvedValue(page([BOLT, RHYSTIC_STUDY]));
+    const { container } = panel();
+    const crowned = await screen.findByRole("button", { name: "Rhystic Study" });
+
+    const marks = screen.getAllByLabelText("Game changer");
+    expect(marks).toHaveLength(1);
+    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    expect(tiles).toHaveLength(2);
+    const crownedTile = tiles.find((tile) => tile.contains(crowned))!;
+    expect(crownedTile).toContainElement(marks[0]);
   });
 
   /** The tiles stay selectable, so the card pane keeps working from inside the editor. */
