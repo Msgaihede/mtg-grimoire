@@ -242,7 +242,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
 /**
  * One destination in the sidebar — and, for two of them, one place to let a card go.
  *
- * The entry is the whole target: a nav item is 44px tall and 184px wide, and asking a reader
+ * The entry is the whole target: a nav item is 44px tall and 183px wide, and asking a reader
  * to hit something smaller than the word they are aiming at while holding a card is asking
  * them to miss.
  *
@@ -357,9 +357,13 @@ function NavItem({
         // live region that first appears with its sentence already inside it announces
         // nothing (the card pane's swap report, for its reason). `sr-only` while empty takes
         // it out of the flow, so the entries below sit where they always do until a card
-        // actually lands — and then move for the four seconds the sentence is up. Measured at
-        // 1280×800: the longest realistic sentence sets in two lines of 183px and pushes
-        // Settings 32px down, which is a card the reader just dropped saying where it went.
+        // actually lands — and then move for the four seconds the sentence is up. Re-measured
+        // in the shipped window 2026-08-14 at 1280×800, after the shell was enlarged and this
+        // line went 11.2 → 12px: the box is 183px, `Added to wishlist.` sets in one line and
+        // pushes Settings **19px** down, and both long cases — a deck name
+        // (`Added to Kess, Dissident Mage Storm.`) and a refusal — set in two lines and push it
+        // **34px**, which is a card the reader just dropped saying where it went. Two lines is
+        // still the ceiling this was drawn for; the push grew by the 2px of extra leading.
         <p
           role="status"
           className={drop.report ? "px-3 pt-1 text-xs leading-tight text-dim" : "sr-only"}
