@@ -14,9 +14,11 @@
  * derived groups are built from the **active** cards only, and every **inactive category**
  * holding cards is then appended as itself, unchanged, in `sortOrder`.
  *
- * **A category holding nothing draws nothing, unless it is one of the four fixed zones** —
- * {@link drawsWhenEmpty}, which is the whole of that rule. Switched off and empty are two
- * different questions and this file keeps answering them separately: `isActive` decides
+ * **A pile holding cards always draws; an empty one is a question about the deck** —
+ * {@link drawsWhenEmpty}, which is the whole of that rule and takes the two facts a pile cannot
+ * know about itself: whether the deck's format has a command zone, and whether a filter is
+ * narrowing what these groups were built from ({@link EmptyGroupRules}). Switched off and empty
+ * are two different questions and this file keeps answering them separately: `isActive` decides
  * whether a pile *counts*, the cards under it decide whether it is *drawn*.
  *
  * The one thing above this line that is the *reader's* to decide is `separateX`: whether a
@@ -74,8 +76,9 @@ export function asGroupBy(value: string): GroupBy {
  * Two kinds of group wear this one shape, and `categoryId` is what tells them apart:
  *
  * * a **category** group *is* a pile of the deck. It has an id, so a card can be dropped
- *   into it, its heading renamed and its switch flipped. It draws with nothing under it only
- *   when it is one of the four fixed zones — see {@link drawsWhenEmpty}.
+ *   into it, its heading renamed and its switch flipped. Whether it draws with nothing under
+ *   it is {@link drawsWhenEmpty}'s answer and not this shape's — an empty pile is a *place*,
+ *   and the exceptions are about the deck rather than about the group.
  * * a **derived** group is a heading and nothing more — `categoryId`, `kind` `null`. Nothing
  *   can be dropped into "Mana value 3", and an empty one does not exist at all.
  */
@@ -95,9 +98,10 @@ export interface CardGroup {
    * allocator's claims. A derived group is built from active cards, so it is always `true`.
    */
   isActive: boolean;
-  /** One of the four `schema::PREDEFINED_CATEGORIES` — cannot be renamed or deleted, and is
-   *  therefore also the one kind of pile that draws a heading with nothing under it
-   *  ({@link drawsWhenEmpty}). */
+  /** One of the four `schema::PREDEFINED_CATEGORIES` — cannot be renamed or deleted. It used to
+   *  be the whole of {@link drawsWhenEmpty}; it now decides nothing on an unfiltered deck, where
+   *  every empty pile is a place, and survives as the test for the one case where the fixed
+   *  zones are exactly what should outlive a filter ({@link EmptyGroupRules.narrowed}). */
   isPredefined: boolean;
   /** In the order `sortBy` asked for, already applied. */
   cards: DeckCard[];
@@ -219,48 +223,102 @@ function strayGroup(cards: DeckCard[]): CardGroup {
 }
 
 /**
+ * What an empty pile's heading depends on beyond the pile itself.
+ *
+ * Two facts a {@link CardGroup} cannot carry, because neither of them is about the pile: which
+ * zones the deck's **format** has, and whether the reader is looking at the whole deck or at a
+ * narrowed slice of it. Both are the editor's to know, so they arrive as an argument rather
+ * than being re-derived down here — this file has never heard of a format spec and must not
+ * start.
+ */
+export interface EmptyGroupRules {
+  /** `FormatSpec.requiresCommander` for the deck's own format. `false` while the specs are
+   *  still loading and for a deck whose format has left the seed, which is the deliberate
+   *  answer rather than a gap: a deck with no format opinion gets no empty command zone, and
+   *  the zone appears the moment it holds a card. */
+  requiresCommander: boolean;
+  /** Whether a filter — the toolbar's text field or its tag chips — is narrowing what these
+   *  groups were built from. */
+  narrowed: boolean;
+}
+
+/**
+ * What a caller that has not heard of a format gets: no command zone, nothing narrowed. Every
+ * empty pile of the reader's own therefore draws, which is the unfiltered deck's answer and the
+ * one a story, a chart or a test wants when it is asking about something else entirely.
+ */
+export const DEFAULT_EMPTY_GROUP_RULES: EmptyGroupRules = {
+  requiresCommander: false,
+  narrowed: false,
+};
+
+/**
  * Whether a category still draws a heading when there is nothing under it.
  *
- * **A pile the reader made and did not fill is not drawn.** This file used to draw every
- * category regardless, on the argument that a column is a *place* as well as a heading — and
- * that argument was written when a deck had five piles. A category is a card's **function**
- * now (`autoCategory.ts`: Removal, Ramp, Draw, Tutor and nine more), so a deck accumulates
- * columns faster than it fills them and the empty ones are a wall of headings between the
- * reader and their cards. The affordance that argument was protecting has not gone anywhere:
- * every card's "Move…" select offers **every** category of the deck, empty ones included,
- * because `DeckEditor` builds it from `categories` rather than from these groups.
+ * **It is asked about empty piles only, and that is the first half of the rule.** A pile
+ * *holding cards* draws whatever its kind — a Modern deck whose Commander pile still holds the
+ * card it was built around, because the reader re-formatted the deck, draws that pile. The
+ * editor never hides cardboard; a heading it left out would be ten copies missing from a deck
+ * with nothing on screen to say where they went. That is structural rather than a case to
+ * remember: the `cards.length > 0` arm in {@link buildGroups}' filter runs in front of this
+ * call, so no answer here can hide a card.
  *
- * **The four seeded `schema::PREDEFINED_CATEGORIES` are the exception** — Commander,
- * Sideboard, Companion, Maybeboard. A reader can neither rename nor delete them, so an empty
- * one is a *slot* rather than a leftover; and an **empty commander zone is itself a fact about
- * the deck's validity**, which is the one heading the editor must never answer a question
- * about by leaving it out.
+ * **An empty pile the reader made draws, because a column is a *place* as well as a heading.**
+ * An empty `Ramp` is where the next ramp spell goes, and a pile that vanished with its last card
+ * would move the layout under the reader's hand and take its own drop target with it. This file
+ * answered the other way round for a while — every pile of the reader's hidden when empty, the
+ * four seeded zones excepted — on the argument that a category is a card's **function** now
+ * (`autoCategory.ts`: Removal, Ramp, Draw, Tutor and nine more), so a deck accumulates columns
+ * faster than it fills them. That argument was really about a deck being *narrowed*, and
+ * narrowing is the one case it still governs — see `narrowed` below.
  *
- * **It reads {@link CardGroup.isPredefined} and could not read the name if it wanted to** —
- * which is what the `Pick` is for. A reader is free to call a pile of their own "Sideboard"
- * (`DECK_CATEGORY_GRAIN` allows it), and that one is theirs and hides when empty like any
- * other; {@link categoryGroup} is the single place the two are told apart, by kind and name
- * together.
+ * **Two of the four fixed zones are conditional now, each for its own reason.** `commander`
+ * draws empty only where the format has a command zone: an empty command zone in a Commander
+ * deck is itself a fact about the deck's validity, the one heading the editor must never answer
+ * a question about by leaving it out — while in a Standard deck it is not a fact about that deck
+ * at all, but a zone the game it is being built for does not have. `companion` never draws
+ * empty, in any format: a companion is a card you either have or do not, and an empty pile there
+ * says nothing that its absence does not say more quietly. Sideboard and Maybeboard stay
+ * unconditional, like every other empty pile.
  *
- * One named function rather than a condition inside the filter below, because the exception is
- * expected to narrow — `group.kind === "commander"` is the smallest version of this rule, and
- * it is one expression away.
+ * **While a filter is narrowing the deck the old rule stands, cut down to the fixed zones.** An
+ * empty pile is then the *filter's* doing rather than the deck's, and typing three letters would
+ * otherwise answer with twenty headings over three cards — exactly what the old rule was written
+ * to stop. {@link CardGroup.isPredefined} is the right test for what survives that: the four
+ * seeded zones are the piles a reader can neither rename nor delete, so they are the deck's
+ * furniture rather than its contents.
+ *
+ * **It reads `kind` and `isPredefined` and could not read the name if it wanted to** — which is
+ * what the `Pick` is for. `deck_category_create` takes `(deck_id, name)` and no kind, so
+ * `commander` and `companion` can only ever be the two seeded zones; a pile a reader called
+ * "Sideboard" is a `main` like every other pile of theirs, and {@link categoryGroup} is the
+ * single place a name is consulted at all.
  */
-export function drawsWhenEmpty(group: Pick<CardGroup, "isPredefined">): boolean {
-  return group.isPredefined;
+export function drawsWhenEmpty(
+  group: Pick<CardGroup, "kind" | "isPredefined">,
+  rules: EmptyGroupRules = DEFAULT_EMPTY_GROUP_RULES,
+): boolean {
+  if (group.kind === "companion") return false;
+  if (group.kind === "commander") return rules.requiresCommander;
+  return rules.narrowed ? group.isPredefined : true;
 }
 
 /**
  * The deck, as headings and rows.
  *
  * @param cards every row of the variant on screen, in the read's own order
- * @param categories every category of the deck, in `sortOrder` — the empty ones included, so
- *   that {@link drawsWhenEmpty} is what decides which of them are drawn rather than the caller
+ * @param categories every category of the deck, in `sortOrder` and **not pre-filtered** — the
+ *   empty ones included, so that {@link drawsWhenEmpty} is the single place deciding which of
+ *   them are drawn. A caller that dropped its empty piles first would be a second copy of that
+ *   rule, and the two would part company silently.
  * @param groupBy what the headings are
  * @param sortBy the order inside each heading
  * @param separateX the deck's own `separateXGroup` preference — see below. Defaults to
  *   `false`, which is what this function answered before the switch existed, so every caller
  *   that has not heard of it keeps the grouping it had.
+ * @param rules the two facts an empty pile's heading depends on that the pile itself cannot
+ *   carry — {@link EmptyGroupRules}. Defaults to {@link DEFAULT_EMPTY_GROUP_RULES}, and is last
+ *   for the same reason `separateX` is: no existing call site breaks.
  *
  * **There is no currency argument any more.** It took one while every row carried two prices,
  * so that a heading's total and the `price` order under it could not be computed from
@@ -284,6 +342,7 @@ export function buildGroups(
   groupBy: GroupBy,
   sortBy: SortBy,
   separateX = false,
+  rules: EmptyGroupRules = DEFAULT_EMPTY_GROUP_RULES,
 ): CardGroup[] {
   const byCategory = new Map<number, DeckCard[]>();
   for (const card of cards) {
@@ -294,15 +353,16 @@ export function buildGroups(
 
   const ordered = [...categories].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
 
-  // The piles that have something in them, plus the four fixed zones, which draw either way.
-  // `drawsWhenEmpty` is the whole of the exception and is deliberately blind to the category's
-  // name; the emptiness test is `cards`, not `count`, because a row in a deck always carries at
-  // least one copy — zero is what removes it.
+  // Every pile that has something in it — that arm first, so nothing below it can hide a card —
+  // plus the empty ones `drawsWhenEmpty` still calls places, which on an unfiltered deck is all
+  // of them bar the Companion and the command zone of a format that has none. That predicate is
+  // deliberately blind to the category's name; the emptiness test is `cards`, not `count`,
+  // because a row in a deck always carries at least one copy — zero is what removes it.
   const categoryGroups = ordered
     .map((category) =>
       categoryGroup(category, sortCards(byCategory.get(category.id) ?? [], sortBy)),
     )
-    .filter((group) => group.cards.length > 0 || drawsWhenEmpty(group));
+    .filter((group) => group.cards.length > 0 || drawsWhenEmpty(group, rules));
 
   // Anything filed under a category the read did not answer with, after the real ones. No
   // filter here and none needed: a stray group is built *from* rows, so an empty one cannot

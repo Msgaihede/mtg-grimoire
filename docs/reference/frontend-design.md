@@ -246,23 +246,32 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   on the first pass and the figure above needed a card moved into it first. The wash and
   `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
   the argument for having three.
-- **The sideboard is a rail, not a packed column — and the rail is a plain flex child.** Both
-  column views split `kind === "side"` out of `groups` before `packColumns` sees them
-  (`splitSideboard`, `views/columns.ts`) and draw them in one box after the packed ones, at the
-  same inline width and `flex` basis, held right by `ml-auto`. The failure it prevents is a drag
-  with no destination on screen: the Sideboard sorts last, so packed it was the far end of the run,
-  and a card dragged out of the main deck had nowhere to be let go of. It carries `SIDEBOARD_ATTR`
-  and nothing else — `STACK_COLUMN_ATTR` means "a box `packColumns` produced", and the rail is by
-  construction the one box it never saw, so a sweep that counts columns must not find it; the name
-  is unprefixed because `TextView` draws the same rail. It is rendered only when a `side` group
-  exists, which is a real condition for a story or a test and **not** one for the app:
-  `schema::PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group is drawn
-  whether or not anything is in it, and a predefined pile cannot be deleted — so in `category` mode
-  the rail is there from the moment a deck is created. **The cost is `stackColumnWidth(zoom)`
-  beside the flow** — 224px at 1× and 434px at 2×, both derived from that one function — which at
-  2× is a third of a 1280px window standing beside a pile that on a new deck holds nothing at all;
-  below one column plus the rail it takes its own line instead, which is the wrap in the entry
-  further down.
+- **The sideboard and the maybeboard are a rail, not packed columns — and the rail is a plain flex
+  child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups` before
+  `packColumns` sees them (`splitRail`, `views/columns.ts`) and draw them in one box after the
+  packed ones, at the same inline width and `flex` basis, held right by `ml-auto`. The failure it
+  prevents is a drag with no destination on screen: both piles sort last, so packed they were the
+  far end of the run, and a card dragged out of the main deck had nowhere to be let go of. The
+  Maybeboard earns the rail on the same three counts as the Sideboard — played beside the deck
+  rather than in it, routinely big because it is where the cuts and the candidates accumulate, and
+  looked for by _position_ rather than by reading down the deck. **Nothing sorts the rail**: the
+  Sideboard sits above the Maybeboard because that is the reader's own `sortOrder` (the seed's
+  order), and a reader who reorders their categories gets the order they chose. It carries
+  `RAIL_ATTR` (`data-deck-rail`) and nothing else — `STACK_COLUMN_ATTR` means "a box `packColumns`
+  produced", and the rail is by construction the one box it never saw, so a sweep that counts
+  columns must not find it; the name is unprefixed because `TextView` draws the same rail, and it
+  is spelled for the *rail* rather than for the Sideboard because the Sideboard is no longer the
+  only thing in it. It is rendered only when a `side` **or** `maybe` group exists, which is a real
+  condition for a story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES`
+  seeds both into every deck, an empty category group is drawn (neither of them is one of the two
+  conditional zones — see `grouping.ts`'s `drawsWhenEmpty`), and a predefined pile cannot be
+  deleted — so in `category` mode the rail is there from the moment a deck is created. **The cost
+  is `stackColumnWidth(zoom)` beside the flow** — 224px at 1× and 434px at 2×, both derived from
+  that one function — which at 2× is a third of a 1280px window standing beside two piles that on a
+  new deck hold nothing at all; below one column plus the rail it takes its own line instead, which
+  is the wrap in the entry further down. **Those widths are unchanged by the Maybeboard joining**:
+  the two piles share one rail one column wide, so the second costs height and nothing else, and
+  the height is the one thing here that has not been driven in the window.
 - **A rail this view used to hold sticky is the one thing not to reinstate.** For one commit
   (`cf13568`, 2026-08-14) the sideboard column was `sticky right-0`, opaque `bg-bg`, `LAYER.raised`
   and a `-8px 0 16px -4px` seam shadow, and every one of those four existed to keep it in view
@@ -411,12 +420,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   column zoomed past the desk's own width genuinely is wider than its box and clipping a card is
   worse than a scrollbar the reader asked for. Wrapping is what makes that the rare case.
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
-  — never a `ResizeObserver`.** The Sideboard was the pack's worst case. `packColumns` is greedy
-  and in the reader's own order (never reordering, never splitting a group), so a category like
-  any other lands wherever the run puts it, and the pile a reader most often wants beside the
-  deck sat at the far end of a long sideways run, off screen. `splitSideboard` takes the `side`
-  groups out before the pack runs and draws them as one column pinned right; the pack keeps its
-  whole contract and is handed fewer groups. Whether there is room for that rail is decided by
+  — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.
+  `packColumns` is greedy and in the reader's own order (never reordering, never splitting a
+  group), so a category like any other lands wherever the run puts it, and the two piles a reader
+  most often wants beside the deck sat at the far end of a long sideways run, off screen.
+  `splitRail` takes the `side` and `maybe` groups out before the pack runs and draws them as one
+  column pinned right; the pack keeps its whole contract and is handed fewer groups. Whether there
+  is room for that rail is decided by
   the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
   the desk holds two columns and the gap between them the rail sits beside the flow, and below
   that width it wraps onto its own line, where `ml-auto` keeps it on the right. **`content-start`
@@ -463,6 +473,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     old sideways layout showed about 2.7 columns at once. The horizontal scrollbar is gone and
     the density went with it; that is the trade this change makes, and it is worth knowing
     before widening the rail or narrowing the columns.
+  - **That pass predates the Maybeboard joining the rail, and nothing above has been
+    re-measured.** Every width and every threshold here is untouched by it — the rail is one
+    column wide whether it holds one pile or two, so 224, 434, 464, 624, 884 and the 362 that
+    leaves one column all still say exactly what they said. What the second pile changes is the
+    rail's *height* and, by one group, what is left to flow: the **5888px** scroll and the
+    **13-column** deck were read with the Maybeboard still packed among the twelve named piles.
+    Read those two as facts about that run rather than about today's layout.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

@@ -579,40 +579,129 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The groups are the deck's categories, and the format has nothing to say about them.**
+   * **The groups are the deck's categories; the format decides only whether an *empty* command
+   * zone is one of them.**
    *
-   * There used to be a filter here: Modern got a sideboard and no commander column, because
-   * `sideboard_max` and `requires_commander` decided which of the five fixed zones were slots
-   * this format had. Schema v8 makes a category a row the *user* named, ordered and switched on
-   * or off, so hiding one would hide a pile they built. This deck is Modern and its Commander
-   * group is drawn — which is the whole of what changed.
+   * Two rules have lived here in turn and this is neither of them whole. The first filtered the
+   * **category list** by the seeded spec — no commander column unless `requires_commander`, no
+   * sideboard when `sideboard_max` was 0 — and schema v8 killed it, because a category is a row
+   * the *user* named, ordered and switched on or off, so cutting one out hides a pile they
+   * built. The second was "draw every category, whatever the format says", which is what this
+   * test asserted until now.
+   *
+   * What replaced it reaches only the **empty** piles, and only through `buildGroups`' rules
+   * argument — `deck.categories` is untouched, which is why the "Move…" and "Add to" tests
+   * below still see all five and no pile is unreachable. This deck is Modern: no empty Commander
+   * heading (the format needs none) and no empty Companion heading (a companion is nominated,
+   * never handed out, so an empty slot says nothing). Everything else is drawn empty — the two
+   * fixed zones Modern does use, and a pile the reader made and emptied, which is the reverse of
+   * the old rule and the whole reason this changed.
    *
    * The default grouping is Categories, so the deck opens on exactly this list.
    */
-  it("draws one group per category, whatever the format says about them", async () => {
+  it("draws no empty command zone or companion slot for a format with neither", async () => {
+    const brew = category(6, "Sunday brew", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, brew]));
+
     await open();
 
-    expect(
-      screen.getAllByRole("region", {
-        name: /^(Main deck|Sideboard|Commander|Companion|Maybeboard)$/,
-      }),
-    ).toHaveLength(5);
-    // Empty ones included: a category is a *place* as well as a heading, and a column that
-    // vanished with its last card is one the reader cannot put a card back into.
+    expect(screen.queryByRole("region", { name: "Commander" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Companion" })).not.toBeInTheDocument();
+    // A category is a *place* as well as a heading, and a column that vanished with its last
+    // card is one the reader cannot put a card back into — so the reader's own emptied pile is
+    // drawn, and so are the two fixed zones this format plays with.
+    expect(group("Main deck")).toBeInTheDocument();
     expect(within(group("Sideboard")).getByText("0 cards")).toBeInTheDocument();
-    // Modern requires no commander and this deck has none, and the group is here all the same.
-    expect(group("Commander")).toBeInTheDocument();
+    expect(within(group("Maybeboard")).getByText("0 cards")).toBeInTheDocument();
+    expect(within(group("Sunday brew")).getByText("0 cards")).toBeInTheDocument();
   });
 
-  /** And the same five for a Commander deck, whose `sideboard_max` is 0: a category is data the
-   *  user made, so re-formatting a deck never takes a pile away from it. */
-  it("draws the same groups for a commander deck", async () => {
+  /**
+   * And the other way for a Commander deck, which is the whole reason the format is asked at
+   * all: an empty command zone is itself a fact about a deck that needs one — it is where the
+   * commander goes, and the deck is not legal until something is in it.
+   *
+   * The Companion heading stays away even here. Commander's `allows_companion` is true, but the
+   * format hands nobody a companion; the reader nominates one, so an empty slot is a heading
+   * about a decision that has not been made. It appears with the card — see the test below.
+   *
+   * Nothing else moved: Commander's `sideboard_max` is 0 and the Sideboard is still the
+   * reader's own pile, so it draws for the reason it always did.
+   */
+  it("draws the empty command zone for a commander deck", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, []));
 
     await open();
 
     expect(await screen.findByRole("region", { name: "Commander" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Companion" })).not.toBeInTheDocument();
     expect(group("Sideboard")).toBeInTheDocument();
+    expect(group("Maybeboard")).toBeInTheDocument();
+  });
+
+  /**
+   * **A pile holding a card draws whatever the format says**, and that is the rule the two tests
+   * above are the exception to rather than the other way round. `drawsWhenEmpty` is asked only
+   * about a group with nothing in it, so a Modern deck still carrying a commander and a
+   * companion — a deck the reader re-formatted — shows both piles and the cards in them.
+   *
+   * The editor never hides cardboard: a card nothing draws is a card the reader cannot find,
+   * count or take out, and the format check in the header is where a deck is told it is wrong.
+   */
+  it("draws a commander and a companion holding cards in a format that wants neither", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        card({ name: "Kenrith", categoryKind: "commander", typeLine: "Legendary Creature" }),
+        card({ name: "Lurrus", categoryKind: "companion", typeLine: "Legendary Creature — Cat" }),
+      ]),
+    );
+
+    await open();
+
+    expect(
+      within(await screen.findByRole("region", { name: "Commander" })).getByRole("button", {
+        name: /^Kenrith/,
+      }),
+    ).toBeInTheDocument();
+    expect(within(group("Companion")).getByRole("button", { name: /^Lurrus/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **The filter is the one thing that takes a reader's own empty pile off the screen**, and the
+   * exception belongs to the filter rather than to the deck: a pile that is empty *because three
+   * letters are in the box* is empty by the act of looking, and a filter matching one card must
+   * not answer with twenty headings and one row. Only the fixed zones survive it — which is the
+   * rule the whole editor used to run on, kept exactly where it was earned.
+   *
+   * It is a fact about the view and never about the deck: `deck.categories` does not change, so
+   * the card's "Move…" select goes on offering the pile by name throughout, and clearing the box
+   * brings the heading straight back.
+   */
+  it("collapses the reader's own empty piles while a filter is running", async () => {
+    const brew = category(6, "Sunday brew", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, brew]));
+
+    await open();
+    expect(group("Sunday brew")).toBeInTheDocument();
+
+    const box = screen.getByLabelText("Filter this deck");
+    await userEvent.type(box, "bolt");
+
+    expect(screen.queryByRole("region", { name: "Sunday brew" })).not.toBeInTheDocument();
+    expect(group("Main deck")).toBeInTheDocument();
+    expect(group("Sideboard")).toBeInTheDocument();
+    expect(group("Maybeboard")).toBeInTheDocument();
+    // The pile is still a move target while it is not a heading — the whole reason hiding one is
+    // survivable is that no surface a reader files a card with is built from the drawn groups.
+    expect(
+      within(screen.getByLabelText("Move Lightning Bolt out of Main deck")).getByRole("option", {
+        name: "Sunday brew",
+      }),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(box);
+
+    expect(await screen.findByRole("region", { name: "Sunday brew" })).toBeInTheDocument();
   });
 
   /** A card is drawn in the group its `categoryId` names, which is the whole of the filing: the

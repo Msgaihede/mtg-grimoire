@@ -4,8 +4,10 @@ import { card } from "./validation/fixtures";
 import {
   asGroupBy,
   buildGroups,
+  DEFAULT_EMPTY_GROUP_RULES,
   DEFAULT_GROUP_BY,
   drawsWhenEmpty,
+  type EmptyGroupRules,
   GROUP_BY_OPTIONS,
   X_GROUP_KEY,
   X_GROUP_NAME,
@@ -47,13 +49,6 @@ const MAYBE = category({
 const CUTS = category({ id: 6, name: "Cuts", kind: "main", isActive: false, sortOrder: 5 });
 
 /**
- * The four `schema::PREDEFINED_CATEGORIES`, as the seed makes them — the Maybeboard switched
- * off, the other three on. Held as a list because the rule about them is one rule and the
- * tests below sweep it rather than restating it four times.
- */
-const PREDEFINED = [COMMANDER, SIDE, COMPANION, MAYBE] as const;
-
-/**
  * A pile of the reader's own, in the shape the categories panel makes one: **`kind: "main"`**,
  * whatever it is called. That is what makes a category named "Sideboard" here a genuinely
  * different row from {@link SIDE}, which is the seeded zone.
@@ -77,31 +72,43 @@ function inCategory(target: DeckCategory, over: Partial<DeckCard> = {}): DeckCar
 
 const names = (groups: readonly { name: string }[]) => groups.map((g) => g.name);
 
+/** A deck whose format has a command zone — Commander, Brawl, Oathbreaker and the rest of the
+ *  seed's `requires_commander` rows. */
+const EDH: EmptyGroupRules = { requiresCommander: true, narrowed: false };
+/** The toolbar's text field or a tag chip is on, so these groups were built from a slice of the
+ *  deck rather than from the deck. */
+const NARROWED: EmptyGroupRules = { requiresCommander: false, narrowed: true };
+/** Both at once — the case that proves the two rules are answered separately rather than one
+ *  standing in for the other. */
+const NARROWED_EDH: EmptyGroupRules = { requiresCommander: true, narrowed: true };
+
 describe("buildGroups by category", () => {
-  it("draws every category in sort order, the empty fixed zones included", () => {
+  it("draws every category in sort order, the empty ones included", () => {
     const groups = buildGroups(
       [card({ categoryKind: "main" })],
-      [COMMANDER, MAIN, SIDE],
+      [COMMANDER, MAIN, SIDE, RAMP],
       "category",
       "alphabetical",
     );
 
-    // The two empty ones here are both fixed zones, so both draw: an empty Sideboard is where
-    // the next sideboard card goes, and an empty command zone is a fact about the deck. A pile
-    // the *reader* made and emptied does not — `drawsWhenEmpty`, swept below.
-    expect(names(groups)).toEqual(["Commander", "Main deck", "Sideboard"]);
-    expect(groups.map((g) => g.cards.length)).toEqual([0, 1, 0]);
+    // Three of these four hold nothing and two of them draw anyway: an empty Sideboard is where
+    // the next sideboard card goes, and an empty `Ramp` is where the next ramp spell goes. The
+    // command zone is the one that is out, because the default rules describe a deck whose
+    // format has no such zone — `drawsWhenEmpty`, swept below.
+    expect(names(groups)).toEqual(["Main deck", "Sideboard", "Ramp"]);
+    expect(groups.map((g) => g.cards.length)).toEqual([1, 0, 0]);
   });
 
   it("carries the category's own identity onto the group", () => {
     const [commander, main, maybe] = buildGroups(
-      // One card, in the Main deck: this used to pass an empty deck, and `Main deck` is a
-      // category of the reader's own, so with nothing in it there is no `main` group to read
-      // an identity off any more.
       [card({ categoryKind: "main" })],
       [COMMANDER, MAIN, MAYBE],
       "category",
       "alphabetical",
+      false,
+      // A commander-format deck, so the empty command zone is one of the three groups there is
+      // an identity to read. Under the default rules it would be two.
+      EDH,
     );
 
     expect(commander).toMatchObject({
@@ -254,8 +261,9 @@ describe("buildGroups by category", () => {
     const stray = card({ name: "Stray" });
     const groups = buildGroups(
       [
-        // A card in `Main deck` as well, so this stays a test about *where the stray goes* —
-        // an empty `Main deck` is no longer drawn, and the assertion below is about order.
+        // A card in `Main deck` as well, so this stays a test about *where the stray goes*:
+        // the assertion below is about order, and a real pile in front of the stray is what
+        // makes "after the real ones" something the list can show.
         card({ name: "Bolt", categoryKind: "main" }),
         {
           ...stray,
@@ -276,22 +284,26 @@ describe("buildGroups by category", () => {
 });
 
 /**
- * **A category with nothing in it draws no heading, and the four fixed zones are the
- * exception.**
+ * **A pile holding cards always draws; an empty one is a question about the deck.**
  *
- * The rule this file used to state the other way round: every category drew, empty or not,
- * because a column is a place as well as a heading. That was written when a deck had five
- * piles. A category is a card's *function* now, so a deck accumulates a dozen of them and the
- * empty ones are a wall of headings between the reader and their cards — and the affordance
- * the old rule protected is still there, because a card's "Move…" select is built from the
- * deck's `categories` rather than from these groups.
+ * The rule this file used to state the other way round: a pile the reader made and emptied was
+ * hidden, and the four seeded zones were the exception that drew anyway. A column is a *place*
+ * as well as a heading, so the reversal is that every empty pile of the reader's own draws — and
+ * the argument the old rule was made of (a category is a card's *function* now, so a deck
+ * accumulates a dozen of them) survives exactly where it was really true: while a filter is
+ * narrowing the deck, where an empty pile is the filter's doing rather than the deck's.
  *
- * Every case below is about one of two independent flags being read for the other's question,
- * which is the mistake this rule is one bad line away from at all times.
+ * Two of the fixed zones went the other way and are conditional now. Every case below is about
+ * one flag being read for another's question — which is the mistake this rule is one bad line
+ * away from at all times, and there are four flags in it rather than two.
  */
 describe("the categories that draw with nothing in them", () => {
-  /** The pile the reader made, emptied — the whole point of the change. */
-  it("does not draw a category of the reader's own that holds nothing", () => {
+  /**
+   * **The reversal, and what it costs to get wrong.** A reader who makes a `Ramp` pile and then
+   * goes to drag the first card into it finds nothing on screen to drag it *to* — the pile they
+   * made a second ago is not drawn, and a hidden category is not a drop target.
+   */
+  it("draws a category of the reader's own that holds nothing", () => {
     const groups = buildGroups(
       [card({ categoryKind: "main" })],
       [MAIN, RAMP],
@@ -299,54 +311,200 @@ describe("the categories that draw with nothing in them", () => {
       "alphabetical",
     );
 
-    expect(names(groups)).toEqual(["Main deck"]);
+    expect(names(groups)).toEqual(["Main deck", "Ramp"]);
+    expect(groups[1].cards).toEqual([]);
   });
 
   /**
-   * The four fixed zones, swept rather than restated.
+   * The two unconditional fixed zones, swept rather than restated.
    *
-   * A reader can neither rename nor delete these, so an empty one is a *slot* and not a
-   * leftover — and the Commander zone carries the strongest form of the argument: an empty
-   * command zone is itself a fact about whether the deck is legal, so leaving it out would be
-   * the editor answering a validity question by omission.
+   * A reader can neither rename nor delete these, and both are places the next card goes: an
+   * empty Sideboard is where the next sideboard card lands, an empty Maybeboard where the next
+   * cut does. A rail that appeared with the first card would move the layout under the reader's
+   * hand, which is `views/columns.ts`' half of the same argument.
    */
-  it.each(PREDEFINED.map((fixed) => [fixed.name, fixed] as const))(
-    "draws an empty %s, because a fixed zone is a slot rather than a leftover",
-    (name, fixed) => {
+  it.each([
+    ["Sideboard", SIDE],
+    ["Maybeboard", MAYBE],
+  ] as const)("draws an empty %s whatever the format", (name, fixed) => {
+    for (const rules of [DEFAULT_EMPTY_GROUP_RULES, EDH, NARROWED, NARROWED_EDH]) {
       const groups = buildGroups(
         [card({ categoryKind: "main" })],
         [MAIN, fixed],
         "category",
         "alphabetical",
+        false,
+        rules,
       );
 
       expect(names(groups)).toContain(name);
       expect(groups.find((g) => g.name === name)?.cards).toEqual([]);
-    },
-  );
+    }
+  });
 
   /**
-   * **The test that proves the rule reads `isPredefined` and not the heading.**
+   * **An empty command zone is a fact about a Commander deck and is not a fact about a Standard
+   * one.** Drawn where the format has the zone, because the editor must never answer a validity
+   * question by omission; left out where the game being built for has no such zone at all, where
+   * it is a heading over a rule nobody is playing by.
+   */
+  it("draws an empty Commander zone only where the format has one", () => {
+    const one = card({ categoryKind: "main" });
+
+    expect(
+      names(buildGroups([one], [COMMANDER, MAIN], "category", "alphabetical", false, EDH)),
+    ).toEqual(["Commander", "Main deck"]);
+
+    expect(
+      names(
+        buildGroups(
+          [one],
+          [COMMANDER, MAIN],
+          "category",
+          "alphabetical",
+          false,
+          DEFAULT_EMPTY_GROUP_RULES,
+        ),
+      ),
+    ).toEqual(["Main deck"]);
+  });
+
+  /**
+   * **The editor never hides cardboard.** A reader who built a Commander deck and then
+   * re-formatted it to Modern still has a card in the command zone, and a rule reading only the
+   * format would take ten copies off the screen with nothing on it to say where they went. The
+   * emptiness test runs in front of `drawsWhenEmpty`, so this cannot be got wrong by editing
+   * that predicate alone.
+   */
+  it("draws a Commander pile that holds cards even where the format has no command zone", () => {
+    const groups = buildGroups(
+      [inCategory(COMMANDER, { name: "Kenrith, the Returned King" })],
+      [COMMANDER, MAIN],
+      "category",
+      "alphabetical",
+      false,
+      DEFAULT_EMPTY_GROUP_RULES,
+    );
+
+    expect(names(groups)).toEqual(["Commander", "Main deck"]);
+    expect(names(groups[0].cards)).toEqual(["Kenrith, the Returned King"]);
+  });
+
+  /**
+   * **A companion is a card you either have or do not.** Every format in the seed bar Gladiator
+   * allows one, so a rule keyed on the format would draw the heading in almost every deck ever
+   * built — and an empty Companion pile says nothing that its absence does not say more quietly.
+   * The moment a card is in it, it is a pile like any other.
+   */
+  it("never draws an empty Companion, and draws one holding a card", () => {
+    for (const rules of [DEFAULT_EMPTY_GROUP_RULES, EDH, NARROWED, NARROWED_EDH]) {
+      expect(names(buildGroups([], [COMPANION], "category", "alphabetical", false, rules))).toEqual(
+        [],
+      );
+
+      expect(
+        names(
+          buildGroups(
+            [inCategory(COMPANION, { name: "Lurrus of the Dream-Den" })],
+            [COMPANION],
+            "category",
+            "alphabetical",
+            false,
+            rules,
+          ),
+        ),
+      ).toEqual(["Companion"]);
+    }
+  });
+
+  /**
+   * **While a filter is on, an empty pile is the filter's doing rather than the deck's.**
+   * Without this, typing three letters answers with twenty headings over three cards — which is
+   * the wall the old rule existed to stop, kept for the one case it was really about. The fixed
+   * zones outlive the filter because they are the deck's furniture rather than its contents; the
+   * two conditional zones keep their own answers, which is what says the narrowing did not
+   * quietly become the whole rule again.
+   */
+  it("hides the reader's own empty piles under a filter and keeps the fixed zones", () => {
+    const one = card({ categoryKind: "main" });
+
+    expect(
+      names(
+        buildGroups(
+          [one],
+          [COMMANDER, MAIN, SIDE, COMPANION, RAMP, MAYBE],
+          "category",
+          "alphabetical",
+          false,
+          NARROWED,
+        ),
+      ),
+    ).toEqual(["Main deck", "Sideboard", "Maybeboard"]);
+
+    // The same deck under a filter in a commander format: the command zone is back and nothing
+    // else moved.
+    expect(
+      names(
+        buildGroups(
+          [one],
+          [COMMANDER, MAIN, SIDE, COMPANION, RAMP, MAYBE],
+          "category",
+          "alphabetical",
+          false,
+          NARROWED_EDH,
+        ),
+      ),
+    ).toEqual(["Commander", "Main deck", "Sideboard", "Maybeboard"]);
+  });
+
+  /**
+   * **The test that proves the rule reads the kind and the flag, never the heading.**
    *
    * `DECK_CATEGORY_GRAIN` is `(deck_id, name)` and the seeded Sideboard was never named by the
    * user, so a reader is free to make a pile of their own and call it "Sideboard". That one is
-   * theirs — theirs to rename, theirs to delete, and theirs to have hidden when it is empty.
-   * A rule matching on the name would keep it on screen for ever.
+   * theirs — theirs to rename, theirs to delete, and theirs to be narrowed away by a filter like
+   * any other pile of theirs. A rule matching on the name would keep it on screen through every
+   * search the reader ever ran.
    */
-  it("hides a pile of the reader's own called Sideboard, which the seeded one is not", () => {
+  it("narrows away a pile of the reader's own called Sideboard, which the seeded one is not", () => {
     const mine = own(8, "Sideboard", 6);
 
     expect(
       names(
-        buildGroups([card({ categoryKind: "main" })], [MAIN, mine], "category", "alphabetical"),
+        buildGroups(
+          [card({ categoryKind: "main" })],
+          [MAIN, SIDE, mine],
+          "category",
+          "alphabetical",
+          false,
+          NARROWED,
+        ),
       ),
-    ).toEqual(["Main deck"]);
+    ).toEqual(["Main deck", "Sideboard"]);
+    // The one that survived is the seeded row, not the reader's — same heading, different pile.
+    expect(
+      buildGroups(
+        [card({ categoryKind: "main" })],
+        [MAIN, SIDE, mine],
+        "category",
+        "alphabetical",
+        false,
+        NARROWED,
+      ).map((g) => g.categoryId),
+    ).toEqual([MAIN.id, SIDE.id]);
 
     // And it is a place like any other the moment something is in it — this is about the cards,
     // never about which row it is.
     expect(
       names(
-        buildGroups([inCategory(mine, { name: "Bolt" })], [MAIN, mine], "category", "alphabetical"),
+        buildGroups(
+          [inCategory(mine, { name: "Bolt" })],
+          [mine],
+          "category",
+          "alphabetical",
+          false,
+          NARROWED,
+        ),
       ),
     ).toEqual(["Sideboard"]);
   });
@@ -372,65 +530,138 @@ describe("the categories that draw with nothing in them", () => {
     expect(names(groups[1].cards)).toEqual(["Ghalta"]);
   });
 
-  /** The other half of the same pair: the seeded Maybeboard is off *and* empty, and it draws —
-   *  because it is predefined, which is the only thing `drawsWhenEmpty` looks at. A pile of the
-   *  reader's own in exactly the same two states does not. */
-  it("draws the empty seeded Maybeboard and not the reader's own empty switched-off pile", () => {
+  /** The other half of the same pair: the seeded Maybeboard is off *and* empty and it draws, and
+   *  so does a pile of the reader's own in exactly the same two states — `isActive` is not a
+   *  question `drawsWhenEmpty` asks. Under a filter they part company, and *that* is the flag
+   *  telling them apart rather than the switch. */
+  it("draws the empty Maybeboard and the reader's own empty switched-off pile alike", () => {
     const one = card({ categoryKind: "main" });
 
-    expect(names(buildGroups([one], [MAIN, MAYBE], "category", "alphabetical"))).toEqual([
+    expect(names(buildGroups([one], [MAIN, MAYBE, CUTS], "category", "alphabetical"))).toEqual([
       "Main deck",
       "Maybeboard",
+      "Cuts",
     ]);
-    expect(names(buildGroups([one], [MAIN, CUTS], "category", "alphabetical"))).toEqual([
-      "Main deck",
-    ]);
+    expect(
+      names(buildGroups([one], [MAIN, MAYBE, CUTS], "category", "alphabetical", false, NARROWED)),
+    ).toEqual(["Main deck", "Maybeboard"]);
   });
 
   /**
-   * The rule is about the cards that are there now, and never about how the category came to
-   * exist — so the same row draws and then does not, with nothing about it changed but its
-   * contents. This is what makes the last card leaving a pile take the heading with it.
+   * The heading stays when the last card leaves, which is the whole affordance: a pile the
+   * reader has just emptied is where they put the next card, and one that vanished under their
+   * hand would take its own drop target with it. Under a filter the same pair reads the other
+   * way, because there the emptiness is the filter's.
    */
-  it("drops a category the moment its last card leaves", () => {
+  it("keeps a category when its last card leaves, and drops it only under a filter", () => {
     expect(names(buildGroups([inCategory(RAMP)], [RAMP], "category", "alphabetical"))).toEqual([
       "Ramp",
     ]);
-    expect(names(buildGroups([], [RAMP], "category", "alphabetical"))).toEqual([]);
+    expect(names(buildGroups([], [RAMP], "category", "alphabetical"))).toEqual(["Ramp"]);
+    expect(names(buildGroups([], [RAMP], "category", "alphabetical", false, NARROWED))).toEqual([]);
   });
 
   /**
-   * The order of what is left is the order it always was — `sortOrder`, then id — with the
-   * hidden ones simply absent rather than the survivors resequenced.
+   * The order of what is drawn is the order it always was — `sortOrder`, then id — with anything
+   * left out simply absent rather than the survivors resequenced.
    *
-   * Written as a mixture on purpose: two piles of the reader's own that hold cards, two empty
-   * fixed zones between them, and two empty piles of their own that go. A filter that rebuilt
-   * the list instead of narrowing it would pass every other test in this block.
+   * Written as a mixture on purpose, and read twice: unfiltered, where only the two conditional
+   * zones are missing; and narrowed, where the reader's own empty piles go and the fixed ones
+   * stay. A filter that rebuilt the list instead of narrowing it would pass every other test in
+   * this block.
    */
-  it("leaves the drawn groups in sortOrder, with the hidden ones simply absent", () => {
+  it("leaves the drawn groups in sortOrder, with the undrawn ones simply absent", () => {
     const draw = own(9, "Draw", 6);
-    const groups = buildGroups(
-      [card({ categoryKind: "main" }), inCategory(draw), inCategory(RAMP)],
-      [COMMANDER, MAIN, SIDE, RAMP, MAYBE, draw, own(10, "Tutor", 7), CUTS],
-      "category",
-      "alphabetical",
-    );
+    const deck = [card({ categoryKind: "main" }), inCategory(draw), inCategory(RAMP)];
+    const categories = [COMMANDER, MAIN, SIDE, RAMP, MAYBE, draw, own(10, "Tutor", 7), CUTS];
 
-    expect(names(groups)).toEqual([
-      "Commander",
+    expect(names(buildGroups(deck, categories, "category", "alphabetical"))).toEqual([
       "Main deck",
       "Sideboard",
       "Ramp",
       "Maybeboard",
+      "Cuts",
       "Draw",
+      "Tutor",
     ]);
+
+    expect(
+      names(buildGroups(deck, categories, "category", "alphabetical", false, NARROWED_EDH)),
+    ).toEqual(["Commander", "Main deck", "Sideboard", "Ramp", "Maybeboard", "Draw"]);
   });
 
-  /** The predicate itself, at its one seam: it is handed a `Pick` of the group and therefore
-   *  *cannot* consult the name, which is the guarantee the case above depends on. */
-  it("answers from isPredefined alone", () => {
-    expect(drawsWhenEmpty({ isPredefined: true })).toBe(true);
-    expect(drawsWhenEmpty({ isPredefined: false })).toBe(false);
+  /**
+   * The predicate itself, at its one seam. It is handed a `Pick` of the group and therefore
+   * *cannot* consult the name — the guarantee the "Sideboard" case above depends on — and the
+   * four answers below are the whole of it, stated without a `buildGroups` in the way.
+   */
+  it("answers from the kind, the format and the filter, and never from the name", () => {
+    // The reader's own pile: drawn, unless a filter is what emptied it.
+    expect(drawsWhenEmpty({ kind: "main", isPredefined: false }, DEFAULT_EMPTY_GROUP_RULES)).toBe(
+      true,
+    );
+    expect(drawsWhenEmpty({ kind: "main", isPredefined: false }, NARROWED)).toBe(false);
+
+    // The two unconditional zones, either way.
+    for (const kind of ["side", "maybe"] as const) {
+      for (const rules of [DEFAULT_EMPTY_GROUP_RULES, EDH, NARROWED, NARROWED_EDH]) {
+        expect(drawsWhenEmpty({ kind, isPredefined: true }, rules)).toBe(true);
+      }
+    }
+
+    // The command zone follows the format and nothing else — a filter does not take it away.
+    expect(drawsWhenEmpty({ kind: "commander", isPredefined: true }, EDH)).toBe(true);
+    expect(drawsWhenEmpty({ kind: "commander", isPredefined: true }, NARROWED_EDH)).toBe(true);
+    expect(
+      drawsWhenEmpty({ kind: "commander", isPredefined: true }, DEFAULT_EMPTY_GROUP_RULES),
+    ).toBe(false);
+    expect(drawsWhenEmpty({ kind: "commander", isPredefined: true }, NARROWED)).toBe(false);
+
+    // The companion never, under any of the four.
+    for (const rules of [DEFAULT_EMPTY_GROUP_RULES, EDH, NARROWED, NARROWED_EDH]) {
+      expect(drawsWhenEmpty({ kind: "companion", isPredefined: true }, rules)).toBe(false);
+    }
+
+    // A derived group's `kind` is `null` and it is never asked — but if it were, it is a pile
+    // like the reader's own rather than a special case.
+    expect(drawsWhenEmpty({ kind: null, isPredefined: false }, DEFAULT_EMPTY_GROUP_RULES)).toBe(
+      true,
+    );
+  });
+
+  /**
+   * **What a caller that has not heard of a format gets.** The argument defaults, so every call
+   * site written before this rule existed keeps compiling — and what it keeps compiling *to* is
+   * the unfiltered non-commander answer, which is the one a story, a chart or a test asking
+   * about something else wants.
+   */
+  it("answers DEFAULT_EMPTY_GROUP_RULES when it is given no rules at all", () => {
+    expect(DEFAULT_EMPTY_GROUP_RULES).toEqual({ requiresCommander: false, narrowed: false });
+
+    for (const group of [
+      { kind: "main", isPredefined: false },
+      { kind: "side", isPredefined: true },
+      { kind: "commander", isPredefined: true },
+      { kind: "companion", isPredefined: true },
+      { kind: "maybe", isPredefined: true },
+    ] as const) {
+      expect(drawsWhenEmpty(group)).toBe(drawsWhenEmpty(group, DEFAULT_EMPTY_GROUP_RULES));
+    }
+
+    // The same for the whole function: no sixth argument is the default rules, not "draw
+    // everything" and not the old rule.
+    expect(names(buildGroups([], [MAIN, RAMP, COMMANDER], "category", "alphabetical"))).toEqual(
+      names(
+        buildGroups(
+          [],
+          [MAIN, RAMP, COMMANDER],
+          "category",
+          "alphabetical",
+          false,
+          DEFAULT_EMPTY_GROUP_RULES,
+        ),
+      ),
+    );
   });
 });
 
@@ -498,25 +729,33 @@ describe("buildGroups by a derived key", () => {
   /**
    * **The derived halves were already right and are untouched.** A `manaValue` or `type` bucket
    * is built out of the cards, so an empty one has never been expressible — which is why the
-   * empty-category rule is a rule about *category* groups alone.
+   * empty-pile rule is a rule about *category* groups alone.
    *
-   * What can still reach a derived grouping is the tail: the switched-off piles, appended as
-   * themselves. They go through the same filter, so the seeded Maybeboard comes back empty and
-   * a pile of the reader's own does not.
+   * What reaches a derived grouping is the tail: the **switched-off** piles, appended as
+   * themselves. They go through the same filter, so an empty `Cuts` joins the empty Maybeboard
+   * there — while `Ramp`, empty but switched **on**, is in no derived grouping at all, because
+   * the tail is `!isActive` and not "everything that draws".
    */
-  it("adds nothing to a derived grouping for an empty category, bar the seeded piles", () => {
+  it("appends the empty switched-off piles to a derived grouping, and drops the reader's own under a filter", () => {
     const cards = [card({ name: "Sol Ring", cmc: 1, typeLine: "Artifact" })];
+    const categories = [MAIN, RAMP, CUTS, MAYBE];
 
     for (const groupBy of ["manaValue", "type"] as const) {
       const bare = buildGroups(cards, [MAIN], groupBy, "alphabetical");
-      const padded = buildGroups(cards, [MAIN, RAMP, CUTS, MAYBE], groupBy, "alphabetical");
+      const padded = buildGroups(cards, categories, groupBy, "alphabetical");
 
-      // The headings a reader sees are the one bucket the card makes, plus the empty seeded
-      // Maybeboard — and never `Ramp` or `Cuts`, which hold nothing.
-      expect(names(padded)).toEqual([...names(bare), "Maybeboard"]);
+      // The one bucket the card makes, then the two switched-off piles in sortOrder — and never
+      // `Ramp`, which is switched on and therefore not part of the tail at all.
+      expect(names(padded)).toEqual([...names(bare), "Maybeboard", "Cuts"]);
       expect(padded.filter((g) => g.categoryId !== null).map((g) => g.categoryId)).toEqual([
         MAYBE.id,
+        CUTS.id,
       ]);
+
+      // Under a filter the reader's own empty pile goes here for the same reason it goes under
+      // `category`: the emptiness is the filter's doing, and the fixed zone outlives it.
+      const narrowed = buildGroups(cards, categories, groupBy, "alphabetical", false, NARROWED);
+      expect(names(narrowed)).toEqual([...names(bare), "Maybeboard"]);
     }
   });
 
