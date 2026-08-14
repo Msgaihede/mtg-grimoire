@@ -2,6 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 
+/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+ *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
+ *  and why the number is seconds; each file keeps its own copy because CSF would index an
+ *  exported one as a story. */
+const FRAME_WAIT = 5_000;
+
 /**
  * Everything about a deck that is not the cards in it.
  *
@@ -68,9 +74,13 @@ export const Default: Story = {
     await expect(canvas.getByLabelText("Format")).toHaveValue("modern");
     await expect(canvas.getByLabelText("Folder")).toHaveValue("");
     // The caption beside the label, not the option inside the select — both say the words, and
-    // only one of them is the deck's own state.
+    // only one of them is the deck's own state. The dialog's arrival is waited out here rather
+    // than on the reads above, because this is the play's one visibility claim — see
+    // {@link FRAME_WAIT}.
     const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
-    await expect(caption.getByText("Top level")).toBeVisible();
+    await waitFor(async () => await expect(caption.getByText("Top level")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
   },
 };
 

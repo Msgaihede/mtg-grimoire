@@ -267,6 +267,33 @@ describe("DeckSearchPanel", () => {
     );
   });
 
+  /**
+   * The other half of opening collapsed, and the regression it introduced: `useCardSearch` was
+   * called unconditionally in the panel's root, so a state that draws no wall ran the wall's
+   * query anyway. That was true of the `roomy: false` rail from the start and cost nothing worth
+   * counting while the rail was the rare case; collapsed is the resting state now, so every deck
+   * the reader opened fired a `search_cards` for a wall nobody was looking at.
+   *
+   * The fix is the rule the editor's dialogs already keep — closed is nothing mounted — so the
+   * hook moved into a child that `shown` mounts. **The press is what makes the silence
+   * discriminate**: a mock that had been wired to nothing would pass the first assertion on its
+   * own, and the second one is what says the search really is behind the disclosure.
+   */
+  it("asks the backend for nothing until the reader opens it", async () => {
+    panel();
+
+    const rail = await screen.findByRole("button", { name: "Search cards" });
+    expect(rail).toHaveAttribute("aria-expanded", "false");
+    expect(searchCards).not.toHaveBeenCalled();
+    // The filter row's set list goes with it: the whole body is unmounted, not just the wall.
+    expect(listSets).not.toHaveBeenCalled();
+
+    await userEvent.click(rail);
+
+    expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+    expect(searchCards).toHaveBeenCalled();
+  });
+
   /** The search view's own parts, in a column: not a second search implementation. */
   it("renders the search filters and the results as a wall of art", async () => {
     await openPanel();

@@ -122,7 +122,12 @@ export const SendAll: Story = {
 
     await userEvent.click(canvas.getByRole("button", { name: "Send all 4 to wishlist" }));
 
-    await expect(await canvas.findByText("Sent. 4 wishes updated.")).toBeVisible();
+    // The dialog's arrival, waited out once — see `Shopping`. The press above is not a substitute
+    // for it: `userEvent`'s own waits are timers, and the frame this needs is a `rAF`.
+    await waitFor(
+      async () => await expect(await canvas.findByText("Sent. 4 wishes updated.")).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
   },
 };
 

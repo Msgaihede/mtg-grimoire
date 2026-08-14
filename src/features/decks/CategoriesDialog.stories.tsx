@@ -2,6 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { CategoriesDialog } from "./CategoriesDialog";
 
+/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+ *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
+ *  and why the number is seconds; each file keeps its own copy because CSF would index an
+ *  exported one as a story. */
+const FRAME_WAIT = 5_000;
+
 /**
  * The piles of one deck — **driven end to end by `.storybook/fake/`.**
  *
@@ -38,7 +44,11 @@ type Story = StoryObj<typeof meta>;
  *  starts with. */
 export const Default: Story = {
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText("Ramp")).toBeVisible();
+    // The panel's arrival, waited out once — everything under it is visible in the same tick,
+    // which is why the second row needs no wait of its own. See {@link FRAME_WAIT}.
+    await waitFor(async () => await expect(await canvas.findByText("Ramp")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
     await expect(canvas.getByText("Card advantage")).toBeVisible();
   },
 };
@@ -48,7 +58,10 @@ export const Default: Story = {
 export const FirstOpen: Story = {
   args: { deckId: 2 },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText("Main deck")).toBeVisible();
+    // The panel's arrival, waited out once — see {@link FRAME_WAIT}.
+    await waitFor(async () => await expect(await canvas.findByText("Main deck")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
   },
 };
 

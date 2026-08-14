@@ -1,6 +1,30 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { DeckDialog } from "./DeckDialog";
+
+/**
+ * How long a `waitFor` will wait for this shell's first frame — **the constant every dialog
+ * built on it needs, which is why the explanation lives here.**
+ *
+ * The panel fades and scales in, so its first painted frame carries its `initial`; and
+ * `toBeVisible` walks the ancestors, so *nothing* inside the panel is visible until the next
+ * frame lands. `findBy*` does not cover it — that waits for an element to **exist**, never to
+ * become visible — so an assertion about anything inside a newly opened dialog is wrapped in a
+ * `waitFor` and not merely awaited. `src/CLAUDE.md`'s motion rules state it app-wide.
+ *
+ * Under the suite's `MotionGlobalConfig.skipAnimations` the wait is one `requestAnimationFrame`
+ * rather than the preset's 260ms — but jsdom has no compositor, `motion` drives that frame off a
+ * timer, and the whole suite is a hundred-odd jsdom files running in parallel. So the default
+ * one second is a wait on the *scheduler*: these plays passed in isolation every time and four
+ * of them failed under `npm run test:run`. Seconds rather than milliseconds for that reason
+ * alone. `TheoryDiffDialog.stories.tsx` measured the same thing first and carries its own copy,
+ * because that dialog draws its own scrim rather than borrowing this one.
+ *
+ * **Not exported, and it must not be.** CSF reads every named export of a story file as a story,
+ * so a shared constant hoisted out of one would be indexed as one — a story with a number for a
+ * component. Each file keeps its own copy of the value and points back here for the reason.
+ */
+const FRAME_WAIT = 5_000;
 
 /** A body that is only a body: the shell's half of the bargain is the header, and this is the
  *  host's — its own `min-h-0 flex-1 overflow-y-auto` scroller, with its own padding. */
@@ -84,8 +108,13 @@ export const Default: Story = {
     await expect(dialog).toHaveAttribute("aria-modal", "true");
     await expect(dialog).toHaveFocus();
     // Named by the host rather than derived from the title: "Close Categories & tags" is not a
-    // sentence.
-    await expect(canvas.getByRole("button", { name: "Close deck settings" })).toBeVisible();
+    // sentence. Waited out rather than read straight off the render `findByRole` resolved on —
+    // see {@link FRAME_WAIT}, which is what every `toBeVisible` inside this shell needs.
+    await waitFor(
+      async () =>
+        await expect(canvas.getByRole("button", { name: "Close deck settings" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
   },
 };
 

@@ -2,6 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { TagsDialog } from "./TagsDialog";
 
+/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+ *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
+ *  and why the number is seconds; each file keeps its own copy because CSF would index an
+ *  exported one as a story. */
+const FRAME_WAIT = 5_000;
+
 /**
  * The labels of one deck — **driven end to end by `.storybook/fake/`.**
  *
@@ -35,7 +41,11 @@ type Story = StoryObj<typeof meta>;
 /** Two labels — one on a card, one waiting to be used. */
 export const Default: Story = {
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText("Cut candidate")).toBeVisible();
+    // `findByText` alone is not enough here: it waits for the row to **exist**, and the shell's
+    // panel is still on its `initial` frame when it does — see {@link FRAME_WAIT}.
+    await waitFor(async () => await expect(await canvas.findByText("Cut candidate")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
   },
 };
 
@@ -48,10 +58,14 @@ export const Default: Story = {
 export const FirstOpen: Story = {
   args: { deckId: 2 },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText("No tags yet.")).toBeVisible();
+    // The panel's arrival, waited out once — everything under it is visible in the same tick,
+    // which is why the suggestion below needs no wait of its own. See {@link FRAME_WAIT}.
+    await waitFor(async () => await expect(await canvas.findByText("No tags yet.")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
     // The palette is global, so a deck with no tags of its own is still offered every name the
     // reader has typed into another one.
-    await expect(canvas.getByRole("button", { name: "Add tag Cut candidate" })).toBeVisible();
+    await expect(await canvas.findByRole("button", { name: "Add tag Cut candidate" })).toBeVisible();
   },
 };
 

@@ -195,36 +195,20 @@ export function DeckSearchPanel({
    * deck row because they say where the reader had got to *in that deck*, and a search column is
    * a thing you open to do a job and shut when the job is done.
    *
-   * The search behind it is unchanged by this: `useCardSearch` below is unconditional, so the
-   * query runs behind the rail exactly as it already did whenever `roomy` was false.
+   * **The search comes up with the disclosure and costs nothing before it** — {@link OpenPanel}
+   * is where `useCardSearch` lives, and `shown` is what mounts it. Closed is nothing mounted,
+   * which is the rule every dialog in this editor is built on and the one this panel used to be
+   * the exception to: the hook was unconditional here, so every deck a reader opened fired a
+   * `search_cards` for a wall nobody was looking at. That was defensible while the rail was the
+   * rare case — it only happened when `roomy` was false — and stopped being defensible the day
+   * collapsed became the resting state.
    */
   const [open, setOpen] = useState(false);
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const categoryFieldId = useId();
 
-  /**
-   * What the picked id is *called*, for the two names every Add button carries — or `null` under
-   * {@link AUTO_CATEGORY}, where the pile is not chosen here at all and is named per card below.
-   *
-   * The editor clamps `targetCategoryId` to a category it is drawing, so the miss below is not
-   * a state this panel expects — but it is one a single render can be caught in, because a
-   * category that has just been deleted or renamed reaches the clamp and this select on the
-   * same commit and nothing orders those two. "this deck" is the honest thing to say about an
-   * id whose name is not in hand: the deck is what the press writes to, and if the id really is
-   * stale `deck_add_card` refuses it in words (`category_of_deck`) into the alert above the
-   * wall. Reading `.name` off `undefined` would instead take the whole panel down over a label.
-   */
-  const auto = targetCategoryId === AUTO_CATEGORY;
-  const targetName = auto
-    ? null
-    : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
-
-  const search = useCardSearch();
-  const { query, rows, searchKey } = search;
-
   const selectedCardId = useAppStore((s) => s.selectedCardId);
-  const selectCard = useAppStore((s) => s.setSelectedCardId);
 
   /**
    * The caret, when the card pane closes and what opened it is not there any more.
@@ -302,49 +286,6 @@ export function DeckSearchPanel({
     </button>
   );
 
-  /**
-   * Every drawn tile, as a card that can be dragged into a category.
-   *
-   * The wall builds its own tiles, so this is the only way to hand a library an element: one
-   * `draggable()` per tile, torn down by the cleanup React 19 takes from a ref callback. The
-   * *drop* is the category column's business — this end only says what is being carried.
-   *
-   * A stable identity, so the registration is not torn down and rebuilt on every render of a
-   * panel that re-renders on every keystroke. The tile's element is passed fresh each time,
-   * and the card with it, so nothing here goes stale.
-   *
-   * The Add button beside the art does the same thing for the keyboard and for anyone who
-   * would rather press than drag (spec §7's click-to-add fallback, which is the *primary*
-   * path — this is a shortcut over it), and it marks itself `data-no-drag` so that a press on
-   * it is a press: `cardDraggable` has the story, and the tile's *art* stays draggable
-   * because the exclusion is marked rather than guessed from the tag.
-   */
-  const tileRef = useCallback(
-    (card: CardSummary, element: HTMLElement | null) =>
-      element
-        ? cardDraggable({
-            element,
-            payload: () => ({
-              kind: "search-card",
-              cardId: card.id,
-              name: card.name,
-              // Carried even though every drop target inside this editor is a category that
-              // names itself: a tile can also be let go on the sidebar's Decks entry, which
-              // names none. One payload shape, whichever target takes it (`dnd.ts`).
-              typeLine: card.typeLine,
-            }),
-          })
-        : undefined,
-    [],
-  );
-
-  const addFailure = add.isError ? ipcError(add.error) : null;
-  // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
-  // in hand — reading it as "show the error instead" would throw away results the reader is
-  // part way through.
-  const failure = query.isError ? ipcError(query.error) : null;
-  const empty = rows.length === 0;
-
   return (
     // A `section`, not an `aside`: the card pane is the app's one complementary landmark, and
     // a second unnamed one would answer to the same role query.
@@ -355,6 +296,10 @@ export function DeckSearchPanel({
     // would be dropped again one commit later, when the returning width reopened the panel
     // around a freshly mounted copy of it. Measured in the running window; the effect above
     // reads as if it works with either shape and only works with this one.
+    //
+    // Which is why the open body is a **child** rather than a second root: `OpenPanel` mounts
+    // and unmounts with the collapse — closed really is nothing mounted — while this element,
+    // the row below it and the disclosure inside that row are the same three nodes throughout.
     <section
       aria-label="Add cards"
       // One hairline down the left edge, and it is the only chrome the panel adds: the
@@ -414,6 +359,110 @@ export function DeckSearchPanel({
         )}
       </div>
 
+      {/* Everything below the row, and only while the disclosure is open — see
+          {@link OpenPanel}. One `{shown && …}` where there were five, which is what makes the
+          search a thing the reader asks for rather than a thing every deck pays for. */}
+      {shown && (
+        <OpenPanel add={add} categories={categories} targetCategoryId={targetCategoryId} />
+      )}
+    </section>
+  );
+}
+
+/**
+ * The panel with its wall in it — **mounted only while the disclosure is open**, which is the
+ * whole reason it is a component rather than a branch inside {@link DeckSearchPanel}.
+ *
+ * A hook cannot be called conditionally, so `useCardSearch` sitting in the root meant its query
+ * ran for every deck the reader opened whether or not they had asked for a wall. Closed is
+ * nothing mounted here for the same reason it is in `DeckDialog`: the search, its filter state,
+ * its facets and its scroll position all begin at the press and cost nothing before it. The
+ * collapse throws that state away rather than hiding it, and that is the intended reading — this
+ * is a column you open to do a job and shut when the job is done, and its own `open` state is
+ * deliberately not remembered either.
+ *
+ * **What stays in the root is what has to outlive the collapse**: the disclosure button, whose
+ * identity across the two states the caret depends on; the `roomy` refusal; and the "Add to"
+ * select, which is a sibling of the toggle inside one flex row and asks the backend for nothing.
+ */
+function OpenPanel({
+  add,
+  categories,
+  targetCategoryId,
+}: Pick<DeckSearchPanelProps, "add" | "categories" | "targetCategoryId">) {
+  const search = useCardSearch();
+  const { query, rows, searchKey } = search;
+
+  // Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
+  // and this is the wall's selection. One field, two subscriptions, no round trip either side.
+  const selectedCardId = useAppStore((s) => s.selectedCardId);
+  const selectCard = useAppStore((s) => s.setSelectedCardId);
+
+  /**
+   * What the picked id is *called*, for the two names every Add button carries — or `null` under
+   * {@link AUTO_CATEGORY}, where the pile is not chosen here at all and is named per card below.
+   *
+   * The editor clamps `targetCategoryId` to a category it is drawing, so the miss below is not
+   * a state this panel expects — but it is one a single render can be caught in, because a
+   * category that has just been deleted or renamed reaches the clamp and the select above on the
+   * same commit and nothing orders those two. "this deck" is the honest thing to say about an
+   * id whose name is not in hand: the deck is what the press writes to, and if the id really is
+   * stale `deck_add_card` refuses it in words (`category_of_deck`) into the alert above the
+   * wall. Reading `.name` off `undefined` would instead take the whole panel down over a label.
+   */
+  const auto = targetCategoryId === AUTO_CATEGORY;
+  const targetName = auto
+    ? null
+    : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
+
+  /**
+   * Every drawn tile, as a card that can be dragged into a category.
+   *
+   * The wall builds its own tiles, so this is the only way to hand a library an element: one
+   * `draggable()` per tile, torn down by the cleanup React 19 takes from a ref callback. The
+   * *drop* is the category column's business — this end only says what is being carried.
+   *
+   * A stable identity, so the registration is not torn down and rebuilt on every render of a
+   * panel that re-renders on every keystroke. The tile's element is passed fresh each time,
+   * and the card with it, so nothing here goes stale.
+   *
+   * The Add button beside the art does the same thing for the keyboard and for anyone who
+   * would rather press than drag (spec §7's click-to-add fallback, which is the *primary*
+   * path — this is a shortcut over it), and it marks itself `data-no-drag` so that a press on
+   * it is a press: `cardDraggable` has the story, and the tile's *art* stays draggable
+   * because the exclusion is marked rather than guessed from the tag.
+   */
+  const tileRef = useCallback(
+    (card: CardSummary, element: HTMLElement | null) =>
+      element
+        ? cardDraggable({
+            element,
+            payload: () => ({
+              kind: "search-card",
+              cardId: card.id,
+              name: card.name,
+              // Carried even though every drop target inside this editor is a category that
+              // names itself: a tile can also be let go on the sidebar's Decks entry, which
+              // names none. One payload shape, whichever target takes it (`dnd.ts`).
+              typeLine: card.typeLine,
+            }),
+          })
+        : undefined,
+    [],
+  );
+
+  const addFailure = add.isError ? ipcError(add.error) : null;
+  // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
+  // in hand — reading it as "show the error instead" would throw away results the reader is
+  // part way through.
+  const failure = query.isError ? ipcError(query.error) : null;
+  const empty = rows.length === 0;
+
+  return (
+    // A fragment, so these stay flex children of the panel's own column: the row above them, the
+    // banners, the filter row, the count line and the wall are one stack and this component is
+    // not a box in the middle of it.
+    <>
       {/* Grown into place rather than shoved in: this panel is a fixed-width column of stacked
           rows, so a banner appearing at the top of it pushes the filter row, the summary and
           the whole wall of tiles down together. The animated element is the wrapper and carries
@@ -421,7 +470,7 @@ export function DeckSearchPanel({
           border-box` a box with its own padding and border can never be shorter than the two of
           them. */}
       <AnimatePresence initial={false}>
-        {shown && addFailure && (
+        {addFailure && (
           <motion.div {...statusLine} className="shrink-0 overflow-hidden">
             <p
               role="alert"
@@ -433,28 +482,26 @@ export function DeckSearchPanel({
         )}
       </AnimatePresence>
 
-      {shown && <FilterBar search={search} layoutToggle={false} />}
+      <FilterBar search={search} layoutToggle={false} />
 
       {/* One live region, mounted for as long as the panel is open: a region that appears
           together with its text announces nothing, because there was no change to notice. */}
-      {shown && (
-        <p
-          role="status"
-          className={cn(
-            "shrink-0 text-xs",
-            empty && failure ? "text-destructive" : "text-dim",
-            empty && "py-8 text-center",
-          )}
-        >
-          {summaryOf(search, failure)}
-        </p>
-      )}
+      <p
+        role="status"
+        className={cn(
+          "shrink-0 text-xs",
+          empty && failure ? "text-destructive" : "text-dim",
+          empty && "py-8 text-center",
+        )}
+      >
+        {summaryOf(search, failure)}
+      </p>
 
       {/* The wall below is what moves when this arrives, so it grows in for the reason the
           add banner above it does. Same split for the same reason: padding and border on the
           child, height and `overflow-hidden` on the animated wrapper. */}
       <AnimatePresence initial={false}>
-        {shown && !empty && failure && (
+        {!empty && failure && (
           <motion.div {...statusLine} className="shrink-0 overflow-hidden">
             <div
               role="alert"
@@ -484,7 +531,7 @@ export function DeckSearchPanel({
         )}
       </AnimatePresence>
 
-      {shown && !empty && (
+      {!empty && (
         <CardGrid
           rows={rows}
           // The panel's own search, so a new one starts at the top of the wall rather than
@@ -556,6 +603,6 @@ export function DeckSearchPanel({
           the rest. Two tiles per row is not that wall: `CardGrid`'s overscan already mounts the
           next two rows of `<img>`s, which is four images ahead of the reader by the same
           protocol and no round trip of its own. */}
-    </section>
+    </>
   );
 }
