@@ -20,15 +20,20 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **twelve** faults
+  Four seeds (`empty`/`starter`/`needsReview`/`large`), **fourteen** faults
   (`busy`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
-  `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`); saying
+  `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
+  `imageUrisMissing`/`exportWriteError`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
-  what one mocked call returns. **Two of the twelve are not failures at all** — `indexCold` is
-  the search index mid-build, and `oracleTagsMissing` is the Oracle tag taxonomy having never
+  what one mocked call returns. **Three of the fourteen are not failures at all** — `indexCold` is
+  the search index mid-build, `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
-  exists for.
+  exists for, and `imageUrisMissing` is a corpus whose `cards.image_uris` is NULL throughout, so
+  `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing.
+  **`oracleTagsMissing` empties rows and `imageUrisMissing` branches in the handler**, and the
+  difference is ownership rather than taste: `seeds.ts` shares `cards` **by reference** between
+  worlds, so nulling a column there would null it for every story on the page.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.

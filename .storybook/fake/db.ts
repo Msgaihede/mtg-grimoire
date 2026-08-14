@@ -107,6 +107,12 @@ import {
 import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
+// The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
+// `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
+// and a second hand-typed list here would let the workbench and the window disagree about which
+// four exist. Under Storybook this specifier is aliased to `.storybook/fake/images.ts`, which
+// re-exports it from the real module unchanged — so both programs read the same tuple.
+import { IMAGE_VARIANTS } from "@/lib/images";
 import type {
   CardDetail,
   CardFace,
@@ -530,6 +536,24 @@ export interface FakeUpdate {
  * was**, and the reason goes to `error_log`. Nothing about categorising a card may fail a deck
  * add, so this is a refusal a story has to be able to show *without* the screen behind it
  * changing at all.
+ *
+ * **`imageUrisMissing`** is `oracleTagsMissing`'s shape one column over, and it is not a failure
+ * either: every `cards.image_uris` is NULL, so {@link readHandlers.card_image_uri} answers `null`
+ * for every printing at every size and the card menu's "Copy card image" copies nothing. It is
+ * the one way a story can show that press doing the honest thing — a clipboard left holding the
+ * *previous* card's URL is what `cardMenu.tsx` refuses to produce.
+ *
+ * **It is a branch in the handler where `oracleTagsMissing` empties rows, and the reason is
+ * ownership rather than taste**: `seeds.ts` shares `cards` **by reference** between worlds
+ * (safe precisely because no write in this fake touches that table), so nulling the two URL
+ * columns would null them for every other story on the page. The taxonomy has no such
+ * constraint — `oracle_tag_cards` is built per seed.
+ *
+ * **`exportWriteError`** is the disk at the other end of a save dialog: `export_write_file`
+ * refuses, in `export.rs`' own words. The reader picked a path the process cannot write —
+ * a read-only stick, a directory that has since gone — and **the dialog stays open with the
+ * text still in it**, which is the whole of what that refusal has to show: an export the app
+ * could not save is one the reader can still copy.
  */
 export type Fault =
   | "busy"
@@ -543,7 +567,9 @@ export type Fault =
   | "errorLog"
   | "feedFetchError"
   | "oracleTagsMissing"
-  | "oracleTagsFetchError";
+  | "oracleTagsFetchError"
+  | "imageUrisMissing"
+  | "exportWriteError";
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -3041,8 +3067,28 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(req.marketplace);
       const limit = pageLimit(req.limit, SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT);
       const text = nonblank(req.text);
+      /**
+       * Every printing of one oracle card — "View all printings", handed over from a menu.
+       *
+       * **Here rather than in {@link matchesCardFilters}, and the asymmetry with Rust is the
+       * TypeScript mirror's rather than this file's.** `filters::push_card_filters` carries
+       * `oracle_id`, so the collection's and the wishlist's queries emit it too; `ipc.ts`
+       * declares it on `SearchRequest` **and not on `CardFilters`**, so a search is the only
+       * thing that can send one. Reading it through the filter helper would therefore mean
+       * widening a type to hold a field no other caller may set — and it would also apply the
+       * filter to `facet_cards`, which sends it deliberately *never*: the counts come from an
+       * in-memory index with no oracle axis, so faceting a narrowed wall over-counts on purpose
+       * (`useCardSearch.ts` states that, and over-counting only ever leaves a control live).
+       *
+       * `nonblank`, like every string filter beside it: `useCardSearch`'s `resetAll` clears this
+       * to exactly `""`, and a blank taken literally would bind `oracle_id = ''` and match
+       * nothing — an empty wall with no chip drawn to explain it, which is the direction
+       * `filters.rs` names as failing closed.
+       */
+      const oracleId = nonblank(req.oracleId);
       const matched = db.cards.filter((c) => {
         if (text !== null && !cardMatchesText(c, text)) return false;
+        if (oracleId !== null && c.oracleId !== oracleId) return false;
         if (!matchesCardFilters(c, { ...req, text: undefined }, null)) return false;
         // An **entry**, not a copy: a row emptied to zero is a row the collection keeps, and
         // this filter counts it as owned. The wishlist's `fulfilled` is the one that counts
@@ -3295,6 +3341,47 @@ export function readHandlers(db: FakeDb) {
         items: all.slice(0, MAX_PRINTINGS).map((c) => toPrinting(db, c, mp)),
         total: all.length,
       };
+    },
+
+    /**
+     * `card::card_image_uri` — the Scryfall CDN URL for one printing at one size, or `null`.
+     *
+     * **The variant is checked and never interpolated**, exactly as `card.rs` checks it against
+     * `schema::IMAGE_VARIANTS`: there it reaches SQL as a `json_extract` path, so an unchecked
+     * one is an injection point, and a fake that shrugged at `png` would let a caller sending it
+     * pass the workbench and be refused by the window. {@link IMAGE_VARIANTS} is the app's own
+     * tuple rather than a fifth copy of the four names.
+     *
+     * **All three of Rust's ways to `null` are reachable here, and every one of them is an
+     * answer rather than a fault.**
+     *
+     * 1. *An unknown card* — a printing this corpus does not have.
+     * 2. *A card whose `image_uris` is NULL* — `Prismatic Ending // Prismatic Ending` (`amh2 5s`,
+     *    `imageStatus: "missing"`) is the fixture's one such row, null in both URL columns, and
+     *    the `imageUrisMissing` fault is the whole corpus in that state.
+     * 3. *A variant the source lacked*, which `card_row::webp_uris` writes as JSON `null` — so a
+     *    present key is not a present URL. Here that is `thumb` and `grid` on **every** row, and
+     *    it is a fact about the fixture rather than a branch invented to reach the case:
+     *    `gen-storybook-cards.mjs` keeps two of Scryfall's image keys, `art_crop` and `normal`,
+     *    so those two variants are the only ones this corpus can answer.
+     *
+     * The two it can answer are answered with the **real** URL off the row —
+     * `display` from `normalUrl`, `art` from `artCropUrl` — never a path minted by rewriting
+     * `/normal/` into `/thumb/`. `images.ts` refuses that derivation next door for the same
+     * reason: it would be a URL nobody has ever fetched, handed to a reader as one to paste.
+     */
+    card_image_uri: (args: { cardId: string; variant: string }): string | null => {
+      const variant = IMAGE_VARIANTS.find((v) => v === args.variant);
+      if (variant === undefined) throw refuse(`unknown image variant: ${args.variant}`);
+      // Before the lookup, because the fault is the *column* being empty on every row and not
+      // an answer about one card — a story in this state gets `null` for a card it has, which
+      // is the state a reader in it is actually in.
+      if (db.fault === "imageUrisMissing") return null;
+      const card = cardById(db, args.cardId);
+      if (card === null) return null;
+      if (variant === "art") return card.artCropUrl;
+      if (variant === "display") return card.normalUrl;
+      return null;
     },
 
     /** `collection::list_entries`. */
@@ -3893,6 +3980,17 @@ const HISTORY_UNREADABLE = "the deck's history could not be read: database is lo
 /** `deck_theory`'s, for the same reason: the plan's shopping list is a fifth satellite read,
  *  made from a dialog that is already open over a deck the screen read fine. */
 const THEORY_UNREADABLE = "the theory list could not be read: database is locked";
+/**
+ * `export::write_export`'s refusal, in its own shape — `could not write {path}: {e}`, where the
+ * tail is `std::io::Error`'s own words.
+ *
+ * A function rather than a constant because the path is half the sentence: a reader who picked a
+ * folder that has since gone needs to see *which* name was refused, and that is the one thing
+ * this command knows about the failure. The OS half is Windows' `Access is denied. (os error 5)`
+ * — the error a read-only stick or a file another program holds open really produces, rather
+ * than an invented one.
+ */
+const exportDenied = (path: string) => `could not write ${path}: Access is denied. (os error 5)`;
 /** `deck::DEFAULT_FORMAT` — `decks.format_key`'s own DDL default, so a blank key means here
  *  exactly what it means in SQL. */
 const DEFAULT_FORMAT = "casual";
@@ -6376,6 +6474,29 @@ export function writeHandlers(db: FakeDb) {
     /** `lib::update_open_release_page`. A no-op for {@link prefetch_images}' reason: it hands
      *  a URL to the OS opener, and there is no browser here to answer it. */
     update_open_release_page: (): void => undefined,
+
+    /**
+     * `export::export_write_file` — the decklist text, at the path the reader named.
+     *
+     * **It takes no `AppState` in the crate and honours no `busy` here, and that is a fidelity
+     * point rather than an omission.** Every other write in this table opens with
+     * {@link refuseIfBusy} because it holds `AppState.db`; this one touches no database at all,
+     * so a sync running underneath it cannot refuse it. A story that seeded `busy` to watch an
+     * export fail would be watching a refusal the app cannot produce.
+     *
+     * **Nothing is stored, for {@link deck_import_read_file}'s reason turned around.** There is
+     * no disk here and no table this belongs in — the fake stores `cards` and the user's rows,
+     * and an export is neither — so what a story can observe is exactly what the app can: that
+     * the write was accepted, or the sentence it was refused with. `ExportDialog` draws no
+     * confirmation on success by design, so "no `role="alert"` appeared" is the whole of the
+     * happy path and is the right amount.
+     *
+     * The `exportWriteError` fault is the other branch, and the dialog stays open on it holding
+     * the text — a refused save must not cost the reader something they can still copy.
+     */
+    export_write_file: (args: { path: string; contents: string }): void => {
+      if (db.fault === "exportWriteError") throw refuse(exportDenied(args.path));
+    },
   } satisfies Record<string, CommandHandler>;
 }
 
