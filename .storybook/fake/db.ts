@@ -4315,9 +4315,41 @@ export function writeHandlers(db: FakeDb) {
       return removeWish(db, args.id);
     },
 
-    /** `deck::create_deck`, which gives the deck its four predefined categories in the same
-     *  transaction — a deck that exists but cannot be filed into anything is a state nothing
-     *  downstream expects. */
+    /**
+     * `deck::create_deck` — **a whole deck in one INSERT**, plus the four predefined categories
+     * in the same transaction, because a deck that exists but cannot be filed into anything is
+     * a state nothing downstream expects.
+     *
+     * Everything {@link DeckInput} carries below `formatKey` is written here rather than left
+     * to a follow-up patch: create-then-patch-then-file is three writes and a half-made deck to
+     * unwind by hand when the second one fails. Four of its rules are **not**
+     * {@link deck_update}'s, and each is a rule a reader who knows the patch will guess wrong:
+     *
+     * - **Nothing here coalesces.** A patch reads an absent field as "leave it"; an insert has
+     *   nothing to leave, so an absent field is the column's own default. For `folderId` that
+     *   difference is the whole meaning of the field — absent **is** the top level and means
+     *   it, while {@link deck_set_folder} remains the only way to un-file a deck that already
+     *   exists.
+     * - **`coverKind` is not settable at create** and keeps its `card_art` default. A custom
+     *   picture is {@link deck_set_cover_image}, which takes a path and a deck id and therefore
+     *   cannot run until the deck is there; the create dialog holds a chosen file and uploads
+     *   it afterwards.
+     * - **`theoryEnabled` sets the column and seeds nothing.** The patch seeds the theory list
+     *   from live on the off → on transition; a deck being born has no live cards to copy, and
+     *   a deck born with the switch already on has made that transition at birth.
+     * - **A deck's birth is exactly one audit row**, however many fields it was born with:
+     *   `deck_update` records one per changed field because each of those is an event, and
+     *   being born is one event. It is also the only `deck` row whose `from` is null — there
+     *   was no previous name, because there was no deck — and it is recorded rather than left
+     *   out so a drawer scrolled to the bottom ends at the deck's own beginning.
+     *
+     * `folderId` is checked **nowhere**, here or in Rust: `decks.folder_id REFERENCES
+     * deck_folders(id)` is a real foreign key over two user tables, so SQLite refuses a folder
+     * that is not there. This store has no foreign keys and does not invent a sentence for one
+     * — {@link FOLDER_GONE} is `deck_set_folder`'s wording, which that command chose because it
+     * validates in words, and borrowing it here would put a refusal in the fake's mouth that
+     * the app never says. `coverCardId` is a soft reference like every card id in a user table.
+     */
     deck_create: (args: { deck: DeckInput }): DeckRow => {
       refuseIfBusy(db);
       const row: FakeDeck = {
@@ -4325,17 +4357,18 @@ export function writeHandlers(db: FakeDb) {
         name: validName(args.deck.name),
         formatKey: validFormat(args.deck.formatKey),
         description: args.deck.description ?? null,
-        coverCardId: null,
+        coverCardId: args.deck.coverCardId ?? null,
         coverKind: COVER_CARD_ART,
         isBuilt: false,
         archived: false,
-        folderId: null,
-        notes: null,
-        theoryEnabled: false,
+        folderId: args.deck.folderId ?? null,
+        notes: args.deck.notes ?? null,
+        theoryEnabled: args.deck.theoryEnabled ?? false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
       ensurePredefinedCategories(db, row.id);
+      record(db, row.id, DECK_LEVEL, "deck", null, { field: "name", from: null, to: row.name }, 0);
       return toDeckRow(db, row);
     },
 

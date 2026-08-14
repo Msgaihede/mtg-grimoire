@@ -248,6 +248,35 @@ describe("ipc argument names match the Rust command signatures", () => {
       deck: { name: "Burn", formatKey: "modern" },
     });
 
+    // A create carries the **whole deck** now, so every field is pinned by name. Nothing
+    // type-checks this mirror against `deck::DeckInput`, and serde fills a field it cannot
+    // find with that field's default — so a key misspelled here is not a type error, it is a
+    // deck quietly born without its notes.
+    //
+    // The bare call above is the other half of the pin: an omitted `folderId` travels as
+    // omitted, and on an INSERT that *is* the top level — unlike `DeckPatch.folderId`, where
+    // a missing value means "leave it" and only `deck_set_folder` reaches the root.
+    await ipc.deckCreate({
+      name: "Rakdos Sacrifice",
+      formatKey: "commander",
+      description: "Aristocrats, but rude",
+      notes: "Swap the Cauldron once the reprint lands.",
+      coverCardId: "p1",
+      folderId: 3,
+      theoryEnabled: true,
+    });
+    expect(invoke).toHaveBeenCalledWith("deck_create", {
+      deck: {
+        name: "Rakdos Sacrifice",
+        formatKey: "commander",
+        description: "Aristocrats, but rude",
+        notes: "Swap the Cauldron once the reprint lands.",
+        coverCardId: "p1",
+        folderId: 3,
+        theoryEnabled: true,
+      },
+    });
+
     await ipc.deckUpdate(4, { isBuilt: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { isBuilt: true } });
 

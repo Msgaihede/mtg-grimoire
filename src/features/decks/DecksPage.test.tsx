@@ -484,8 +484,17 @@ describe("DecksPage", () => {
     await userEvent.selectOptions(screen.getByLabelText("Format"), "modern");
     await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
 
+    // The whole deck in one call, and the two answers the reader left alone are the switch's
+    // `false` and nothing else: a field left empty is **absent** rather than `""`, because this
+    // is an INSERT and an absent field is the column's own default. What each field does on the
+    // wire is `CreateDeckDialog.test.tsx`'s subject; this one is about the gallery's own two
+    // steps — the write, and going to what it made.
     await waitFor(() =>
-      expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "modern" }),
+      expect(deckCreate).toHaveBeenCalledWith({
+        name: "Sunday burn",
+        formatKey: "modern",
+        theoryEnabled: false,
+      }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
   });

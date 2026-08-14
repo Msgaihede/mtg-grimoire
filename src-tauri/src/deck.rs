@@ -90,13 +90,66 @@ pub const SAME_PRINTING: &str = "That is already this printing.";
 const PRINTING_GONE: &str = "That printing is not in the card database any more — a sync \
      replaced it while the card was open. Reopen the card for the printings it has now.";
 
-/// One new deck, as the "New deck" dialog sends it.
+/// One new deck, as the "New deck" dialog sends it — **a whole configured deck, in one INSERT**.
+///
+/// Every deck-level field the settings dialog can edit is here, because the alternative is
+/// create-then-patch-then-file: three transactions, a deck that exists in a state the user did
+/// not ask for between each pair of them, and a half-configured row to unwind by hand when the
+/// second one fails. That is the trap [`crate::deck_import::commit_import`] exists to avoid on
+/// the card side, and it is why this struct is wide rather than the three fields it was.
+///
+/// Two things it deliberately cannot say:
+///
+/// * **`cover_kind`.** It keeps its DDL default, [`COVER_CARD_ART`], whatever
+///   [`Self::cover_card_id`] holds. The other word means a file at
+///   `<data dir>/covers/<id>.webp`, and writing that file needs the id this statement is still
+///   making — so a custom picture is [`set_cover_image`], a follow-up call, and the create
+///   dialog has to treat a failure there as a deck that exists without its picture.
+/// * **Anything about cards.** A deck is born empty and with its four predefined categories;
+///   [`add_card`] and [`crate::deck_import::commit_import`] are what fill it.
+///
+/// A create leaves **one** history row however many of these fields it carries — see
+/// [`create_deck`].
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeckInput {
     pub name: String,
     pub format_key: String,
+    /// The one-line blurb the gallery tile shows.
     pub description: Option<String>,
+    /// The long-form notes — the v8 column, and **not** [`Self::description`]. Two columns
+    /// because they are two things: a caption and a notebook.
+    pub notes: Option<String>,
+    /// The card whose art crop the tile draws.
+    ///
+    /// A **soft** reference, like every card id in a user table, so nothing is checked here:
+    /// `cards` is dropped and rebuilt on every sync, and a cover pointing at a printing that
+    /// went away is a tile that falls back to a placeholder, not a deck that failed to be made.
+    pub cover_card_id: Option<String>,
+    /// Which folder to file the deck in, or `None` for the **root of the tree**.
+    ///
+    /// **This is the one field whose `None` does not mean what [`DeckPatch::folder_id`]'s
+    /// means, and a reader who knows that rule will assume it applies here.** It does not. A
+    /// patch writes `coalesce(?n, folder_id)`, which reads a bound NULL as "leave it" — which
+    /// is why no patch can un-file a deck and why [`set_folder`] exists. This is an INSERT:
+    /// there is no previous value for a null to leave alone, so an omitted folder is a deck at
+    /// the top level, which is exactly what a reader who picked no folder meant.
+    ///
+    /// Fenced by the **real foreign key** rather than in words, unlike [`set_folder`]'s check:
+    /// `decks.folder_id REFERENCES deck_folders(id)` is enforced (both are user tables, so the
+    /// constraint is one the sync can never trip over), and a folder id that the dialog did not
+    /// take out of the live folder list is a caller's bug rather than something a user typed.
+    pub folder_id: Option<i64>,
+    /// Whether the deck keeps a theory list beside its live one, from the moment it exists.
+    ///
+    /// **Sets the column and seeds nothing**, which is the half that differs from
+    /// [`DeckPatch::theory_enabled`]: that one copies the live deck into an empty theory list
+    /// as it flips, because an empty plan beside a full deck reads as data loss. A deck one
+    /// statement old has no live list to copy, so there is nothing that could read as anything.
+    /// `deck_theory`'s seeding is untouched and still runs on the patch route.
+    ///
+    /// Absent is `false` — resolved in Rust rather than by a `coalesce`; see [`create_deck`].
+    pub theory_enabled: Option<bool>,
 }
 
 /// An edit to one deck. Every field is optional: absent means "leave it".
@@ -125,8 +178,14 @@ pub struct DeckPatch {
     /// deck back at the root of the tree wants that command.
     pub folder_id: Option<i64>,
     /// The deck's long-form notes — the v8 column, and **not** [`Self::description`], which is
-    /// the one-line blurb the "New deck" dialog fills and the gallery tile shows. Two columns
-    /// because they are two things: a caption and a notebook.
+    /// the one-line blurb the gallery tile shows. Two columns because they are two things: a
+    /// caption and a notebook.
+    ///
+    /// **Neither column is "the create-time one" and neither is "the settings-only one."** This
+    /// line used to split them that way — it said `description` was what the "New deck" dialog
+    /// fills — and that stopped being a useful distinction the moment [`DeckInput`] grew to
+    /// carry both: the two dialogs now render one form, so every deck-level field is reachable
+    /// from whichever of them the user is in. What tells these two apart is what they hold.
     pub notes: Option<String>,
     /// Whether this deck keeps a theory list beside its live one.
     ///
@@ -411,22 +470,48 @@ pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, S
     .map_err(|e| e.to_string())
 }
 
-/// Make a deck, and give it its four predefined categories in the same transaction — a deck
-/// that exists but cannot be filed into anything is a state nothing downstream expects, and
-/// the v8 migration only ever seeded these for decks that existed *at* the migration; a deck
-/// made afterwards needs the same four rows made for it here. `deck_meta::
-/// ensure_predefined_categories` says on its own doc why it takes no transaction of its
-/// own — this is the call that supplies one.
+/// Make a deck — **the whole of it, in one statement** — and give it its four predefined
+/// categories in the same transaction.
+///
+/// The categories are here because a deck that exists but cannot be filed into anything is a
+/// state nothing downstream expects, and the v8 migration only ever seeded these for decks that
+/// existed *at* the migration; a deck made afterwards needs the same four rows made for it here.
+/// `deck_meta::ensure_predefined_categories` says on its own doc why it takes no transaction of
+/// its own — this is the call that supplies one.
+///
+/// Every column [`DeckInput`] carries is written by the one INSERT, so the deck the user
+/// described either exists as they described it or does not exist at all. Two rules hold that
+/// statement together and neither is visible from the SQL alone:
+///
+/// * **No `coalesce` on `folder_id`.** [`update_deck`] wraps every column in one so that an
+///   absent patch field means "leave it"; there is nothing here to leave, so a `None` is filed
+///   at the root of the tree and means it. [`DeckInput::folder_id`] carries the full contrast.
+/// * **`theory_enabled`'s absence is resolved in Rust, not in SQL.** The column is
+///   `NOT NULL DEFAULT 0`, so a bound NULL would fail the write outright — and spelling a
+///   `coalesce(?n, 0)` to avoid that would put the patch's convention into a statement that
+///   deliberately does not use it. `unwrap_or(false)` says the same thing without the echo.
+///
+/// `cover_kind` is absent from the column list on purpose and takes its DDL default,
+/// [`COVER_CARD_ART`]; [`DeckInput`] says why the other word cannot be reached from here.
 pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, String> {
     let name = valid_name(&input.name)?;
     let format_key = valid_format(conn, &input.format_key)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let id: i64 = tx
         .query_row(
-            "INSERT INTO decks (name, format_key, description, created_at, updated_at)
-             VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
+            "INSERT INTO decks (name, format_key, description, notes, cover_card_id, folder_id,
+                                theory_enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch())
              RETURNING id",
-            params![name, format_key, input.description],
+            params![
+                name,
+                format_key,
+                input.description,
+                input.notes,
+                input.cover_card_id,
+                input.folder_id,
+                input.theory_enabled.unwrap_or(false),
+            ],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -435,6 +520,12 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
     // null: there was no previous name, because there was no deck. Recorded here rather than
     // left out so that a drawer scrolled to the bottom ends at the deck's own beginning
     // instead of at whatever edit happens to be oldest.
+    //
+    // **One row, however many fields the deck was born with.** [`update_deck`] writes one per
+    // field that moved because each of those is a change to something that already had a value;
+    // a create has no `from` side to compare against, and seven lines under one press would read
+    // as a deck somebody spent an evening editing. `deck_audit`'s
+    // `every_deck_write_leaves_exactly_one_audit_row` counts exactly this one.
     crate::deck_audit::record(
         &tx,
         id,
@@ -2842,11 +2933,14 @@ mod tests {
         card_row(&detail, card_id, category_id).owned_quantity
     }
 
+    /// The plainest deck there is: a name, a format, and every other column at its default.
+    /// The wide creates live in the handful of tests that are *about* the widened input, so
+    /// that the sixty tests which only need a deck to exist keep saying so.
     fn input(name: &str, format_key: &str) -> DeckInput {
         DeckInput {
             name: name.to_owned(),
             format_key: format_key.to_owned(),
-            description: None,
+            ..Default::default()
         }
     }
 
@@ -3938,6 +4032,238 @@ mod tests {
         );
     }
 
+    /// One INSERT makes a whole deck, so the deck the user described either exists as they
+    /// described it or does not exist at all — the reason [`DeckInput`] is wide rather than the
+    /// three fields it was.
+    ///
+    /// `cover_kind` is the one thing that is **not** settable here, and the assertion says so:
+    /// it keeps its DDL default whatever `cover_card_id` holds, because the other word names a
+    /// file written against an id this statement is still in the middle of making.
+    #[test]
+    fn a_create_carrying_every_field_reads_back_with_all_of_them() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let folder = crate::deck_meta::create_folder(&conn, None, "Commander")
+            .unwrap()
+            .id;
+
+        let deck = create_deck(
+            &conn,
+            &DeckInput {
+                name: "  Burn  ".to_owned(),
+                format_key: "modern".to_owned(),
+                description: Some("Fast red".to_owned()),
+                notes: Some("Skewers over Bolts in game two.".to_owned()),
+                cover_card_id: Some("bolt-lea".to_owned()),
+                folder_id: Some(folder),
+                theory_enabled: Some(true),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(deck.name, "Burn", "still trimmed by `valid_name`");
+        assert_eq!(deck.format_key, "modern");
+        assert_eq!(deck.description.as_deref(), Some("Fast red"));
+        assert_eq!(
+            deck.notes.as_deref(),
+            Some("Skewers over Bolts in game two."),
+            "the notebook and the caption are two columns and both arrive at create"
+        );
+        assert_eq!(deck.cover_card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(
+            deck.cover_artist.as_deref(),
+            Some("Christopher Rush"),
+            "and the readback joins `cards` for the credit an art crop owes"
+        );
+        assert_eq!(
+            deck.cover_kind, COVER_CARD_ART,
+            "a custom picture is written against a deck id, so create cannot ask for one"
+        );
+        assert_eq!(deck.folder_id, Some(folder));
+        assert!(deck.theory_enabled);
+        // And the four categories are still seeded in the same transaction — the widened
+        // INSERT is one bigger statement inside it, not a second path around it.
+        assert_eq!(count(&conn, "deck_categories"), 4);
+    }
+
+    /// `folder_id: None` at create is **the root of the tree**, and it earns a test of its own
+    /// because the same `None` means the opposite thing one struct over:
+    /// [`DeckPatch::folder_id`] is written `coalesce(?n, folder_id)`, which reads a bound NULL
+    /// as "leave it", so no patch can un-file a deck ([`set_folder`] is that command). An INSERT
+    /// has no previous value to leave alone. A reader who has learned the patch rule will assume
+    /// it applies here.
+    #[test]
+    fn a_deck_created_with_no_folder_is_at_the_top_level() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let commander = crate::deck_meta::create_folder(&conn, None, "Commander")
+            .unwrap()
+            .id;
+        let filed = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Sisay".to_owned(),
+                format_key: "commander".to_owned(),
+                folder_id: Some(commander),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let root = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        assert_eq!(
+            root.folder_id, None,
+            "no folder chosen is the root of the tree, not `leave it`"
+        );
+        assert_eq!(
+            filed.folder_id,
+            Some(commander),
+            "and a folder that was chosen is kept"
+        );
+        // A real NULL in the column, not a 0 that a later read would resolve to a folder.
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT folder_id FROM decks WHERE id = ?1",
+                params![root.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, None);
+    }
+
+    /// A folder id naming nothing is refused by the **real foreign key** —
+    /// `decks.folder_id REFERENCES deck_folders(id)`, enforced because `decks` and
+    /// `deck_folders` are both user tables and neither is dropped by a sync — rather than in
+    /// words the way [`set_folder`] refuses one. No sentence is owed here: the folder select is
+    /// filled from the live folder list, so an id that resolves to nothing is a caller's bug and
+    /// not something a user typed. `foreign_keys` is ON, as `db::open` always sets it.
+    #[test]
+    fn creating_a_deck_in_a_folder_that_is_not_there_is_refused_by_the_foreign_key() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        let err = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Burn".to_owned(),
+                format_key: "modern".to_owned(),
+                folder_id: Some(404),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.to_lowercase().contains("foreign key"), "{err}");
+        // And the whole deck went with the refusal: the categories and the history line are
+        // written inside the same transaction, so there is no half-made deck to find.
+        assert_eq!(count(&conn, "decks"), 0);
+        assert_eq!(count(&conn, "deck_categories"), 0);
+        assert_eq!(count(&conn, "deck_audit"), 0);
+    }
+
+    /// Theory at create **sets the column and seeds nothing**, which is not what
+    /// [`DeckPatch::theory_enabled`] does: flipping that switch on an existing deck copies its
+    /// live list into an empty theory one, because an empty plan beside a full deck reads as
+    /// data loss rather than as a blank page. A deck one statement old has no live list, so
+    /// there is nothing that could read as anything.
+    ///
+    /// The second half is the half that makes the first honest: the patch route still seeds, so
+    /// this is a create that has nothing to copy and not a seeding rule that was removed.
+    #[test]
+    fn theory_at_create_enables_the_list_and_seeds_no_cards() {
+        let conn = seeded();
+        let theory_rows = |deck_id: i64| -> i64 {
+            conn.query_row(
+                "SELECT count(*) FROM deck_cards WHERE deck_id = ?1 AND variant = ?2",
+                params![deck_id, THEORY],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        let born_on = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Burn".to_owned(),
+                format_key: "modern".to_owned(),
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(born_on.theory_enabled);
+        assert_eq!(
+            count(&conn, "deck_cards"),
+            0,
+            "a deck one statement old has no live cards to seed from"
+        );
+        // Cards added afterwards stay in the variant they were added to: enabling at create
+        // hooks nothing up to `deck_theory::seed_from_live`.
+        add(&conn, born_on.id, "bolt-lea", main_of(&conn, born_on.id), 4);
+        assert_eq!(theory_rows(born_on.id), 0);
+
+        // Meanwhile the patch route seeds exactly as it always did.
+        let switched_on = create_deck(&conn, &input("Angels", "modern")).unwrap();
+        add(
+            &conn,
+            switched_on.id,
+            "serra-lea",
+            main_of(&conn, switched_on.id),
+            1,
+        );
+        update_deck(
+            &conn,
+            switched_on.id,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(theory_rows(switched_on.id), 1, "untouched by any of this");
+    }
+
+    /// **Being born is one event however many fields it was born with.** [`update_deck`] writes
+    /// one history row per field that actually moved, because each of those is a change to
+    /// something that already had a value; a create has no `from` side to compare against, and a
+    /// drawer that opened with seven lines under one press would read as a deck somebody spent
+    /// an evening editing. `deck_audit`'s `every_deck_write_leaves_exactly_one_audit_row` counts
+    /// the same single row for `deck_create`.
+    #[test]
+    fn a_create_carrying_every_field_still_writes_one_history_row() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let folder = crate::deck_meta::create_folder(&conn, None, "Commander")
+            .unwrap()
+            .id;
+
+        let deck = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Burn".to_owned(),
+                format_key: "modern".to_owned(),
+                description: Some("Fast red".to_owned()),
+                notes: Some("Skewers over Bolts in game two.".to_owned()),
+                cover_card_id: Some("bolt-lea".to_owned()),
+                folder_id: Some(folder),
+                theory_enabled: Some(true),
+            },
+        )
+        .unwrap();
+
+        let history = crate::deck_audit::list(&conn, deck.id, 10).unwrap();
+        assert_eq!(history.len(), 1, "one create, one line");
+        assert_eq!(history[0].kind, crate::deck_audit::DECK);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&history[0].payload).unwrap(),
+            json!({ "field": "name", "from": null, "to": "Burn" }),
+            "the name, with the null `from` that only a create has — and no `folder` row \
+             either, which `set_folder` and a folder patch both write"
+        );
+    }
+
     /// A deck delete is a real user deletion — the decks are the user's to destroy — and
     /// the CASCADEs take the cards, the claims, the categories and the tags with it. What it
     /// never touches is the collection: a deck names copies, it does not own them.
@@ -4329,6 +4655,26 @@ mod tests {
             ("Burn", "modern")
         );
         assert!(input.description.is_none());
+        assert!(
+            input.theory_enabled.is_none(),
+            "an omitted flag is absent, not `false` — `create_deck` decides what absent means"
+        );
+
+        // The widened create payload in full. These seven camelCase spellings are the contract
+        // `src/lib/ipc.ts` mirrors, and a wrong one here is not a compile error on either side:
+        // `#[serde(default)]` would read a misspelled field as an omitted one and the deck would
+        // simply come out unconfigured.
+        let whole: DeckInput = serde_json::from_str(
+            r#"{"name":"Burn","formatKey":"modern","description":"Fast red",
+                "notes":"Sideboard plan","coverCardId":"bolt-lea","folderId":7,
+                "theoryEnabled":true}"#,
+        )
+        .expect("the create payload, carrying a whole deck");
+        assert_eq!(whole.description.as_deref(), Some("Fast red"));
+        assert_eq!(whole.notes.as_deref(), Some("Sideboard plan"));
+        assert_eq!(whole.cover_card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(whole.folder_id, Some(7));
+        assert_eq!(whole.theory_enabled, Some(true));
 
         let patch: DeckPatch = serde_json::from_str(r#"{"coverCardId":"bolt-lea","isBuilt":true}"#)
             .expect("the patch payload");

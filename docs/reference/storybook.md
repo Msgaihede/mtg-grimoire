@@ -2,13 +2,18 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **375 stories across 48 story files, 47 docs
+`npm run storybook` · `npm run build-storybook`. **388 stories across 50 story files, 49 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
-(`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **with the
-facet-ordering `main` merged in**: 422 entries, 375 `story`, 47 `docs`, 49 distinct
-`importPath`s. That branch adds **five** stories to three existing files (`CardArt` 2,
-`SearchPage` 2, `CardGrid` 1) and no story *file*.
+(`Object.values(index.entries)`, grouped by `type`; the 51st `importPath` is the `.mdx`).
+**Measured 2026-08-14** off a fresh `build-storybook` on the deck-creation-overhaul branch **with
+`main` merged in**: 437 entries, 388 `story`, 49 `docs`, 51 distinct `importPath`s. That branch
+adds **two** story files — `Decks/Cover picker` and `Decks/Settings form` — and one story to
+`CreateDeckDialog`.
+
+The figure it replaced was measured the same day off a different branch (422 entries, 375
+stories, 48 files), which is the trap `.storybook/CLAUDE.md` names: **a count is a measurement of
+a tree**, so two branches can each be right about their own base and neither about the merge.
+Re-derive from the built index rather than adding your own diff to the last number.
 
 The seventeen over the 358 measured 2026-08-12 come from six branches that never saw each other's
 stories: five are `Card/DetailPane`'s, when the printings list gained a group-by selector (a story
