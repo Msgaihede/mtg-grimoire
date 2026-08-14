@@ -2,11 +2,14 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **370 stories across 48 story files, 47 docs
+`npm run storybook` · `npm run build-storybook`. **371 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
 **Measured 2026-08-14** off a fresh `build-storybook` on the facet-ordering branch **after**
-merging `main`: 417 entries, 370 `story`, 47 `docs`, 49 distinct `importPath`s.
+merging `main`: 417 entries, 370 `story`, 47 `docs`, 49 distinct `importPath`s. The 371st is
+`Decks/Editor`'s `ReopensOnThePlan`, added with the per-deck view memory into an existing file —
+so the file and docs-page counts are unmoved, and that one is a **source** count
+(`export const … : Story`) rather than a re-measured index.
 
 The twelve over the 358 measured 2026-08-12 come from five branches that never saw each other's
 stories: five are `Card/DetailPane`'s, fifteen to twenty, when the printings list gained a
@@ -147,13 +150,16 @@ pages against 48 story files, and the two opting out are still the same two.)
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**270** plays today, in a file of **273** tests — the other three are its own;
+  (**279** plays today, in a file of **282** tests — the other three are its own;
 `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-14). **Both figures had rotted before this
-re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
-worth of drift added by branches that did not re-measure, and is the same prose-only rot the
-story totals above have taken three times. Only one of the six is this branch's
-(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
+summary for the second, both measured 2026-08-14). **This pair rots faster than anything else
+on this page and has now been re-counted twice in one day** — 264/267, then 270/273, then these,
+against trees that were already answering something else each time. Only **one** of the nine
+plays added since the 270 is the branch that re-counted them (`Decks/Editor`'s
+`ReopensOnThePlan`); the other eight arrived from branches that did not, which is the same
+prose-only rot the story totals above have taken three times. **A number here is a claim about a
+tree, so re-measure rather than reason about the delta.** This is what puts a story's own claim
+inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.

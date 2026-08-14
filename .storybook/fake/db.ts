@@ -101,6 +101,8 @@ import {
   PRINTING_GROUP_BY_OPTIONS,
   isPrintingGroupBy,
 } from "@/features/card/printings";
+import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
+import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -124,6 +126,7 @@ import type {
   DeckRow,
   DeckTag,
   DeckVariant,
+  DeckViewState,
   EntryChange,
   EntryInput,
   EntryPatch,
@@ -260,9 +263,29 @@ export interface FakeDeck {
    *  gallery tile shows. Two columns because they are two things. */
   notes: string | null;
   /** Whether this deck keeps a `theory` list beside its `live` one. Read on the row as well as
-   *  written, because the editor's Live/Theory control *is* this boolean — a switch the app
+   *  written, because the editor's Theory/Live control *is* this boolean — a switch the app
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
+  /**
+   * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
+   * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
+   * opening a deck again puts them back where they left it.
+   *
+   * **Two of the three are `string` and not a narrowed union, deliberately, and the split is
+   * about whose vocabulary each one is.** `lastVariant` is `DeckVariant` because `live`/`theory`
+   * is the crate's own word list: none of the three columns carries a CHECK — `ALTER TABLE ADD
+   * COLUMN` cannot add one — so Rust fences that one in words instead. The other two name
+   * vocabularies that belong to TypeScript (`GroupBy` in `features/decks/grouping.ts`, `SortBy`
+   * in `features/decks/sorting.ts`), and the column carries whatever it was handed: a database
+   * outlives the build that wrote it, so a word a newer version chose has to survive the trip
+   * rather than be refused. `asGroupBy`/`asSortBy` degrade an unknown one to the default at the
+   * *reader*, which is the only place that can know what this build can draw — the opposite of
+   * `printing_group_by`, whose write refuses a mode it does not know, and for the same reason
+   * read the other way: that setting's vocabulary is the backend's.
+   */
+  lastVariant: DeckVariant;
+  lastGroupBy: string;
+  lastSortBy: string;
   updatedAt: number;
 }
 
@@ -1719,6 +1742,13 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
+    // And the three that remember where the reader was. They ride the *gallery's* row rather
+    // than a read of their own because the editor already has this row when it mounts — a
+    // second command to ask "which tab was I on" would be a round trip between opening a deck
+    // and drawing it, which is exactly the flicker the memory exists to remove.
+    lastVariant: d.lastVariant,
+    lastGroupBy: d.lastGroupBy,
+    lastSortBy: d.lastSortBy,
   };
 }
 
@@ -3570,6 +3600,18 @@ function validVariant(variant: string): DeckVariant {
   throw refuse(`\`${variant}\` is not a deck variant. Use one of: ${VARIANTS.join(", ")}.`);
 }
 
+/**
+ * `deck::NO_MODE` — the whole of what the backend checks about a remembered grouping or sort.
+ *
+ * The words themselves are TypeScript's vocabulary and the crate deliberately does not know
+ * them ({@link FakeDeck.lastGroupBy}), but a blank is not one of them in any vocabulary: it is a
+ * bug in the caller, and storing it would hand the editor back a remembered choice of nothing.
+ */
+function validMode(mode: string): string {
+  if (mode.trim() !== "") return mode;
+  throw refuse("A remembered view mode cannot be blank.");
+}
+
 function validName(name: string): string {
   const trimmed = name.trim();
   if (trimmed !== "") return trimmed;
@@ -3872,6 +3914,32 @@ function seedFromLive(db: FakeDb, deckId: number): number {
     rows += 1;
   }
   return rows;
+}
+
+/**
+ * `deck_theory::move_live_to_theory` — what switching the plan **on** does, and it is a move
+ * rather than a copy.
+ *
+ * The deck the reader built *becomes* the plan: every `live` row changes variant, and the live
+ * list is left **empty**. That is the whole difference from {@link seedFromLive}, which copies
+ * and leaves both lists holding the same cards — and it is a difference about what the two
+ * lists mean rather than about rows. Enabling the switch is the moment a reader says "this is
+ * what I am working toward, not what is sleeved up"; a copy would leave a live list nobody had
+ * decided was real, and every count on the gallery tile would go on claiming copies for it.
+ *
+ * **It releases this deck's claims, and gets that for free here.** `deck_allocations` is
+ * `live`-only, so in the app the move is followed by a reallocation that drops the rows this
+ * deck held. There is no allocations table in this fake (simplification 2) — `allocate` reads
+ * the live rows at read time, and after the move there are none, so the next read hands the
+ * copies back to every other deck without anything having to be rewritten.
+ *
+ * Row ids, tags and `needsReview` travel with the row because it *is* the same row. Answers the
+ * number of rows moved.
+ */
+function moveLiveToTheory(db: FakeDb, deckId: number): number {
+  const live = db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE);
+  for (const row of live) row.variant = "theory";
+  return live.length;
 }
 
 /** `deck_theory::theory_copies` — copies, not rows. Two printings at 2 and 3 is 5 cards. */
@@ -4323,6 +4391,13 @@ export function writeHandlers(db: FakeDb) {
         folderId: null,
         notes: null,
         theoryEnabled: false,
+        // The DDL's three defaults. `lastGroupBy`/`lastSortBy` are imported rather than spelled
+        // out because the column's default and the editor's opening mode have to be the same
+        // word — a deck that opened on a grouping the toolbar does not start in would look like
+        // a memory that had already been written to.
+        lastVariant: LIVE,
+        lastGroupBy: DEFAULT_GROUP_BY,
+        lastSortBy: DEFAULT_SORT_BY,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -4342,9 +4417,17 @@ export function writeHandlers(db: FakeDb) {
      *
      * **Two things happen beside the columns.** Sending `coverCardId` sets `coverKind` back to
      * `card_art`, which is how a deck showing an uploaded picture returns to card art without
-     * the file being deleted. And switching `theoryEnabled` **on** seeds the theory list from
-     * live when there is nothing in it, in the same write: an empty theory list beside a full
-     * live one reads as data loss rather than as a blank page. Switching it off keeps every row.
+     * the file being deleted. And switching `theoryEnabled` **on moves the live list into
+     * theory** — see {@link moveLiveToTheory}: the deck the reader built becomes the plan, the
+     * live list is left empty, {@link FakeDeck.lastVariant} is left at `theory` so the editor
+     * opens on what they now have, and this deck's claims are released with the rows. Switching
+     * it off keeps every row.
+     *
+     * **Two guards on that move, and both are about not destroying an edit.** It happens only on
+     * the false→true *transition*, and only when the theory list is **empty** — a plan the reader
+     * has already started is not something a re-press of the switch may pour the live deck over.
+     * A reader who wants the deck copied into a plan they have already begun asks for it by name:
+     * {@link deck_theory_copy_from_live} still copies, and still skips rather than folding.
      *
      * The history is written **per changed field**, and only for fields that actually changed:
      * a dialog that saves an untouched form must not fill the drawer with edits nobody made.
@@ -4383,9 +4466,9 @@ export function writeHandlers(db: FakeDb) {
       if (patch.notes !== undefined && patch.notes !== before.notes) {
         field("notes", before.notes, patch.notes);
       }
-      // One row, whether or not the theory list was seeded below: the seeding is part of
-      // switching the list on rather than a second edit, and N `add` rows for one press would
-      // read as a deck somebody typed out.
+      // One row, whether or not the live list moved below: the move is part of switching the
+      // list on rather than a second edit, and N `add` rows for one press would read as a deck
+      // somebody typed out.
       if (patch.theoryEnabled !== undefined && patch.theoryEnabled !== before.theoryEnabled) {
         field("theory", before.theoryEnabled, patch.theoryEnabled);
       }
@@ -4405,8 +4488,15 @@ export function writeHandlers(db: FakeDb) {
       deck.folderId = patch.folderId ?? deck.folderId;
       deck.notes = patch.notes ?? deck.notes;
       if (patch.theoryEnabled !== undefined) {
+        const turnedOn = patch.theoryEnabled && !before.theoryEnabled;
         deck.theoryEnabled = patch.theoryEnabled;
-        if (patch.theoryEnabled && theoryCopies(db, deck.id) === 0) seedFromLive(db, deck.id);
+        if (turnedOn && theoryCopies(db, deck.id) === 0) {
+          moveLiveToTheory(db, deck.id);
+          // The tab the reader is put on, because it is now the tab their deck is in. Written
+          // here rather than left to `deck_set_view_state` for the reason the move itself is
+          // not two commands: a reader who pressed one switch made one decision.
+          deck.lastVariant = "theory";
+        }
       }
       deck.updatedAt = stamp(db);
       return toDeckRow(db, deck);
@@ -4466,6 +4556,47 @@ export function writeHandlers(db: FakeDb) {
       return toDeckRow(db, deck);
     },
 
+    /**
+     * `deck::set_view_state` — remember which tab, grouping and sort the reader is looking at.
+     *
+     * **Three columns, and nothing else in the row moves.** No `updated_at` bump, no history
+     * row, no reallocation: *looking* at a tab is not editing a deck. Each of those would be a
+     * lie of a different size — a bump would resort the gallery every time somebody glanced at
+     * their plan, a history row would bury the edits the drawer exists to show under a hundred
+     * "changed the sort", and there is nothing to reallocate because no card moved. It is the
+     * one write in this table that answers `void` for exactly that reason: there is no new
+     * {@link DeckRow} worth reading back, and a caller that redrew from one would repaint the
+     * editor on every toolbar press.
+     *
+     * **Absent means "leave it"**, per field, like a {@link DeckPatch} — so the toolbar sends
+     * only what the reader touched and three controls need no shared state to be written from.
+     *
+     * **The three fields are checked by three different amounts, and each amount is a statement
+     * about whose vocabulary the field holds.** `variant` goes through the same
+     * {@link validVariant} every other deck write opens with — `live`/`theory` is the backend's
+     * word list, and the column carries no CHECK to enforce it, so the fence is in words.
+     * `groupBy`/`sortBy` are only checked for being **blank** ({@link validMode}): the words are
+     * TypeScript's ({@link FakeDeck.lastGroupBy}) and a build that refused one it did not know
+     * would refuse the future, while a blank is a caller bug in any vocabulary. That is the
+     * deliberate opposite of `set_printing_group_by`, which refuses any mode outside its own
+     * list — because that list is the backend's.
+     *
+     * An unknown deck is refused by name, like every other deck write.
+     */
+    deck_set_view_state: (args: { deckId: number; viewState: DeckViewState }): void => {
+      refuseIfBusy(db);
+      // Validated before the deck is looked up, as the Rust validates before its UPDATE: a
+      // refusal about the arguments does not depend on which deck they were aimed at.
+      const state = args.viewState;
+      const variant = state.variant === undefined ? undefined : validVariant(state.variant);
+      const groupBy = state.groupBy === undefined ? undefined : validMode(state.groupBy);
+      const sortBy = state.sortBy === undefined ? undefined : validMode(state.sortBy);
+      const deck = requireDeck(db, args.deckId);
+      if (variant !== undefined) deck.lastVariant = variant;
+      if (groupBy !== undefined) deck.lastGroupBy = groupBy;
+      if (sortBy !== undefined) deck.lastSortBy = sortBy;
+    },
+
     /** `deck::delete_deck`. **This one really deletes** — the deck, its cards, its categories,
      *  its tags and its history, by cascade. Archiving is the soft path, and it is what a
      *  gallery's "remove" should reach for. Its **folder** is not touched: a folder files decks
@@ -4493,6 +4624,13 @@ export function writeHandlers(db: FakeDb) {
      *
      * It is not handed {@link ensurePredefinedCategories}: it inherits the source's four,
      * because every deck has them.
+     *
+     * **The three view-state columns are reset rather than inherited**, and that is Rust's
+     * answer rather than a taste: `duplicate_deck` names the columns it copies, and those three
+     * are not among them, so a copy starts at `live`/`category`/`alphabetical`. It is the right
+     * one for what they mean — a remembered view is where *this reader* left *this deck*, and a
+     * copy is a draft nobody has opened yet. The spread would have inherited them silently,
+     * which is the whole reason this is written out.
      */
     deck_duplicate: (args: { id: number }): DeckRow => {
       refuseIfBusy(db);
@@ -4503,6 +4641,9 @@ export function writeHandlers(db: FakeDb) {
         name: `${source.name} (copy)`,
         isBuilt: false,
         archived: false,
+        lastVariant: "live",
+        lastGroupBy: DEFAULT_GROUP_BY,
+        lastSortBy: DEFAULT_SORT_BY,
         updatedAt: stamp(db),
       };
       db.decks.push(copy);
@@ -5299,10 +5440,14 @@ export function writeHandlers(db: FakeDb) {
      * `deck_theory::copy_from_live` — seed the theory list from the live one, answering how many
      * **rows** were written.
      *
-     * Normally implicit (a `theoryEnabled: true` patch does this in the same write when the
-     * theory list is empty) and offered separately for the reader who wants to start again from
-     * what is sleeved up. It folds nothing and overwrites nothing: a theory row the reader
-     * already made is their plan for that card.
+     * **The one command that still copies**, and the reason it is worth having beside
+     * {@link moveLiveToTheory}: switching the plan on *moves* the deck into it, while this
+     * duplicates a live list that stays exactly where it is. It is what a reader reaches for to
+     * start a plan again from what is sleeved up, and it is the only way to fill a plan that
+     * already has something in it — the switch refuses to touch one of those on purpose.
+     *
+     * It folds nothing and overwrites nothing: a theory row the reader already made is their
+     * plan for that card.
      *
      * **Records exactly one history row**, kind `deck`, field `theory`, carrying the *copies* it
      * added in both the payload and `delta` — which makes it the one `deck`-kind row that can

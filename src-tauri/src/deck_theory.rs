@@ -9,9 +9,13 @@
 //!
 //! This module is the three things that are only true of the *pair*:
 //!
-//! * **Seeding.** Switching the theory list on for a deck that has none copies the live list
-//!   into it, in the same transaction as the flag ([`crate::deck::update_deck`] is the caller).
-//!   An empty theory list beside a full live one is not a blank page, it reads as data loss.
+//! * **The move.** Switching the theory list on for a deck that has none **moves** the live
+//!   list into it, in the same transaction as the flag ([`crate::deck::update_deck`] is the
+//!   caller). The deck the reader has built **is the plan**; what is sleeved up is what they
+//!   have actually acquired, so the live list starts empty and fills as cards arrive. Copying
+//!   instead would claim, on the reader's behalf, that they already own a deck they have only
+//!   designed — and it would leave the allocator reserving collection copies for a list that is
+//!   now a plan, which is why [`move_live_into_theory`] makes its caller reallocate.
 //! * **The difference.** [`theory_diff`] answers what theory holds that live does not — **one
 //!   direction only**, because this is a shopping list rather than a reconciliation. What live
 //!   has and theory dropped is a cut the user already made; it needs no row.
@@ -269,11 +273,9 @@ fn grouped_diff(
 /// Copy the live list into the theory one, leaving whatever theory already holds alone.
 ///
 /// **Takes the caller's connection and opens no transaction**, exactly as
-/// [`crate::deck::allocate_deck`] does, because its most important caller is
-/// [`crate::deck::update_deck`]: switching the theory list on and filling it are one fact and
-/// have to be one write. A copy that committed while the flag rolled back would be a theory
-/// list nobody asked for; a flag that committed while the copy rolled back is the empty list
-/// this exists to prevent.
+/// [`crate::deck::allocate_deck`] does, because its caller [`copy_from_live`] pairs it with a
+/// `touch_deck` and a history row and the three are one fact: a copy that committed while the
+/// history rolled back is a change with no line against it.
 ///
 /// `ON CONFLICT … DO NOTHING` on [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) rather
 /// than a fold: a theory row the user already made is *their plan for that card*, and topping
@@ -307,9 +309,54 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
         .map_err(|e| e.to_string())
 }
 
-/// Does this deck's theory list hold anything at all? The condition on the seeding rule: a
-/// theory list with rows in it is a plan the user has started, and switching the flag back on
-/// must not pour the live deck over it.
+/// **Move** the live list into the theory one: the same rows, re-labelled, leaving `live`
+/// empty.
+///
+/// What switching the theory list on actually does. The deck the reader has spent their evening
+/// building **is the plan** — they typed it out of a list, not out of a box — and the live list
+/// is what they have since sleeved up, which on the day the switch is pressed is nothing.
+/// Copying would leave the app asserting the reader owns a second copy of every card in it.
+///
+/// **Safe against the [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) unique index only
+/// because the caller has already checked the theory list is empty**, and that is the whole
+/// reason [`crate::deck::update_deck`]'s guard cannot be dropped. `variant` is *in* that grain,
+/// so re-labelling a live row `theory` collides with a theory row of the same deck, category
+/// and printing — and this is a bare `UPDATE` with no `ON CONFLICT` clause, so a collision is a
+/// `UNIQUE constraint failed` that fails the caller's whole write. Adding one here would be the
+/// wrong repair twice over: it would hide the guard's removal, and either arm of it (skip, or
+/// fold) silently rewrites a plan the reader started.
+///
+/// **It also sets the deck's `last_variant`**, because after the move the live tab is empty and
+/// everything the reader recognises is in the other one. Landing them on a blank page they did
+/// not empty is the failure this line prevents — the columns are all still there, one tab
+/// across, and nothing on screen would say so.
+///
+/// **It allocates nothing itself, and its caller must.** `deck_allocations` reserves collection
+/// copies for `live` only, so a deck whose live list has just been emptied is holding claims on
+/// copies it no longer wants; releasing them belongs in the same transaction as the move, and
+/// [`crate::deck::update_deck`] is where that transaction is.
+///
+/// Answers the number of **rows** moved, which is what `execute` counts — [`seed_from_live`]'s
+/// unit, and for its reason.
+pub(crate) fn move_live_into_theory(tx: &Connection, deck_id: i64) -> Result<usize, String> {
+    let moved = tx
+        .execute(
+            "UPDATE deck_cards SET variant = ?2, updated_at = unixepoch()
+              WHERE deck_id = ?1 AND variant = ?3",
+            params![deck_id, THEORY, LIVE],
+        )
+        .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE decks SET last_variant = ?2 WHERE id = ?1",
+        params![deck_id, THEORY],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(moved)
+}
+
+/// Does this deck's theory list hold anything at all? The condition on the move: a theory list
+/// with rows in it is a plan the user has started, and switching the flag back on must neither
+/// pour the live deck over it nor — see [`move_live_into_theory`] — collide with it.
 pub(crate) fn theory_is_empty(conn: &Connection, deck_id: i64) -> Result<bool, String> {
     conn.query_row(
         "SELECT NOT EXISTS(SELECT 1 FROM deck_cards WHERE deck_id = ?1 AND variant = ?2)",
@@ -331,7 +378,14 @@ fn theory_copies(conn: &Connection, deck_id: i64) -> Result<i64, String> {
     .map_err(|e| e.to_string())
 }
 
-/// [`seed_from_live`] as a command of its own — "copy my deck into the plan", pressed.
+/// [`seed_from_live`] as a command of its own — "copy what I have sleeved up into the plan",
+/// pressed.
+///
+/// **This is the copy, and it stays a copy**, which is what tells it apart from
+/// [`move_live_into_theory`] now that switching the list on is a move. That one runs once, on a
+/// deck whose live list *is* the plan the reader typed out; this one is pressed later, on a deck
+/// that has both lists, and it means "the cards I actually own should be in the plan too". Live
+/// keeps every row, exactly as the button says.
 ///
 /// Opens the transaction its callee will not, and moves `updated_at` through
 /// [`crate::deck::touch_deck`] so the gallery surfaces the edit and a stale deck id is answered
@@ -340,13 +394,13 @@ fn theory_copies(conn: &Connection, deck_id: i64) -> Result<i64, String> {
 /// **Records exactly one history row**, kind `deck`, field `theory`, carrying the copies it
 /// added — and it has to, for a reason worth stating because the opposite was tried first. The
 /// toggle's own row is a fact about a *switch*, written once per deck whether the deck holds
-/// forty cards or none; on an already-seeded list, which is the only state where this button is
-/// meaningfully pressed, the toggle's row was written long ago and nothing else would be. "Log
-/// ALL changes" is the whole point of the table, and a press that moves forty cards into a list
-/// is a change.
+/// forty cards or none; on a list that already exists, which is the only state where this button
+/// is meaningfully pressed, the toggle's row was written long ago and nothing else would be.
+/// "Log ALL changes" is the whole point of the table, and a press that copies forty cards into a
+/// list is a change.
 ///
 /// One row and not one per card: N `add` rows would read as a deck somebody typed out, and the
-/// toggle path — where the same copy rides along inside `update_deck` — records one row for the
+/// toggle path — where the move rides along inside `update_deck` — records one row for the
 /// same reason. `copied` is in the payload **and** in `delta`, which is [`crate::deck_audit`]'s
 /// established shape (an `add` carries its quantity in both): `delta` is the day header's
 /// arithmetic, the payload is the sentence's facts.
@@ -564,6 +618,16 @@ mod tests {
         .unwrap()
     }
 
+    /// Which list this deck would open on — `decks.last_variant`, schema v12.
+    fn last_variant(conn: &Connection, deck_id: i64) -> String {
+        conn.query_row(
+            "SELECT last_variant FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// One collection row of one printing.
     fn own(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
         crate::collection::add_entry(
@@ -579,10 +643,15 @@ mod tests {
         .id
     }
 
-    /// The whole of rule 1: a theory list that is switched on with nothing in it is not a
-    /// blank page, it is the deck the user already has — anything else reads as data loss.
+    /// The whole of rule 1: switching the theory list on **moves** the live deck into it. What
+    /// the reader has built is the plan — they typed it out of a list, not out of a box — and
+    /// what is sleeved up starts empty and fills as they acquire cards.
+    ///
+    /// **The second assertion is the test.** A copy passes the first one just as well, and a
+    /// copy is what this used to do: it left the app claiming the reader owned a second Bolt for
+    /// every Bolt in the plan.
     #[test]
-    fn enabling_theory_seeds_it_from_live() {
+    fn enabling_theory_moves_the_live_deck_into_it() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
@@ -593,18 +662,81 @@ mod tests {
 
         assert_eq!(
             cards_in(&conn, id, THEORY),
-            vec![("bolt-lea".to_owned(), 4), ("serra-lea".to_owned(), 1)]
-        );
-        assert_eq!(
-            cards_in(&conn, id, LIVE),
             vec![("bolt-lea".to_owned(), 4), ("serra-lea".to_owned(), 1)],
-            "seeding copies, it never moves"
+            "the plan is the deck that was there"
+        );
+        assert!(
+            cards_in(&conn, id, LIVE).is_empty(),
+            "and the live list is what has actually been sleeved up: nothing, yet"
+        );
+    }
+
+    /// After the move the live tab is empty and everything the reader recognises is one tab
+    /// across, so the deck has to open there. Landing them on a blank page they did not empty is
+    /// the failure this pins — the columns are all still there and nothing on screen says so.
+    #[test]
+    fn enabling_theory_leaves_the_deck_opening_on_the_theory_tab() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, LIVE, 4);
+        assert_eq!(
+            last_variant(&conn, id),
+            LIVE,
+            "a deck opens on the deck the reader has, until there is a reason not to"
+        );
+
+        set_theory(&conn, id, true);
+
+        assert_eq!(last_variant(&conn, id), THEORY);
+    }
+
+    /// **The move releases what the live list had reserved, in the same transaction.** This is
+    /// the one a naive implementation gets wrong invisibly: `deck_allocations` carries no
+    /// variant and `allocate_deck` claims for `live` only, so a move that did not reallocate
+    /// would leave this deck holding four copies of a card it no longer lists — taken away from
+    /// every other deck, and released only at whatever unrelated write happened to touch this
+    /// one next.
+    ///
+    /// The deck is **built**, because that is what makes a claim visible to anybody else, and
+    /// the claim is asserted before the switch so the test can tell "released" from "never
+    /// made".
+    #[test]
+    fn enabling_theory_releases_the_copies_the_live_list_had_claimed() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        let entry = own(&conn, "bolt-lea", 4);
+        add(&conn, id, "bolt-lea", main, LIVE, 4);
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &DeckPatch {
+                is_built: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            allocations(&conn),
+            vec![(entry, 4)],
+            "the live list must really have claimed the copies"
+        );
+
+        set_theory(&conn, id, true);
+
+        assert!(
+            allocations(&conn).is_empty(),
+            "a plan reserves nothing, and the live list is now empty"
         );
     }
 
     /// The other half of the rule, and the one a naive implementation gets wrong: a theory
     /// list that already holds something is a plan the user started, and switching the flag
-    /// back on must not pour the live deck over it.
+    /// back on must neither pour the live deck over it nor collide with it.
+    ///
+    /// **Live keeps its rows here**, and that is the same guard read from the other side: no
+    /// move happened, so nothing left the deck the user has.
     #[test]
     fn enabling_theory_again_leaves_a_started_plan_alone() {
         let conn = seeded();
@@ -620,6 +752,11 @@ mod tests {
             vec![("serra-lea".to_owned(), 1)],
             "the plan the user started, untouched"
         );
+        assert_eq!(
+            cards_in(&conn, id, LIVE),
+            vec![("bolt-lea".to_owned(), 4)],
+            "and the deck they have, untouched with it"
+        );
     }
 
     /// Rule 4. Switching the list off hides a switch; a list the user spent an evening on is
@@ -630,6 +767,8 @@ mod tests {
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
         add(&conn, id, "bolt-lea", main, LIVE, 4);
+        // The Bolt arrives in the plan by the move, not by a copy — so live is empty from here
+        // on, and the Angel is an edit the reader makes to the plan afterwards.
         set_theory(&conn, id, true);
         add(&conn, id, "serra-lea", main, THEORY, 2);
 
@@ -639,11 +778,15 @@ mod tests {
             cards_in(&conn, id, THEORY),
             vec![("bolt-lea".to_owned(), 4), ("serra-lea".to_owned(), 2)]
         );
-        // And switching it back on finds the plan still there rather than re-seeding over it.
+        // And switching it back on finds the plan still there rather than moving over it.
         set_theory(&conn, id, true);
         assert_eq!(
             cards_in(&conn, id, THEORY),
             vec![("bolt-lea".to_owned(), 4), ("serra-lea".to_owned(), 2)]
+        );
+        assert!(
+            cards_in(&conn, id, LIVE).is_empty(),
+            "and nothing re-appears in the live list either way"
         );
     }
 
