@@ -258,6 +258,59 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **174px past a 1280px window** (measured), and the page slid left, sidebar and all, the
   moment its own `scrollIntoView` ran. `right-0`, the same decision as
   `AddToCollection`'s `align="end"`.
+- **A fixed-width column layout that opens the next column to the right is a horizontal
+  scrollbar with extra steps.** The deck editor's two column views pack a deck's groups into
+  columns of a fixed width — `stackColumnWidth(zoom)`, 224px at 1×, and `TextView`'s
+  `COLUMN_WIDTH`, a flat 300px that does not zoom — and both used to lay those columns in one
+  non-wrapping row inside an `overflow-auto` box. That is not a decision at 1280px and five
+  columns; it is a decision at the app's floor. **The floor is a 1024px window**, where the
+  editor's desk row — the view, the stats block and the search panel between them — measures
+  **376px** with the card pane docked (361 once the page's own scrollbar is out), and **the view
+  itself — the box the columns are actually in — gets 313 of it**, from `DeckEditor.tsx`'s own
+  measured table: `| 1024 | open | 361 | 313 | rail |`. Only 376 is pinned to the pixel, as
+  `DeckEditor.test.tsx`'s `desk(376)`; 361 and 313 live there in prose. **313 is the column
+  budget**, and against it one 224px stack column leaves 89px and one 300px text column 13 — one
+  column, either way. `packColumns` fills a column before opening the next, so a deck is always
+  fewer columns than it has categories; it is nonetheless **more columns than the desk is wide**
+  the moment it has two, and every column after the first opened to the right, off the edge, with
+  an X scrollbar across the whole desk. Same failure as the popup above, from the other
+  direction — and it is the one route `DECK_FLOOR` never measured: **208
+  is the width the deck side is _guaranteed_, and it does not hold even one column**, because
+  that floor was written for the desk's three-way split and never for what the pack does inside
+  it. The fix is `flex-wrap` on the packed row: the column that will not fit goes below the line
+  and the reader scrolls **down**, which every deck view already does. `packColumns` is
+  untouched by it — the wrap is a property of the box the columns are laid in, not of how they
+  were filled — and `overflow-auto` stays rather than narrowing to `overflow-y-auto`, since one
+  column zoomed past the desk's own width genuinely is wider than its box and clipping a card is
+  worse than a scrollbar the reader asked for. Wrapping is what makes that the rare case.
+- **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
+  — never a `ResizeObserver`.** The Sideboard was the pack's worst case. `packColumns` is greedy
+  and in the reader's own order (never reordering, never splitting a group), so a category like
+  any other lands wherever the run puts it, and the pile a reader most often wants beside the
+  deck sat at the far end of a long sideways run, off screen. `splitSideboard` takes the `side`
+  groups out before the pack runs and draws them as one column pinned right; the pack keeps its
+  whole contract and is handed fewer groups. Whether there is room for that rail is decided by
+  the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
+  the desk holds two columns and the gap between them the rail sits beside the flow, and below
+  that width it wraps onto its own line, where `ml-auto` keeps it on the right. **`content-start`
+  belongs on the view's root and nowhere else**, and it is what keeps a wrapped rail immediately
+  under the flow: that root is a `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as
+  the scroller rather than as tall as its content, and `align-content`'s initial `normal` behaves
+  as _stretch_ — two lines in a box with slack means the slack is dealt out between them, hanging
+  the rail in mid-desk under a small deck. `items-start` cannot say it (it aligns an item within
+  its line), and the flowing box inside cannot carry it (that box is never stretched, so it has no
+  free cross-space to align). **That threshold
+  is arithmetic rather than a measurement** — 224 + 16 + 224 = **464px** in the stack view at 1×,
+  whose gap is `gap-4` (884 at 2×, where a column is 434), and 300 + 24 + 300 = **624px** in the
+  text view, whose gap is `gap-6` and whose 300px column has no zoom to move it. `min-w-0` and
+  `flex-1` cannot express it, because a flex item that may shrink to nothing never wraps at all.
+  An observer could, and is refused: **a view has no business observing its own box** —
+  `DEFAULT_COLUMN_HEIGHT`'s doc is explicit that the editor measures the scroller and passes the
+  height — and a second reading of the same box answers a frame behind the layout it is reacting
+  to, which at exactly this threshold is one frame of the scrollbar the whole change exists to
+  remove. **Not yet driven in the shipped window** (2026-08-14): every figure in these two
+  entries is either quoted from `DeckEditor`'s own measurements or derived from the two column
+  widths, and the wrap, the drop and the rail's own position are what a live pass still owes.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row

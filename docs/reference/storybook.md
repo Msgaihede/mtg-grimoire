@@ -2,15 +2,20 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **375 stories across 48 story files, 47 docs
+`npm run storybook` · `npm run build-storybook`. **379 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the game-changer branch **with the
-facet-ordering `main` merged in**: 422 entries, 375 `story`, 47 `docs`, 49 distinct
-`importPath`s. That branch adds **five** stories to three existing files (`CardArt` 2,
-`SearchPage` 2, `CardGrid` 1) and no story *file*.
+**Measured 2026-08-14** off a fresh `build-storybook` on the deck-view-overflow branch: 426
+entries, 379 `story`, 47 `docs`, 49 distinct `importPath`s. That branch adds **four** stories to
+**two existing files** — `WrappedColumns` and `SideboardRail` in each of `Decks/StackView` and
+`Decks/TextView` — and no story *file*, which is why the file and docs-page counts held while the
+story total moved.
 
-The seventeen over the 358 measured 2026-08-12 come from six branches that never saw each other's
+The 375 it is four over was measured the same day on the game-changer branch **with the
+facet-ordering `main` merged in**: 422 entries, 375 `story`, 47 `docs`, 49 distinct
+`importPath`s, adding **five** stories to three existing files (`CardArt` 2, `SearchPage` 2,
+`CardGrid` 1) and no story *file*. That 375 was itself seventeen over the 358 measured
+2026-08-12, from six branches that never saw each other's
 stories: five are `Card/DetailPane`'s, when the printings list gained a group-by selector (a story
 per mode that renders differently, plus one that drives the select) and the card art gained a foil
 view; five are `Components/CardZoomIndicator`'s, **the one new story _file_ in the set**, which is
@@ -38,7 +43,7 @@ if you state a delta at all, count `+` minus `-`, and treat a figure that is off
 miscount to find rather than a mystery to write up.
 
 None of which changes the rule: **rebuild and read the index on the tree you are actually
-shipping**, which is the merge commit and not either parent. This branch re-measured four times
+shipping**, which is the merge commit and not either parent. That branch re-measured four times
 (363 → 369 → 374 → 375) and every intermediate number was stale before CI finished.
 
 **This line is where a derived count goes to die, three times over.** The deck-import branch's
@@ -153,13 +158,18 @@ pages against 48 story files, and the two opting out are still the same two.)
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**270** plays today, in a file of **273** tests — the other three are its own;
-`grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-14). **Both figures had rotted before this
-re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
-worth of drift added by branches that did not re-measure, and is the same prose-only rot the
-story totals above have taken three times. Only one of the six is this branch's
-(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
+  (**288** plays today, in a file of **291** tests — the other three are its own;
+`grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the loop's own
+structure for the second — one `it` per play, plus the glob tripwire and the two stories mounted
+together — both re-derived 2026-08-14). **This pair rots faster than the story totals above,
+because no build produces it**: `index.json` knows nothing about plays, so a branch can
+re-measure the totals correctly and leave this line untouched. It read 270/273 against a tree
+already answering **284/287** — fourteen plays' worth of drift from branches that did exactly
+that — and before that 264/267 against 269/272. Four of today's figure are this branch's, one
+each on `WrappedColumns` and `SideboardRail` in `StackView` and `TextView`. Count the `play:`
+lines rather than the stories: **all 288 sit at two-space indent and no meta carries one**, which
+is what makes the grep and the runner agree; a `play` on a meta would run once per story and
+break that. This is what puts a story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.

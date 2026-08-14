@@ -15,7 +15,7 @@ import { deckGroupProps, useCategoryDrop, type DeckCardActions } from "../cardCo
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns } from "./columns";
+import { packColumns, SIDEBOARD_ATTR, splitSideboard } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -120,30 +120,101 @@ export function StackView({
   // chrome at every stop on the ladder. A px number in an inline style rather than the `14rem`
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
+  // The Sideboard never enters the pack: it is lifted out here and drawn in the rail below, so
+  // `packColumns` is handed a shorter list and its contract — greedy, in the reader's own
+  // order, never reordering — is untouched. Splitting *after* packing would mean pulling a
+  // group out of a column somebody else is already sharing, and re-flowing the rest.
+  const { flow, sideboard } = splitSideboard(groups);
   // The pack has to see the zoom too — a taller stack is fewer groups to a column. Wrapped
   // rather than passed by name, because `packColumns` takes a measurement of one item and knows
   // nothing about decks, let alone about how big the reader is drawing them.
-  const columns = packColumns(groups, (group) => groupHeight(group, cardZoom), columnHeight);
+  const columns = packColumns(flow, (group) => groupHeight(group, cardZoom), columnHeight);
 
   return (
-    // Scrolls both ways: sideways because a fifteen-category deck is more columns than a
-    // window is wide, and down because a lifted card at the foot of a column overflows its
-    // group on purpose and has to have somewhere to go.
+    // Scrolls **down**, and that is the whole of this layout. A column that will not fit opens
+    // *below* the line rather than off the right edge: a fifteen-category deck used to run
+    // sideways and put an X scrollbar across the entire desk, which is the one thing the app's
+    // 1024px floor forbids — reached by the route `DeckEditor`'s `DECK_FLOOR` never measured,
+    // since 208 is the width this view is guaranteed and it does not hold even one column.
+    // Down is also where a lifted card at the foot of a column has always had to go, so there
+    // is one direction to scroll rather than two.
+    //
+    // `overflow-auto` and not `overflow-y-auto`: one column at 2× really is wider than a narrow
+    // desk, and clipping a card is worse than a scrollbar the reader asked for by zooming.
+    // Wrapping is what makes that the rare case instead of the ordinary one.
+    //
+    // The `flex-wrap` *here* is what decides the narrow desk. With the flowing box below
+    // refusing to go under one column wide, a desk too narrow to hold a column beside the rail
+    // drops the rail onto its own line — CSS answering it, with nothing in this view measuring
+    // its own box, which its `DEFAULT_COLUMN_HEIGHT` is equally explicit about.
+    //
+    // `content-start` belongs on *this* box and only here, because this is the box with height
+    // to spare: `DeckEditor` renders it as a `flex-1` item of a `min-h-0 flex-col` parent, so
+    // its height is the scroller's rather than its content's. Once the rail has wrapped, that
+    // makes two flex lines in a box taller than both — and `align-content`'s initial `normal`
+    // behaves as **stretch**, dealing the slack out between them. A freshly created deck — four
+    // nearly empty piles, one short column — would draw that column at the top and the Sideboard
+    // floating a couple of hundred pixels under it with nothing in between. `items-start` cannot
+    // prevent it: that aligns an item within its line, never the lines within the box.
     <div
       ref={scrollRef}
-      className={cn("flex min-w-0 flex-1 gap-4 overflow-auto pb-2", className)}
+      className={cn(
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-auto pb-2",
+        className,
+      )}
     >
-      {columns.map((column, index) => (
+      {/* The flowing half. `minWidth` is one column, and that number is the whole mechanism
+          above: below it the rail wraps, rather than this box squeezing under a column's fixed
+          width and scrolling sideways. `min-w-0`/`flex-1` cannot say it — they describe how a
+          box shares slack, not the width at which it must stop sharing. `flex-wrap` is what
+          sends the column that will not fit onto the next line, and `items-start` keeps a column
+          its own height: stretched, a switched-off pile's dashed border would grow to the
+          tallest thing on its line and read as an empty box nobody drew.
+
+          **No `content-start` here, on purpose.** This box is a flex item of a line the outer
+          `items-start` never stretches, so its height is exactly its content's, there is no free
+          cross-space in it, and an `align-content` would have nothing to align. The one place
+          that rule can act is the root above. */}
+      <div style={{ minWidth: columnWidth }} className="flex flex-1 flex-wrap items-start gap-4">
+        {columns.map((column, index) => (
+          <div
+            // By position, and that is safe here in the way a table row's key is not: a column
+            // is not a thing the reader can address, and its identity is exactly "the nth
+            // column of this layout".
+            key={index}
+            {...{ [STACK_COLUMN_ATTR]: "" }}
+            style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
+            className="flex flex-col gap-5"
+          >
+            {column.map((group) => (
+              <StackGroup
+                key={group.key}
+                group={group}
+                marketplace={marketplace}
+                violations={violations}
+                onSelect={onSelect}
+                actions={actions}
+                zoom={cardZoom}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      {/* The rail: the Sideboard, on the right, never packed and never wrapped away from the
+          edge while there is room for it. It draws for an **empty** Sideboard too — an empty
+          pile is where the next sideboard card goes, and a rail that appeared with the first
+          card would move the whole layout under the reader's hand at the moment they were
+          using it. `ml-auto` is a no-op while the flowing half is `flex-1`, and does the work
+          in the one case that matters: the rail on its own line, still right. The width is the
+          same `stackColumnWidth` the columns are, inline and in both halves of the shorthand,
+          because a Tailwind class built from a number emits no CSS rule at all. */}
+      {sideboard.length > 0 && (
         <div
-          // By position, and that is safe here in the way a table row's key is not: a column
-          // is not a thing the reader can address, and its identity is exactly "the nth
-          // column of this layout".
-          key={index}
-          {...{ [STACK_COLUMN_ATTR]: "" }}
+          {...{ [SIDEBOARD_ATTR]: "" }}
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
-          className="flex flex-col gap-5"
+          className="ml-auto flex flex-col gap-5"
         >
-          {column.map((group) => (
+          {sideboard.map((group) => (
             <StackGroup
               key={group.key}
               group={group}
@@ -155,7 +226,7 @@ export function StackView({
             />
           ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }

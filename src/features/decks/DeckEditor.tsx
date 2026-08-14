@@ -656,8 +656,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     });
   }, [trayShown, applyDrop]);
 
-  // A pile can be off the bottom of the view while a card is in the air over it — the stack
-  // packs into columns that scroll sideways, and the grid runs down the page. This scrolls the
+  // A pile can be off the bottom of the view while a card is in the air over it — the stack's
+  // columns wrap down the page rather than running off its right-hand edge, and the grid runs
+  // down it too, so every view here is taller than its box before it is wider. This scrolls the
   // view when the drag nears its edge: the one motion in here, and the platform's own idea of a
   // drag rather than the app's.
   useEffect(() => {

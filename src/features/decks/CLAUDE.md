@@ -159,6 +159,44 @@ price | type`). An **inactive category stays its own group in all three grouping
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
   the pre-warm reports success and every tile then fetches cold anyway.
+- **`Stacks` and `Text` wrap their columns downward — neither view grows sideways any more**
+  (changed 2026-08-14). Both pack a deck's groups into fixed-width columns —
+  `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
+  next column _to the right_, so a fifteen-category deck ran off the edge and put an X scrollbar
+  across the whole desk. That is the one thing the 1024px floor forbids, reached by the one route
+  `DECK_FLOOR` never measured: 208 is the width the deck side is _guaranteed_, and it does not hold
+  even one column. The packed row is a `flex-wrap` container now, so a column that will not fit goes
+  **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
+  rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
+  wider than its box, and clipping a card is worse than a scrollbar the reader asked for. Wrapping
+  is what makes that the rare case instead of the ordinary one.
+- **The Sideboard is a rail pinned to the right of the flow, and is never packed.** `splitSideboard`
+  in `views/columns.ts` takes it out before the pack runs, on **`kind === "side"` and nothing else**
+  — the name is the user's (`DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so any pile may be called
+  "Sideboard"), and the kind is what the rules read. It used to be the greedy pack's worst case: a
+  category like any other, so it landed wherever the run put it, which on a long sideways run was
+  off the right-hand edge. **`packColumns` keeps its whole contract** — greedy, in the reader's
+  order, never reordering, never splitting a group, an over-tall group taking its own column —
+  and is simply handed fewer groups. The rail is drawn for an **empty** Sideboard too: an empty pile
+  is where the next sideboard card goes, and a rail that appeared with the first card would move the
+  layout under the reader's hand. **No group with that kind is no rail at all** — and which groups
+  carry the kind is `buildGroups`' answer, never a view's. Under `Group by` mana value or type the
+  derived buckets are headings with `kind: null` and they flow, but **every switched-off category
+  is appended as itself**, so a reader who turns the Sideboard off and then groups by mana value
+  gets a rail beside a layout made almost entirely of headings. The split reads `kind` and nothing
+  else — not `isActive`, and never `groupBy`, which would push a deck concept into the one file
+  here whose whole discipline is not knowing what a deck is. A group in the rail is the same
+  `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with it
+  rather than being defined twice.
+- **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
+  column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
+  own `flex-wrap` drops the rail onto the next line — `ml-auto` is what keeps it on the right when
+  it lands there, and a no-op at every other width. `min-w-0`/`flex-1` cannot say this, because a
+  flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
+  **this view has no business observing its own box** (`DEFAULT_COLUMN_HEIGHT`'s doc: the editor
+  measures the scroller and passes the height), and a second reading of the same box answers a frame
+  behind the layout it is reacting to. The widths, and the law behind all three of these bullets:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,
