@@ -14,9 +14,8 @@
  * an optimisation — a menu that fetched on open would fire a request every time a reader
  * right-clicked the wrong tile.
  */
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import {
-  ChevronRight,
   Copy,
   ExternalLink,
   Folder,
@@ -27,7 +26,7 @@ import {
   LibraryBig,
   Plus,
 } from "lucide-react";
-import { ROW_CLASS } from "@/components/menu/panel";
+import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildFolderTree, type FolderNode } from "@/features/decks/FolderTree";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
@@ -39,7 +38,6 @@ import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
 import { ipc, ipcError, type DeckFolder, type DeckRow, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { sortOptions } from "@/lib/options";
-import { cn } from "@/lib/utils";
 
 /**
  * The card a menu was opened on, as every surface can describe it.
@@ -307,102 +305,136 @@ function run(work: Promise<unknown>): void {
  * **This component is the whole reason `MenuLazy` exists.** `useDecks()` and `useDeckFolders()`
  * are two queries, and a right-click on a tile in a wall of forty must fire neither. They fire
  * here, on an expand, which is a deliberate act.
+ *
+ * **It draws nothing of its own but two words.** The rows are `MenuRows`, the menu module's one
+ * export for a lazy body, so a folder here is a real nested `role="menu"` with the cascade's
+ * ArrowRight, ArrowLeft, `aria-haspopup`/`aria-expanded`, caret and per-level Escape — rather
+ * than an indented list whose hierarchy only the sighted reader can see. A second implementation
+ * of a menu row is the thing that export exists to prevent.
+ *
+ * **It writes nothing, and that is not tidiness.** `ctx.run` hands focus back, closes the menu
+ * and *then* calls `onSelect`, so by the time a leaf's handler runs this component is on its way
+ * out — it survives only for the length of the panel's exit animation, which is no place to put
+ * a write and nowhere at all to put its refusal. {@link useCardToDeck} is the other half, and it
+ * is mounted by the surface, which outlives the menu. That is the split `useSidebarDrops` and
+ * `useSwapFromPane` already use: borrow `useDeck` whole somewhere that persists, and own the
+ * reporting there.
+ *
+ * `onDone` is accepted and deliberately **not called**: `ctx.run` has already closed the menu by
+ * the time any row of this body runs, and calling it too would be a double close. It is for a
+ * body that finishes without a row being pressed, which this one cannot do.
  */
-export function DeckTargetSubmenu({
-  target,
-  onDone,
-}: {
+export function DeckTargetSubmenu(props: {
   target: CardMenuTarget;
   onDone: () => void;
+  /** Where a chosen leaf goes. {@link useCardToDeck}'s `addToDeck`, wired by the surface. */
+  onPick: (target: CardMenuTarget, deckId: number, variant: DeckVariant) => void;
 }) {
+  const { target, onPick } = props;
   const { decks, query: deckQuery } = useDecks();
   const { folders, query: folderQuery } = useDeckFolders();
-  /** The leaf the reader pressed. Setting it is what mounts the deck's own hook below. */
-  const [pending, setPending] = useState<{ deckId: number; variant: DeckVariant } | null>(null);
-  /** What the last refused add said, drawn over the rows it came back to. */
-  const [refusal, setRefusal] = useState<string | null>(null);
-
-  /**
-   * **One `useDeck`, mounted on the press rather than on the row**, because `useDeck` is the
-   * single definition of the add rule *and* it carries the deck's own `deck_get`. A hook per
-   * deck row would read every deck in the gallery to offer a menu; `null` until a leaf is taken
-   * leaves the query disabled, and the one read that does happen is for the deck the card is
-   * going into.
-   */
-  const { addCard } = useDeck(pending?.deckId ?? null, pending?.variant ?? DEFAULT_VARIANT);
-  const add = addCard.mutate;
-  /**
-   * Which leaf has already been written, so the add happens exactly once.
-   *
-   * Load-bearing under `StrictMode`, which mounts an effect twice on purpose — without it a
-   * single press would put two copies in the deck in development and one in the shipped
-   * window, which is the worst shape a bug can have.
-   */
-  const written = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (pending === null) return;
-    const key = `${pending.deckId}:${pending.variant}`;
-    if (written.current === key) return;
-    written.current = key;
-    /**
-     * **No `categoryId`, so `autoCategoryFor` files the card by what it does** — the app's one
-     * rule, shared by a plain add, a drag with no column under it and an imported line. The
-     * type line travels as the fallback (`null` where the surface has none); it is deliberately
-     * not *absent*, which is the arm that files everything under `DEFAULT_CATEGORY_NAME`
-     * without consulting the card at all.
-     */
-    add(
-      { cardId: target.cardId, typeLine: target.typeLine ?? null, quantity: 1 },
-      /**
-       * **The menu closes on the answer, not on the press** — which is what makes these two
-       * callbacks fire at all. `mutate`'s per-call callbacks are the observer's, and TanStack
-       * skips them once the component holding it has unmounted; closing first would have thrown
-       * the refusal away with the panel. The write is a local SQLite round trip, so the beat
-       * this costs a successful add is imperceptible.
-       *
-       * **Reporting is the surface's, the write and its refusal rule are the deck's** —
-       * `useSidebarDrops` is the precedent and the same shape: per-call sentences here, and the
-       * `["decks"]` invalidation that carries a `GONE` back to the editor's columns staying on
-       * `useDeck.addCard`'s single definition. There is no toast in this app to reach for; the
-       * sentence is drawn where the reader is already looking, over the rows it came back to.
-       */
-      {
-        onSuccess: () => onDone(),
-        onError: (error) => {
-          // Both are undone, so the same leaf can simply be pressed again: the guard above is
-          // keyed on the leaf, and a refusal that left it set would make one deck unpressable.
-          written.current = null;
-          setPending(null);
-          setRefusal(ipcError(error));
-        },
-      },
-    );
-  }, [pending, add, onDone, target.cardId, target.typeLine]);
 
   const items = useMemo(
     () =>
-      buildDeckTargetItems(folders, decks, (deckId, variant) => setPending({ deckId, variant })),
-    [folders, decks],
+      buildDeckTargetItems(folders, decks, (deckId, variant) => onPick(target, deckId, variant)),
+    [folders, decks, onPick, target],
   );
 
-  if (pending !== null) return <PickerNote>Adding…</PickerNote>;
   // A gallery with nothing in it and a gallery that has not answered yet are told apart by
   // `isPending`, never by the empty array — both hooks say so on their own `decks`/`folders`.
   if (deckQuery.isPending || folderQuery.isPending) return <PickerNote>Loading decks…</PickerNote>;
   if (items.length === 0) return <PickerNote>No decks</PickerNote>;
-  return (
-    <>
-      {refusal !== null && (
-        // `role="alert"` and not the panel's rows: it appears with its sentence already in it,
-        // which a `status` region announces nothing for.
-        <p role="alert" className="px-2 py-1.5 text-sm text-destructive">
-          {refusal}
-        </p>
-      )}
-      <PickerRows items={items} depth={0} />
-    </>
+  return <MenuRows items={items} />;
+}
+
+/**
+ * The other half of the deck picker: the write, and what to say when it is refused.
+ *
+ * **Mounted by the surface, not by the menu**, because a menu row's handler runs *after*
+ * `ctx.run` has closed the menu — a write started from inside the panel lives only as long as
+ * its exit animation, and an answer that arrives after that has nowhere to be reported and no
+ * observer left to report it. The two surfaces that already reach a deck write from outside the
+ * editor solve it the same way: `useSidebarDrops` is mounted in `AppShell` and `useSwapFromPane`
+ * in the card pane, and `decks/CLAUDE.md` names both as borrowing the mutation whole while
+ * owning only their own reporting. This is the third.
+ *
+ * `error` is the surface's to draw, wherever that surface draws a refused write. Nothing is
+ * invented here: there is no toast in this app, and a menu that has already closed is not a
+ * place to put one.
+ */
+export function useCardToDeck(): {
+  /** Wire to {@link DeckTargetSubmenu}'s `onPick`. */
+  addToDeck: (target: CardMenuTarget, deckId: number, variant: DeckVariant) => void;
+  /** What the last refused add said, or `null`. */
+  error: string | null;
+  clearError: () => void;
+} {
+  /**
+   * The add the reader asked for. Setting it is what mounts the deck's own hook below.
+   *
+   * **One `useDeck`, armed by the press rather than by the row**, because `useDeck` is the single
+   * definition of the add rule *and* it carries the deck's own `deck_get`. A hook per deck row
+   * would read every deck in the gallery to offer a menu; `null` until a leaf is taken leaves
+   * that query disabled (`enabled: id !== null`), and the one read that does happen is for the
+   * deck the card is going into.
+   */
+  const [pending, setPending] = useState<{
+    target: CardMenuTarget;
+    deckId: number;
+    variant: DeckVariant;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const { addCard } = useDeck(pending?.deckId ?? null, pending?.variant ?? DEFAULT_VARIANT);
+  const add = addCard.mutate;
+  /**
+   * Which add has already been sent, so it happens exactly once.
+   *
+   * Load-bearing under `StrictMode`, which mounts an effect twice on purpose — without it a
+   * single press would put two copies in the deck in development and one in the shipped window,
+   * which is the worst shape a bug can have.
+   */
+  const written = useRef<{ target: CardMenuTarget; deckId: number; variant: DeckVariant } | null>(
+    null,
   );
+
+  useEffect(() => {
+    if (pending === null || written.current === pending) return;
+    written.current = pending;
+    /**
+     * **No `categoryId`, so `autoCategoryFor` files the card by what it does** — the app's one
+     * rule, shared by a plain add, a drag with no column under it and an imported line. The type
+     * line travels as the fallback (`null` where the surface has none); it is deliberately not
+     * *absent*, which is the arm that files everything under `DEFAULT_CATEGORY_NAME` without
+     * consulting the card at all.
+     *
+     * The per-call callbacks are this surface's reporting, exactly as `dropOnDecks` attaches
+     * its sentences; the `["decks"]` invalidation that carries a `GONE` back to the editor's
+     * columns stays on `useDeck.addCard`'s single definition, because two definitions would be
+     * two places to keep one rule.
+     */
+    add(
+      {
+        cardId: pending.target.cardId,
+        typeLine: pending.target.typeLine ?? null,
+        quantity: 1,
+      },
+      {
+        onSuccess: () => setError(null),
+        onError: (refusal) => setError(ipcError(refusal)),
+      },
+    );
+  }, [pending, add]);
+
+  const addToDeck = useCallback(
+    (target: CardMenuTarget, deckId: number, variant: DeckVariant) =>
+      // A fresh object every time, so pressing the same leaf twice is two adds rather than one:
+      // the guard above is identity on this value and a reader who adds a second copy means it.
+      setPending({ target, deckId, variant }),
+    [],
+  );
+  const clearError = useCallback(() => setError(null), []);
+  return { addToDeck, error, clearError };
 }
 
 /**
@@ -515,118 +547,14 @@ function deckItem(deck: DeckRow, choose: (deckId: number, variant: DeckVariant) 
 }
 
 /**
- * The picker's own rows, drawn inside the panel the `lazy` row opened.
+ * A word where a row would be — the deck list still arriving, or a gallery with nothing in it.
  *
- * **Indented disclosures rather than a second cascade.** The panel owns the cascade, and a
- * lazy row's content is the *inside* of one child panel — so a folder here opens downward, in
- * place, the way the gallery's own filing cabinet indents rather than flying out. It is also
- * what keeps a four-deep path (folder → subfolder → deck → list) reachable without four
- * panels chasing each other off the edge of a 1280px window.
- *
- * The indent is an **inline style**: Tailwind scans source text for whole class names, so
- * `pl-[${n}px]` built by interpolation emits no rule at all.
- */
-function PickerRows({ items, depth }: { items: readonly MenuItem[]; depth: number }) {
-  return (
-    <>
-      {items.map((item) => (
-        <PickerRow key={item.id} item={item} depth={depth} />
-      ))}
-    </>
-  );
-}
-
-const PICKER_INDENT_STEP = 12;
-
-/**
- * A picker row wears the panel's own row, not a lookalike.
- *
- * `ROW_CLASS` is the cascade's shared geometry — and its shared **timing**, which is the token
- * `duration-[var(--duration-fast)]` rather than a number, because timings live in
- * `src/lib/motion.ts` and `index.css` and nowhere else.
- *
- * The colours are `ContextMenu.tsx`'s `LIVE_ROW`, spelled out here because that constant is
- * module-private. **`focus:` and not `focus-visible:` is the load-bearing half**: the panel's
- * caret *is* real focus, moved programmatically by `moveCaret`, and `:focus-visible`'s heuristic
- * may decline to paint a focus the reader never reached with the keyboard — so a row styled the
- * other way loses the caret the instant it crosses from a panel row into this content. `px-2`
- * comes with `ROW_CLASS` and the indent overrides its left half from the `style` attribute,
- * which wins over a class.
- */
-const PICKER_ROW = cn(ROW_CLASS, "cursor-pointer text-text hover:bg-bg focus:bg-bg");
-
-function PickerRow({ item, depth }: { item: MenuItem; depth: number }) {
-  const [open, setOpen] = useState(false);
-  const indent = { paddingLeft: 8 + depth * PICKER_INDENT_STEP };
-
-  switch (item.kind) {
-    case "submenu": {
-      const Icon = item.Icon;
-      return (
-        <>
-          <button
-            type="button"
-            role="menuitem"
-            tabIndex={-1}
-            // `aria-expanded` and deliberately **no `aria-haspopup`**: this row does not open a
-            // popup, it unfolds its own children into the panel it is already in.
-            aria-expanded={open}
-            onClick={() => setOpen((was) => !was)}
-            className={PICKER_ROW}
-            style={indent}
-          >
-            {Icon ? <Icon className="size-4 shrink-0" aria-hidden /> : null}
-            <span className="min-w-0 flex-1 truncate">{item.label}</span>
-            <ChevronRight
-              className={cn(
-                "size-4 shrink-0 transition-transform motion-reduce:transition-none",
-                "duration-[var(--duration-fast)]",
-                open && "rotate-90",
-              )}
-              aria-hidden
-            />
-          </button>
-          {open ? <PickerRows items={item.items} depth={depth + 1} /> : null}
-        </>
-      );
-    }
-    case "action": {
-      const Icon = item.Icon;
-      return (
-        <button
-          type="button"
-          role="menuitem"
-          tabIndex={-1}
-          // `aria-disabled`, never the `disabled` attribute: a greyed row exists to be read, so
-          // it stays in the tab order.
-          aria-disabled={item.disabled === true || undefined}
-          onClick={() => {
-            if (item.disabled !== true) item.onSelect();
-          }}
-          className={cn(PICKER_ROW, item.disabled === true && "cursor-default text-dim")}
-          style={indent}
-        >
-          {Icon ? <Icon className="size-4 shrink-0" aria-hidden /> : null}
-          <span className="min-w-0 flex-1 truncate">{item.label}</span>
-          {item.reason ? <span className="text-dim">{item.reason}</span> : null}
-        </button>
-      );
-    }
-    default:
-      // The picker builds actions and submenus and nothing else. A radio, a separator or a
-      // nested `lazy` row belongs to the panel's own renderer, which is what draws the menu
-      // this content sits inside.
-      return null;
-  }
-}
-
-/**
- * A word where a row would be — loading, empty, or the beat between the press and the close.
- *
- * A **disabled `menuitem`** rather than a paragraph, for the two reasons this app's menus give
- * everywhere: a `role="menu"` may only hold menu rows, so a bare `<p>` inside one is a string a
- * screen reader is not obliged to announce; and a greyed row exists precisely to be read.
- * `aria-disabled`, never the `disabled` attribute.
+ * The one piece of markup this file still draws inside a menu, and it is a **disabled
+ * `menuitem`** rather than a paragraph for two reasons this app's menus give everywhere: a
+ * `role="menu"` may only own menu rows, so a bare `<p>` inside one is a string a screen reader is
+ * not obliged to announce; and a greyed row exists precisely to be read. `aria-disabled`, never
+ * the `disabled` attribute — which is also what keeps the caret off it, since `menuRowsIn`
+ * filters on exactly that attribute.
  */
 function PickerNote({ children }: { children: string }) {
   return (

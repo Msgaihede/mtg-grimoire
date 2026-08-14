@@ -1,7 +1,10 @@
+import { useCallback } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuAction, MenuItem, MenuSubmenu } from "@/components/menu/types";
 import { copyText } from "@/lib/clipboard";
 import { openExternal } from "@/lib/externalLinks";
@@ -11,6 +14,7 @@ import {
   buildCardMenu,
   buildDeckTargetItems,
   DeckTargetSubmenu,
+  useCardToDeck,
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
@@ -105,7 +109,9 @@ describe("buildCardMenu", () => {
       expect(vi.mocked(ipc.cardImageUri)).toHaveBeenCalledWith("bolt-lea", "display"),
     );
     await waitFor(() =>
-      expect(vi.mocked(copyText)).toHaveBeenCalledWith("https://cards.scryfall.io/display/x.webp?1"),
+      expect(vi.mocked(copyText)).toHaveBeenCalledWith(
+        "https://cards.scryfall.io/display/x.webp?1",
+      ),
     );
   });
 
@@ -138,7 +144,10 @@ describe("buildCardMenu", () => {
     const requestAllPrintings = vi.fn();
     const items = buildCardMenu(BOLT, deps({ requestAllPrintings, viewPrintingsInPane: null }));
     (find(items, "View all printings") as MenuAction).onSelect();
-    expect(requestAllPrintings).toHaveBeenCalledWith({ oracleId: "o-bolt", name: "Lightning Bolt" });
+    expect(requestAllPrintings).toHaveBeenCalledWith({
+      oracleId: "o-bolt",
+      name: "Lightning Bolt",
+    });
   });
 
   it("routes View all printings to the card pane inside the editor", () => {
@@ -317,62 +326,260 @@ describe("buildDeckTargetItems", () => {
 });
 
 describe("DeckTargetSubmenu", () => {
-  function mount(onDone = vi.fn()) {
+  function mount(onPick = vi.fn()) {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     render(
       <QueryClientProvider client={client}>
-        <DeckTargetSubmenu target={{ ...BOLT, typeLine: "Instant" }} onDone={onDone} />
+        <DeckTargetSubmenu
+          target={{ ...BOLT, typeLine: "Instant" }}
+          onDone={vi.fn()}
+          onPick={onPick}
+        />
       </QueryClientProvider>,
     );
-    return onDone;
+    return onPick;
   }
 
   beforeEach(() => {
     deckList.mockResolvedValue([deck({ id: 7, name: "Burn" })]);
     deckFolderList.mockResolvedValue([]);
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn" }, cards: [], categories: [] });
-    deckAddCard.mockResolvedValue(undefined);
-    oracleTagsForPrintings.mockResolvedValue([]);
   });
 
-  it("adds one copy, naming no category so the app's own rule files the card", async () => {
+  it("hands the chosen deck and variant to the surface", async () => {
     const user = userEvent.setup();
-    const onDone = mount();
+    const onPick = mount();
+    const target = { ...BOLT, typeLine: "Instant" };
 
-    await user.click(await screen.findByRole("menuitem", { name: "Burn" }));
+    await user.click(await screen.findByRole("menuitem", { name: /Burn/ }));
 
-    // No category id and a type line: `useDeck.addCard`'s `autoCategoryFor` arm, which is the
-    // same rule a drag with no column under it and an imported line take.
-    await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "live", 1),
-    );
-    // On the **answer**, not on the press: closing first would unmount the observer and throw
-    // the other branch's sentence away with it.
-    await waitFor(() => expect(onDone).toHaveBeenCalled());
-  });
-
-  it("says why a refused add failed instead of closing over it", async () => {
-    const user = userEvent.setup();
-    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
-    const onDone = mount();
-
-    await user.click(await screen.findByRole("menuitem", { name: "Burn" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
-    // The menu stays open, so the sentence has somewhere to be read...
-    expect(onDone).not.toHaveBeenCalled();
-    // ...and the same deck can simply be pressed again.
-    deckAddCard.mockResolvedValue(undefined);
-    await user.click(screen.getByRole("menuitem", { name: "Burn" }));
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(onPick).toHaveBeenCalledWith(target, 7, "live");
   });
 
   it("says so rather than drawing an empty panel when there are no decks", async () => {
     deckList.mockResolvedValue([]);
     mount();
     expect(await screen.findByText("No decks")).toBeInTheDocument();
+  });
+
+  it("says the list is still coming rather than that there is nothing in it", () => {
+    // `isPending`, never the empty array: a gallery that has not answered and a gallery with
+    // nothing in it say opposite things to a reader about to file a card.
+    mount();
+    expect(screen.getByText("Loading decks…")).toBeInTheDocument();
+  });
+});
+
+describe("useCardToDeck", () => {
+  function arm() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return renderHook(() => useCardToDeck(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+  }
+
+  beforeEach(() => {
+    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn" }, cards: [], categories: [] });
+    deckAddCard.mockResolvedValue(undefined);
+    oracleTagsForPrintings.mockResolvedValue([]);
+  });
+
+  it("adds one copy, naming no category so the app's own rule files the card", async () => {
+    const { result } = arm();
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "theory"));
+
+    // No category id and a type line: `useDeck.addCard`'s `autoCategoryFor` arm, which is the
+    // same rule a drag with no column under it and an imported line take.
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", 1),
+    );
+    expect(result.current.error).toBeNull();
+  });
+
+  it("keeps what a refused add said, for the surface to draw", async () => {
+    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
+    const { result } = arm();
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+
+    await waitFor(() => expect(result.current.error).toBe("That deck is not there any more"));
+    act(() => result.current.clearError());
+    expect(result.current.error).toBeNull();
+  });
+
+  it("adds a second copy when the same leaf is pressed twice", async () => {
+    // The once-guard is identity on the armed value, not on the deck: a reader who picks the
+    // same deck again means a second copy.
+    const { result } = arm();
+    const target = { ...BOLT, typeLine: "Instant" };
+    act(() => result.current.addToDeck(target, 7, "live"));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(1));
+    act(() => result.current.addToDeck(target, 7, "live"));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * The picker inside the real cascade
+ * ------------------------------------------------------------------------------------------ */
+
+const KRENKO = deck({ id: 7, name: "Krenko", folderId: 1, theoryEnabled: true });
+const COMMANDER = folder(1, "Commander");
+
+/**
+ * A surface, in miniature: it owns the write and the sentence a refusal leaves, and it hands the
+ * menu a picker wired to them. This is the whole shape a real surface will have.
+ */
+function Surface() {
+  const { menu } = useContextMenu();
+  const { addToDeck, error } = useCardToDeck();
+  const Picker = useCallback(
+    (p: { target: CardMenuTarget; onDone: () => void }) => (
+      <DeckTargetSubmenu {...p} onPick={addToDeck} />
+    ),
+    [addToDeck],
+  );
+  const items = buildCardMenu(
+    { ...BOLT, typeLine: "Instant" },
+    deps({ DeckTargetSubmenu: Picker }),
+  );
+  return (
+    <>
+      <button onContextMenu={menu(() => items)}>target</button>
+      {error !== null && <p role="alert">{error}</p>}
+    </>
+  );
+}
+
+/**
+ * The real thing: the app's provider, the app's panel, and the picker mounted as the `lazy` body
+ * of a menu `buildCardMenu` actually built.
+ *
+ * The deck list and the folder list are **seeded into the cache** rather than awaited. The picker
+ * is a consumer of the cascade here, and every assertion below is about the caret and the
+ * arrows — a first paint that says `Loading decks…` would put the caret on the panel instead of
+ * on a row and make the keyboard walk describe the read's timing rather than the menu's
+ * behaviour. Both notes have their own tests above, against the unseeded hooks.
+ */
+function openCardMenu() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  client.setQueryData(["decks", "list"], [KRENKO]);
+  client.setQueryData(["decks", "folders"], [COMMANDER]);
+  render(
+    <QueryClientProvider client={client}>
+      <ContextMenuProvider>
+        <Surface />
+      </ContextMenuProvider>
+    </QueryClientProvider>,
+  );
+  screen
+    .getByRole("button", { name: "target" })
+    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+}
+
+/** The root panel is still up. `getByRole("menu")` cannot say so — every open submenu is a
+ *  `menu` of its own, which is the point of this whole round. */
+function rootMenuIsOpen(): boolean {
+  return screen.queryByRole("menuitem", { name: /Copy card name/ }) !== null;
+}
+
+/** Down to `Add to`, in, down to `Deck`, in — the four presses that mount the picker. */
+const TO_PICKER =
+  "{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowRight}" +
+  "{ArrowDown}{ArrowDown}{ArrowRight}";
+
+describe("the deck picker inside the real cascade", () => {
+  beforeEach(() => {
+    // jsdom has no layout engine, so `documentElement.clientWidth` is a hard 0 on every element
+    // and the panel would place itself against nothing. Stated, and never as `window.innerWidth`.
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
+    vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
+    deckList.mockResolvedValue([KRENKO]);
+    deckFolderList.mockResolvedValue([COMMANDER]);
+    deckGet.mockResolvedValue({ deck: { id: 7, name: "Krenko" }, cards: [], categories: [] });
+    deckAddCard.mockResolvedValue(undefined);
+    oracleTagsForPrintings.mockResolvedValue([]);
+  });
+
+  it("walks a folder, a deck and a variant on the same two arrow keys the panel's own rows use", async () => {
+    const user = userEvent.setup();
+    openCardMenu();
+    await screen.findByRole("menu");
+    await user.keyboard(TO_PICKER);
+
+    // A row this file built, drawn by the menu module, with the cascade's own ARIA on it.
+    const commander = await screen.findByRole("menuitem", { name: /Commander/ });
+    expect(commander).toHaveFocus();
+    expect(commander).toHaveAttribute("aria-haspopup", "menu");
+    expect(commander).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{ArrowRight}");
+    expect(commander).toHaveAttribute("aria-expanded", "true");
+    const krenko = screen.getByRole("menuitem", { name: /Krenko/ });
+    expect(krenko).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("menuitem", { name: "Theory" })).toHaveFocus();
+
+    // ...and back out, one level per press, without closing the menu.
+    await user.keyboard("{ArrowLeft}");
+    expect(krenko).toHaveFocus();
+    expect(krenko).toHaveAttribute("aria-expanded", "false");
+    await user.keyboard("{ArrowLeft}");
+    expect(commander).toHaveFocus();
+    expect(rootMenuIsOpen()).toBe(true);
+  });
+
+  it("closes one level per Escape rather than the whole menu", async () => {
+    const user = userEvent.setup();
+    openCardMenu();
+    await screen.findByRole("menu");
+    await user.keyboard(TO_PICKER);
+    await screen.findByRole("menuitem", { name: /Commander/ });
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(screen.getByRole("menuitem", { name: "Theory" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitem", { name: "Theory" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Krenko/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitem", { name: /Krenko/ })).not.toBeInTheDocument();
+    expect(rootMenuIsOpen()).toBe(true);
+  });
+
+  it("writes the add after the press has closed the whole menu", async () => {
+    const user = userEvent.setup();
+    openCardMenu();
+    await screen.findByRole("menu");
+    await user.keyboard(TO_PICKER);
+    await screen.findByRole("menuitem", { name: /Commander/ });
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    await user.click(screen.getByRole("menuitem", { name: "Theory" }));
+
+    // `ctx.run` closes the menu *before* it calls the row's handler, so the write cannot belong
+    // to anything inside the panel. It lands because the surface holds it.
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", 1),
+    );
+  });
+
+  it("leaves a refused add's sentence on the surface, which outlived the menu", async () => {
+    const user = userEvent.setup();
+    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
+    openCardMenu();
+    await screen.findByRole("menu");
+    await user.keyboard(TO_PICKER);
+    await screen.findByRole("menuitem", { name: /Commander/ });
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    await user.click(screen.getByRole("menuitem", { name: "Theory" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
   });
 });
