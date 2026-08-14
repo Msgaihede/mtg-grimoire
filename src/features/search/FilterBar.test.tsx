@@ -540,10 +540,12 @@ describe("FilterBar, its format options in order", () => {
 
   /**
    * The whole reason the list is the search's own. A `<select>` whose `value` matches no
-   * `<option>` draws **blank** — not the format, not `Any format`, nothing — while the filter
-   * it names goes on narrowing the results underneath. So the assertion is what the control
-   * *reads*, not merely that the row exists: a present-but-unselected option would pass
-   * `getByRole` and be exactly the bug this prevents.
+   * `<option>` does not draw blank — React selects the first row that is not disabled, which is
+   * the pinned `Any format`, while the filter it names goes on narrowing the results
+   * underneath. Both halves are asserted because they fail differently: `value` reads back
+   * `""` from a controlled select given a key none of its options carry, and the option's own
+   * text is the whole of what the reader can see. Neither is `getByRole` — a
+   * present-but-unselected option would pass that and be exactly the bug this prevents.
    */
   it("draws a format the shared list does not carry, and shows it as picked", () => {
     render(<FilterBar search={seeded({ format: "historic" })} />);

@@ -287,9 +287,11 @@ describe("DeckSearchPanel", () => {
    * A deck is built out of the cards it may legally hold, so the wall beside it starts there
    * rather than at the whole corpus.
    *
-   * The label as well as the value, because the value is what the *request* carries and the
-   * label is the whole of what the reader can see: a select holding a key no option draws is
-   * blank on screen and correct in every assertion about `value`.
+   * The label as well as the value, because the two fail differently. A select holding a key
+   * none of its options carries reports the **first** option instead — `Any format`, pinned at
+   * the top of this list — so `value` reads back `""` and the first assertion below does catch
+   * it. What that one cannot say is which word is on screen, and the word is the whole of what
+   * the reader has; the second assertion is for that.
    */
   it("opens on the deck's own format when it is handed one", async () => {
     panel({ defaultFormat: COMMANDER });

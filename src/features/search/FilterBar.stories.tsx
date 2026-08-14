@@ -32,8 +32,9 @@ const AT_MIN_WIDTH = "w-[776px]";
  * drift from the app while every story here stayed green. The hook is cheap: it queries the
  * seeded fake backend, and the 43-printing corpus answers at once.
  *
- * **The preset is applied from an effect, once.** `useCardSearch` takes no initial state, so
- * "two colours are on" can only be reached by pressing what a reader would press. An effect
+ * **The preset is applied from an effect, once.** The only initial state `useCardSearch` takes
+ * is a default *format*, which this wrapper does not pass — so every filter a story here opens
+ * on, that one included, is reached by pressing what a reader would press. An effect
  * rather than a `play`, because a `play` does not run on the docs page — Storybook renders the
  * stories there without autoplay — so a docs page built on plays would show six identical
  * untouched rows. The guard is a ref rather than a dependency array: the dependency would be

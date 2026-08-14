@@ -219,11 +219,12 @@ export function useCardSearch(
      * answer, which the deck editor derives from the open deck.
      *
      * The **caller's**, because only the caller knows whether the key it is holding is one the
-     * database can answer. `filters.rs` answers an unrecognised format key with the literal SQL
-     * `0` — no rows, no error, no way to tell it from a search that genuinely matched nothing —
-     * and `casual` and `limited` are exactly that: rows of `format_specs` with no `legalities`
-     * key behind them. A hook cannot make that judgement about a key it was handed, so it does
-     * not try; it seeds what it is given, and the caller is the fence.
+     * database can answer: a key with no `legalities` behind it comes back as no rows at all,
+     * which is indistinguishable on screen from a search that genuinely matched nothing, and
+     * telling those keys apart takes the `format_specs` row the caller already has in hand. A
+     * hook cannot make that judgement about a key it was handed, so it does not try; it seeds
+     * what it is given, and the caller is the fence. `DeckEditor`'s `searchFormatDefault` is
+     * where that fence is written down.
      */
     defaultFormat?: FormatFilterOption | null;
   } = {},
@@ -427,7 +428,7 @@ export function useCardSearch(
    * one of them — the default itself.
    *
    * It has to be able to carry a key `FORMATS` does not list because the deck picker offers
-   * twenty-four `format_specs` rows against this list's seven: a Brawl or an Oathbreaker deck
+   * every enabled `format_specs` row against this list's seven: a Brawl or an Oathbreaker deck
    * would otherwise open on a filter whose value no option holds, and a `<select>` given a
    * value none of its `<option>`s carry does not show it — it silently reports the first one,
    * so the panel would say `Any format` over a filtered wall of cards.
@@ -439,14 +440,27 @@ export function useCardSearch(
    * reason, rather than closed over.
    */
   const formats = useMemo<readonly FormatFilterOption[]>(() => {
-    // Both halves, because a row is a value *and* a word: a default carrying one and not the
-    // other cannot be drawn, and appending it would put a blank line in the picker.
-    if (!defaultFormatValue || !defaultFormatLabel) return FORMATS;
+    // The **value** decides, because the value is what `format` above was seeded from: a row
+    // fenced out for want of a label would leave the filter set to a key the picker cannot
+    // draw, which is precisely the case this memo exists to prevent. A row is still a value
+    // *and* a word, so a default carrying no word falls back to its key rather than putting a
+    // blank line in the picker. Nothing reaches that fallback today — the one caller that sets
+    // a default reads `spec.displayName` — and the two lines must not be able to disagree.
+    if (!defaultFormatValue) return FORMATS;
     if (FORMATS.some((f) => f.value === defaultFormatValue)) return FORMATS;
-    return [...FORMATS, { value: defaultFormatValue, label: defaultFormatLabel }];
+    return [
+      ...FORMATS,
+      { value: defaultFormatValue, label: defaultFormatLabel || defaultFormatValue },
+    ];
   }, [defaultFormatValue, defaultFormatLabel]);
 
-  // The default is not the reader narrowing anything, and `""` is not either.
+  // **"Not the default", which is very nearly but not quite "the reader set it".** The name
+  // says the intent and the comparison is what the state can answer: a format equal to the
+  // default reads as unset however it got there. So a reader who presses Reset all on a
+  // Commander deck's panel and then picks Commander back off the select counts as having asked
+  // nothing, and an empty answer would be captioned "waiting for the sync" rather than "your
+  // search missed". Telling those two apart would take remembering the press, which buys a
+  // caption in a case that also needs the database to be empty.
   const formatIsReaderSet = format !== "" && format !== defaultFormatValue;
 
   return {
@@ -588,8 +602,9 @@ export function useCardSearch(
      * A format the *caller* defaulted is not the reader asking, which is why this reads
      * `formatIsReaderSet` rather than `format`: a deck editor's panel over a database that has
      * not synced yet would otherwise caption its empty wall "try another word", and there is no
-     * other word — there are no cards. With no default the two expressions are identical, which
-     * is why `SearchPage` cannot notice the difference.
+     * other word — there are no cards. That test is "the format differs from the default", with
+     * the one consequence written at its definition above. With no default the two expressions
+     * are identical, which is why `SearchPage` cannot notice the difference.
      */
     unfiltered:
       !debouncedText &&
