@@ -87,6 +87,91 @@ describe("CardArt", () => {
     expect(container.querySelector("[data-foil-sheen]")).not.toBeInTheDocument();
   });
 
+  it("draws no marks at all for a card with nothing to mark", () => {
+    const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
+    expect(container.querySelector("[data-card-marks]")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A game changer gets the chip and never the sheen.** The sheen is a photograph of what
+   * the cardboard does to light, and a game changer's cardboard does nothing special — it is
+   * an ordinary card the Commander bracket happens to count. Marking it as if it were foil
+   * would say something false about the object.
+   */
+  it("crowns a game changer without pretending it is foil", () => {
+    const { container } = render(<CardArt cardId="pcy" name="Rhystic Study" gameChanger />);
+
+    const chip = container.querySelector("[data-card-marks]");
+    expect(chip?.querySelector(".lucide-crown")).toBeInTheDocument();
+    expect(container.querySelector("[data-foil-sheen]")).not.toBeInTheDocument();
+  });
+
+  /**
+   * A game changer is a fact about the *card* and a finish a fact about the *printing*, so a
+   * foil-only printing of a game changer carries both — and it carries them in **one** chip.
+   * A tile's fourth corner is the only one left (the other three are the owned badge, the
+   * printing count and the caption), and a second box beside this one would start a row of
+   * stickers over the art.
+   */
+  it("puts both marks in one chip when a card is a foil-only game changer", () => {
+    const { container } = render(
+      <CardArt cardId="mp2" name="Consecrated Sphinx" finish="foil" gameChanger />,
+    );
+
+    const chips = container.querySelectorAll("[data-card-marks]");
+    expect(chips).toHaveLength(1);
+    expect(chips[0].querySelectorAll("svg")).toHaveLength(2);
+    expect(chips[0].querySelector(".lucide-crown")).toBeInTheDocument();
+    expect(container.querySelector("[data-foil-sheen]")).toBeInTheDocument();
+  });
+
+  /**
+   * **The bug this chip existed with for its whole life.** `pointer-events` inherits, so the
+   * chip took the overlay wrapper's `none` and was never a hit target — and a tooltip is shown
+   * by the element the pointer *hits*, so the `<title>` inside every glyph in it could not
+   * appear at all. The wrapper keeps `none`, because a full-bleed sheen inside a button really
+   * would swallow every click; the chip alone takes it back.
+   */
+  it("makes the chip hoverable so its tooltip can appear", () => {
+    const { container } = render(<CardArt cardId="mp2" name="Consecrated Sphinx" finish="foil" />);
+
+    const chip = container.querySelector("[data-card-marks]");
+    expect(chip).toHaveClass("pointer-events-auto");
+    expect(chip).not.toHaveClass("pointer-events-none");
+    // And the sheen it shares a wrapper with stays untouchable.
+    expect(chip?.parentElement).toHaveClass("pointer-events-none");
+  });
+
+  /** The chip's padding is hoverable too, so it says in words whichever facts it is drawing. */
+  it("names both facts on the chip itself", () => {
+    const { container, rerender } = render(
+      <CardArt cardId="mp2" name="Consecrated Sphinx" finish="foil" gameChanger />,
+    );
+    expect(container.querySelector("[data-card-marks]")).toHaveAttribute(
+      "title",
+      "Game changer · Foil",
+    );
+
+    rerender(<CardArt cardId="pcy" name="Rhystic Study" gameChanger />);
+    expect(container.querySelector("[data-card-marks]")).toHaveAttribute("title", "Game changer");
+  });
+
+  /**
+   * The crown is held to the chip's own rule (see above): a wall of game changers must not
+   * become forty buttons called "Rhystic Study Game changer". A `title` attribute is excluded
+   * on the same terms — name computation skips an `aria-hidden` subtree whole — while the
+   * browser still shows it on hover, which is what makes the tooltip and the quiet name
+   * compatible rather than a trade.
+   */
+  it("keeps the crown out of the enclosing button's name", () => {
+    render(
+      <button type="button">
+        <CardArt cardId="pcy" name="Rhystic Study" gameChanger />
+      </button>,
+    );
+    expect(screen.getByRole("button")).toHaveAccessibleName("Rhystic Study");
+  });
+
   /** The face and the variant both reach the URL, which is what keys the image. */
   it("asks for the face and variant it was given", () => {
     render(<CardArt cardId="bolt" name="Lightning Bolt" face={1} variant="art" />);

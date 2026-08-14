@@ -148,6 +148,7 @@ const BOLT: CardSummary = {
   printings: 1,
   priceLow: 400.5,
   priceHigh: 400.5,
+  gameChanger: false,
 };
 
 /**

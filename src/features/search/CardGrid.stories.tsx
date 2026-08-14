@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fireEvent, fn, within } from "storybook/test";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import type { DragPayload } from "@/features/decks/dnd";
 import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
@@ -34,6 +35,23 @@ const ALL: StoryCard[] = CARDS.map(gridCard);
 const BOLT_ALPHA = gridCard(printing("lea", "161"));
 const BOLT_2X2 = gridCard(printing("2x2", "117"));
 const BOLT_STRIXHAVEN = gridCard(printing("sta", "105"));
+/** One of the three fixture cards Wizards named — see {@link GameChangers}. */
+const RHYSTIC_STUDY = gridCard(printing("pcy", "45"));
+
+/**
+ * Which fixture printings the Commander bracket counts — **derived from the corpus**, never a
+ * hand-written list of ids, so a fixture regenerated with a different set of crowns still
+ * stories the truth.
+ *
+ * Module scope for `tileDrag`'s reason: the wall re-registers a tile's drag when a callback it
+ * was handed changes identity, and a fresh arrow per render would do that on every scrolled row.
+ *
+ * `StoryCard` carries no `gameChanger` field of its own on purpose — the wall's slot is a
+ * *question asked about a card*, and the collection's wall has no answer to give. `SearchPage`
+ * passes the one-line `(card) => card.gameChanger`; a story with no such column looks the id up.
+ */
+const GAME_CHANGER_IDS = new Set(CARDS.filter((c) => c.gameChanger).map((c) => c.id));
+const isGameChanger = (card: StoryCard) => GAME_CHANGER_IDS.has(card.id);
 
 /**
  * `SearchPage.tsx:144-148`'s payload, verbatim — **at module scope, because it has to hold
@@ -116,11 +134,14 @@ const meta = {
           "name is printed on the card. An art crop would need one — and the deck's stack and " +
           "grid views draw whole cards for the same two reasons this wall does, so a reader " +
           "moving between them is looking at the same object.\n\n" +
-          "Two slots keep the wall generic. `badge` is a mark over the art's bottom-left " +
-          "corner and `action` is one control at the end of the caption; the corner, its " +
-          "felt backing and the `empty:hidden` guard belong to the wall, so two views cannot " +
-          "drift into two shades. Switch the **Art** toolbar to Live to see real Scryfall " +
-          "images instead of the offline placeholders.",
+          "**Seven callbacks keep the wall generic** — `badge`, `topLeft`, `finish`, " +
+          "`gameChanger`, `action`, `tileRef` and `dragPayload` — and each is a question the " +
+          "caller answers about a card rather than a field on the row, because the search's " +
+          "rows and the collection's know different things. The two the stories below lean on " +
+          "are `badge`, a mark over the art's bottom-left corner, and `action`, one control at " +
+          "the end of the caption; the corner, its felt backing and the `empty:hidden` guard " +
+          "belong to the wall, so two views cannot drift into two shades. Switch the **Art** " +
+          "toolbar to Live to see real Scryfall images instead of the offline placeholders.",
       },
     },
   },
@@ -246,6 +267,55 @@ export const WithBadges: Story = {
     // Before that guard existed, a wall of unowned tiles was a wall of empty 12×4px chips.
     // The Secret Lair Bolt is the tile this story's callback gives no copies and no wish.
     await expect(cornerOf(tileFor(canvasElement, "SLD · 1638"))).toBeEmptyDOMElement();
+  },
+};
+
+/**
+ * The Commander bracket's crown — the fourth mark a tile can wear, and the one that shares a
+ * corner instead of taking one.
+ *
+ * A tile has three corners spoken for (bottom-left the owned badge, top-left the printing count,
+ * top-right the finish chip) and the crown goes in **that same top-right chip**, beside the foil
+ * or etched glyph. A boxed "GC" badge — which is what the deck views draw, where a row has a line
+ * of text to hang it on — reads as a sticker on a wall of art; at 12px in gold it reads as part
+ * of the card.
+ *
+ * **The picture is decoration and the caption is the statement.** The chip lives inside the
+ * tile's button and the whole overlay around it is `aria-hidden`, because any text of its own
+ * would join the button's accessible name and make a wall of game changers forty buttons called
+ * "… Game changer" — the same trap the owned badge avoids by being a *sibling* of the button.
+ * So the tile appends an `sr-only` `, Game changer` to its caption, which is where the finish
+ * word already goes.
+ *
+ * Two rows, both drawn: the wall is virtualised and jsdom lays nothing out, so a play can only
+ * reach the first few tiles of a list (`.storybook/CLAUDE.md`'s rule — assert a named row, never
+ * a count). Rhystic Study is one of the three fixture cards carrying `gameChanger: true`; the
+ * Alpha Bolt beside it is not.
+ *
+ * **`tileFor` cannot find a crowned tile**, which is why this play reaches for the button's name
+ * instead: that helper matches a caption exactly, and a crowned tile's caption is
+ * `PCY · 45, Game changer`.
+ */
+export const GameChangers: Story = {
+  args: { rows: [RHYSTIC_STUDY, BOLT_ALPHA], gameChanger: isGameChanger },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const crowned = canvas.getByRole("button", { name: "Rhystic Study" });
+    // `hidden: true`: the mark is *in* the accessibility tree only as far as the
+    // `aria-hidden` overlay above it allows, which is not at all. Asked for anyway, because
+    // "the crown is drawn, over this card and inside this button" is the claim.
+    await expect(
+      within(crowned).getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
+    ).toBeInTheDocument();
+    // And the button is still called nothing but the card.
+    await expect(crowned).toHaveAccessibleName("Rhystic Study");
+    // The words, in the caption beside the set and the number.
+    await expect(canvas.getByText(`, ${GAME_CHANGER_LABEL}`)).toHaveClass("sr-only");
+
+    const plain = canvas.getByRole("button", { name: "Lightning Bolt" });
+    await expect(
+      within(plain).queryByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
+    ).toBeNull();
   },
 };
 

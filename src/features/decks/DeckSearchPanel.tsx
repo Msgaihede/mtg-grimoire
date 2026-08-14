@@ -79,6 +79,26 @@ const AUTO_LABEL = "Auto (by card type)";
  */
 const TILE_FLOOR = 150;
 
+/**
+ * Whether a tile's card is a Commander **game changer**, for the crown `CardArt` draws in the
+ * tile's top-right chip.
+ *
+ * The same wall over the same rows, so it says the same thing: `gameChanger` is a fact about the
+ * *card* and not about the view it is drawn in, and a card crowned on the search page and bare
+ * here would teach the reader that the mark means something about the wall. It is this panel a
+ * Commander deck is actually built out of, so this is where the fact is worth most.
+ *
+ * The chip is shared with the finish mark and holds the crown alone here, because this wall
+ * passes no `finish` — its tiles are 150px and the sheen is the search view's.
+ *
+ * Module scope, which is what `CardGrid` asks of every per-card callback it takes: a tile
+ * re-registers its drag when a callback in its ref's dependency list changes identity, and this
+ * panel re-renders on every keystroke in its search box. `tileRef` below is held still for
+ * exactly that reason, and this is held the same way so the wall's rule has no exception to
+ * remember — the search view holds `tileFinish` and `tileDrag` at module scope for both.
+ */
+const tileGameChanger = (card: CardSummary) => card.gameChanger;
+
 export interface DeckSearchPanelProps {
   /**
    * The editor's own `useDeck().addCard`, handed down rather than mounted again here — the
@@ -438,6 +458,9 @@ export function DeckSearchPanel({
           selectedId={selectedCardId}
           onSelect={selectCard}
           tileRef={tileRef}
+          // The crown in a tile's top-right chip: the same fact the search view's wall marks,
+          // marked the same way here — see `tileGameChanger`.
+          gameChanger={tileGameChanger}
           badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
           action={(card) => {
             // Where this card would land, named before the press rather than reported after it.
