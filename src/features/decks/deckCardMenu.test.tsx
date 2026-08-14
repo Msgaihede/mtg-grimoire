@@ -340,6 +340,33 @@ describe("deckCardTagRows", () => {
     expect((find(rows, "None") as MenuRadio).checked).toBe(true);
   });
 
+  /**
+   * **The app's collator, not SQLite's BINARY collation.**
+   *
+   * `deck_meta.rs`'s `ORDER BY t.name` is a `TEXT` column with no `COLLATE NOCASE`, so the list
+   * arrives in byte order: every capitalised label sorts above every lower-case one, and a
+   * reader looking for "budget" under B finds it at the bottom. Ordering is a *display* decision
+   * and lives in TS — `sortOptions`' `Intl.Collator("en", { sensitivity: "base" })`, which is
+   * what every other option list in this app is drawn through — so Rust's `ORDER BY` is not the
+   * bug and is not what changed.
+   *
+   * "None" stays pinned in front: it is the row that takes a label *off*, not one of the labels.
+   */
+  it("draws the labels through the app's collator rather than in the order they arrived", () => {
+    const arrived: DeckTag[] = [
+      { id: 1, deckId: 4, name: "Cut", color: "ember", cardCount: 0 },
+      { id: 2, deckId: 4, name: "budget", color: "moss", cardCount: 0 },
+      { id: 3, deckId: 4, name: "Ramp", color: "gold", cardCount: 0 },
+    ];
+
+    expect(labels(deckCardTagRows(bolt(), arrived, vi.fn()))).toEqual([
+      "None",
+      "budget",
+      "Cut",
+      "Ramp",
+    ]);
+  });
+
   it("takes the label off with null and puts one on by id", () => {
     const setTag = vi.fn();
     const row = bolt({ tagId: 8 });

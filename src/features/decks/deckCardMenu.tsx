@@ -36,6 +36,7 @@ import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import type { DeckCard, DeckCategory, DeckTag, FormatSpec } from "@/lib/ipc";
+import { sortOptions } from "@/lib/options";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "./cardControl";
 import { commanderIneligibility } from "./validation/commanders";
@@ -301,8 +302,20 @@ function zoneItem(
  * `tagId: number | null`, and `deck_cards.tag_id` is a single column. A checkbox list would be
  * a control promising something the model cannot store.
  *
- * The deck's own order, which `deck_get` answers alphabetically; no `sortOptions` call, because
- * the list arrives sorted and re-sorting it here would be a second opinion about one list.
+ * **Drawn through `sortOptions`, like every other option list in this app** — and "the list
+ * arrives sorted" is not the exemption it was written down as (fixed 2026-08-14). What
+ * `deck_get` answers is `deck_meta.rs`' `ORDER BY t.name` over a `TEXT` column with **no
+ * `COLLATE NOCASE`**, which is SQLite's BINARY collation: byte order, so a deck tagged `Cut`,
+ * `budget` and `Ramp` drew `Cut, Ramp, budget` and a reader looking for "budget" under B found
+ * it below every capitalised label. `sortOptions` is `Intl.Collator("en", { sensitivity:
+ * "base" })`, so case stops splitting the alphabet. Ordering is a **display** decision and lives
+ * in TS; Rust's `ORDER BY` is not the bug and did not change. The two exemptions this app grants
+ * — an order that *is* the information, and an order the reader arranged themselves — are
+ * neither of them this list, which is why the comment they were claimed in is gone.
+ *
+ * "None" is pinned in front of the sort rather than sorted into it: it is the row that takes a
+ * label *off*, not one of the labels — `Any card`'s and `Top level`'s arrangement.
+ *
  * Exported so the rule above can be pinned without mounting a menu.
  */
 export function deckCardTagRows(
@@ -318,7 +331,7 @@ export function deckCardTagRows(
       checked: card.tagId === null,
       onSelect: () => setTag(card, null),
     },
-    ...tags.map(
+    ...sortOptions(tags, (tag) => tag.name).map(
       (tag): MenuItem => ({
         kind: "radio",
         id: `tag-${tag.id}`,
