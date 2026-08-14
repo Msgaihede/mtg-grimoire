@@ -389,7 +389,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `COLUMN_WIDTH`, a flat 300px that does not zoom — and both used to lay those columns in one
   non-wrapping row inside an `overflow-auto` box. That is not a decision at 1280px and five
   columns; it is a decision at the app's floor. **The floor is a 1024px window**, where the
-  editor's desk row — the view, the stats block and the search panel between them — measures
+  editor's desk row — the view and the docked search panel, with a stats block between them at
+  the time these were taken, since moved to a band under the deck — measures
   **376px** with the card pane docked (361 once the page's own scrollbar is out), and **the view
   itself — the box the columns are actually in — gets 313 of it**, from `DeckEditor.tsx`'s own
   measured table: `| 1024 | open | 361 | 313 | rail |`. Only 376 is pinned to the pixel, as
@@ -399,10 +400,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   fewer columns than it has categories; it is nonetheless **more columns than the desk is wide**
   the moment it has two, and every column after the first opened to the right, off the edge, with
   an X scrollbar across the whole desk. Same failure as the popup above, from the other
-  direction — and it is the one route `DECK_FLOOR` never measured: **208
+  direction — and it is the one route `DECK_FLOOR` never measured: **192
   is the width the deck side is _guaranteed_, and it does not hold even one column**, because
-  that floor was written for the desk's three-way split and never for what the pack does inside
-  it. The fix is `flex-wrap` on the packed row: the column that will not fit goes below the line
+  that floor was written for how the desk row is *divided* and never for what the pack does
+  inside the view's share of it. It has only ever moved away from holding one: 224 → 208 → 192,
+  each drop a scrollbar the row's arithmetic had not counted. The fix is `flex-wrap` on the packed row: the column that will not fit goes below the line
   and the reader scrolls **down**, which every deck view already does. `packColumns` is
   untouched by it — the wrap is a property of the box the columns are laid in, not of how they
   were filled — and `overflow-auto` stays rather than narrowing to `overflow-y-auto`, since one

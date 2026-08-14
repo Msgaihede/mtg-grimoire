@@ -171,6 +171,25 @@ price | type`). An **inactive category stays its own group in all three grouping
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
   views' Sideboard rail — still sees a sideboard in the two modes that otherwise have no categories
   in them, which is the right answer in both cases and is a special case in neither.
+- **The deck stats are a band at the foot of the editor, and there is no control that hides
+  them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
+  the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
+  panel was asked whether it fit — so opening Stats at 1280 with a card pane docked cost the
+  reader their search, and the toggle existed to give that width back. Full width under the deck
+  the four charts sit on one line and nothing on the desk is traded for them. Three consequences,
+  each measured in the shipped window and none of them visible to a test:
+  **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
+  drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
+  would put four charts between a card and the one drop that takes it out;
+  **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
+  to **847px** in the **710px** a 1280×800 window leaves, so the deck holds a `min-h-96` floor
+  (**384px** = one whole stack card and its group heading) and the band's last ~137px is one
+  scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**612px**);
+  **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the
+  row's arithmetic did not count — the same 16px correction, for the same reason, as the drop from
+  224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
+  `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
+  pixel short.
 - **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
   switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
   one holding cards and `live` is the column that fills as the reader acquires them. Reading
@@ -205,8 +224,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
   next column _to the right_, so a fifteen-category deck ran off the edge and put an X scrollbar
   across the whole desk. That is the one thing the 1024px floor forbids, reached by the one route
-  `DECK_FLOOR` never measured: 208 is the width the deck side is _guaranteed_, and it does not hold
-  even one column. The packed row is a `flex-wrap` container now, so a column that will not fit goes
+  `DECK_FLOOR` never measured: **192** is the width the deck side is _guaranteed_, and it does not
+  hold even one column — nor did the 208 it dropped from, nor the 224 before that. That floor
+  governs how the desk row is *divided*; it has never said anything about what the pack does inside
+  the view's share of it. The packed row is a `flex-wrap` container now, so a column that will not fit goes
   **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
   rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
   wider than its box, and clipping a card is worse than a scrollbar the reader asked for. Wrapping
