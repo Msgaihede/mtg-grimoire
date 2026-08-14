@@ -76,8 +76,9 @@ deliberately**: no screenshots are stored.
   measured 359 correctly against their own base and the merged tree was 365: a count is a
   measurement of a *tree*, so taking either side of that conflict would have shipped a figure
   true of no checkout. The same trap eats derived counts — "38 docs pages render inline" was
-  `45 − 7` and is now `46 − 7 − 1`, unchanged in value and stale in every term. Re-derive from
-  the built index and from source, never from the last number plus your own diff.
+  `45 − 7` and then `46 − 7 − 1`, unchanged in value and stale in every term; it reads **39**
+  and `47 − 7 − 1` on the tree of 2026-08-14. Re-derive from the built index and from source,
+  never from the last number plus your own diff.
 - **Every drag is held in `try { … } finally { await held.cancel(); }`, and every assertion about
   a drag's result goes through `waitFor`.** A throw mid-drag leaks pdnd's one global drag flag into
   the _next_ story, which is why one broken assertion reported two failures.

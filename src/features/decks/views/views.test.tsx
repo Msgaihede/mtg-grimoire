@@ -14,8 +14,9 @@ import { stackCardWidth, stackHeight } from "../CardStack";
 import { DECK_GROUP_ATTR, type DeckCardActions } from "../cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
+import { SIDEBOARD_ATTR } from "./columns";
 import { GridView } from "./GridView";
-import { StackView, STACK_COLUMN_ATTR, STACK_PINNED_ATTR, stackColumnWidth } from "./StackView";
+import { StackView, STACK_COLUMN_ATTR, stackColumnWidth } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 
@@ -58,10 +59,17 @@ const MAYBE = category({
   sortOrder: 4,
 });
 /**
- * The one pile the stack view pins, and the only fixture here whose **id** is load-bearing: it is
- * `fixtures.ts`'s own `CATEGORIES.side`, so `card({ categoryKind: "side" })` files itself into this
- * category with no second edit. It sits between Ramp and the Maybeboard in `sortOrder` precisely
- * so a test can show the pin moving it past a pile that comes after it.
+ * The pile the rail exists for.
+ *
+ * Added beside the three above rather than folded into one of them: every count and every
+ * order asserted in this file is a claim about that fixture, and a fourth category in `GROUPS`
+ * would have rewritten all of them.
+ *
+ * `sortOrder` 2 puts it **between** Ramp and the Maybeboard, which is exactly where a greedy
+ * in-order pack used to leave it — the middle of a sideways run — and is what lets a test show
+ * the rail drawing it past a pile that comes after it. The **id** is the only one here that is
+ * load-bearing: it is `fixtures.ts`'s own for a `side` card, so `card({ categoryKind: "side" })`
+ * lands in this category rather than arriving as a stray group.
  */
 const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 2 });
 
@@ -546,6 +554,9 @@ describe("the views that are not the table", () => {
 
 describe("StackView columns", () => {
   const columns = () => [...document.querySelectorAll(`[${STACK_COLUMN_ATTR}]`)];
+  /** The rail is **not** one of the boxes above — `STACK_COLUMN_ATTR` marks what `packColumns`
+   *  produced, and the rail is the one box it never saw — so it is found by its own attribute. */
+  const rail = () => document.querySelector<HTMLElement>(`[${SIDEBOARD_ATTR}]`);
   /** By the id each section is `aria-labelledby`, which is the heading's own handle rather
    *  than a guess at the header's shape. */
   const headingsIn = (column: Element) =>
@@ -711,18 +722,19 @@ describe("StackView columns", () => {
 
   /**
    * **The Sideboard is not part of the pack**, and that is the whole of the change. It is split
-   * off before `packColumns` sees anything and drawn once, after every column the packer made —
-   * so a reader scrolling a fifteen-category deck sideways never loses the pile they are cutting
-   * to.
+   * off before `packColumns` sees anything and drawn in the rail beside the columns — so a reader
+   * running a fifteen-category deck down the page never loses the pile they are cutting to.
    *
-   * The desk is the same derived two-group height the pack above uses, and the **column count**
-   * is what would move if the split were not happening: unpinned, these four groups come to
-   * **two** columns — Commander and Ramp, then the Sideboard and the empty Maybeboard sharing
-   * one comfortably. Pinned, the three flowing groups still need two and the Sideboard takes a
-   * third of its own. So a view that forgot to split fails here on the count, before it ever
-   * fails on the attribute.
+   * The desk is the same derived two-group height the pack above uses, and what the split moves
+   * is **which groups share a column**: left in the stream, these four pack as Commander and Ramp,
+   * then the Sideboard and the empty Maybeboard sharing the second comfortably — the same *count*
+   * as the split answer, with the sideboard buried in the middle of it. So the headings are what
+   * this reads, and a count alone would pass against the bug.
+   *
+   * The rail is asserted as the other half rather than instead: "the Sideboard is not in a column"
+   * is equally true of a view that dropped the pile on the floor.
    */
-  it("pulls the sideboard out of the pack and pins it after every other column", () => {
+  it("pulls the sideboard out of the pack and draws it in the rail", () => {
     const three = (kind: "main" | "commander" | "side") =>
       Array.from({ length: 3 }, (_, i) =>
         card({ name: `${kind} ${i}`, categoryKind: kind, ownedQuantity: 1 }),
@@ -740,64 +752,31 @@ describe("StackView columns", () => {
       />,
     );
 
-    expect(columns()).toHaveLength(3);
+    expect(columns()).toHaveLength(2);
     // The flowing groups, still in the reader's own order and still never split.
     expect(headingsIn(columns()[0])).toEqual(["Commander", "Ramp"]);
     expect(headingsIn(columns()[1])).toEqual(["Maybeboard"]);
-    // The pin: one group, drawn past a pile whose `sortOrder` puts it later.
-    expect(headingsIn(columns()[2])).toEqual(["Sideboard"]);
-    // And exactly one column carries the mark — by identity, so "the last one" is asserted
-    // rather than "one of them".
-    const pinned = columns().filter((c) => c.hasAttribute(STACK_PINNED_ATTR));
-    expect(pinned).toHaveLength(1);
-    expect(pinned[0]).toBe(columns()[2]);
+    // The Sideboard is in neither, and it is in the rail — the pile the pack would have dropped
+    // between them, drawn past a category whose `sortOrder` puts it later.
+    expect(columns().some((c) => headingsIn(c).includes("Sideboard"))).toBe(false);
+    expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
   });
 
   /**
-   * The pin is a **position and never a second geometry**: the same inline width and the same
-   * `flex` basis as every column beside it, off the one `stackColumnWidth(zoom)`.
+   * **The rail is a plain flex child, and there is deliberately nothing sticky about it.**
    *
-   * Asserted at 2× rather than at rest, because a pinned column left on the `14rem` literal this
-   * replaced — or on an unzoomed number — agrees with its neighbours at 1× and stands two hundred
-   * pixels narrow at every other stop. The basis is read separately for the reason the flowing
-   * column's is: these are `flex` children, and a basis left behind wins over the width with
-   * nothing about the markup looking wrong.
-   */
-  it("sizes the pinned column exactly as it sizes a flowing one", () => {
-    useAppStore.setState({ cardZoom: 2 });
-    render(
-      <StackView
-        groups={buildGroups(
-          [card({ name: "Sol Ring" }), card({ name: "Blood Moon", categoryKind: "side" })],
-          [RAMP, SIDE],
-          "category",
-          "alphabetical",
-        )}
-        marketplace={TCG}
-        columnHeight={4000}
-      />,
-    );
-
-    const [flowing, pinned] = columns() as HTMLElement[];
-    expect(pinned).toHaveAttribute(STACK_PINNED_ATTR);
-    expect(pinned.style.width).toBe(`${stackColumnWidth(2)}px`);
-    expect(pinned.style.flex).toBe(`0 0 ${stackColumnWidth(2)}px`);
-    expect(pinned.style.width).toBe(flowing.style.width);
-    expect(pinned.style.flex).toBe(flowing.style.flex);
-  });
-
-  /**
-   * …and it holds the right edge while the rest of the desk scrolls under it.
+   * It was `sticky right-0` over an opaque `bg-bg` at `LAYER.raised` with a leftward seam shadow,
+   * and every one of those four existed for one reason: to hold the rail in view *while the packed
+   * columns scrolled sideways underneath it*. The columns wrap downward now, so nothing passes
+   * under the rail — an opaque backdrop would occlude nothing and the seam shadow would draw a
+   * permanent divider across a layout in which nothing moves. `ml-auto` is the whole mechanism
+   * that is left: a no-op while the flow is `flex-1`, and what keeps the rail on the right in the
+   * one case that matters, its own wrapped line.
    *
-   * **jsdom paints nothing, so this cannot prove the column stays put** — no layout, no scroll,
-   * no occlusion. Only the live CDP pass in the shipped window can show that, and it is the one
-   * thing worth driving there. What a test can hold is the class contract that makes it possible,
-   * and each of these is load-bearing for a different reason: `sticky right-0` is the mechanism,
-   * `bg-bg` is what stops the flowing columns being read *through* it, `LAYER.raised` is what
-   * keeps it over them rather than under, and it is still a column — `flex-col` with the same
-   * `gap-5` — because the pin changes where the box sits and nothing about what is in it.
+   * The negatives are asserted rather than assumed because the alternative shipped: reinstating a
+   * sticky rail is a two-word edit that no other test in this file would notice.
    */
-  it("pins the column against the right edge, opaque and above what slides under it", () => {
+  it("draws the rail as a plain flex child, with nothing sticky about it", () => {
     render(
       <StackView
         groups={buildGroups(
@@ -810,56 +789,40 @@ describe("StackView columns", () => {
       />,
     );
 
-    const pinned = document.querySelector<HTMLElement>(`[${STACK_PINNED_ATTR}]`)!;
-    // Both attributes: it is a column first, and a pinned one second — every column assertion in
-    // this file finds its columns by `STACK_COLUMN_ATTR`.
-    expect(pinned).toHaveAttribute(STACK_COLUMN_ATTR);
-    const classes = pinned.className.split(" ");
-    expect(classes).toContain("sticky");
-    expect(classes).toContain("right-0");
-    expect(classes).toContain("bg-bg");
-    expect(classes).toContain(LAYER.raised);
+    // Whole class names, never a substring: `bg-bg` is a prefix of nothing here, but `border`
+    // inside `border-transparent` is exactly the trap this file's group-chrome block names.
+    const classes = rail()!.className.split(" ");
+    expect(classes).toContain("ml-auto");
+    // A column of groups, the same as any packed one — the rail changes where the box sits and
+    // nothing about what is in it.
     expect(classes).toContain("flex-col");
     expect(classes).toContain("gap-5");
-    // The only thing telling a reader there is a column beneath it. A pinned column with no edge
-    // reads as a rendering fault rather than as a design.
-    expect(pinned.className).toContain("shadow");
+    expect(classes).not.toContain("sticky");
+    expect(classes).not.toContain("bg-bg");
+    expect(classes).not.toContain(LAYER.raised);
+    expect(rail()!.className).not.toContain("shadow");
+    // And it is not one of the packer's boxes, which is the other half of the same claim: a
+    // sweep that counts columns is counting what `packColumns` decided.
+    expect(rail()).not.toHaveAttribute(STACK_COLUMN_ATTR);
   });
 
   /**
-   * **No sideboard, no pinned column** — and this is the assertion that protects every other
-   * column count in this file.
+   * **A derived heading never reaches the rail, because a derived group carries `kind: null`.**
+   * That is the rule, and a split reading anything other than the group's own kind — a name, a
+   * position, "the last group" — would park "Mana value 1" at the right edge of the desk, a
+   * bucket the reader never asked to keep in view.
    *
-   * Every pack test above is written against decks of ordinary categories, and each one would
-   * quietly gain a column the day the split fired on something wider than `kind === "side"` —
-   * `isPredefined`, say, or a name a reader typed. They would go red as arithmetic failures in
-   * `packColumns`, a long way from the change that caused them. This says the real thing once, so
-   * that failure has somewhere to point.
-   */
-  it("draws no pinned column at all when the deck has no sideboard", () => {
-    render(<StackView groups={GROUPS} marketplace={TCG} />);
-
-    expect(columns().length).toBeGreaterThan(0);
-    expect(document.querySelectorAll(`[${STACK_PINNED_ATTR}]`)).toHaveLength(0);
-  });
-
-  /**
-   * **A derived heading is never pinned, because a derived group carries `kind: null`.** That is
-   * the rule, and a split reading anything other than the group's own kind — a name, a position,
-   * "the last group" — would stick "Mana value 1" to the right edge of the desk, a bucket the
-   * reader never asked to keep in view.
-   *
-   * **What is not the rule, and reads like it here:** the *grouping mode* does not disable
-   * pinning. The Sideboard's heading is absent from this fixture because the pile is **active**
-   * and `grouping.ts` buckets an active pile's cards into the derived groups (`buildGroups` line
-   * 210, `if (!card.categoryActive) continue;`) — so there is no `side` group left to pin, rather
-   * than a `side` group being passed over. The switched-off case below is the pair that says so.
+   * **What is not the rule, and reads like it here:** the *grouping mode* does not disable the
+   * rail. The Sideboard's heading is absent from this fixture because the pile is **active** and
+   * `grouping.ts` buckets an active pile's cards into the derived groups (`buildGroups` line
+   * 210, `if (!card.categoryActive) continue;`) — so there is no `side` group left, rather than a
+   * `side` group being passed over. The switched-off case below is the pair that says so.
    *
    * The cards are asserted **present** as well: "no Sideboard heading" is also true of a view
    * that dropped the pile on the floor.
    */
   it.each(["manaValue", "type"] as const)(
-    "draws no pinned column when the grouping is %s",
+    "draws no rail at all when the grouping is %s",
     (groupBy) => {
       render(
         <StackView
@@ -880,27 +843,27 @@ describe("StackView columns", () => {
       expect(screen.getByRole("button", { name: /^Blood Moon/ })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /^Pyroblast/ })).toBeInTheDocument();
       expect(screen.queryByText("Sideboard")).not.toBeInTheDocument();
-      expect(document.querySelectorAll(`[${STACK_PINNED_ATTR}]`)).toHaveLength(0);
+      expect(rail()).toBeNull();
     },
   );
 
   /**
-   * **A switched-off Sideboard is still pinned under a derived grouping**, and this is the pair
-   * to the case above: together they say the split reads the group's own `kind` and never the
+   * **A switched-off Sideboard still reaches the rail under a derived grouping**, and this is the
+   * pair to the case above: together they say the split reads the group's own `kind` and never the
    * mode the toolbar is in.
    *
    * `buildGroups` buckets the **active** cards and appends every switched-off pile as itself,
    * unchanged and last (its own line 204–207) — so under `manaValue` a sideboard the reader has
-   * turned off arrives as a real `side` group, and `StackView` pins it. That is the wanted
+   * turned off arrives as a real `side` group, and the split sends it right. That is the wanted
    * answer and not a quirk being tolerated: it is still that pile, still `aria-labelledby` its
    * own name, still a drop target with a `categoryId` — the switch says it counts toward
    * nothing, never that it has stopped being the sideboard.
    *
    * Without this, `StackView` could grow a `groupBy` check — or a `group.isActive` one — and
    * every assertion in this file would stay green while a reader who switched their sideboard
-   * off and grouped by curve lost the pin.
+   * off and grouped by curve lost the rail.
    */
-  it("still pins a switched-off sideboard when the grouping is derived", () => {
+  it("still draws the rail for a switched-off sideboard when the grouping is derived", () => {
     const off = category({ id: 2, name: "Sideboard", kind: "side", isActive: false, sortOrder: 2 });
     render(
       <StackView
@@ -917,12 +880,11 @@ describe("StackView columns", () => {
       />,
     );
 
-    const pinned = columns().filter((c) => c.hasAttribute(STACK_PINNED_ATTR));
-    expect(pinned).toHaveLength(1);
-    expect(headingsIn(pinned[0])).toEqual(["Sideboard"]);
-    // And the derived bucket the *active* card went into is a flowing column, not a second pin.
-    expect(pinned[0]).toBe(columns()[columns().length - 1]);
-    expect(columns().length).toBeGreaterThan(1);
+    expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
+    // And the derived bucket the *active* card went into is a packed column, not a second rail:
+    // the pile the reader switched off is the only thing on the right.
+    expect(columns()).toHaveLength(1);
+    expect(headingsIn(columns()[0])).toEqual(["Mana value 1"]);
   });
 });
 
@@ -1002,6 +964,208 @@ describe("StackView group chrome", () => {
     expect(classesOf(screen.getByRole("list", { name: "Ramp" }))).not.toContain("opacity-60");
   });
 });
+
+/**
+ * The two views that lay a deck out as columns, and the one number they disagree about.
+ *
+ * Everything in the block below is true of both — which box a group is drawn in, and how wide
+ * that box is — so it is a sweep rather than two copies. The width is the fixture's own field
+ * precisely because it is the difference: `StackView`'s column is the card plus its chrome and
+ * therefore moves with the reader's zoom, `TextView`'s is a fixed 300px line of text and does
+ * not. A view that took the other one's number would pass a sweep that only asked "is there a
+ * width".
+ */
+const COLUMN_VIEWS = [
+  {
+    name: "StackView",
+    render: (props: ViewProps) => <StackView {...props} />,
+    /** The id `StackGroup` gives its heading, which is what the section is `aria-labelledby` —
+     *  the same handle `StackView columns` reads its packing off. */
+    heading: "group-",
+    width: `${stackColumnWidth(DEFAULT_ZOOM)}px`,
+    zoomedWidth: `${stackColumnWidth(2)}px`,
+  },
+  {
+    name: "TextView",
+    render: (props: ViewProps) => <TextView {...props} />,
+    /** This view's packed columns carry no attribute of their own — a column here is a box and
+     *  nothing else — so its groups are found by the id in `TextGroup`'s `aria-labelledby`. */
+    heading: "text-group-",
+    /** `COLUMN_WIDTH`, written out because `TextView` does not export it. The two values being
+     *  the same string *is* the claim: a decklist line is 300px whatever size the reader is
+     *  drawing card faces at. */
+    width: "18.75rem",
+    zoomedWidth: "18.75rem",
+  },
+] as const;
+
+/**
+ * **The Sideboard is pinned to the right, and the columns beside it come down rather than
+ * running off the edge.**
+ *
+ * Both views packed every group into a row of fixed-width columns that grew sideways, so a
+ * fifteen-category deck was an X scrollbar across the whole desk — the one thing `DeckEditor`'s
+ * 1024px floor exists to prevent, arriving by a route that floor never measured. And the
+ * Sideboard, being a category like any other to a greedy in-order pack, landed wherever the
+ * pack dropped it: usually the far end of that run, i.e. off screen.
+ *
+ * Every claim below is about which of the scroller's two boxes a group is in, and how wide that
+ * box is. **jsdom lays nothing out**, so none of it can watch a column actually wrap — what a
+ * test can see is the inputs CSS applies the rule to, which is what these read.
+ */
+describe.each(COLUMN_VIEWS)(
+  // `$name sideboard rail`, not `$name's`: vitest quotes an interpolated string, so the
+  // possessive would print as `'StackView''s`. Same shape as `$name editing` above.
+  "$name sideboard rail",
+  ({ render: renderView, heading, width, zoomedWidth }) => {
+    /** The zoom is one number for the whole app and this store outlives a test — the reason
+     *  `StackView columns` resets it, and the same reason here. */
+    afterEach(() => useAppStore.setState({ cardZoom: DEFAULT_ZOOM }));
+
+    /** `GROUPS`' deck with a Sideboard in the middle of the reader's own order. */
+    const withSideboard = buildGroups(
+      [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
+      [COMMANDER, RAMP, SIDE, MAYBE],
+      "category",
+      "alphabetical",
+    );
+
+    const rail = () => document.querySelector<HTMLElement>(`[${SIDEBOARD_ATTR}]`);
+    /**
+     * The box the columns flow in — read as the rail's own **previous** sibling rather than by
+     * position in the tree, because the order of the two is load-bearing. `ml-auto` puts the
+     * rail at the right of the line it ends; a rail drawn first would be pinned to the left
+     * with the whole deck flowing after it, and every other assertion here would still pass.
+     */
+    const flow = () => rail()!.previousElementSibling as HTMLElement;
+    const headingsIn = (root: Element) =>
+      [...root.querySelectorAll(`[id^="${heading}"]`)].map((n) => n.textContent);
+
+    const draw = (groups: readonly CardGroup[] = withSideboard, over: Partial<ViewProps> = {}) =>
+      render(renderView({ groups, marketplace: TCG, ...over }));
+
+    /**
+     * **A `side` group is never packed.** Read as two lists — what is in the flow, and what is
+     * in the rail — because either half alone is satisfied by a broken layout: "the Sideboard
+     * is in the rail" passes against a view that draws the pile twice, and "the Sideboard is on
+     * screen" passed against the packed layout this replaces, which is how the bug survived.
+     *
+     * The three that stay are asserted **in order**, which is `packColumns`' whole contract:
+     * lifting one group out must close the gap up rather than reshuffle what is left.
+     */
+    it("lifts a side group out of the pack and into the rail", () => {
+      draw();
+
+      expect(headingsIn(flow())).toEqual(["Commander", "Ramp", "Maybeboard"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
+    });
+
+    /**
+     * The rail is drawn for an **empty** Sideboard too: an empty pile is where the next
+     * sideboard card goes, and a rail that appeared with the first one would shove the entire
+     * layout sideways under the hand that dropped it — mid-drag, which is the one moment the
+     * reader cannot afford it.
+     *
+     * `within` rather than `screen`: every empty group in the deck says the same sentence, so a
+     * bare `getByText` would find Ramp's and pass with no rail drawn at all.
+     */
+    it("draws the rail for an empty sideboard, and says where the next card goes", () => {
+      draw(buildGroups([], [RAMP, SIDE], "category", "alphabetical"));
+
+      expect(headingsIn(rail()!)).toEqual(["Sideboard"]);
+      expect(within(rail()!).getByText("Nothing here yet.")).toBeInTheDocument();
+    });
+
+    /**
+     * **The rail is exactly one column wide, inline, in both halves of the `flex` shorthand.**
+     *
+     * Asserted first against the column beside it — one number read twice out of the DOM, which
+     * no later edit can let drift apart — and then against the view's own value, without which
+     * two empty strings would agree and pass.
+     *
+     * Drawn at 2× because that is where the two views part company: `StackView`'s rail has to
+     * follow the zoom the cards inside it took, and `TextView`'s has to ignore it. The failure
+     * either way is silent — a width built by interpolating a Tailwind class emits no CSS rule
+     * at all, so the rail keeps its markup and lays itself out at whatever its contents come to.
+     * The basis is worth its own assertion because these are `flex` children: one left at the
+     * old value wins over the width, and nothing about the markup looks wrong.
+     */
+    it("makes the rail one column wide, in both halves of the shorthand", () => {
+      useAppStore.setState({ cardZoom: 2 });
+      draw();
+
+      const column = flow().firstElementChild as HTMLElement;
+      expect(rail()!.style.width).toBe(column.style.width);
+      expect(rail()!.style.flex).toBe(column.style.flex);
+      expect(rail()!.style.width).toBe(zoomedWidth);
+      expect(rail()!.style.flex).toBe(`0 0 ${zoomedWidth}`);
+    });
+
+    /**
+     * **The flowing area's `minWidth` is the whole of how the rail gets out of the way**, and it
+     * is the only part of the wrap a test can see.
+     *
+     * Too narrow to hold a column and the rail side by side, the outer box's own `flex-wrap`
+     * drops the rail onto the next line — but only because the flow refuses to shrink past one
+     * column. Without it the flow squeezes, the rail stays on the line, and the desk scrolls
+     * sideways again: the exact bug this change removes, reappearing with every element still
+     * where the markup says it is.
+     */
+    it("gives the flowing area a column's minWidth, so the rail wraps instead of scrolling", () => {
+      draw();
+      expect(flow().style.minWidth).toBe(width);
+    });
+
+    /**
+     * No `side` group, no rail — `GROUPS` is Commander, Ramp and the Maybeboard, and none of
+     * them is one. A rail drawn unconditionally would hold a column's width of empty space at
+     * the right edge of every deck without a sideboard, which reads as a layout that has simply
+     * been given too much room rather than as a bug.
+     *
+     * **It is also what protects every column count in this file.** The `StackView columns` block
+     * packs decks of ordinary categories, and each of those counts would quietly move the day the
+     * split fired on something wider than `kind === "side"` — `isPredefined`, say, or a name a
+     * reader typed — failing as arithmetic inside `packColumns`, a long way from the change that
+     * caused it. This says the real thing once, so that failure has somewhere to point.
+     */
+    it("draws no rail when nothing in the deck is a sideboard", () => {
+      draw(GROUPS);
+      expect(rail()).toBeNull();
+    });
+
+    /**
+     * **A group in the rail is the same group, so a card can still be dropped into it.** The
+     * rail is a second place these views draw a pile, and a second, lighter definition of one
+     * would take the drop target with it: the card would follow the pointer, the Sideboard would
+     * light up nothing, and letting go would do nothing at all.
+     *
+     * Driven as the real gesture rather than by finding `DECK_GROUP_ATTR`, because the attribute
+     * is the half that survives forgetting to call the hook — `deckGroupProps` writes it,
+     * `useCategoryDrop` is what makes it a place, and only the drop tells the two apart.
+     */
+    it("takes a dropped card into the sideboard in the rail", async () => {
+      const drop = vi.fn();
+      draw(withSideboard, {
+        actions: { setQuantity: vi.fn(), move: vi.fn(), moveTargets: [], drop },
+      });
+
+      const target = rail()!.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${SIDE.id}"]`);
+      expect(target).not.toBeNull();
+      const marked = document.querySelector<HTMLElement>(
+        `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+      )!;
+
+      await dragOnto(marked.closest("li") ?? marked, target!);
+
+      expect(drop).toHaveBeenCalledWith({
+        write: "move",
+        cardId: "c-Sol Ring",
+        from: RAMP.id,
+        to: SIDE.id,
+      });
+    });
+  },
+);
 
 /**
  * **The wall's own geometry under the reader's zoom.**

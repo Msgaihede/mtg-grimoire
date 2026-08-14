@@ -231,9 +231,9 @@ panel, nothing written until Import). The Rust half and every measurement:
 price | type`). An **inactive category stays its own group in all three grouping modes**, and it
   stays that group _whole_: `buildGroups` appends it carrying its own `kind`, so a switched-off
   Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
-  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, `StackView`'s
-  pinned column — still sees a sideboard in the two modes that otherwise have no categories in
-  them, which is the right answer in both cases and is a special case in neither.
+  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
+  views' Sideboard rail — still sees a sideboard in the two modes that otherwise have no categories
+  in them, which is the right answer in both cases and is a special case in neither.
 - **The deck stats are a band at the foot of the editor, and there is no control that hides
   them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
   the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
@@ -341,6 +341,82 @@ price | type`). An **inactive category stays its own group in all three grouping
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
   the pre-warm reports success and every tile then fetches cold anyway.
+- **`Stacks` and `Text` wrap their columns downward — neither view grows sideways any more**
+  (changed 2026-08-14). Both pack a deck's groups into fixed-width columns —
+  `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
+  next column _to the right_, so a fifteen-category deck ran off the edge and put an X scrollbar
+  across the whole desk. That is the one thing the 1024px floor forbids, reached by the one route
+  `DECK_FLOOR` never measured: **192** is the width the deck side is _guaranteed_, and it does not
+  hold even one column — nor did the 208 it dropped from, nor the 224 before that. That floor
+  governs how the desk row is *divided*; it has never said anything about what the pack does inside
+  the view's share of it. The packed row is a `flex-wrap` container now, so a column that will not fit goes
+  **below** the line and the reader scrolls down, which the desk already did. `overflow-auto` stays
+  rather than becoming `overflow-y-auto` — one column zoomed past the desk's own width really is
+  wider than its box, and clipping a card is worse than a scrollbar the reader asked for. Wrapping
+  is what makes that the rare case instead of the ordinary one. **Driven 2026-08-14** on a seeded
+  16-category deck: no X scrollbar at 1024, 1280 or 1920, the two wrap thresholds exact, and the
+  rare case contained to the view rather than the page — every figure in
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **The rail costs a column of flow, and at the app's own window that is the column.** Measured
+  live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
+  16px gap leave **362 — room for exactly one**. The same deck that used to show ~2.7 columns
+  across a sideways scroll is thirteen stacked lines now. That is the trade and it was made
+  deliberately: the reader asked for the Sideboard to be somewhere fixed, and a pile they can
+  always find is worth more than a column they have to scroll to. **It is also the number to
+  check first** if the rail is ever widened or the columns narrowed.
+- **The Sideboard is a rail pinned to the right of the flow, and is never packed.** `splitSideboard`
+  in `views/columns.ts` takes it out before the pack runs, on **`kind === "side"` and nothing else**
+  — the name is the user's (`DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so any pile may be called
+  "Sideboard"), and the kind is what the rules read. It used to be the greedy pack's worst case: a
+  category like any other, so it landed wherever the run put it, which on a long sideways run was
+  off the right-hand edge. **`packColumns` keeps its whole contract** — greedy, in the reader's
+  order, never reordering, never splitting a group, an over-tall group taking its own column —
+  and is simply handed fewer groups. The rail is drawn for an **empty** Sideboard too: an empty pile
+  is where the next sideboard card goes, and a rail that appeared with the first card would move the
+  layout under the reader's hand. **No group with that kind is no rail at all** — and which groups
+  carry the kind is `buildGroups`' answer, never a view's. Under `Group by` mana value or type the
+  derived buckets are headings with `kind: null` and they flow, but **every switched-off category
+  is appended as itself**, so a reader who turns the Sideboard off and then groups by mana value
+  gets a rail beside a layout made almost entirely of headings. The split reads `kind` and nothing
+  else — not `isActive`, and never `groupBy`, which would push a deck concept into the one file
+  here whose whole discipline is not knowing what a deck is. A group in the rail is the same
+  `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with it
+  rather than being defined twice.
+- **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
+  column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
+  own `flex-wrap` drops the rail onto the next line — `ml-auto` is what keeps it on the right when
+  it lands there, and a no-op at every other width. `min-w-0`/`flex-1` cannot say this, because a
+  flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
+  **this view has no business observing its own box** (`DEFAULT_COLUMN_HEIGHT`'s doc: the editor
+  measures the scroller and passes the height), and a second reading of the same box answers a frame
+  behind the layout it is reacting to. The widths, and the law behind all three of these bullets:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **The rail is a plain flex child and nothing about it is sticky**, which is the one thing to read
+  before reinstating anything. It was briefly `sticky right-0` over an opaque `bg-bg` at
+  `LAYER.raised` with a leftward seam shadow, and all four existed for a single reason: to hold the
+  rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
+  downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
+  shadow draws a permanent divider across a layout in which nothing moves. `ml-auto` is the whole
+  mechanism that is left. The rail therefore carries `SIDEBOARD_ATTR` **only**: `STACK_COLUMN_ATTR`
+  means "a box `packColumns` produced", and the rail is by construction the one box it never saw,
+  so a sweep counting columns goes on counting what the packer decided. `views.test.tsx` asserts
+  those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
+  no other test would notice.
+- **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a commander is one card
+  and a companion is one card, and railing either would spend a column's width on a pile that is
+  read at a glance. What it prevents at the other end is a drag with no destination on screen: the
+  Sideboard sorts last, so packed it was the far end of the run, and a card dragged out of the main
+  deck had nowhere to be let go of. The rail is drawn only when a `side` group exists, and **that
+  condition is real for a story and not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard
+  into every deck, a category group draws whether or not anything is in it, and a predefined pile
+  cannot be deleted — so under `category` the rail is there from the moment a deck is created, empty
+  or not. **It costs `stackColumnWidth(zoom)` beside the flow** — 224px at 1×, 434px at 2×, both
+  derived from that one function — which at 2× on a 1280px window is a third of the width standing
+  beside a pile that on a new deck holds nothing. The wrap is what makes that bearable rather than
+  what removes it: below one column plus the rail, the rail takes its own line instead. **The sticky
+  rail's live figures went with the sticky rail** — the `position: sticky`, `z-index: 10` and
+  occlusion readings taken on 2026-08-14 measured the one-commit implementation this branch
+  replaced, and nothing about the wrapping layout has been driven in the window yet.
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,
@@ -429,39 +505,6 @@ price | type`). An **inactive category stays its own group in all three grouping
   absent rather than 0.6. Move a card in before reading that signal (this cost the 2026-08-14 pass
   a read on the Maybeboard). An empty pile carries the other two signals only: the wash and the
   `INACTIVE` marker.
-- **The sideboard is pinned to the right of the desk, and it is a column rather than a panel.**
-  `StackView` pulls every `kind === "side"` group out of what `packColumns` sees and draws them as
-  one extra column after the packed ones — `sticky right-0`, `LAYER.raised`, an opaque `bg-bg` so
-  the scrolling columns pass _under_ it, the same inline width and `flex` basis as every other
-  column, and a soft left shadow for the seam (a shadow, not a border: the borders had just gone,
-  and a hairline reinstated here would have been the only one left in the view). It carries
-  `STACK_COLUMN_ATTR` **and** `STACK_PINNED_ATTR`, because "is a column" and "is the pinned one"
-  are two claims and a sweep that counts columns has to go on counting this one. The failure it
-  prevents is a drag with no destination on screen: the Sideboard sorts last, so on a deck wide
-  enough to scroll it packs off the right edge, and a card dragged out of the main deck has nowhere
-  to be let go of. **Scoped to `side` and deliberately not to the other two `RULE_KINDS`** — a
-  commander is one card and a companion is one card, and pinning either would spend a column on a
-  pile that is read at a glance. Two things then need no special case: a derived group is
-  `kind: null`, so `manaValue` and `type` pin nothing _unless_ the reader has switched the Sideboard
-  off (which appends the category itself, kind and all — the first bullet in this section); and the
-  column is rendered only when a `side` group exists. **That last condition is real for a story and
-  not for the app**: `PREDEFINED_CATEGORIES` seeds a Sideboard into every deck, a category group
-  draws whether or not anything is in it, and a predefined pile cannot be deleted — so under
-  `category` the pinned column is there from the moment a deck is created, empty or not.
-  **It costs `stackColumnWidth(zoom)` permanently** — 224px at 1× (**measured** 2026-08-14) and
-  434px at 2× (**derived** from the same function; the live pass ran at 1× only) — which on a
-  1280px window at 2× is a third of the width parked on the sideboard before the deck has drawn a
-  card. **Measured in the shipped window 2026-08-14** (debug build, 1280×800): the column computed
-  `position: sticky`, `right: 0px`, `z-index: 10`, an opaque `bg-bg`, a `-8px 0 16px -4px` shadow
-  and `width: 224px`; it held its `left` at 325px across a full scroll of a 1424px desk in a 632px
-  scrollport, and `elementFromPoint` over a scrolled-under card returned the Sideboard's own text
-  rather than the card. Figures: [frontend-design.md](../../../docs/reference/frontend-design.md).
-- **A card scrolled under the pinned column is not hittable there, and that is correct** — it
-  cannot be clicked, opened or dragged until it is scrolled clear, because an opaque sticky overlay
-  is over it and a hidden card should not be grabbable. **Know the symptom, because it presents as
-  a broken drag**: the first `cdp.mjs drag` of the 2026-08-14 pass failed with "the browser never
-  started a drag" purely because the source card's centre sat under the pinned column. Scroll the
-  source clear before pressing; suspect this before suspecting the harness or pdnd.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -484,12 +527,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   293px from where they are going: it reads as the card jumping in front and the stack catching
   up around it. They uncover it instead. **jsdom paints nothing, so only the live pass can prove
   this** — see [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
-  **`LAYER.raised` has a second occupant in this view now, and the two are ordered by the JSX
-  rather than by a number**: the pinned sideboard column sits on the same rung as an open card's
-  list, and equal z-indexes resolve by document order, so the pinned column winning is a fact
-  about it being drawn last. That is the only reading an opaque pinned column can survive — a card
-  lifted out of a column scrolling past has to go _under_ the sideboard, not over it — and moving
-  the pinned column above the packed ones would invert it silently, with the suite still green.
+  **`LAYER.raised` has one occupant in this view and that is deliberate**: the rail took the same
+  rung for as long as it was an opaque sticky column, which made the two orderable only by document
+  order. It is a plain flex child now and asks for no z-index at all, so an open card's list is the
+  only thing raised here and there is nothing for it to be ordered against.
 - **`data-stack-open` exists so a test or a `cdp.mjs --probe` can _count_ open cards** — the CSS
   lift was observable from neither.
 - **`onFocus`/`onBlur` sit on the `<li>`, not the button**, which is `focus-within`'s old reach
