@@ -272,6 +272,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   is the wrap in the entry further down. **Those widths are unchanged by the Maybeboard joining**:
   the two piles share one rail one column wide, so the second costs height and nothing else, and
   the height is the one thing here that has not been driven in the window.
+- **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
+  shipped window.** Against `.storybook/fake`, reading each group's accessible name off
+  `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no
+  Commander and no Companion**, and the rail held `["Sideboard", "Maybeboard"]` in that order. A
+  freshly created **Commander**-format deck drew `Commander, Sideboard, Maybeboard` — the command
+  zone empty, the companion slot still absent in a format that allows one. Creating a category
+  through the Categories drawer put an empty `Ramp` on the desk immediately, in `sortOrder` between
+  `Main deck` and the rail, which is the reversal itself: under the old rule it was invisible from
+  the moment it was made. Typing `bolt` into the filter removed `Ramp` and left `Main deck,
+  Sideboard, Maybeboard` — the narrowed arm, cut to the fixed zones. **No number here is a
+  measurement**: a headless browser at a story's viewport says nothing about the app's geometry,
+  and nothing above was measured in pixels.
 - **A rail this view used to hold sticky is the one thing not to reinstate.** For one commit
   (`cf13568`, 2026-08-14) the sideboard column was `sticky right-0`, opaque `bg-bg`, `LAYER.raised`
   and a `-8px 0 16px -4px` seam shadow, and every one of those four existed to keep it in view

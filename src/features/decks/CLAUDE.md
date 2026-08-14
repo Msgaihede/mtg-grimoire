@@ -541,8 +541,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   **The sticky rail's live figures went with the sticky rail** — the `position: sticky`,
   `z-index: 10` and occlusion readings taken on 2026-08-14 measured the one-commit implementation
   that was replaced. The wrapping rail has since been driven and its figures are in
-  [frontend-design.md](../../../docs/reference/frontend-design.md); **the two-pile rail has not
-  been**, and what is unmeasured about it is its height, never its width.
+  [frontend-design.md](../../../docs/reference/frontend-design.md). **The two-pile rail has been
+  driven in Storybook over CDP and not in the shipped window** (2026-08-14): the rail held
+  `["Sideboard", "Maybeboard"]` in that order with neither in a packed column. What that pass could
+  not answer is anything about _size_ — a headless browser at a story's own viewport is not the
+  app's window — so the rail's **height** remains the unmeasured thing, and its width was never in
+  question.
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,
