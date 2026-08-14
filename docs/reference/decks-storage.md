@@ -131,6 +131,33 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
   per deck it un-filed.
+- **`decks.separate_x_group` is a stored _reading_ preference, and `deck_update` is the whole of
+  how it is written.** `INTEGER NOT NULL DEFAULT 0`, **schema v12** — whether this deck gathers
+  the cards printing `{X}` under a heading of their own. Per deck rather than per user for
+  `theory_enabled`'s reason: it is a statement about how _this_ list is read, so two decks may
+  disagree and a copy must not. It rides `DeckPatch`, `DeckRow`, `DeckBefore` and `DECK_SELECT`,
+  and **`duplicate_deck` carries it across** while `is_built` and `archived` still reset — what
+  describes the deck comes over, what state the deck is _in_ does not, and a copy that read
+  differently from its original would be a surprise nobody asked for. Rust stores it and does
+  nothing else with it: which cards fall in the group, what it is called and where it sorts are
+  `grouping.ts`'s, which is the crate's facts/conclusions boundary rather than an accident of
+  where it was easier to write. **Two positional traps, both silent when got wrong.** The column
+  goes **last** in `DECK_SELECT` and `deck_row` reads it at index **15**, because a column added
+  anywhere else shifts every later index into a field of the same SQLite type and nothing errors.
+  And `update_deck` binds it as **`?12`, not `?11`** — that hole is `COVER_CARD_ART`, bound rather
+  than spelled in the `SET` list, so a new column takes the next number at the **end** of the list
+  and never the next one that merely _reads_ free.
+- **The audit word is `"xGroup"`, and it is the only multi-word field name `record_deck_edit`
+  writes.** Every other arm of that switch — and of `auditText.ts`'s, which is the only thing that
+  reads the payload — is a single lowercase word, so this is the first place the two spellings can
+  drift with nothing going red: `auditText`'s `default` arm answers a field it does not recognise
+  with "Changed the deck", a sentence true of every deck edit, so a typo here reads as a bland
+  history line rather than as a failure. **Deriving the word from the column gives `separateX`,
+  which is wrong** — and is exactly what the Storybook fake guessed before it was corrected
+  against `deck.rs`. `auditText.test.ts` pins the right word _and_ that wrong-but-plausible one,
+  which is the only fence either side has. Neither sentence claims a card moved ("Split the X
+  spells into their own group" / "Folded the X spells back into their mana values"), because
+  nothing was added, removed or refiled: it changes how the deck is read and not what is in it.
 - **The six single-card commands, and what each takes** (the seventh, `deck_import_commit`, is
   the bulk one and has its own bullet below).\
   `deck_get(id, variant)`;
@@ -333,7 +360,8 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
   promise the answer before the press.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
-  `newest([...])` counts six of them** — update (the rename, the cover and the Built toggle),
+  `newestWrite([...])` counts six of them** — update (the rename, the cover, the Built toggle and
+  the `Split X` chip, which is a deck-row write and therefore not a seventh mutation),
   add-card, set-quantity, move, missing-to-wishlist, swap-printing. **There is no remove
   mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
   removes a deck row. The deck _row_ is a different hook — the gallery's `useDecks` owns create,
@@ -364,7 +392,33 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   fetch a picture, and it is the **whole card** — `cardImageUrl(…, DECK_CARD_VARIANT)`, which is
   `grid`; `Table` and `Text` are text and draw nothing —
   which is why the old single-row view's thumbnail, its `17rem` container query and
-  `STACK_MAX_WIDTH` are gone rather than moved.
+  `STACK_MAX_WIDTH` are gone rather than moved. **That pass predates the `Split X` toggle**
+  (schema v12, 2026-08-14): the twelve stand as measured — the toggle is a modifier of one of the
+  three modes and not a fourth mode — but the _split_ arm of the mana-value grouping has never
+  been driven in the shipped window at all.
+- **`Split X` is a modifier of the mana-value grouping, and in a deck the rule for X is the
+  _exclusive_ one.** A card printing `{X}` lands in `X_GROUP_KEY` — `"mv-x"`, headed
+  `Mana value X` — **and in no other group**, because every surface drawing these headings counts
+  copies and sums prices: a card in two piles makes the columns add up to more than the deck, and nothing on
+  screen says which heading lied. **The search chips are the same idea shaped the opposite way,
+  deliberately** — there X is an overlay ORed with the numerals, because a search cannot find one
+  row twice ([search-faceting.md](search-faceting.md)). Neither is a bug in the other. The pile
+  sorts at 9, after `8 or more` and ahead of `unknown`, which moved to 10; the reasons, the
+  `{Y}`/`{Z}` exclusion and the `useState`-versus-`deck.update` rule are the frontend's, in
+  [src/features/decks/CLAUDE.md](../../src/features/decks/CLAUDE.md).
+- **The stats curve grew a tenth bar and the stats aside did not grow with it.** `STATS_WIDTH_PX`
+  stays **280** (`w-70`) because that constant is what the `DECK_FLOOR` table measures the deck
+  column against, so buying a bar with 24px of panel would narrow the deck at every window size in
+  that table — and the bar is cheaper than the deck. The cells gave way instead. 280 less `p-3.5`
+  on both sides and a 1px border is **250px** of content; nine 20px cells at `gap-1` were **212**,
+  ten would be **236** against a scrollbar this block draws at roughly **15**, so ten cells are
+  **18px**: `10 × 18 + 9 × 4 = 216`, leaving 34px clear at whatever width the platform picks.
+  **The 4px gap is what stays put** — it is the whole of what makes two `bg-surface` tracks read
+  as two bars, and closing it to buy width turns the chart into one block. 18px still holds the
+  widest label (`8+`) and a two-digit count at `text-[0.7rem]` monospace. Both cell widths are
+  written out whole (`w-5`, `w-[1.125rem]`) because Tailwind scans source text and a width
+  assembled from a number emits no rule at all. **This is arithmetic off the constants, not a
+  measurement**: nobody has re-driven the window since the tenth bar landed.
 - **A deck card is the whole card, and the app's marks are overlays on it.** Both picture views
   drew the 626×457 `art` crop inside three app-built bands until 2026-08-12, which showed the one
   part of a card that does not say what it is: no printed frame, no type line, no rules text, no

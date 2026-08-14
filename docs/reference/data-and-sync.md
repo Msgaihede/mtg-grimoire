@@ -254,7 +254,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hard error, not a NULL: read it with `CAST(raw AS BLOB)` and `card_row::raw_json`.
   Nothing reads it at runtime; `artist` has had a column since v3. The v3 migration does
   **not** rewrite existing rows — the corpus converts on the next sync's swap.
-- **Schema is v11.** v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
+- **Schema is v12.** v12 adds one column — `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`,
+  whether a deck gathers its `{X}` spells under a heading of their own. Per **deck** and not a
+  preference, for `theory_enabled`'s reason: it says how _this_ list is read, so a copy must read
+  the same way and a second deck must be free to disagree; a global setting would have made
+  opening one deck change the shape of every other. **The `DEFAULT` is the whole of the upgrade's
+  promise** — `ALTER TABLE … ADD COLUMN` fills every existing row, so a user who has never heard
+  of the switch opens their decks and finds them grouped exactly as they left them, and there is
+  no backfill because there is nothing to compute. Nullable would have been three states for a
+  two-state switch and a `coalesce` at every read site. It touches `cards` not at all, so it takes
+  the same free pass v8, v9 and v11 take below: **v10 keeps the title of newest creator**, and no
+  `cards_fts` rebuild is owed. What the column _means_ is
+  [decks-storage.md](decks-storage.md); nothing about the grouping it controls is in Rust.
+  v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
   `PRIMARY KEY (marketplace, card_id, finish)`, `WITHOUT ROWID`) and `marketplace_feed_meta`
   (`marketplace, fetched_at, feed_built_at, row_count`) for the Card Kingdom and Mana Pool
   price feeds. **They are tables and not `cards` columns because `swap_staging` drops `cards`
@@ -314,16 +326,34 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
   what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares
   `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
-  `idx_cards_collapse` share a name. **`v10_database` is "head minus one" and is renamed on
-  every renumber** — it means "the version below the newest step", never a fixed number, and
+  `idx_cards_collapse` share a name. **Since v12 it compares `decks`' columns too, in _ordinal_
+  order** (`deck_columns`, `card_columns`' counterpart): `decks` has an `ALTER` ladder of its own
+  now — v8's three columns and v12's one — and every read of a deck row is **positional**, so a
+  route that reaches head with the same column _set_ in a different order is a `DeckRow` reading
+  the wrong fields with no error anywhere.
+  **"Head minus one" is a title that moves between fixtures, not a fixture that is renamed.**
   `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
-  `SCHEMA_VERSION - 1` so the two cannot drift apart. `v9_database` is a *different* claim and
-  is pinned to the literal 9: it is the last version **below the `CARDS_INDEXES` replay**,
-  which is the only thing that can prove a machine entering the ladder under v10 still ends up
-  with every index a fresh install has. It is also why a rewind fixture may only undo the steps
-  _above_ where it claims to sit: `migrate` reads `user_version` once and walks every step
-  above it, so a head database rewound two versions re-runs v8's deck rebuild over v8-shaped
-  tables and dies on a duplicate column — a failure no real upgrade can produce.
+  `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and v12 handed it to a
+  new **`v11_database`** rather than renumbering the old holder: `v10_database` stays, pinned to
+  the literal 10 by `the_v10_fixture_really_sits_where_the_v11_step_can_run_over_it`, because
+  `the_v11_step_creates_the_marketplace_price_tables` needs a database that step can actually run
+  over. `v9_database` is a *different* claim again and is pinned to the literal 9: it is the last
+  version **below the `CARDS_INDEXES` replay**, which is the only thing that can prove a machine
+  entering the ladder under v10 still ends up with every index a fresh install has.
+  **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
+  for every one of them whose DDL is not idempotent.** All three rewind fixtures —
+  `v9_database`, `v10_database`, `v11_database` — are built the same way, because only version
+  1's DDL is frozen and there is no way to _build_ a later database forwards: migrate to head,
+  undo by hand, renumber. `migrate` then reads `user_version` once and walks every step
+  above it, so each of those steps is **replayed** over the fixture. `CREATE TABLE IF NOT EXISTS`
+  survives that; **`ALTER TABLE … ADD COLUMN` does not** — SQLite answers `duplicate column name`
+  — which is why v12's column had to be dropped in **all three** fixtures, `v9_database` and
+  `v10_database` included, while v11's `CREATE TABLE IF NOT EXISTS` tables need no line in
+  `v9_database` at all. (`v10_database` drops them for a different reason: a fixture claiming to
+  be a v10 must not already hold what the v11 step is being tested for creating.) Rewinding
+  _too far_ fails the same way from the other direction: a head database rewound two versions
+  re-runs v8's deck rebuild over v8-shaped tables and dies on a duplicate column — a failure no
+  real upgrade can produce.
 - v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
   and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
   (2026) makes a commander out of a Vehicle or Spacecraft _with a P/T box_, and that is

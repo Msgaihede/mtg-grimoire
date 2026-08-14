@@ -2,11 +2,22 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-`npm run storybook` · `npm run build-storybook`. **370 stories across 48 story files, 47 docs
+`npm run storybook` · `npm run build-storybook`. **372 stories across 48 story files, 47 docs
 pages** — counted off `storybook-static/index.json`, which is the only place the three agree
 (`Object.values(index.entries)`, grouped by `type`; the 49th `importPath` is the `.mdx`).
-**Measured 2026-08-14** off a fresh `build-storybook` on the facet-ordering branch **after**
-merging `main`: 417 entries, 370 `story`, 47 `docs`, 49 distinct `importPath`s.
+**Measured 2026-08-14** off a fresh `build-storybook` on the X-mana-category worktree at
+`09ea7db`: 419 entries, 372 `story`, 47 `docs`, 49 distinct `importPath`s.
+
+The two over the 370 measured earlier the same day are `Decks/DeckStats`' `ManaCurveWithX` and
+`ManaCurveSplitX` — the pair the X mana category is measured over, one deck drawn twice with
+nothing between them but the toggle. **No story file and no docs page moved with them**: they
+take that file from seven stories to nine, and it already had a docs page, which is why 48 and 47
+are unchanged while the story total is not. The other three story files this branch touched
+changed stories they already had — `Components/FilterChips`' mana-value pair gained the X chip,
+`Decks/DeckEditor`'s `GroupAndSort` gained the `Split X` control, `Search/Page`'s `Empty` gained
+a paragraph — and a rewritten story is invisible to every count on this line. **The arithmetic
+agreeing with the measurement here is a coincidence of a quiet base**, not a method: 372 was
+built, not derived, and the paragraphs below are what happens when someone derives.
 
 The twelve over the 358 measured 2026-08-12 come from five branches that never saw each other's
 stories: five are `Card/DetailPane`'s, fifteen to twenty, when the printings list gained a
@@ -54,7 +65,9 @@ can go missing from the prose while the story total still looks plausible.
 file in the meta and `CategoriesPanel`/`TheoryDiffDialog` do not carry it, so those two have
 stories and no docs page. A new story file gets neither unless it says `tags: ["autodocs"]`.
 (Re-derived 2026-08-14 from the built index rather than carried forward: `46 + 1 mdx = 47` docs
-pages against 48 story files, and the two opting out are still the same two.)
+pages against 48 story files, and the two opting out are still the same two. Re-derived again
+from the `09ea7db` build above, which added two stories to a file that already had a docs page:
+same 48, same 47, same two opting out.)
 
 - **What it is for: a design workbench, a living catalogue, and an a11y surface** — build a
   component against every state at once, find the one that already exists before writing a
@@ -81,6 +94,13 @@ pages against 48 story files, and the two opting out are still the same two.)
   failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
   with every map **empty** rather than zeroed, and the filter row leaves every control live on
   it. The fake has no warm-up of its own, so it is the only way a story can stand there.
+  **One field of that response is not a map and has no empty to send**: `manaX` — the mana row's
+  X chip — is a count, so the cold handler answers `0`, which is character for character what a
+  warm response sends for "no X cards in this search". `ready: false` is the whole of what tells
+  those two apart, so this fault is the only place a story can prove the X chip stays live rather
+  than merely showing a row with no counts on it. A scalar added to `FacetResponse` later needs
+  the same line here and the same reasoning; see
+  [search-faceting.md](search-faceting.md).
   Counting the list is worth doing when one is added: this line said _four_ for three faults'
   worth of drift, because a prose-only edit routes to neither CI job and nothing goes red.
   **`deckMeta` is the one that refuses
@@ -125,7 +145,11 @@ pages against 48 story files, and the two opting out are still the same two.)
   2026-08-12 and is `46 − 7 − 1` now, which is exactly the way a derived count goes stale while
   still looking right. Re-derive it from `inline: false` in source, as this was; a new story file
   that writes the store needs the same parameter or its docs page shows one story's view under
-  every heading.
+  every heading. (Re-derived at `09ea7db`: **eight** `inline: false` sites under `src/`, seven in
+  a meta and `CardZoomIndicator`'s in a story, against the 46 autodocs files the build above
+  counted — all three terms unchanged, so 38 stands. Recorded even though nothing moved: "the
+  terms were checked and held" is the only thing that distinguishes this figure from the same
+  figure left alone.)
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
@@ -147,13 +171,19 @@ pages against 48 story files, and the two opting out are still the same two.)
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`
-  (**270** plays today, in a file of **273** tests — the other three are its own;
-`grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` for the first, and the runner's own
-summary for the second, both measured 2026-08-14). **Both figures had rotted before this
-re-count** — they read 264/267 against a tree already answering 269/272, which is six plays'
-worth of drift added by branches that did not re-measure, and is the same prose-only rot the
-story totals above have taken three times. Only one of the six is this branch's
-(`Search/Page`'s `Unplayable`). This is what puts a story's own claim inside `npm run verify` —
+  (**280** plays at `09ea7db`, counted with
+`grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l` on that tree, 2026-08-14). **The
+runner's own total is deliberately not restated beside it.** The pair used to read 270/273 —
+both the runner's, measured earlier the same day — and the file's own three tests still make the
+run `plays + 3`, but that half was not re-run this pass and arithmetic is not a measurement.
+Quote 280 for plays; open a run for the other number. **The play count had rotted before this
+one too**: the tree this branch started from already answered **278** against a line saying 270,
+so eight of the ten are merges nobody re-counted and **two** are this branch's — `Decks/DeckStats`'
+`ManaCurveWithX` and `ManaCurveSplitX`, the same two stories the totals at the top moved by. The
+pair before that read 264/267 against a tree already answering 269/272 — six plays' worth of
+drift then, of which one was that branch's (`Search/Page`'s `Unplayable`). Twice now the branch
+that found the drift contributed almost none of it, which is the shape of prose-only rot rather
+than of anyone's carelessness. This is what puts a story's own claim inside `npm run verify` —
   `build-storybook` compiles stories, it never plays them. `composeStories` **snapshots project
   annotations at call time**, so `setProjectAnnotations` must run before it, at module scope;
   after the scan it is a no-op and the failure is a story running with no decorator.
