@@ -106,12 +106,18 @@ describe("FilterBar", () => {
     expect(toggleManaValue).not.toHaveBeenCalled();
   });
 
-  /** Nothing to reset, nothing to say — an always-visible Reset is a control that is
-   *  disabled most of the time, which reads as broken. */
-  it("hides Reset all until something is filtered", () => {
+  /**
+   * Drawn from the first render and greyed until there is something to clear. The search box
+   * is `flex-1`, so a Reset that appeared on the first press would take its width out of the
+   * box and slide all nine colour chips left — under the finger that just pressed one.
+   */
+  it("draws Reset all greyed until something is filtered", () => {
     render(<FilterBar search={search()} />);
 
-    expect(screen.queryByRole("button", { name: /reset all/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /**
@@ -156,6 +162,7 @@ describe("FilterBar", () => {
 
     const reset = screen.getByRole("button", { name: /reset all/i });
     expect(reset).toHaveTextContent("3");
+    expect(reset).not.toHaveAttribute("aria-disabled");
 
     await userEvent.click(reset);
 

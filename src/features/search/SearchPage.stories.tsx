@@ -280,8 +280,9 @@ export const TableView: Story = {
  *
  * **And the filter row above it is fully live**, which is the second claim and the one that
  * had no test. Counted honestly an empty corpus puts every option at zero, the greying rule
- * dims the whole row, and — with no filter on — there is no `Reset all` drawn to escape by:
- * the first screen a new user ever sees would be a dead control panel. So `facets::compute`
+ * dims the whole row, and — with no filter on — the `Reset all` that would be the escape is
+ * itself greyed: the first screen a new user ever sees would be a dead control panel. So
+ * `facets::compute`
  * guards on `ix.all.count() == 0` and answers `ready: false`, the same shape a cold index
  * has, and the fake's `facet_cards` carries the same guard. It went in without one: the fake
  * answered `ready: true` unconditionally, mirroring a `compute` that no longer existed, and
