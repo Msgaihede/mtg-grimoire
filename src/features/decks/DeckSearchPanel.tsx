@@ -63,7 +63,7 @@ export const AUTO_CATEGORY = 0;
  * It read `Auto (by card type)` while the type line was the whole of the rule, and that was
  * still on screen after the rule changed — **found by driving the shipped window on 2026-08-14,
  * not by the suite**, which pinned the string in four places and so agreed with itself. The
- * wording matches the Categories panel's button ("File cards by what they do") on purpose: they
+ * wording matches the Categories dialog's button ("File cards by what they do") on purpose: they
  * are the same rule, and a reader who meets it twice under two names has to work out that it is
  * one rule.
  */
@@ -156,8 +156,14 @@ export interface DeckSearchPanelProps {
  *
  * A **fixture of the editor, not a dismissible layer**: Escape pressed in here belongs to the
  * card detail pane, which listens on `window` in the bubble phase, and the way to put the
- * panel away is the disclosure control it names itself by. The one dismissible thing inside it
- * is the set picker's listbox, which is already an `"inner"` layer of its own.
+ * panel away — and the way to get it out in the first place, since it opens collapsed — is the
+ * disclosure control it names itself by. The one dismissible thing inside it is the set picker's
+ * listbox, which is already an `"inner"` layer of its own.
+ *
+ * It is a docked column rather than one of the editor's dialogs because it is **worked out of**:
+ * its tiles are drag sources into the deck's own category columns beside it, and a scrim would
+ * end that drag path and cover the card pane a reader flips printings in. `src/CLAUDE.md` carries
+ * that rule; everything the reader merely *consults* is a `DeckDialog`.
  *
  * The tiles stay selectable, so the pane keeps working from inside the editor: clicking the
  * art opens the card exactly as it does on the search view, and the Add button beside it does
@@ -170,8 +176,29 @@ export function DeckSearchPanel({
   onTargetCategoryChange,
   roomy = true,
 }: DeckSearchPanelProps) {
-  /** What the *reader* last chose. What is drawn is this and `roomy` together. */
-  const [open, setOpen] = useState(true);
+  /**
+   * What the *reader* last chose, and it starts **collapsed** (changed 2026-08-14). What is
+   * drawn is this and `roomy` together.
+   *
+   * The panel is {@link PANEL_WIDTH_PX} plus the desk row's 16px gap out of a row measured at
+   * **602px** at 1280×800 with the card pane docked (`DeckEditor`'s `DECK_FLOOR` carries that
+   * measurement), which leaves the deck **202px** — one stack column. Open by default, every
+   * reader paid that on every deck they opened whether or not they were adding cards; collapsed,
+   * the deck starts with the whole desk and one press on the rail gets the wall back.
+   *
+   * **Per editor-open, and deliberately not remembered.** This is `useState` and not a
+   * `useAppStore` field, so a reader who opens the panel, leaves the deck and comes back finds it
+   * collapsed again. That is the choice rather than the omission it looks like: `cardZoom`,
+   * `searchView` and `collectionView` are session-wide answers to questions about the *app*, and
+   * which way a reader last left one particular deck's search column is not one of them. It is
+   * not the deck's either — `rememberView` keeps `lastVariant`/`lastGroupBy`/`lastSortBy` on the
+   * deck row because they say where the reader had got to *in that deck*, and a search column is
+   * a thing you open to do a job and shut when the job is done.
+   *
+   * The search behind it is unchanged by this: `useCardSearch` below is unconditional, so the
+   * query runs behind the rail exactly as it already did whenever `roomy` was false.
+   */
+  const [open, setOpen] = useState(false);
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const categoryFieldId = useId();
@@ -364,7 +391,7 @@ export function DeckSearchPanel({
 
                 **Deliberately not alphabetical**, and one of the exceptions `src/lib/options.ts`
                 names. The categories arrive in `cat.sort_order, cat.id` — the order the reader
-                dragged them into in `CategoriesPanel`, and the order every deck view draws its
+                dragged them into in `CategoriesDialog`, and the order every deck view draws its
                 columns in. Sorting them here would make this dropdown disagree with the deck
                 beside it and would overwrite an order the reader chose. */}
             <select

@@ -210,6 +210,21 @@ function panel({
 }
 
 /**
+ * The panel with its disclosure pressed open — which is what most of this file is about, and no
+ * longer the state it renders in.
+ *
+ * The panel opens **collapsed** (its `open` state's own doc has the 602/384/202 arithmetic), so
+ * a test that renders it and reaches straight for the wall is asking about a wall that is not
+ * drawn. Pressing the control the reader would press keeps each of those tests asking what it
+ * meant to ask, rather than being repaired by a prop nobody has.
+ */
+async function openPanel(options: Parameters<typeof panel>[0] = {}) {
+  const view = panel(options);
+  await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+  return view;
+}
+
+/**
  * What the target-category select offers, by name.
  *
  * Read off the select rather than by `role: "option"`: the filter bar's format picker sits in
@@ -221,9 +236,40 @@ const categoryOptions = (): string[] => {
 };
 
 describe("DeckSearchPanel", () => {
+  /**
+   * The state a deck opens in, and the reason it changed: the panel's 384px plus the desk's
+   * 16px gap out of a 602px row at 1280×800 with the card pane docked leaves the deck 202px —
+   * one stack column — so open by default every reader paid for a wall whether or not they were
+   * adding cards.
+   *
+   * `roomy` is left true here on purpose: this is the reader's own default, not the editor
+   * refusing for want of width, and the two are kept apart everywhere else in this file.
+   */
+  it("starts collapsed, so the deck has the desk until the reader asks for the wall", async () => {
+    const first = panel();
+
+    const rail = screen.getByRole("button", { name: "Search cards" });
+    expect(rail).toHaveAttribute("aria-expanded", "false");
+    expect(rail).not.toHaveAttribute("aria-disabled");
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+
+    await userEvent.click(rail);
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    first.unmount();
+
+    // And it is not remembered. The choice is this component's `useState` and deliberately not a
+    // `useAppStore` field — a reader who opens the panel, leaves the deck and comes back finds it
+    // collapsed again, which is what makes moving it into the store a change rather than a tidy.
+    panel();
+    expect(screen.getByRole("button", { name: "Search cards" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   /** The search view's own parts, in a column: not a second search implementation. */
   it("renders the search filters and the results as a wall of art", async () => {
-    panel();
+    await openPanel();
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Color identity" })).toBeInTheDocument();
@@ -237,7 +283,7 @@ describe("DeckSearchPanel", () => {
    * see from here.
    */
   it("leaves the grid-or-table choice to the search view", async () => {
-    panel();
+    await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
     expect(screen.queryByRole("button", { name: "Table view" })).not.toBeInTheDocument();
@@ -249,8 +295,8 @@ describe("DeckSearchPanel", () => {
    * draws its columns — and its **value is an id**, because that is what an add is addressed
    * by now that a category's name is the reader's to change.
    */
-  it("offers the deck's own categories as targets, in the editor's order", () => {
-    panel();
+  it("offers the deck's own categories as targets, in the editor's order", async () => {
+    await openPanel();
 
     expect(screen.getByLabelText("Add to")).toHaveValue(String(MAIN.id));
     expect(categoryOptions()).toEqual([
@@ -266,12 +312,12 @@ describe("DeckSearchPanel", () => {
 
   /** The other half of the same rule, and the reason the list is a prop: the categories are
    *  the deck's own rows, so one deck has a pile another has never made. */
-  it("offers exactly the categories it is handed, and no others", () => {
-    const seeded = panel();
+  it("offers exactly the categories it is handed, and no others", async () => {
+    const seeded = await openPanel();
     expect(categoryOptions()).not.toContain("Ramp");
     seeded.unmount();
 
-    panel({ categories: [MAIN, category({ id: 9, name: "Ramp", sortOrder: 2 })] });
+    await openPanel({ categories: [MAIN, category({ id: 9, name: "Ramp", sortOrder: 2 })] });
     expect(categoryOptions()).toEqual(["Auto (by what it does)", "Main deck", "Ramp"]);
   });
 
@@ -286,7 +332,7 @@ describe("DeckSearchPanel", () => {
    * whole gesture is the editor's (`DeckEditor.test.tsx`).
    */
   it("hands each drawn tile to the drag adapter, carrying the card it draws", async () => {
-    const { container } = panel();
+    const { container } = await openPanel();
     const art = await screen.findByRole("button", { name: "Lightning Bolt" });
 
     const tiles = [...container.querySelectorAll('[draggable="true"]')];
@@ -315,7 +361,7 @@ describe("DeckSearchPanel", () => {
    * deliberately still a drag handle — the exclusion is marked, not guessed from the tag.
    */
   it("does not drag a tile when the press landed on its Add button", async () => {
-    const { container } = panel();
+    const { container } = await openPanel();
     const add = await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
     const tile = container.querySelector('[draggable="true"]')!;
 
@@ -339,7 +385,7 @@ describe("DeckSearchPanel", () => {
    * do not).
    */
   it("adds one copy of a card to the target category", async () => {
-    panel();
+    await openPanel();
 
     await userEvent.click(
       await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
@@ -349,7 +395,7 @@ describe("DeckSearchPanel", () => {
   });
 
   it("adds to whichever category is picked, and says so on the button", async () => {
-    const view = panel();
+    const view = await openPanel();
     await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
 
     view.retarget(SIDE.id);
@@ -361,7 +407,7 @@ describe("DeckSearchPanel", () => {
   /** A `<select>` speaks strings and a category is addressed by number, so the parse back is
    *  the panel's own job and the editor is handed an id it can write with. */
   it("hands the category choice back to the editor as an id", async () => {
-    const view = panel();
+    const view = await openPanel();
 
     await userEvent.selectOptions(screen.getByLabelText("Add to"), String(SIDE.id));
 
@@ -377,7 +423,7 @@ describe("DeckSearchPanel", () => {
    * taking the whole panel down over a label.
    */
   it("names the deck rather than crashing when the picked category is not in the list", async () => {
-    panel({ targetCategoryId: 404 });
+    await openPanel({ targetCategoryId: 404 });
 
     expect(
       await screen.findByRole("button", { name: "Add Lightning Bolt to this deck" }),
@@ -387,7 +433,7 @@ describe("DeckSearchPanel", () => {
   /** The result still tells the collection story: a card already in the binder is a card the
    *  deck can be built out of today. */
   it("marks a result with what the collection holds", async () => {
-    panel();
+    await openPanel();
 
     expect(await screen.findByText("×3")).toBeInTheDocument();
   });
@@ -406,7 +452,7 @@ describe("DeckSearchPanel", () => {
    */
   it("crowns a game changer, and leaves the tile beside it unmarked", async () => {
     searchCards.mockResolvedValue(page([BOLT, RHYSTIC_STUDY]));
-    const { container } = panel();
+    const { container } = await openPanel();
     const crowned = await screen.findByRole("button", { name: "Rhystic Study" });
 
     const marks = screen.getAllByLabelText("Game changer");
@@ -419,7 +465,7 @@ describe("DeckSearchPanel", () => {
 
   /** The tiles stay selectable, so the card pane keeps working from inside the editor. */
   it("opens the card in the pane from a tile", async () => {
-    panel();
+    await openPanel();
 
     await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
 
@@ -429,7 +475,7 @@ describe("DeckSearchPanel", () => {
   /** The editor has to be usable at 1024px with the card pane docked beside it, and 384px of
    *  search is what has to give. */
   it("collapses to a rail that says what it is, and opens again", async () => {
-    panel();
+    await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
     await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
@@ -448,9 +494,15 @@ describe("DeckSearchPanel", () => {
    * none, the rail is what is drawn whatever the reader last chose — and the disclosure is
    * disabled, because a press could not open anything and a control that records an intention
    * and moves nothing is worse than one that says why.
+   *
+   * Opened first, and that is the whole of what makes the last two acts discriminate: the panel
+   * starts collapsed now, so a reader who never pressed anything is already in the state a
+   * refusal draws, and every assertion below would pass against a component that had thrown the
+   * choice away.
    */
   it("draws its rail, refused and explained, when the editor has no room for it", async () => {
-    const view = panel({ roomy: false });
+    const view = await openPanel();
+    view.update({ roomy: false });
 
     const rail = screen.getByRole("button", { name: "Search cards" });
     expect(rail).toHaveAttribute("aria-expanded", "false");
@@ -485,7 +537,7 @@ describe("DeckSearchPanel", () => {
    * Tab restarting from the top of the app.
    */
   it("takes the caret when the pane closes and the tile that opened it has gone", async () => {
-    const view = panel();
+    const view = await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
     // The card opens, and its arrival is what squeezes the panel out.
@@ -509,7 +561,7 @@ describe("DeckSearchPanel", () => {
   /** And it does not steal one: an opener still on screen has already been handed the caret
    *  back, which is where the reader was. */
   it("leaves the caret alone when something else still has it", async () => {
-    const view = panel();
+    const view = await openPanel();
     const elsewhere = document.createElement("button");
     document.body.append(elsewhere);
 
@@ -528,7 +580,7 @@ describe("DeckSearchPanel", () => {
    * back when the pane closes, and one the reader shut stays shut.
    */
   it("comes back when the room does, unless the reader was the one who shut it", async () => {
-    const view = panel();
+    const view = await openPanel();
     await screen.findByRole("searchbox", { name: "Search cards" });
 
     view.update({ roomy: false });
@@ -559,7 +611,7 @@ describe("DeckSearchPanel", () => {
         cardCount: 295,
       },
     ]);
-    panel();
+    await openPanel();
     await userEvent.click(screen.getByRole("button", { name: "Set" }));
     await screen.findByRole("combobox", { name: /search sets/i });
 
@@ -582,7 +634,7 @@ describe("DeckSearchPanel", () => {
   /** A refused add is said in the app's own words, where the reader is looking. */
   it("says so when an add is refused", async () => {
     deckAddCard.mockRejectedValue("The database is busy with a sync — try again in a moment.");
-    panel();
+    await openPanel();
 
     await userEvent.click(
       await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
@@ -597,7 +649,7 @@ describe("DeckSearchPanel", () => {
    * of `<img>`s, which is the same warming by a shorter path.
    */
   it("leaves image warming to the grid's overscan", async () => {
-    panel();
+    await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());

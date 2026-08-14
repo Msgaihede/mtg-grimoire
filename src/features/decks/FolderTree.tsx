@@ -616,7 +616,8 @@ function FolderRow({
  * parent for a reader who cannot see the indent. A rename needs no such line at all, because
  * the field is standing exactly where the folder was.
  *
- * `CategoriesPanel`'s `RenameField` decided the two details that matter and they are kept here:
+ * `metaRows.tsx`'s `RenameField` — the row grammar the deck's two meta dialogs share — decided
+ * the two details that matter and they are kept here:
  * the current name arrives **selected**, because the commonest rename replaces the word rather
  * than edits inside it, and Escape's job is left to the page — a second Escape rung inside an
  * `"inner"` layer is the case `useDismissOnEscape` explicitly does not order.

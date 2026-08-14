@@ -78,9 +78,17 @@ const meta = {
           "the card is going is the one thing about the press that is not visible on the " +
           "tile.\n\n" +
           "**A fixture of the editor, not a dismissible layer.** Escape pressed in here belongs " +
-          "to the card detail pane; the way to put the panel away is the disclosure it names " +
-          "itself by ({@link Collapsed}), and the one state where that control refuses is " +
-          "{@link NoRoom} — measured width, not a guess.\n\n" +
+          "to the card detail pane; the way to put the panel away — and the way to get it out " +
+          "in the first place — is the disclosure it names itself by ({@link Collapsed}), and " +
+          "the one state where that control refuses is {@link NoRoom} — measured width, not a " +
+          "guess.\n\n" +
+          "**It opens collapsed** (2026-08-14), which is why every play below presses that " +
+          "disclosure before it looks at anything. 384px plus the desk's 16px gap out of a row " +
+          "measured at **602px** at 1280×800 with the card pane docked leaves the deck 202px — " +
+          "one stack column — so open by default every reader paid for the wall on every deck " +
+          "they opened whether or not they were adding cards. The choice is this component's " +
+          "`useState` and deliberately not a `useAppStore` field: it is per editor-open and not " +
+          "remembered.\n\n" +
           "**`Docked` and the plan's `Results` are one state, not two.** This panel has no " +
           "empty-and-docked shape to tell apart from a docked one with results: with the seed " +
           "it is given, docking it *is* showing results. What genuinely differs is why a wall " +
@@ -102,7 +110,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Open, with the whole corpus in it.
+ * Opened by a press, with the whole corpus in it — the panel itself starts collapsed.
  *
  * The count line is the search view's own `summaryOf`, imported rather than re-written: two
  * copies of these six sentences would be two answers to "why is this list empty", and the one
@@ -121,10 +129,12 @@ export const Docked: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    await expect(within(panel).getByRole("button", { name: "Search cards" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    const toggle = within(panel).getByRole("button", { name: "Search cards" });
+    // Collapsed at rest, so the wall arrives on a press. {@link Collapsed} is where that
+    // default is the subject rather than the setup.
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
 
     // The category is in every Add button's name, and it is the only part of the press a
@@ -161,7 +171,12 @@ export const Docked: Story = {
 };
 
 /**
- * Put away by the reader, and still saying what it is.
+ * The state a deck opens in — and the state the reader puts it back into — still saying what it
+ * is.
+ *
+ * **Collapsed is the default now** (2026-08-14), so this is the panel at rest rather than a panel
+ * somebody shut. The deck gets the whole desk until the reader wants the wall, and one press on
+ * the rail is what fetches it back.
  *
  * The words run down the rail rather than leaving a bare icon to be guessed at, and they are the
  * button's accessible name either way — an `aria-label` would be a second, invisible copy of
@@ -172,19 +187,24 @@ export const Docked: Story = {
  * position, so two shapes would make the disclosure a *different* button either side of a
  * collapse — and the caret handed to the rail when the card pane closes would be dropped again
  * one commit later. That this is the same element is invisible on screen and is what the identity
- * check below is for.
+ * check below is for: the round trip out and back is what asks the question, which is why this
+ * play opens the panel it is named after.
  */
 export const Collapsed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
+    // At rest, before anything is pressed.
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(toggle);
     await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
 
     await userEvent.click(toggle);
 
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    // The same button, not a new one in the same place.
+    // The same button, not a new one in the same place — across both presses.
     await expect(within(panel).getByRole("button", { name: "Search cards" })).toBe(toggle);
     // Everything below the rail is gone with it: the filters, the count and the wall.
     await expect(within(panel).queryByText("33 cards")).toBeNull();
@@ -199,10 +219,10 @@ export const Collapsed: Story = {
  * The narrowest thing gives way first, which is the rule the category columns already follow, one
  * level up. `roomy` is measured against the row the deck and the panel share rather than against
  * the window, because the window's width is three layouts away from it — a 1024px window leaves
- * that row 361px with the card pane open, against 776px without one (`DeckEditor.tsx:66-71`'s
- * measured table). Three docked columns simply do not fit in 1024: the deck was measured at
- * **2px** before this floor existed, which reads as a rendering fault rather than as a squeeze
- * (`DeckEditor.tsx:55-58`).
+ * that row 361px with the card pane open, against 776px without one (the measured table on
+ * `DeckEditor`'s `DECK_FLOOR`). Three docked columns simply do not fit in 1024: the deck was
+ * measured at **2px** before that floor existed, which reads as a rendering fault rather than as
+ * a squeeze.
  *
  * **`aria-disabled` and a press that does nothing, not `disabled`.** A disabled button is out of
  * the tab order, which would leave the reason hanging on a hover a keyboard reader cannot perform
@@ -210,7 +230,10 @@ export const Collapsed: Story = {
  * `title` is its description, and it is somewhere the caret can be put when the card pane closes
  * and the tile that opened it has gone with the panel.
  *
- * The reader's own choice is untouched by this, so the panel comes back the moment the room does.
+ * The reader's own choice is untouched by this, so a panel they had opened comes back the moment
+ * the room does. Untouched includes untouched by the press above: `roomy` decides what is
+ * *drawn* and the reader decides what they *want*, and a refusal that quietly flipped the second
+ * one would answer a reader who never operated the control.
  */
 export const NoRoom: Story = {
   args: { roomy: false },
@@ -249,6 +272,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
     await expect(
       await within(panel).findByText(
         "Card database is empty — waiting for the first sync to finish.",
@@ -269,6 +293,7 @@ export const NoMatch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
     await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
@@ -290,20 +315,21 @@ export const NoMatch: Story = {
 /**
  * A write the database refused, said beside the button that was pressed.
  *
- * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
- * every write handler and by no read handler — which is why the wall underneath is untouched and
- * still counting 41.
+ * The fake's `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of every
+ * write handler and by no read handler — which is why the wall underneath is untouched and still
+ * counting the 33 the play asserts.
  *
- * **This refusal is deliberately not in the editor's banner.** That one speaks for the three
- * writes the deck's own controls make, and a refusal reported somewhere else is a refusal the
- * reader has to go looking for — two banners for one press would be worse than one in the wrong
- * place (`DeckEditor.tsx:235-240`).
+ * **This refusal is deliberately not in the editor's banner.** That one speaks for the writes the
+ * deck's own controls make (`DeckEditor`'s `newestWrite`), and a refusal reported somewhere else
+ * is a refusal the reader has to go looking for — two banners for one press would be worse than
+ * one in the wrong place.
  */
 export const Busy: Story = {
   parameters: { fake: { fault: "busy" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
     // Matched by prefix, where the click-to-add story above spells the category out.
     //
     // The name's tail is the category the picker is on, which is the deck's **first** in
@@ -311,7 +337,7 @@ export const Busy: Story = {
     // arrives on the deck read rather than on the search this story is really about. Naming it
     // would make a story about a *refused write* wait on, and fail over, a list it does not
     // care about; `findByRole` with a prefix waits for the button and says nothing about which
-    // pile it points at. `ClickToAdd` is where the picker's own contract is pinned.
+    // pile it points at. {@link Docked} is where the picker's own contract is pinned.
     await userEvent.click(
       await within(panel).findByRole("button", { name: /^Add Ancient Tomb to / }),
     );
