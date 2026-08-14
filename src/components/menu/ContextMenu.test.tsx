@@ -408,6 +408,59 @@ describe("ContextMenu", () => {
     expect(screen.queryByRole("menuitem", { name: "Scryfall" })).not.toBeInTheDocument();
   });
 
+  /**
+   * The hover-collapse, from the one starting position the test above cannot reach.
+   *
+   * That test opens the submenu **by hover**, so the caret never leaves the root panel and the
+   * collapse unmounts nothing the caret is in. This one opens it **by keyboard**, which is the
+   * ordinary way in — the menu opens at the pointer, so the pointer is already resting on the
+   * first row while the reader arrows down into a submenu — and then nudges the mouse.
+   *
+   * Every other close in the cascade hands the caret back before it unmounts anything: ArrowLeft
+   * focuses the parent row, a submenu's Escape focuses its own row, a click on a parent row is
+   * focused by the click itself. The hover timer was the one route that wrote `openPath` directly,
+   * and an element holding `document.activeElement` unmounting drops the caret on `<body>` — which
+   * is outside the React root, so the panel's `onKeyDown` never fires again. The arrows, Home and
+   * End go dead, and so does **Tab**, which then falls through to the browser and walks focus into
+   * the page behind a panel that is still up: exactly what the Tab branch exists to prevent.
+   */
+  it("hands the caret back when a hover collapses the panel it is in", () => {
+    vi.useFakeTimers();
+    open([
+      {
+        kind: "submenu",
+        id: "open-on",
+        label: "Open on",
+        items: [{ kind: "action", id: "sf", label: "Scryfall", onSelect: vi.fn() }],
+      },
+      { kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() },
+    ]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+    const panel = screen.getByRole("menu");
+
+    // By keyboard, so `focusInto` puts the caret on a row *inside* the submenu's panel.
+    fireEvent.keyDown(panel, { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: /Open on/ }), { key: "ArrowRight" });
+    expect(screen.getByRole("menuitem", { name: "Scryfall" })).toHaveFocus();
+
+    // The pointer, which never moved off the row the menu opened under, is nudged onto a row that
+    // opens nothing — so the sweep collapses the submenu the caret is in.
+    fireEvent.pointerOver(screen.getByRole("menuitem", { name: "Copy card name" }));
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
+    expect(screen.queryByRole("menuitem", { name: "Scryfall" })).not.toBeInTheDocument();
+
+    // Back on the row the closed panel hung off, the way ArrowLeft would have left it -- and in
+    // particular not on `<body>`.
+    expect(document.body).not.toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: /Open on/ })).toHaveFocus();
+
+    // ...and the panel still owns its keys, which is the half that makes this more than untidy.
+    // Fired at wherever the caret actually is: from `<body>` the press never reaches the React
+    // root at all, so nothing moves.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toHaveFocus();
+  });
+
   it("takes Home and End to the ends of the list", async () => {
     const user = userEvent.setup();
     open([

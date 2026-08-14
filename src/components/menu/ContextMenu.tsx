@@ -55,6 +55,20 @@ const samePath = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((id, i) => id === b[i]);
 
 /**
+ * The depth of the deepest panel that survives a move from `prev` to `next`.
+ *
+ * A panel at depth `d` is drawn because `openPath[d - 1]` names the row it hangs off, so it is
+ * still the same panel afterwards only if `next` agrees with `prev` about every entry above it —
+ * the length of their common prefix. Everything below that depth is unmounted, whether it is
+ * closing (a shorter path) or being replaced by a sibling's panel at the same depth.
+ */
+const keptDepth = (next: string[], prev: string[]): number => {
+  let depth = 0;
+  while (depth < next.length && depth < prev.length && next[depth] === prev[depth]) depth += 1;
+  return depth;
+};
+
+/**
  * What every row needs and no row should be handed one prop at a time.
  *
  * `openPath` is the chain of expanded rows, one id per level: `openPath[d]` is the row expanded in
@@ -569,6 +583,36 @@ export function ContextMenu({
   };
 
   /**
+   * The caret, moved out of a panel that is about to be unmounted — **the hover's half of a rule
+   * every other close in this file already keeps.**
+   *
+   * ArrowLeft focuses the parent row before it collapses, `Submenu`'s Escape focuses its own row
+   * before it closes, and a click on a parent row is focused by the click that closed it. A
+   * hover-collapse writes `openPath` with nothing under the pointer having taken the caret, so it
+   * is the one route that can unmount the element holding `document.activeElement`. That drops the
+   * caret on `<body>`, which is **outside the React root** — so the panel's `onKeyDown` stops
+   * firing altogether and the arrows, Home, End *and Tab* go dead while the panel is still up.
+   * Tab is the one that does damage: unhandled, it falls through to the browser and walks focus
+   * into the page behind a menu the reader can still see.
+   *
+   * The hand-back target is ArrowLeft's, arrived at the same way: the row that the deepest doomed
+   * panel hangs off. Only the caret is moved and only when it is inside something closing, so a
+   * sweep across rows while the caret sits in the root panel goes on rearranging nothing.
+   */
+  const handBack = (next: string[]) => {
+    const root = panelRef.current;
+    const caret = document.activeElement;
+    if (!root || !(caret instanceof Element) || !root.contains(caret)) return;
+    const panel = panelOf(caret);
+    if (!panel) return;
+    const kept = keptDepth(next, openPath);
+    if (depthOf(panel) <= kept) return;
+    const doomed = root.querySelector<HTMLElement>(panelAtDepth(kept + 1));
+    const parentRow = doomed?.closest<HTMLElement>(ROW_SELECTOR);
+    if (parentRow) rowButtonOf(parentRow)?.focus();
+  };
+
+  /**
    * Hover, resolved against the DOM for the same reason the caret is.
    *
    * `onPointerOver` and not `onPointerEnter`: React synthesises enter/leave from over/out, and a
@@ -608,6 +652,9 @@ export function ContextMenu({
     if (samePath(next, openPath)) return;
     hoverTimer.current = setTimeout(() => {
       hoverTimer.current = null;
+      // The caret first, while the panel it is in is still on screen -- then the collapse. Same
+      // order, and the same two lines, as ArrowLeft and as `Submenu`'s Escape.
+      handBack(next);
       setOpenPath(next);
     }, SUBMENU_HOVER_MS);
   };
