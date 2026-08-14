@@ -124,7 +124,7 @@ export function moveToFolderContent({
     // `isPending`, never by the empty array — the hook says so on its own `folders`.
     if (folders.query.isPending) return <Note>Reading your folders…</Note>;
     if (folders.query.isError) {
-      return <Note alert>Could not read your folders — {ipcError(folders.query.error)}</Note>;
+      return <Note failed>Could not read your folders — {ipcError(folders.query.error)}</Note>;
     }
 
     return (
@@ -178,16 +178,34 @@ export function moveToFolderContent({
 const ROW = cn(
   "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text",
   "transition-colors duration-150 hover:bg-bg motion-reduce:transition-none",
+  // An inert row lights up under the pointer otherwise, which is the one thing a row that
+  // cannot be pressed must not do. Written out whole, variant and all: Tailwind scans source
+  // text for class names.
+  "aria-disabled:hover:bg-transparent",
   FOCUS_INSET,
 );
 
-/** What the panel says while it is reading, or when the read was refused — never a blank box,
- *  which reads as a menu that has nothing to offer. */
-function Note({ children, alert = false }: { children: ReactNode; alert?: boolean }): JSX.Element {
+/**
+ * What the panel says while it is reading, or when the read was refused — never a blank box,
+ * which reads as a menu that has nothing to offer.
+ *
+ * `role="status"` rather than `alert` even for the refusal: this screen reserves `alert` for a
+ * **write** the app refused, which is a thing that just happened, and a failed *read* is a
+ * condition that is — `FolderTree`'s own split, one panel along. It announces nothing on mount
+ * either way, because a live region that first appears with its sentence already inside it is a
+ * region nothing changed in.
+ */
+function Note({
+  children,
+  failed = false,
+}: {
+  children: ReactNode;
+  failed?: boolean;
+}): JSX.Element {
   return (
     <p
-      role={alert ? "alert" : undefined}
-      className={cn("px-2 py-1.5 text-xs", alert ? "text-destructive" : "text-dim")}
+      role="status"
+      className={cn("px-2 py-1.5 text-xs", failed ? "text-destructive" : "text-dim")}
     >
       {children}
     </p>

@@ -215,6 +215,28 @@ describe("buildDeckMenu", () => {
     expect(moveToFolder).toHaveBeenLastCalledWith(ATRAXA.id, null);
   });
 
+  /** A refused read is said in words rather than drawn as an empty panel, which reads as a menu
+   *  with nothing to offer. */
+  it("says so when the folder list cannot be read", async () => {
+    deckFolderList.mockRejectedValue(new Error("database is locked"));
+    expand(find(buildDeckMenu(ATRAXA, deps()), "Move to") as MenuLazy);
+
+    expect(await screen.findByText(/Could not read your folders/)).toBeInTheDocument();
+    expect(screen.queryAllByRole("menuitem")).toHaveLength(0);
+  });
+
+  /** A reader who files nothing still gets the one destination that is not a folder — and it is
+   *  the one they are already in, so it is offered inert. */
+  it("offers the top level even when there are no folders at all", async () => {
+    deckFolderList.mockResolvedValue([]);
+    expand(find(buildDeckMenu(ATRAXA, deps()), "Move to") as MenuLazy);
+
+    const rows = await screen.findAllByRole("menuitem");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("All decks");
+    expect(rows[0]).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("writes nothing when an inert destination is pressed", async () => {
     const moveToFolder = vi.fn();
     const menu = buildDeckMenu({ ...ATRAXA, folderId: MODERN.id }, deps({ moveToFolder }));
