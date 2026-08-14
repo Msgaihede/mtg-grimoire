@@ -282,6 +282,7 @@ const BOLT_ENTRY: CollectionRow = {
   id: 7,
   cardId: "c1",
   name: "Lightning Bolt",
+  oracleId: "o1",
   setCode: "lea",
   setName: "Limited Edition Alpha",
   collectorNumber: "161",

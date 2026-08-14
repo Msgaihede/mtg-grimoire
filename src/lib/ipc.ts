@@ -632,6 +632,16 @@ export interface CollectionRow {
   id: number;
   cardId: string;
   name: string | null;
+  /**
+   * The oracle card this printing is of — read off `cards.oracle_id`, never denormalised
+   * onto the entry.
+   *
+   * **`null` means exactly one thing: this entry is orphaned.** No live `cards` row is ever
+   * null (0 of 116,590), so a healthy entry's card row always answers one — the fact the card
+   * menu's "View all printings" reads to tell "this printing has left the card database" from
+   * "the reader's copy is fine".
+   */
+  oracleId: string | null;
   /** From the *entry*, not the card: this is what the user recorded owning. */
   setCode: string;
   setName: string | null;

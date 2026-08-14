@@ -1833,6 +1833,7 @@ function toCollectionRow(
     cardId: e.cardId,
     // Every `cards`-derived field is nullable; the entry's own three never are.
     name: card?.name ?? null,
+    oracleId: card?.oracleId ?? null,
     setCode: e.setCode,
     setName: card?.setName ?? null,
     collectorNumber: e.collectorNumber,

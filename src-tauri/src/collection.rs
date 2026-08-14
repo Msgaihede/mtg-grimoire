@@ -632,6 +632,17 @@ pub struct CollectionRow {
     pub id: i64,
     pub card_id: String,
     pub name: Option<String>,
+    /// The oracle card this printing is of — read straight off `cards.oracle_id`, never
+    /// denormalised onto the entry.
+    ///
+    /// **`None` means exactly one thing: this entry is orphaned.** `cards.oracle_id` is
+    /// NULLABLE by the JSON's own contract, but no live row is ever null (0 of 116,590,
+    /// reversible printings included — see [`crate::card_row`]), so a healthy entry's card
+    /// row always answers one. This is the fact the card menu's "View all printings" reads
+    /// to tell "this printing has left the card database" from "the reader's copy is fine" —
+    /// before this field existed every row read `None` and the menu could not draw that
+    /// distinction at all.
+    pub oracle_id: Option<String>,
     /// From the *entry*, not the card: this is what the user recorded owning.
     pub set_code: String,
     pub set_name: Option<String>,
@@ -901,7 +912,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 {price} AS {UNIT_PRICE_ALIAS},
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
-                e.tags, e.notes, e.needs_review, e.updated_at
+                e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id
          FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
@@ -950,6 +961,10 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     notes: r.get(27)?,
                     needs_review: r.get(28)?,
                     updated_at: r.get(29)?,
+                    // Appended rather than inserted at its logical place beside `name`, so
+                    // every index above stays exactly what it was — one changed line instead
+                    // of thirty.
+                    oracle_id: r.get(30)?,
                 })
             },
         )
@@ -2004,6 +2019,27 @@ mod tests {
         assert_eq!(neither.total, 0, "the filters AND, they do not OR");
     }
 
+    /// A healthy entry's `oracleId` answers the card it names — the fact
+    /// `card/cardMenu.tsx`'s "View all printings" needs, and the one `CollectionRow` never
+    /// carried before this. `seeded()`'s `bolt-lea` is `oracle_id = 'o1'`.
+    #[test]
+    fn a_healthy_entrys_oracle_id_answers_the_card_it_names() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].oracle_id.as_deref(), Some("o1"));
+    }
+
     /// A row whose printing has left the card database still lists, still counts, and
     /// still says which card it is — from the columns denormalised at write time. This is
     /// the payoff for spec §6's insurance, and the reason the join is a LEFT JOIN.
@@ -2031,6 +2067,13 @@ mod tests {
             ("lea", "161")
         );
         assert_eq!(row.unit_price, None, "and no price either — not zero");
+        // The distinction the card menu's null-oracle arm draws: an orphan's `oracleId` is
+        // `None` for the honest reason (no live row is ever null — 0 of 116,590), never
+        // because this DTO happened not to carry the column.
+        assert_eq!(
+            row.oracle_id, None,
+            "there is no card row to answer it either"
+        );
         let s = summarise(&conn, &CollectionQuery::default()).unwrap();
         assert_eq!(s.total_cards, 2, "the cards are still owned");
         assert_eq!(s.unpriced, 2);
@@ -2642,6 +2685,7 @@ mod tests {
             id: 7,
             card_id: "bolt-lea".into(),
             name: Some("Lightning Bolt".into()),
+            oracle_id: Some("o1".into()),
             set_code: "lea".into(),
             set_name: Some("Limited Edition Alpha".into()),
             collector_number: "161".into(),
@@ -2675,7 +2719,8 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({
-                "id": 7, "cardId": "bolt-lea", "name": "Lightning Bolt", "setCode": "lea",
+                "id": 7, "cardId": "bolt-lea", "name": "Lightning Bolt", "oracleId": "o1",
+                "setCode": "lea",
                 "setName": "Limited Edition Alpha", "collectorNumber": "161", "lang": "en",
                 "rarity": "common", "manaCost": "{R}", "typeLine": "Instant", "layout": "normal",
                 "finish": "nonfoil", "condition": "NM", "quantity": 4, "tradelistQuantity": 1,
