@@ -93,7 +93,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { DeckEditor } from "./DeckEditor";
+import { categoryExport, DeckEditor, exportFileName } from "./DeckEditor";
 import { useAppStore } from "@/lib/store";
 
 const DECK: DeckRow = {
@@ -2613,5 +2613,98 @@ describe("DeckEditor drag and drop", () => {
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
     expect(deckMoveCard).not.toHaveBeenCalled();
     window.removeEventListener("keydown", listen);
+  });
+});
+
+/**
+ * The pure half of the export layer, asserted **directly** rather than through the rendered
+ * dialog.
+ *
+ * That is a stated compromise and not the usual preference: the export dialog is the one editor
+ * surface with no control in this view — it is opened from a category heading's right-click,
+ * which `views/` wires — so there is nothing here to press and no rendered path to reach it
+ * through. Both functions are exported for that reason, and when the heading is wired the
+ * integration assertion belongs beside it rather than replacing these.
+ */
+describe("categoryExport", () => {
+  const REMOVAL = category(11, "Removal", "main");
+  const CARDS: DeckCard[] = [
+    card({ name: "Swords to Plowshares", categoryId: REMOVAL.id }),
+    card({ name: "Sol Ring", categoryId: 12 }),
+  ];
+
+  it("takes the pile's own cards and nothing from another", () => {
+    const exported = categoryExport(REMOVAL.id, [REMOVAL], CARDS, "Burn");
+
+    expect(exported.subject).toBe("Removal");
+    expect(exported.cards.map((c) => c.name)).toEqual(["Swords to Plowshares"]);
+    expect(exported.fileName).toBe("Burn - Removal");
+  });
+
+  /** Every render but the ones the dialog is up. `""` and **not** the deleted-pile wording: a
+   *  closed dialog is not a statement about a pile that has gone. */
+  it("says nothing at all while the layer is closed", () => {
+    expect(categoryExport(null, [REMOVAL], CARDS, "Burn")).toEqual({
+      subject: "",
+      cards: [],
+      fileName: "Burn",
+    });
+  });
+
+  /**
+   * Another surface — the Categories dialog, or a second window on the same database — can
+   * delete a category while this dialog is open over it, and the editor re-reads the deck
+   * without it. The empty card list is honest; `Export ""` as the dialog's accessible name was
+   * not, which is the whole of what this fallback is for.
+   */
+  it("names a pile that has been deleted rather than titling itself with nothing", () => {
+    // The re-read has lost the category **and** its rows — `deck_cards.category_id` is
+    // `ON DELETE CASCADE` — so this is the state the open dialog actually lands in. The filter
+    // itself is not what empties the list: it answers whatever rows still claim that id, which
+    // is the honest reading of a pile mid-delete.
+    const cascaded = CARDS.filter((c) => c.categoryId !== REMOVAL.id);
+    const exported = categoryExport(REMOVAL.id, [], cascaded, "Burn");
+
+    expect(exported.subject).toBe("a deleted category");
+    expect(exported.cards).toEqual([]);
+    // The category's **name**, never the subject: `Burn - a deleted category` is a sentence
+    // where a file name belongs.
+    expect(exported.fileName).toBe("Burn");
+  });
+
+  /** The point of the layer carrying an id and not the cards: a write under the open dialog is
+   *  followed rather than frozen at the moment the menu row was pressed. */
+  it("follows a rename made under the open dialog", () => {
+    const renamed = { ...REMOVAL, name: "Interaction" };
+
+    expect(categoryExport(REMOVAL.id, [renamed], CARDS, "Burn").subject).toBe("Interaction");
+  });
+});
+
+describe("exportFileName", () => {
+  it("joins the deck and the pile", () => {
+    expect(exportFileName("Atraxa Superfriends", "Removal")).toBe("Atraxa Superfriends - Removal");
+  });
+
+  /** Taken out rather than replaced — nobody typed an underscore — and `save()` is handed this
+   *  as a `defaultPath`, which Windows refuses outright if it holds one of them. */
+  it("drops the characters a file name may not hold", () => {
+    expect(exportFileName("Atraxa: Superfriends?", "Removal/Burn")).toBe(
+      "Atraxa Superfriends - RemovalBurn",
+    );
+  });
+
+  /** The defect a reading of this function found before anything could run it: an empty half
+   *  used to leave its separator behind, so a pile with no name suggested `Atraxa -`. */
+  it("leaves no dangling separator when a half is empty", () => {
+    expect(exportFileName("Atraxa", "")).toBe("Atraxa");
+    expect(exportFileName("", "Removal")).toBe("Removal");
+  });
+
+  /** And the same thing one step further in: a half that is *made* empty by the strip must not
+   *  leave one either, which is why the parts are cleaned before they are judged. */
+  it("falls back to a word rather than to nothing, or to a bare separator", () => {
+    expect(exportFileName("", "")).toBe("decklist");
+    expect(exportFileName(":", "?")).toBe("decklist");
   });
 });

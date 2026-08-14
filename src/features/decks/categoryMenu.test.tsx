@@ -54,6 +54,11 @@ const labels = (items: MenuItem[]) =>
 const find = (items: MenuItem[], label: string) =>
   items.find((item) => item.kind !== "separator" && item.label === label)!;
 
+/** Every row **including** the rules between them, by `id`. {@link labels} strips separators, so
+ *  it is the one shape that cannot see one being dropped. */
+const shape = (items: MenuItem[]) =>
+  items.map((item) => (item.kind === "separator" ? `—${item.id}` : item.id));
+
 describe("buildCategoryMenu", () => {
   it("offers rename, import, export, the switch and delete for a category the reader made", () => {
     expect(labels(buildCategoryMenu(REMOVAL, deps()))).toEqual([
@@ -62,6 +67,32 @@ describe("buildCategoryMenu", () => {
       "Export cards…",
       "Deactivate",
       "Delete…",
+    ]);
+  });
+
+  /**
+   * **The rule sits above the two rows that change what the deck counts**, and its position is
+   * the whole reason it is there: switching a pile off takes its cards out of size, copy limits,
+   * legality and the allocator's claims, and deleting one takes the cards themselves. Nothing
+   * else in this file can see it — `labels` strips separators, exactly as the panel's caret does
+   * — so removing it would fail no other assertion here.
+   */
+  it("puts a rule above the two rows that change what the deck counts", () => {
+    expect(shape(buildCategoryMenu(REMOVAL, deps()))).toEqual([
+      "rename",
+      "import",
+      "export",
+      "—before-writes",
+      "active",
+      "delete",
+    ]);
+    // And on a zone whose two absent rows sit either side of it, the rule is still between the
+    // reads and the write rather than left dangling at an end.
+    expect(shape(buildCategoryMenu(COMMANDER_ZONE, deps()))).toEqual([
+      "import",
+      "export",
+      "—before-writes",
+      "active",
     ]);
   });
 

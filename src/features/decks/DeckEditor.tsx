@@ -12,7 +12,7 @@ import {
   filterChipState,
   ToggleChip,
 } from "@/components/FilterChips";
-import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
+import { ipc, ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
@@ -184,22 +184,80 @@ const NO_TAGS: readonly number[] = [];
 const NO_EXPORT_CARDS: readonly DeckCard[] = [];
 
 /**
+ * What the export dialog is titled when the pile it was opened on has gone.
+ *
+ * Reachable: another surface — the Categories dialog, a second window on the same database —
+ * can delete a category while this dialog is open over it, and the editor re-reads the deck
+ * without it. The empty card list that follows is honest; `Export ""` as the dialog's accessible
+ * name is not, which is the whole reason this string exists rather than a fallback of `""`.
+ * **Not the deck's name**: that would claim a deck-level export nobody asked for.
+ */
+const DELETED_CATEGORY = "a deleted category";
+
+/**
  * What the save dialog's file name starts as: the deck and the pile.
  *
  * The characters Windows forbids in a file name are taken out rather than replaced — a deck
  * called `Atraxa: Superfriends` should suggest `Atraxa Superfriends - Removal`, not a name with
  * an underscore where nobody typed one. The extension is `ExportDialog`'s, which appends the one
  * belonging to the format chosen there.
+ *
+ * **An empty half contributes nothing, separator included** — and it is cleaned *before* it is
+ * judged empty, which is the order that matters. Joining unconditionally answered `"Atraxa -"`
+ * for a pile with no name (the state {@link DELETED_CATEGORY} covers on the title side), and
+ * filtering before stripping would answer `"-"` for a deck whose whole name is punctuation this
+ * has to remove.
+ *
+ * Exported for its test: it is reached only through a dialog this editor has no control to open
+ * (the opener is a category heading's right-click, which `views/` wires), so there is no rendered
+ * path to assert it through yet.
  */
-function exportFileName(deck: string, category: string): string {
+export function exportFileName(deck: string, category: string): string {
   const name = [deck, category]
+    .map((part) => part.replace(/[\\/:*?"<>|]/g, "").trim())
     .filter((part) => part !== "")
-    .join(" - ")
-    .replace(/[\\/:*?"<>|]/g, "")
-    .trim();
+    .join(" - ");
   // A deck with no name, and this dialog rendered closed, both reach here. `save()` is handed a
   // `defaultPath`, and an empty one is a picker with no name in its box.
   return name === "" ? "decklist" : name;
+}
+
+/**
+ * The three arguments `ExportDialog` takes, for the pile the `export` layer names.
+ *
+ * **Derived from the deck's live list rather than from what a menu row was holding**, which is
+ * why the layer carries an id and not the cards: a deck is re-read after every write, so a
+ * snapshot taken when the menu opened would describe the pile as it was. A rename under the open
+ * dialog therefore retitles it, and a delete empties it and says so.
+ *
+ * `cards` is the deck's rows and **not** `shown`: the toolbar's filter narrows what is *drawn*,
+ * and exporting "Removal" means the pile rather than the four of it a search box happens to be
+ * showing.
+ *
+ * `categoryId` is `null` for a closed dialog, which is every render but the ones it is up — the
+ * subject is `""` there because nothing draws it, and that is the one case that must **not** read
+ * {@link DELETED_CATEGORY}: a closed dialog is not a statement about a deleted pile.
+ *
+ * Pure, and exported for that reason: see {@link exportFileName}.
+ */
+export function categoryExport(
+  categoryId: number | null,
+  categories: readonly DeckCategory[],
+  cards: readonly DeckCard[],
+  deckName: string,
+): { subject: string; cards: readonly DeckCard[]; fileName: string } {
+  if (categoryId === null) {
+    return { subject: "", cards: NO_EXPORT_CARDS, fileName: exportFileName(deckName, "") };
+  }
+  const name = categories.find((c) => c.id === categoryId)?.name ?? null;
+  return {
+    subject: name ?? DELETED_CATEGORY,
+    cards: cards.filter((c) => c.categoryId === categoryId),
+    // The **name**, never the subject: a file called `Burn - a deleted category` is a sentence
+    // where a name belongs, and the deck's own name is the honest suggestion for a pile that is
+    // not there any more.
+    fileName: exportFileName(deckName, name ?? ""),
+  };
 }
 
 /**
@@ -514,29 +572,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.cards],
   );
 
-  /**
-   * The three arguments `ExportDialog` takes, derived from the pile the `export` layer names.
-   *
-   * **From the live list rather than from what a menu row was holding**, which is why the layer
-   * carries an id: a deck is re-read after every write, so a snapshot taken when the menu opened
-   * would describe the pile as it was. Renaming or deleting the category under the open dialog
-   * therefore empties it honestly instead of exporting a pile that is gone.
-   *
-   * **`deck.cards` and not `shown`**: the toolbar's filter narrows what is drawn, and exporting
-   * "Removal" means the pile rather than the four of it a search box happens to be showing.
-   */
+  /** What the export dialog draws, for the pile the layer names — {@link categoryExport}, which
+   *  is pure and carries the whole of the reasoning. */
   const exportedId = layer?.kind === "export" ? layer.categoryId : null;
-  const exported = useMemo(() => {
-    const subject = categories.find((c) => c.id === exportedId)?.name ?? "";
-    return {
-      subject,
-      cards:
-        exportedId === null
-          ? NO_EXPORT_CARDS
-          : deck.cards.filter((c) => c.categoryId === exportedId),
-      fileName: exportFileName(row?.name ?? "", subject),
-    };
-  }, [exportedId, categories, deck.cards, row?.name]);
+  const exported = useMemo(
+    () => categoryExport(exportedId, categories, deck.cards, row?.name ?? ""),
+    [exportedId, categories, deck.cards, row?.name],
+  );
 
   // The add target has to be a category this deck still has — a category deleted or renamed
   // away under an open editor would otherwise leave the select holding an id that is not in its
@@ -768,8 +810,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
   const close = useCallback(() => setLayer(null), []);
 
-  /** Open one of the eight, from the control that was pressed — and never a second one, because
-   *  there is one slot. A menu row has no control to hand back to and passes `null`. */
+  /**
+   * Open one of the eight, from the control that was pressed — and never a second one, because
+   * there is one slot. A menu row has no control to hand back to and passes `null`.
+   *
+   * **A press on the layer that is already up closes it**, which is what a toolbar toggle should
+   * do and is why the kind is compared. **Read this before wiring the category heading's menu
+   * (Task 13):** `export` and `import` are the first arms carrying a *payload*, so "the same kind
+   * again" is no longer necessarily "the same thing again" — re-opening the export on a
+   * **different** pile would close the dialog rather than re-aim it. It cannot happen today,
+   * because both payload arms are modal and the heading behind the scrim cannot be right-clicked;
+   * it becomes reachable the moment anything can ask for one of these without going through a
+   * scrim. Left as it is deliberately rather than fixed blind — the right answer (close only when
+   * the payload matches too) is one line, and it wants a caller that can reach it.
+   */
   const openLayer = useCallback((next: NonNullable<Layer>, trigger: HTMLButtonElement | null) => {
     openerRef.current = trigger;
     setLayer((open) => (open?.kind === next.kind ? null : next));

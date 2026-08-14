@@ -888,10 +888,15 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's **six** full-window surfaces (Import, Categories, Tags, History, Theory diff, Deck
-  settings) are held in **one** piece of state, because `useDismissOnEscape` orders exactly two
-  rungs and two `"inner"` peers open at once are not ordered at all. The anchored format check
-  rides in the same union, so at most one of its **seven** registrations is ever enabled.
+- The editor's **seven** full-window surfaces (Import, Categories, Tags, History, Theory diff,
+  Deck settings, Export) are held in **one** piece of state, and the anchored format check rides
+  in the same union, so at most one of its **eight** registrations is ever enabled. The original
+  reason was that `useDismissOnEscape` ordered exactly two rungs, so two `"inner"` peers open at
+  once were not ordered at all; **that hook keeps a capture stack now** and would order them, and
+  the one slot is still right — two of these open together is not a state anything here draws, and
+  a union is what makes "never two" structural rather than remembered. Two members carry a payload
+  (`export` a category id, `import` an optional forced category name), which is the other thing a
+  union buys: a second `useState` could hold a category id while a *different* layer was open.
 - **The two that were drawers are centred modals, and the search column deliberately is not**
   (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
   them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
@@ -985,13 +990,25 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
-  as the docked panel's set filter. Every one of the editor's six full-window surfaces is opened
+  as the docked panel's set filter. **Six** of the editor's seven full-window surfaces are opened
   by pressing a button — five of them in the toolbar (`Import cards · Categories · Tags · History
   · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
   — pressing a button takes the focus out of this field, and the root's `onBlur` closes the list
-  on the way. **That is the whole of what makes a third rung unnecessary**, so a
-  future surface opened without moving the caret — a hotkey, an auto-open — breaks it, and the fix
-  is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope.
+  on the way.
+- **The seventh arrives another way, and the rung this used to say was missing has since been
+  built.** The export dialog is opened from a category heading's right-click and has no control in
+  the view at all — the first editor surface with none. This entry used to end "**that is the whole
+  of what makes a third rung unnecessary**, so a future surface opened without moving the caret
+  breaks it, and the fix is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope".
+  **That depth exists**: the hook keeps a stack of capture-phase registrations and only the token
+  on top acts, so `"inner"` peers are ordered by mount depth rather than racing in registration
+  order — which is what lets a context menu open over a dialog opened over the card pane and give
+  one press to each. So the prediction was right and the remedy is the one it named; what is no
+  longer true is that focus mechanics are all that hold this together. **The focus half holds for
+  this surface anyway rather than by luck**: `ContextMenu` focuses its own panel in a layout effect
+  as it opens and hands the caret to the opener before it runs a row, so a right-click has already
+  taken the caret out of this field before the dialog exists. What to check for the next surface is
+  therefore narrower than it was — whether it registers its rung, not whether a button was pressed.
 - **The query carries no `marketplace`, and that is a documented exception** to the app's rule that
   every price-bearing query carries it and has it in the key. A row draws a name, a mana cost and a
   set code and no price at all, so a currency switch has nothing to change about it, and putting
