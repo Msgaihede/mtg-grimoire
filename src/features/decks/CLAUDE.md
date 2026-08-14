@@ -323,6 +323,33 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
 
 ## Views and interaction
 
+- **The editor's chrome is one height, 36px, and the ribbon carries `py-1.5` that is not
+  spacing** (2026-08-14). The header row is the **first child of the page scroller**, and the
+  name field's ring is `outline-2 outline-offset-2` — 4px proud on every side — so with no
+  padding its top lay outside the scroller's padding box, where a scroll container clips, and
+  what survived ran into the shell's mana line. Six pixels is the ring's four and two to spare;
+  **vertical only**, because horizontal padding would indent the back button and the deck's
+  actions past the toolbar row beneath them, and `gap-x-3` already leaves the ring three times
+  the room it asks for on that axis. The height is `FILTER_CONTROL`'s rather than a number this
+  folder invented: `CONTROL` was 32px "so the two rows read as rows", but both rows have grown a
+  `ToggleChip` since — `Built` in the header, `Split X` in the toolbar — and a `ToggleChip` is
+  36, so the height meant to unify was drawing every plain press four pixels shorter than the
+  chips beside it. **`text-xs` stays where it is, and that is the load-bearing half**:
+  `FILTER_CONTROL` carries `text-sm`, but the header's actions block is **692px** at max-content
+  and 14px glyphs put it near **760**, against the ~1017px a 1280×800 window leaves — the row is
+  `flex-wrap`, so it does not overflow, it *wraps*, and a wrapped header costs 44px of deck
+  height at the app's own default size. That is the regression `NAME_FLOOR` exists to keep out.
+  Height was the axis with room; width was not.
+  **Driven 2026-08-14** (`npm run tauri dev`, a debug build, at 1280×800 and 1920×1080): with the
+  padding backed out in the page the ring's top sat **3.5px above** the scroller's padding box —
+  clipped, and only a live pass sees it, because jsdom has no layout engine and a Storybook frame
+  is not the page scroller; with the padding it clears by **2.5px** top and bottom, and at 1920 it
+  clears the actions block beside it by **8.3px**. Every control in both rows measured **36px**
+  after the change and the name field measured **35px**, untouched. **The header already wrapped
+  to two lines at 1280 before any of this** — the actions block is **825px** here (**801** at the
+  old sizes) against the **729** a 1002px ribbon can spare once `NAME_FLOOR` is honoured — so the
+  wrap is not what this pass introduced, and the deck this was driven on carries both a
+  `9 issues` chip and a `1 game changer` label, which the 692 figure above does not.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long
@@ -343,8 +370,11 @@ price | type`). An **inactive category stays its own group in all three grouping
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
   would put four charts between a card and the one drop that takes it out;
   **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
-  to **847px** in the **702px** a 1280×800 window leaves (710 when it was measured, less the 8px
-  the ribbon gained when the shell was enlarged on 2026-08-14), so the deck holds a `min-h-96` floor
+  to **886px** in the **702px** a 1280×800 window leaves (710 when it was measured, less the 8px
+  the ribbon gained when the shell was enlarged on 2026-08-14; the same deck read **866** with the
+  ribbon's padding and the 36px chrome backed out in the page, so those two cost 20px between
+  them, and 847 is the figure they replace — an earlier sitting, a different deck), so the deck
+  holds a `min-h-96` floor
   (**384px** = one whole stack card and its group heading) and the band's last ~145px is one
   scroll away, while at 1920×1080 nothing scrolls at all and the deck takes the surplus (**604px**);
   **(3)** `DECK_FLOOR` dropped **208 → 192**, because that page scroller is a second scrollbar the

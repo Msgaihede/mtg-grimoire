@@ -284,7 +284,10 @@ export function QuickAdd({
         }}
         onKeyDown={onKeyDown}
         className={cn(
-          "h-8 w-52 rounded-md border border-border bg-bg px-2.5 text-[0.8125rem]",
+          // 36px, the deck editor's one chrome height — see `CONTROL` in `DeckEditor.tsx`.
+          // This field is the first control in that toolbar row and the only one drawn from
+          // another file, so it is the one that drifts silently when the row's height moves.
+          "h-9 w-52 rounded-md border border-border bg-bg px-2.5 text-[0.8125rem]",
           FOCUS,
         )}
       />
