@@ -16,7 +16,7 @@ import type {
   SyncStatus,
 } from "@/lib/ipc";
 import { dragOnto, startDrag } from "@/test-drag";
-import { DECK_CARD_VARIANT } from "./cardControl";
+import { CARD_BODY_ATTR, DECK_CARD_VARIANT, LANDED_ATTR } from "./cardControl";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -499,12 +499,11 @@ describe("DeckEditor", () => {
     await open();
 
     const format = screen.getByLabelText("Deck format");
-    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Casual",
-      "Commander",
-      "Gladiator",
-      "Modern",
-    ]);
+    expect(
+      within(format)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Casual", "Commander", "Gladiator", "Modern"]);
   });
 
   /**
@@ -523,13 +522,11 @@ describe("DeckEditor", () => {
 
     const format = screen.getByLabelText("Deck format");
     expect(format).toHaveValue("historic");
-    expect(within(format).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Casual",
-      "Commander",
-      "Gladiator",
-      "Historic",
-      "Modern",
-    ]);
+    expect(
+      within(format)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Casual", "Commander", "Gladiator", "Historic", "Modern"]);
   });
 
   /** The caret starts in the editor rather than on `<body>`: the gallery's New deck button —
@@ -1029,11 +1026,7 @@ describe("DeckEditor", () => {
         .getAllByRole("option")
         .map((o) => o.textContent);
 
-    expect(labels(screen.getByLabelText("Group by"))).toEqual([
-      "Categories",
-      "Mana value",
-      "Type",
-    ]);
+    expect(labels(screen.getByLabelText("Group by"))).toEqual(["Categories", "Mana value", "Type"]);
     expect(labels(screen.getByLabelText("Sort"))).toEqual([
       "Alphabetical",
       "Mana cost",
@@ -1213,9 +1206,7 @@ describe("DeckEditor", () => {
     const asOf = screen.getByText(/prices as of the last/i);
     // `DOCUMENT_POSITION_FOLLOWING` — the band comes after the as-of line in document order,
     // which in this one flex column is after it on screen.
-    expect(
-      asOf.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(asOf.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   /**
@@ -1264,6 +1255,85 @@ describe("DeckEditor", () => {
 
     expect(useAppStore.getState().selectedCardId).toBe("s-Goblin Guide");
     expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * **Putting the card down.** A click on the desk — the gap between two piles, a group's
+   * padding, the blank under a short column — clears the selection, which is also what closes
+   * the pane, because the gold ring on the card and the pane beside it are one fact.
+   *
+   * The click lands on the group's own section, which is exactly what a reader hits when they
+   * mean nothing at all.
+   */
+  it("puts the card down when the reader clicks the desk", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
+
+    await userEvent.click(group("Main deck"));
+
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * **…and never by the press that picked one up**, which is the whole reason the rule tests
+   * what was clicked rather than simply clearing on every click.
+   *
+   * A card's own press and the editor's listener run in the *same* event, the card's first — so
+   * without the test the second card would be selected and then immediately unselected, and the
+   * editor would answer `null` to a reader who had just clicked a card. Two cards rather than
+   * one, because the handler reads the selection it had *before* the click: from nothing to a
+   * card, the early return hides the bug.
+   */
+  it("moves the selection to the next card rather than clearing it", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Bear/ }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("c-Bear");
+  });
+
+  /**
+   * **Where the card landed, marked for ten seconds.**
+   *
+   * The add is made in the docked panel and the card lands somewhere in a deck the reader is not
+   * looking at, which is the whole reason the mark exists. It is keyed by the **row** the write
+   * answered with (`EntryChange.id`) rather than by the printing, because `deck_add_card` folds:
+   * a second copy of a card the deck already holds is the row that is already there, and that is
+   * the row worth pointing at.
+   */
+  it("marks the row an add landed in", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    deckAddCard.mockResolvedValue({ id: 99, quantity: 1, removed: false });
+
+    await open();
+    await openSearchPanel();
+    // What the deck reads back as once the add has been written — the same row id the write
+    // answered with, which is what ties the two together.
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        { ...card({ name: "Goblin Guide", typeLine: "Creature — Goblin" }), id: 99 },
+      ]),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
+    );
+
+    const landed = await waitFor(() => {
+      const marks = document.querySelectorAll(`[${LANDED_ATTR}]`);
+      expect(marks).toHaveLength(1);
+      return marks[0];
+    });
+    expect(landed.closest(`[${CARD_BODY_ATTR}]`)?.textContent).toContain("Goblin Guide");
   });
 
   /**
@@ -2320,9 +2390,7 @@ describe("DeckEditor", () => {
    * and the reader cannot press their way out of.
    */
   it("falls back to the defaults for a grouping or a sort it no longer offers", async () => {
-    deckGet.mockResolvedValue(
-      detail({ lastGroupBy: "colour", lastSortBy: "rarity" }, [bolt()]),
-    );
+    deckGet.mockResolvedValue(detail({ lastGroupBy: "colour", lastSortBy: "rarity" }, [bolt()]));
     await open();
 
     expect(screen.getByLabelText("Group by")).toHaveValue("category");

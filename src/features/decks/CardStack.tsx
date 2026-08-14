@@ -18,11 +18,15 @@ import { cn } from "@/lib/utils";
 import { GameChangerBanner, QuantityTag, RuleBreakMark } from "./CardMarks";
 import {
   DECK_CARD_VARIANT,
+  deckCardBodyProps,
   deckCardName,
   deckCardProps,
+  deckCardSelectedProps,
   DeckCardControls,
   FOCUS_INSET,
+  LandedMark,
   revealedWhenOpen,
+  SELECTED_CARD,
   useDeckCardDrag,
   type DeckCardActions,
 } from "./cardControl";
@@ -197,11 +201,7 @@ export function stackDataHeight(zoom: number): number {
  * differences visible.
  */
 export function stackCardHeight(zoom: number): number {
-  return (
-    stackImageHeight(zoom) +
-    2 * STACK_CARD_BORDER +
-    (stackDataHeight(zoom) - STACK_DATA_RISE)
-  );
+  return stackImageHeight(zoom) + 2 * STACK_CARD_BORDER + (stackDataHeight(zoom) - STACK_DATA_RISE);
 }
 
 /**
@@ -508,8 +508,36 @@ export interface CardStackProps {
    * geometry.
    */
   zoom?: number;
+  /**
+   * The printing the card pane is open on, or `null` — which is both "no card is open" and "the
+   * open one came from somewhere that is not this deck".
+   *
+   * It does two things here, and the second is the interesting one. The card wears
+   * {@link SELECTED_CARD}, as a tile on the search wall does; and **it is the stack's resting
+   * state** — see {@link CardStack} for what that replaced and why the pile still only ever
+   * holds one card open.
+   *
+   * By `cardId` rather than by the row's own id, which is `TableView`'s rule and the store's: a
+   * pane is open on a *printing*. A deck holds one row per `(category, card)`, so at most one
+   * card of any one pile can match, and a printing filed in two piles is picked in both — which
+   * is the honest answer to "which card is the pane about".
+   */
+  selectedCardId?: string | null;
+  /**
+   * Which cards have just been added, as `deck_cards.id` → the nonce that add was given.
+   *
+   * The whole map rather than a flag per card, for `violations`' reason: one object serves a
+   * whole view, and the stack does not have to be told twice. The **value** is what makes a
+   * second add of a card that is still glowing replay the mark — it is passed straight through
+   * as React's `key`, so a changed nonce is a new element and a CSS animation that runs once per
+   * element runs again. `DeckEditor`'s `useRecentAdds` is the one writer.
+   */
+  landed?: ReadonlyMap<number, number>;
   className?: string;
 }
+
+/** Nothing has landed — a stable identity, so a stack given no map does not re-render for one. */
+const NONE_LANDED: ReadonlyMap<number, number> = new Map();
 
 /**
  * One group's cards as a stack: overlapping card faces, each showing only its title bar, and
@@ -527,6 +555,21 @@ export interface CardStackProps {
  * CSS version survive it deliberately: the list's height still cannot depend on which card is
  * open, because {@link stackHeight} reads the count and nothing else; and the caret still does
  * what the pointer does, by the same two callbacks rather than by a second code path.
+ *
+ * ## The pile's resting state is the picked card, not nothing
+ *
+ * {@link useFlipThrough} answers which card the *pointer* has settled on, and `null` when it has
+ * gone. That null used to close the pile, so a reader who clicked a card to read it in the pane
+ * beside them watched it drop back into the stack the moment they moved to the pane — the card
+ * they were looking at was the one thing on screen that stopped being visible.
+ *
+ * So the resolved answer is `openIndex ?? selectedIndex`: the hover wins while there is one, and
+ * what it falls back to is the picked card rather than a closed pile. Two properties are worth
+ * stating because they are what keeps this a small change rather than a new interaction.
+ * **Still exactly one card open** — the geometry at the top of this file is arithmetic about one
+ * open card, and two would push the tail of the pile twice as far over whatever is below it.
+ * And **still no dependency of {@link stackHeight}** on any of it: the height is the count and
+ * the zoom, so a picked card costs the layout nothing it did not already cost on hover.
  */
 export function CardStack({
   cards,
@@ -536,11 +579,18 @@ export function CardStack({
   onSelect,
   actions,
   zoom = DEFAULT_ZOOM,
+  selectedCardId = null,
+  landed = NONE_LANDED,
   className,
 }: CardStackProps) {
   const { openIndex, arm, openNow, release } = useFlipThrough();
   const reduced = useReducedMotion();
   if (cards.length === 0) return null;
+
+  // `-1` for a pile that does not hold the picked card, which is every pile but one — folded to
+  // `null` here so the `??` below reads as the sentence it is rather than as an index test.
+  const picked = selectedCardId === null ? -1 : cards.findIndex((c) => c.cardId === selectedCardId);
+  const open = openIndex ?? (picked === -1 ? null : picked);
 
   return (
     // `overflow-visible` and the fixed height are the two halves of one idea, and neither
@@ -558,11 +608,7 @@ export function CardStack({
       aria-label={label}
       onPointerLeave={release}
       style={{ height: stackHeight(cards.length, zoom) }}
-      className={cn(
-        "relative block overflow-visible",
-        openIndex !== null && LAYER.raised,
-        className,
-      )}
+      className={cn("relative block overflow-visible", open !== null && LAYER.raised, className)}
     >
       {cards.map((card, index) => (
         <StackedCard
@@ -570,7 +616,9 @@ export function CardStack({
           card={card}
           currency={currency}
           index={index}
-          open={index === openIndex}
+          open={index === open}
+          selected={index === picked}
+          landedKey={landed.get(card.id)}
           zoom={zoom}
           onArm={arm}
           onOpenNow={openNow}
@@ -623,6 +671,8 @@ function StackedCard({
   currency,
   index,
   open,
+  selected,
+  landedKey,
   zoom,
   onArm,
   onOpenNow,
@@ -638,6 +688,13 @@ function StackedCard({
   /** Its place in the stack, which is the whole of its identity to {@link useFlipThrough}. */
   index: number;
   open: boolean;
+  /** This is the card the pane is open on. **Not the same question as `open`** — the pile rests
+   *  on the picked card, so the two are usually true together, and they part the moment the
+   *  pointer settles on a neighbour. */
+  selected: boolean;
+  /** The nonce this card's last add was given, or `undefined` for a card that did not just
+   *  arrive — passed through as the mark's `key`, so a second add replays it. */
+  landedKey: number | undefined;
   /** The stack's zoom, handed down whole rather than resolved into pixels above: the two
    *  numbers this card needs are derived here, from the same functions the list's own height
    *  was, so there is no second arithmetic to keep in step. */
@@ -689,6 +746,10 @@ function StackedCard({
       onFocus={() => onOpenNow(index)}
       onBlur={onRelease}
       {...(open ? { [STACK_OPEN_ATTR]: "" } : {})}
+      // The card's whole body, so a click on its data line — which is outside the button on
+      // purpose — is a click on the card and not on the desk. See `CARD_BODY_ATTR`.
+      {...deckCardBodyProps()}
+      {...deckCardSelectedProps(selected)}
       initial={false}
       animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : stackCollapsedMargin(zoom) }}
       transition={transition}
@@ -726,6 +787,10 @@ function StackedCard({
         // **The data line below repeats this expression and has to**: it draws the same edge for
         // the length of its own box, over the top of this one. See the comment on it.
         ruleBreakText ? "border-destructive" : "border-border",
+        // Outside all of that, and therefore never confusable with the card's own edge: a ring
+        // is painted beyond the border box, so a picked card that also breaks a rule wears a
+        // gold ring around a red card rather than one edge arguing with itself.
+        selected && SELECTED_CARD,
       )}
     >
       <button
@@ -836,6 +901,17 @@ function StackedCard({
           {ruleBreakText !== null && (
             <RuleBreakMark text={ruleBreakText} className="absolute top-1 right-[5px]" />
           )}
+
+          {/* **Inside the face, which is what makes it findable in a fanned pile.** The face is
+              the one box here that a collapsed card still shows 34px of, so a mark laid over it
+              is a lit band and a bright hairline exactly where the reader is scanning. Laid
+              over the marks strip rather than under it — the strip's tag is 11px type on a
+              scrim and a 15 % wash does not touch it, while a mark the tag could cover would be
+              missing on precisely the cards that have one. See {@link LandedMark}.
+
+              `rounded-[7px]` is the face's own corner, spelled again because the mark cannot
+              inherit it — {@link LandedMark} has why. */}
+          {landedKey !== undefined && <LandedMark key={landedKey} className="rounded-[7px]" />}
         </span>
       </button>
 

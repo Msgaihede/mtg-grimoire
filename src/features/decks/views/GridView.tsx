@@ -22,12 +22,16 @@ import { cn } from "@/lib/utils";
 import { GameChangerBadge, RuleBreakMark, TagDot } from "../CardMarks";
 import {
   DECK_CARD_VARIANT,
+  deckCardBodyProps,
   deckCardName,
   deckCardProps,
+  deckCardSelectedProps,
   DeckCardControls,
   deckGroupProps,
   FOCUS_INSET,
+  LandedMark,
   REVEALED_ON_CARD,
+  SELECTED_CARD,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
@@ -83,6 +87,8 @@ export function GridView({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -93,6 +99,12 @@ export function GridView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
+  /** The printing the pane is open on, so its tile wears the same gold ring a search tile does.
+   *  By `cardId`, so a printing filed in two piles is marked in both — `CardStack` has why. */
+  selectedCardId?: string | null;
+  /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
+   *  `LandedMark`. */
+  landed?: ReadonlyMap<number, number>;
   className?: string;
 }) {
   // One read for the whole wall, passed down rather than read per tile: a hundred-card deck is a
@@ -132,6 +144,8 @@ export function GridView({
           violations={violations}
           onSelect={onSelect}
           actions={actions}
+          selectedCardId={selectedCardId}
+          landed={landed}
           zoom={cardZoom}
         />
       ))}
@@ -147,6 +161,8 @@ function GridGroup({
   violations,
   onSelect,
   actions,
+  selectedCardId,
+  landed,
   zoom,
 }: {
   group: CardGroup;
@@ -154,6 +170,9 @@ function GridGroup({
   violations?: Map<string, ValidationIssue[]>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** Handed through to the tiles — see {@link GridView}'s own props. */
+  selectedCardId?: string | null;
+  landed?: ReadonlyMap<number, number>;
   /** How large the reader is drawing cards, from the wall above. */
   zoom: number;
 }) {
@@ -198,6 +217,8 @@ function GridGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
+              selected={card.cardId === selectedCardId}
+              landedKey={landed?.get(card.id)}
               zoom={zoom}
             />
           ))}
@@ -227,6 +248,8 @@ function GridCard({
   ruleBreakText,
   onSelect,
   actions,
+  selected,
+  landedKey,
   zoom,
 }: {
   card: DeckCard;
@@ -235,6 +258,11 @@ function GridCard({
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** This is the card the pane is open on. */
+  selected: boolean;
+  /** The nonce this tile's last add was given, or `undefined`. Passed through as the mark's
+   *  `key`, so adding the same card twice replays the fade. */
+  landedKey: number | undefined;
   /** How large the reader is drawing cards. The tile's width is the only thing it decides
    *  outright — the picture follows by aspect ratio, and the foot follows by
    *  {@link atLeast}. */
@@ -260,9 +288,17 @@ function GridCard({
       // fixed width utility this used to carry: Tailwind scans source text for whole class
       // names, so an interpolated one emits no rule and the tile collapses to its content.
       style={{ width: scaled(TILE_WIDTH, zoom) }}
+      // The tile is the card's whole body, so a press on the control bar over its foot — a
+      // positioned sibling of the button rather than part of it — does not read as a click on
+      // the desk. See `cardControl`'s `CARD_BODY_ATTR`.
+      {...deckCardBodyProps()}
+      {...deckCardSelectedProps(selected)}
       className={cn(
         "group relative overflow-hidden rounded-md border bg-surface",
         ruleBreakText !== null ? "border-destructive" : "border-border",
+        // The search wall's own recipe, outside the tile's border box — so a picked tile that
+        // also breaks a rule keeps both marks and neither is drawn over the other.
+        selected && SELECTED_CARD,
       )}
     >
       <button
@@ -317,6 +353,15 @@ function GridCard({
           {ruleBreakText !== null && (
             <RuleBreakMark text={ruleBreakText} className="absolute bottom-1 left-1" />
           )}
+
+          {/* Over the picture rather than over the whole tile, so the foot's gem and price stay
+              at full strength while the card itself lights up. Nothing overlaps a tile on this
+              wall, so unlike the stack there is no reveal strip the mark has to survive into —
+              it is the same mark, drawn in the one place the reader is looking.
+
+              Square, and the tile's own `overflow-hidden rounded-md` rounds it: this span has
+              no radius of its own to match. */}
+          {landedKey !== undefined && <LandedMark key={landedKey} />}
         </span>
 
         {/* The foot, and the one part of a tile that is not the card: a rarity gem and this
