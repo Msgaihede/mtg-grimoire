@@ -367,10 +367,12 @@ function Body({
   // the same press, and the two focus hand-backs fight over where the caret lands. See
   // `useDismissOnEscape`.
   //
-  // **The `"inner"` rung is one at a time, and no z-index or state union enforces it** — the
-  // protocol orders exactly two rungs, so two inner layers open at once would both consume the
-  // same press. What keeps this pane's apart is that each yields to the thing that would open
-  // the other:
+  // **The `"inner"` rung is one at a time here, and no z-index or state union enforces it.** The
+  // hook would cope if it were not — it keeps a stack of capture-phase registrations and only the
+  // token on top acts — but Escape was never the reason these two are exclusive: **two of them
+  // open at once means a card image drawn over the finish chips the reader is choosing from**,
+  // which is a picture problem and no key press fixes it. What keeps this pane's apart is that
+  // each yields to the thing that would open the other:
   //
   // * the **quick-add popup** on a printings row closes when focus leaves its own root, and
   //   opening anything else moves the caret into that instead;

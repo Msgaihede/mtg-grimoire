@@ -111,8 +111,13 @@ export interface CreateDeckDialogProps {
    * Escape, the header's ✕ and the trigger pressed again: close, and hand the caret back to
    * whatever opened this.
    *
-   * Stable, please — {@link useDismissOnEscape} takes it as a dependency, so a function rebuilt
-   * on every render of the opener re-registers the window listener just as often.
+   * **Stability is a courtesy here now, not a requirement.** This said "{@link
+   * useDismissOnEscape} takes it as a dependency, so a function rebuilt on every render of the
+   * opener re-registers the window listener just as often" — the hook latches it in a ref and
+   * depends only on `enabled` and `layer`. It made that change for a correctness reason worth
+   * knowing: once the hook kept a stack, a re-registration popped this layer's token and pushed a
+   * new one **on top** of whatever had been opened over it, so the next Escape closed the wrong
+   * window. An unstable one now costs a re-render and nothing else.
    */
   onDismiss: () => void;
   /**

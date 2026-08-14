@@ -76,6 +76,19 @@ Every one of these has its measurement and its story in
   _registration_ order. Every new dismissible layer follows this or it will close something it
   did not open. A layer that Escape dismissed hands focus back to whatever opened it; an
   outside-click deliberately does not.
+- **Two `"inner"` peers are ordered, by a stack — this is newer than most of the prose about it,
+  and the old claim is still quoted in places.** `useDismissOnEscape` keeps a module-level stack:
+  every capture-phase layer pushes a token on mount and pops it on cleanup, and **only the token
+  on top acts**, so a context menu over a dialog over the card pane gives one press to each. A
+  lone `"inner"` layer is a stack of one and behaves as it always did. What this replaced was
+  **not** "both close on one press" — the capture rung checks `defaultPrevented` too, so the
+  _first-registered_ peer took the press and the newer one, the thing on top, was **starved**
+  (measured `{ first: 1, second: 0 }`, 2026-08-14). Two consequences worth carrying: `onDismiss`
+  is **latched in a ref and is not a dependency**, because a re-registration used to move a layer
+  to the top of the stack and close the wrong window — so an unstable callback is a re-render and
+  no longer a bug; and **a design that keeps two layers exclusive needs a reason of its own now**
+  (they overlap on screen, they are one piece of state, one would draw over the other), because
+  "Escape cannot order them" has stopped being one.
 - **A surface opened from a view is a centred modal over a scrim, not a docked column — unless
   the reader works _out of_ it while editing beside it.** Width is the scarce thing in this app:
   the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane

@@ -199,17 +199,22 @@ export function QuickAdd({
    * `DeckEditor.test.tsx` presses Escape from this very field and asserts the press reaches the
    * window unconsumed.
    *
-   * And it is one more `"inner"` peer on a screen that already carries several, because this
-   * hook orders exactly two rungs and two `"inner"` peers open at once are ordered by nothing.
+   * And it is one more `"inner"` peer on a screen that already carries several.
    * **No ordinal here on purpose**: `DeckEditor`'s `Layer` union is where that census is kept,
    * and a count copied into a second file is a count that rots in one of them. What matters is
    * that this one sits *outside* the union, so what keeps it apart is **focus, not structure** —
-   * every layer in that union is opened by pressing a button (most of them in the toolbar, the
-   * theory diff from the control beside the variant tabs), pressing a button takes
-   * the focus out of this field, and `onBlur` below closes this list on the way. The two cannot
-   * be open at once, so there is no pair for a third rung to order. A surface that ever opened
-   * *without* moving the caret would break that, and the answer then is a depth in the hook
-   * rather than a second `"inner"`.
+   * a layer in that union opened by pressing a button takes the focus out of this field on the
+   * way up, and `onBlur` below closes this list with it.
+   *
+   * **The gap that argument used to leave has since been filled, and not by this file.** It ended
+   * "a surface that ever opened *without* moving the caret would break that, and the answer then
+   * is a depth in the hook rather than a second `"inner"`" — and both halves happened. The
+   * editor's export dialog is opened from a category heading's right-click and has no button at
+   * all; the hook grew the depth, keeping a stack of capture-phase registrations where only the
+   * token on top acts. So peers are ordered now, and the sentence this paragraph used to open
+   * with — that the hook orders exactly two rungs and peers are ordered by nothing — is false.
+   * The focus half survives that surface anyway: `ContextMenu` focuses its own panel as it opens,
+   * so a right-click has already left this field.
    */
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: listOpen });
 

@@ -321,13 +321,26 @@ describe("CategoriesDialog", () => {
  * registers its Escape rung on the **flag** rather than on the panel's mount.
  *
  * The editor renders its dialogs unconditionally and holds "which one is up" in a single `Layer`
- * union, which is what guarantees that two `"inner"` rungs are never live at once — and
- * `useDismissOnEscape` orders exactly two rungs, one capture-phase and one bubble-phase, so two
- * `"inner"` peers are not ordered by it at all. That guarantee used to come free from synchronous
- * unmounting: the flag went false and the listener came down in the same commit. With an exit
- * animation the *element* outlives the flag, so a rung registered on the mount would still be
- * consuming Escape while the next dialog was opening — and the press would close a dialog the
- * reader had already dismissed, or both.
+ * union, which is what guarantees that two `"inner"` rungs are never live at once. That guarantee
+ * used to come free from synchronous unmounting: the flag went false and the listener came down
+ * in the same commit. With an exit animation the *element* outlives the flag, so a rung
+ * registered on the mount would go on consuming Escape for the length of the fade — spending the
+ * press on a dialog the reader had already dismissed, and starving the layer behind it, since a
+ * capture rung `preventDefault()`s and the card pane's bubble rung returns early on
+ * `defaultPrevented`.
+ *
+ * **This used to add "and `useDismissOnEscape` orders exactly two rungs, so two `"inner"` peers
+ * are not ordered by it at all", and that has stopped being true in a way this test's own reader
+ * needs to know.** The hook stacks capture-phase registrations now and only the token on top
+ * acts, so peers *are* ordered, by mount depth. Follow that through this scenario: with a rung
+ * registered on the panel's **mount** — the defect — the fading Categories panel would hold a
+ * token pushed at its original mount, and the opening Tags panel would push above it, so Tags
+ * would act and the assertions below would **still pass**. So this test no longer discriminates
+ * the regression it was written for; what it still pins is worth keeping — exactly one layer
+ * listening, and it is the *new* one, with the press consumed — but a rung moved back onto the
+ * mount would not turn it red. Restoring that requires a different shape (asserting the exiting
+ * layer holds no registration, rather than which one answers), and it is deliberately not done
+ * here in a documentation pass.
  *
  * **The rung it proves is `DeckDialog`'s**, and this is deliberately not a second copy of that
  * file's own tests: the case needs *two peers*, and these two are the realest pair the editor

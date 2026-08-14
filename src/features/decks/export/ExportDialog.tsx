@@ -66,10 +66,12 @@ export interface ExportDialogProps {
   /**
    * Escape, and the close control: hand focus back to whatever opened the dialog, then close.
    *
-   * Stable, please — {@link DeckDialog} passes it to `useDismissOnEscape`, which takes it as a
-   * dependency, so a function rebuilt on every render of the opener re-registers the window
-   * listener just as often. This file forwards the prop unchanged rather than wrapping it, which
-   * is what keeps that true without a `useCallback` of its own.
+   * **Forwarded unchanged rather than wrapped**, which costs nothing and keeps the identity the
+   * host chose. It used to say the prop had to be stable because `useDismissOnEscape` took it as
+   * a dependency; that hook latches it in a ref now and depends only on `enabled` and `layer`, so
+   * an unstable one costs a re-render and nothing else. The ref is a correctness fence rather
+   * than a saved registration — while it *was* a dependency, a re-render moved this layer to the
+   * top of the hook's stack and the next Escape closed the wrong window.
    */
   onDismiss: () => void;
   /** A press on the scrim: close without moving focus. The reader is already somewhere else. */

@@ -619,8 +619,12 @@ function FolderRow({
  * `metaRows.tsx`'s `RenameField` — the row grammar the deck's two meta dialogs share — decided
  * the two details that matter and they are kept here:
  * the current name arrives **selected**, because the commonest rename replaces the word rather
- * than edits inside it, and Escape's job is left to the page — a second Escape rung inside an
- * `"inner"` layer is the case `useDismissOnEscape` explicitly does not order.
+ * than edits inside it, and Escape's job is left to the page — this field is one of `DecksPage`'s
+ * `Panel` union, so the page's single rung already closes it, and a rung of its own would be a
+ * second registration for one layer. (That reason used to read "the case `useDismissOnEscape`
+ * explicitly does not order", which is no longer true — the hook stacks capture-phase
+ * registrations and only the top one acts — and was never the argument: the field has nothing to
+ * dismiss that the page is not already dismissing.)
  *
  * What is *not* kept is that field's visible Cancel: at 208px less an indent there is no room
  * for two text buttons beside the input, and this screen's other half-made decisions (the new

@@ -369,8 +369,9 @@ describe("the printings list preview", () => {
    *
    * With the quick-add popup open, hovering a *different* row moves no focus and presses
    * nothing, so without a guard the dwell runs and puts a card image over the finish chips the
-   * reader is choosing from. Two `"inner"` layers, which `useDismissOnEscape` does not order.
-   * Measured in the running window before the guard existed.
+   * reader is choosing from. Measured in the running window before the guard existed — and the
+   * complaint is that picture, not the Escape ladder: `useDismissOnEscape` orders `"inner"` peers
+   * by a stack now, so the pair would dismiss cleanly and still be unreadable.
    */
   it("stays out of the way of a layer the reader already opened", async () => {
     await openPane();

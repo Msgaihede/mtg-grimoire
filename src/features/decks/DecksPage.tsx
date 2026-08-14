@@ -122,11 +122,19 @@ export function deckBadge(deck: DeckRow): DeckBadge {
 /**
  * The one dismissible layer this view can have open, and there is deliberately only ever one.
  *
- * `useDismissOnEscape` orders exactly two rungs — one capture-phase `"inner"` layer and one
- * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
- * would both close on a single press. Modelling every panel on this screen as *one* piece of
- * state is what makes "never two" structural rather than remembered; the tree's create field
- * is in here for that reason even though it is drawn inline rather than floating.
+ * **At most one of these is ever meant to be open**, and modelling every panel on this screen as
+ * *one* piece of state is what makes "never two" structural rather than remembered — a half-typed
+ * new deck beside a half-answered delete question is not a state this view draws, and separate
+ * flags can express it. The tree's create field is in here for that reason even though it is
+ * drawn inline rather than floating.
+ *
+ * This used to be argued from Escape — "`useDismissOnEscape` orders exactly two rungs, so two
+ * `"inner"` peers open at once are not ordered at all and would both close on a single press" —
+ * and that is no longer true: the hook keeps a stack of capture-phase registrations and only the
+ * token on top acts, so peers *are* ordered, by mount depth. (It was not true of the old hook
+ * either: the capture rung checks `defaultPrevented`, so the first-registered peer took the press
+ * and the newer one was starved rather than both closing.) The union stands on the sentence above,
+ * which never depended on any of it.
  */
 type Panel =
   | { kind: "createDeck" }

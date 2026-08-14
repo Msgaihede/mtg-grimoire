@@ -150,12 +150,15 @@ export interface ValidationPanelProps {
  * cannot make a deck illegal must not be drawn as though it could.
  *
  * The panel is an `"inner"` Escape rung — one press closes it and the card pane behind the
- * view keeps its own — and it is the *same* piece of state as the row menus, so those two can
- * never be open at once (`useDismissOnEscape` orders exactly two rungs; `DecksPage`'s `Panel`
- * union is the same arrangement, for the same reason). The screen carries a **third** `"inner"`
- * peer that no union covers — the set filter in the docked search panel (`SetCombobox`) — and
- * that one is held apart by focus and click mechanics instead: see `DeckEditor`'s `Layer` doc
- * for both directions and for the one case the mechanics do not cover.
+ * view keeps its own — and it is the *same* piece of state as the editor's dialogs, so those can
+ * never be open at once: a chip's answer floating over a modal is not a state this view draws,
+ * and one slot is what makes that structural (`DecksPage`'s `Panel` union is the same
+ * arrangement, for the same reason). That used to be justified by `useDismissOnEscape` ordering
+ * exactly two rungs, which it no longer does — it stacks capture-phase registrations and only
+ * the top one acts — and which was never what the union was for. The screen carries a further
+ * `"inner"` peer that no union covers — the set filter in the docked search panel
+ * (`SetCombobox`) — held apart by focus and click mechanics instead: see `DeckEditor`'s `Layer`
+ * doc for both directions.
  */
 export function ValidationPanel({
   cards,
