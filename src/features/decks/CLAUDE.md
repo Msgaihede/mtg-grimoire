@@ -279,12 +279,39 @@ reader to configure the deck they had just made; it now asks all of them.
     the very tile the reader has hold of — mid-drag. These zones have to answer for exactly the
     drags it refuses, so widening it was never available; a component with a monitor of its own
     re-renders **itself** and leaves that rule true.
-  - **`{ kind: "auto" }` is a `DropTarget` and `auto-add` is a `DeckWrite`**, both new in `dnd.ts`.
-    An auto add names no category — the pile is per card, decided inside `useDeck.addCard` — so it
-    could not be spelled as a category id without inventing one. `deck-card` is **refused** there
-    and the box greys: that payload deliberately carries no `typeLine`, so there is nothing for
-    `autoCategoryFor` to read, and re-filing a card the deck already holds is the Categories
-    dialog's bulk action.
+  - **`{ kind: "auto" }` is a `DropTarget`, and it resolves to one of two writes.** An auto add
+    names no category — the pile is per card, decided inside `useDeck.addCard` — so it could not
+    be spelled as a category id without inventing one. A printing off a wall becomes `auto-add`;
+    **a card the deck already holds becomes `auto-refile`** and is filed again by what it does
+    (2026-08-15). That second arm replaced a refusal, and the reasoning it replaced is worth
+    keeping because it was nearly right: a `deck-card` payload carries no `typeLine`, so there is
+    nothing in *the payload* for `autoCategoryFor` to read — true, and the wrong place to conclude
+    from, because the editor is drawing the row and has the type line, the pile's name and the
+    tags query already. So `auto-refile` carries an **address** (`cardId`, `from`) and the caller
+    supplies the fact, exactly as it does for the pile a `move` lands in. The payload did not have
+    to grow a field, and `dnd.ts` says why at the type.
+  - **`useDeck.refileCard` is `addCard`'s auto arm read backwards, and deliberately the same
+    three steps in the same order**: the card's Oracle tags, `autoCategoryFor`, then a command
+    that finds-or-creates the pile that names. One rule at two entrances — a card filed on the way
+    *in* and the same card filed again later must not disagree about where it belongs. **Two
+    answers write nothing and neither is a failure**: a card the rule cannot place
+    (`Uncategorised`) stays put, because moving it out of a pile somebody chose into the bin is a
+    downgrade dressed as tidying; and a card already in the pile the rule names is already filed.
+    Neither reaches IPC — the comparison is against the row's own `categoryName` — so "press it
+    again" costs one tag read. `DeckEditor` draws a `role="status"` sentence for both, clearing
+    itself after `REFILE_NOTE_MS`, because a deliberate gesture that changes the screen not at all
+    is the shape of thing that reads as a broken control. A card that *moves* gets no sentence:
+    the caret follows it and the pile announces its own name.
+  - **The pile is resolved in Rust, in the move's own transaction**, which is what `deck_move_card`
+    grew a name arm for — `add_card`'s two-arm target copied rather than approximated. Three
+    things follow and each is why: a pile the app invents comes out `origin: 'auto'`, so
+    `drawsWhenEmpty` takes it off the desk once its last card leaves, where `deckCategoryCreate`
+    writes `'user'` and would leave a column nobody asked for standing for ever; the create and
+    the move are one transaction, so a refused move cannot strand an empty pile; and it is one
+    round trip rather than three. **`useDeckMeta`'s bulk `autoCategorise` deliberately keeps
+    sending the id arm** — it resolves every target once for the whole press, and its three
+    refusals (a switched-off target, a pile the reader made, a card the rule cannot place) are
+    TypeScript's and would be lost to `category_for_name`, which knows none of them.
   - **`New category` is two acts.** A modal cannot be opened mid-gesture, so the drop hands the
     whole `DragPayload` up and `DeckEditor`'s `quickCategory` layer asks for a name; the submit
     creates the pile and then puts `dropWrite` to the id it answered with — so an add stays an add

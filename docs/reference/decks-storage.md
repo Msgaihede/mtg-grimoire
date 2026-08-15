@@ -314,12 +314,33 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   or a name**, id wins when both arrive, neither is refused in words, and the name is
   found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
   pile a card belongs in is domain logic); `deck_set_card_quantity(deckId, cardId, categoryId,
-variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId, variant)`,
-  which stays inside one variant; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
+variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId,
+toCategoryName, variant)`, which stays inside one variant and takes **either an id or a name
+  exactly as the add does** — see the bullet below; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
 variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inactive
   categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
   variant must be one the schema knows, and the category must belong to _this_ deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
+- **`deck_move_card` grew the add's two-arm target on 2026-08-15**, for the quick zones' `Auto`
+  applied to a card the deck already holds. A **name** goes through `deck_meta::category_for_name`
+  — the same find-or-create the add and import paths use — inside the move's own transaction, and
+  the id wins when both arrive. Three things that arrangement buys over resolving the name in
+  TypeScript (`deck_category_list` + `deck_category_create` + move, which is what the bulk
+  `autoCategorise` still does for its own reasons): a pile the app invents is recorded
+  **`origin: 'auto'`**, so `grouping.ts`'s `drawsWhenEmpty` stops drawing it once its last card
+  leaves — `create_category` writes `'user'` and would leave a column nobody asked for standing
+  for ever; the create and the move are **one transaction**, so a refused move cannot strand an
+  empty pile; and it is one round trip rather than three.
+  - **It answers the category the copies are now in**, which was `()` before. The name arm's
+    caller has no other way to learn what was found or made, and the caret follows a moved card
+    to its new pile — so that id is load-bearing rather than a convenience.
+  - **`from == to` is checked *after* the resolution, and returns without committing.** The name
+    arm cannot know the target's id until it has resolved it, and a card the rule files where it
+    already is has to be answered rather than moved. Dropping the transaction rolls back the
+    `touch_deck` above it, because bumping `updated_at` to leave the list exactly as it was is
+    precisely what the id arm's caller-side guard exists to prevent. Nothing can have been created
+    on that path: `category_for_name` answers a **new** id when it makes a pile, and a new id is
+    never a pile the card is already in.
 - **`deck_category_clear(deckId, categoryId, variant)` empties one pile of one list, and exists
   for `deck_import_commit`'s reason** (added 2026-08-15, behind a category heading's right-click
   `Clear stack…`). The frontend holds every row of the pile, so a `deck_set_card_quantity(…, 0)`
