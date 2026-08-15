@@ -2108,6 +2108,10 @@ pub fn move_card(
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
+    // Read before the resolution below, because that resolution is what can **create** a pile
+    // — `add_card`'s rule, and this command grew the same second arm. Undoing a move that
+    // invented a `Ramp` column has to take the column away with the card that made it.
+    let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
     let from = category_of_deck(&tx, deck_id, from_category_id)?;
     let (to_category_id, to) = match to_category_id {
         Some(id) => (id, category_of_deck(&tx, deck_id, id)?),
@@ -2203,7 +2207,14 @@ pub fn move_card(
         &json!({ "from": from, "to": to }),
         0,
     )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+    crate::deck_undo::record_cells(
+        &tx,
+        audit_id,
+        deck_id,
+        cells,
+        before,
+        Some(categories_before),
+    )?;
     // A move changes what is claimed even though nothing was added or removed: an inactive
     // category reserves nothing, so a card dragged into or out of one is a claim released or
     // made.

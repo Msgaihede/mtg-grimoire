@@ -1387,7 +1387,8 @@ mod tests {
                 },
             ),
             ("deck_move_card", nothing, |c, id| {
-                crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), draw(c, id), "live")
+                let to = draw(c, id);
+                crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), Some(to), None, "live")
                     .unwrap();
             }),
             (
@@ -1397,8 +1398,29 @@ mod tests {
                         .unwrap();
                 },
                 |c, id| {
-                    crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), draw(c, id), "live")
+                    let to = draw(c, id);
+                    crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), Some(to), None, "live")
                         .unwrap();
+                },
+            ),
+            (
+                // The name arm, which **creates** the pile it moves into — `add_card`'s second
+                // entrance, grown on this command by main while this branch was open. Undo has
+                // to take the column away along with the card that made it, or the deck keeps a
+                // heading for a card that is no longer under it.
+                "deck_move_card (inventing a category by name)",
+                nothing,
+                |c, id| {
+                    crate::deck::move_card(
+                        c,
+                        id,
+                        "bolt-lea",
+                        ramp(c, id),
+                        None,
+                        Some("Landfall"),
+                        "live",
+                    )
+                    .unwrap();
                 },
             ),
             ("deck_swap_printing", nothing, |c, id| {
