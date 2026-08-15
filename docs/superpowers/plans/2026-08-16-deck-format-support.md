@@ -38,6 +38,7 @@
 | `src/features/decks/export/format.ts` | Six writers, the section ladder, `omittedCount` | 6 |
 | `src/features/decks/export/ExportDialog.tsx` | Six formats and the omitted-cards line | 7 |
 | `src/features/decks/DeckEditor.tsx` | `Export deck`, and the export layer's two scopes | 8 |
+| `src/features/decks/decklists.test.ts` | Every real decklist through every format, and back | 11 |
 | Docs | `src/features/decks/CLAUDE.md`, `src-tauri/CLAUDE.md`, `docs/reference/decks-storage.md` | 9 |
 
 **Wave order for a fan-out.** A: 1 and 2 (different trees). B: 3, then 4 (both edit `parse.ts`, so they are sequential). C: 5 and 6 in parallel. D: 7 and 8 in parallel. E: 9. F: 10.
@@ -1720,6 +1721,190 @@ Expected: PASS. Grep for `categoryExport` across `src/` and fix any remaining re
 ```bash
 git add src/features/decks/DeckEditor.tsx src/features/decks/DeckEditor.test.tsx
 git commit -m "feat(decks): export a whole deck from the editor header"
+```
+
+---
+
+### Task 11: Every real decklist, through every format, and back
+
+**Files:**
+- Create: `src/features/decks/decklists.test.ts`
+- Modify (only if it can be done without changing any assertion): `src/features/decks/import/fixtures.ts`
+
+**Interfaces:**
+- Consumes: `parseDecklist`, `buildImportPlan`, `toImportItems` (Tasks 3–5); `formatExport`, `omittedCount`, `EXPORT_FORMATS` (Task 6); the three fixtures (Task 1).
+- Produces: nothing the app imports.
+
+**Why this exists.** Every round-trip assertion in the tree today runs over a hand-built array of
+two or three cards. Nothing drives a **real decklist** — 105 lines, 14 piles, 7 split names, 44
+tags, 17 `{noDeck}` cards — from text, through the planner, out through a writer and back in. A
+format is exactly the kind of thing that works on three cards and fails on a corpus, and this is
+the file that would have caught every defect this branch was written to fix.
+
+**The matrix is three real decklists × six formats.** Not one representative format: the writers
+disagree deliberately (uppercase against lowercase set codes, headings against `SB:` prefixes,
+who keeps a maybeboard), and a per-format table is the only shape that shows a writer drifting
+from the parser that has to read it.
+
+- [ ] **Step 1: Decide where the resolver stub lives**
+
+`plan.ts` needs resolved rows, which come from Rust. `plan.test.ts` already stubs that with a
+local `planFor`/`match` pair. **Prefer one definition**: move the stub into
+`src/features/decks/import/fixtures.ts` (already the shared test corpus) and have both files use
+it. If adopting it in `plan.test.ts` means touching anything but that helper's own body, keep a
+local stub in the new file instead and write a comment saying which two questions the two stubs
+answer and why one could not serve both. Either way, all 124 tests in `src/features/decks/import/`
+must still pass.
+
+The stub claims **only** "a printing answered this line" — it must not invent a set code, a
+collector number or a type line that the real resolver would have chosen differently, because a
+fixture that teaches a false answer is worse than no fixture. Where a line carried a printing
+hint, echo the hint back; where it carried none, say so.
+
+- [ ] **Step 2: Write the import half**
+
+```ts
+/**
+ * The three real exports, each all the way through the import pipeline.
+ *
+ * `parse.test.ts` pins what the *parser* makes of these; this pins what the **deck** does, which
+ * is the question a reader actually has. The resolver is stubbed — see the helper's own comment
+ * for what it claims and what it refuses to claim.
+ */
+describe("importing a real decklist", () => {
+  it.each([
+    ["Archidekt, sectioned", ARCHIDEKT_SECTIONED, 105, 117, 17],
+    ["Archidekt, flat", ARCHIDEKT_FLAT, 88, 100, 0],
+    ["empty-() hints", EMPTY_HINT_LIST, 88, 100, 0],
+  ])("plans %s as %i lines and %i copies", (_name, text, lines, copies, excluded) => {
+    const plan = planOf(text);
+    expect(plan.parseIssues).toEqual([]);
+    expect(plan.cards).toHaveLength(lines);
+    expect(plan.totalCards).toBe(copies);
+    expect(toImportItems(plan, []).filter((i) => i.inactive === true)).toHaveLength(excluded);
+  });
+
+  it("puts the same 88 counted cards in the deck whichever of the three was pasted", () => {
+    // The two flat lists are the sectioned one less its maybeboard, so the *counted* deck has to
+    // come out identical from all three. This is the assertion the whole corpus was chosen for.
+    const counted = (text: string) =>
+      toImportItems(planOf(text), [])
+        .filter((i) => i.inactive !== true)
+        .reduce((n, i) => n + i.quantity, 0);
+    expect(counted(ARCHIDEKT_SECTIONED)).toBe(100);
+    expect(counted(ARCHIDEKT_FLAT)).toBe(100);
+    expect(counted(EMPTY_HINT_LIST)).toBe(100);
+  });
+});
+```
+
+Add, in the same describe, one test asserting the **piles** the sectioned list lands in — all 14
+by name, with their copy counts — because that is the fact this branch exists to preserve and the
+one no count above would notice losing.
+
+- [ ] **Step 3: Write the export half — every format, over a real deck**
+
+Build `ExportCard`s from a planned real decklist (name, quantity, set code, collector number,
+category name, and a kind/switch derived from the pile), then render all six formats and assert
+the **shape** of each: the heading count, that no card was lost, the trailing newline, and what
+each one deliberately drops.
+
+```ts
+describe("exporting a real deck", () => {
+  const cards = exportCardsFor(ARCHIDEKT_SECTIONED); // 105 rows, 117 copies, 17 switched off
+
+  it.each(EXPORT_FORMATS)("writes every counted card in %s", (format) => {
+    const text = formatExport(cards, format);
+    expect(text.endsWith("\n")).toBe(true);
+    expect(text.startsWith("\n")).toBe(false);
+    // Copies the format wrote, plus the copies it says it left out, is the whole deck.
+    expect(copiesIn(text, format) + omittedCount(cards, format)).toBe(117);
+  });
+
+  it("drops exactly the switched-off piles from Arena and MTGO, and nothing from the rest", () => {
+    for (const format of EXPORT_FORMATS) {
+      expect(omittedCount(cards, format), format).toBe(
+        format === "arena" || format === "mtgo" ? 17 : 0,
+      );
+    }
+  });
+});
+```
+
+`copiesIn` counts the quantities in the rendered text and must handle CSV's own row shape; write
+it in the test file and keep it dumb — a second parser here would be a second thing to be wrong.
+
+- [ ] **Step 4: Write the round-trip half — the one that matters**
+
+```ts
+/**
+ * Text in, deck out, text out, deck in — over a real 105-line decklist rather than three cards.
+ *
+ * **CSV is write-only and is excluded by name**, not by omission: nothing in `parse.ts` reads a
+ * comma-separated decklist, and adding one would be a second grammar rather than a rule inside
+ * the one there is.
+ */
+describe("a real decklist round-trips through every format this app can read", () => {
+  const READABLE = EXPORT_FORMATS.filter((f) => f !== "csv");
+
+  it("excludes only CSV", () => {
+    expect(READABLE).toEqual(["plain", "mtgo", "arena", "moxfield", "archidekt"]);
+  });
+
+  it.each(READABLE)("keeps every card and copy through %s", (format) => {
+    const cards = exportCardsFor(ARCHIDEKT_SECTIONED);
+    const back = parseDecklist(formatExport(cards, format));
+    expect(back.issues, format).toEqual([]);
+    const expected = 117 - omittedCount(cards, format);
+    expect(back.totalCards, format).toBe(expected);
+    // Names, sorted, so a writer that reorders sections is not a failure and a writer that
+    // mangles `Branchloft Pathway // Boulderloft Pathway` is.
+    expect(new Set(back.lines.map((l) => l.name)).size, format).toBeGreaterThan(0);
+  });
+
+  it("keeps the reader's own 14 piles through Archidekt, and only through Archidekt", () => {
+    const cards = exportCardsFor(ARCHIDEKT_SECTIONED);
+    const archidekt = parseDecklist(formatExport(cards, "archidekt"));
+    expect(pilesOf(archidekt)).toEqual(pilesOf(parseDecklist(ARCHIDEKT_SECTIONED)));
+    // Moxfield has a fixed vocabulary, so `Flash Enabler` becomes `Deck` — a real loss, stated
+    // here rather than discovered by a reader whose categories vanished.
+    const moxfield = parseDecklist(formatExport(cards, "moxfield"));
+    expect(pilesOf(moxfield)).not.toEqual(pilesOf(archidekt));
+  });
+
+  it("keeps the switched-off piles through Archidekt's {noDeck}", () => {
+    const cards = exportCardsFor(ARCHIDEKT_SECTIONED);
+    const back = parseDecklist(formatExport(cards, "archidekt"));
+    expect(back.lines.filter((l) => l.excluded)).toHaveLength(17);
+  });
+
+  it("survives a second trip, so the format is a fixed point", () => {
+    // A writer that is not idempotent grows or loses something on every export/import cycle, and
+    // one cycle cannot see it.
+    const once = formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), "archidekt");
+    const twice = formatExport(exportCardsFor(once), "archidekt");
+    expect(twice).toBe(once);
+  });
+});
+```
+
+The fixed-point test is the strongest one here — write it even if the others have to be trimmed.
+
+- [ ] **Step 5: Run it**
+
+Run: `npx vitest run src/features/decks/decklists.test.ts` — all green
+Then: `npx vitest run src/features/decks/import/ src/features/decks/export/` — still green (124 + Task 6's and 7's)
+Then: `npx prettier --check` and `npx eslint --max-warnings 0` on the new file.
+
+**A failure here is a real defect, not a test to relax.** If a format cannot round-trip a real
+decklist, fix the writer or the parser and say what was wrong; do not weaken the assertion to
+match the behaviour.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/features/decks/decklists.test.ts src/features/decks/import/fixtures.ts
+git commit -m "test(decks): drive every real decklist through every export format and back"
 ```
 
 ---
