@@ -1689,6 +1689,10 @@ mod tests {
             card_id: card_id.to_owned(),
             quantity,
             category_name: category.to_owned(),
+            // An ordinary counted pile, which is what an import has always made. The flag says
+            // the *file* called this pile a maybeboard (Archidekt's `{noDeck}`); a journal test
+            // about restoring rows has no opinion about that.
+            inactive: false,
         }
     }
 
