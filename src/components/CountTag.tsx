@@ -4,12 +4,13 @@ import { cn } from "@/lib/utils";
  * What a count tag is filled with when nothing colours it: the colourless deep, `--color-pie-c`.
  *
  * A filled mark has to be *some* colour, and grey is the one that says nothing — which is what a
- * count on a card in a search result has to say, and what a count on an untagged deck card has to
- * say. If the neutral fill were gold, gold would stop being something a **tag** means.
+ * count on an untagged deck card has to say. If the neutral fill were gold, gold would stop being
+ * something a **tag** means.
  *
  * This used to be `UNTAGGED_COLOR` in `features/decks/tagColors.ts`, where it answered a question
- * about tags. It answers a question about this mark, so it lives with the mark: a wall of search
- * tiles has no tags at all and still needs the fill.
+ * about tags. It answers a question about this mark, so it stays with the mark even though the
+ * one caller left is `QuantityTag`: the fill is what says "no tag", and a module about tag
+ * colours is the wrong place for the absence of one.
  */
 export const NEUTRAL_COUNT_PAINT = {
   css: "var(--color-pie-c)",
@@ -24,14 +25,20 @@ export const NEUTRAL_COUNT_PAINT = {
 const SLANT = "polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%)";
 
 /**
- * A number laid on a card, as a filled banner cut off at a slant — the app's one drawing of
- * "there are N of these".
+ * A number laid on a card, as a filled banner cut off at a slant — the deck stack's drawing of
+ * "there are N of these in this pile".
  *
- * Two surfaces make that statement and they are counting different things: the deck stack says
- * how many copies of a card are in a pile, and the search wall says how many printings a
- * collapsed tile stands for. Neither is a chip of app furniture over a photograph — it is a mark
- * the eye finds first and reads as a quantity before it reads the card, which only works if both
- * are the same object. Drawn here so they cannot drift into two shapes.
+ * **It had two callers for a day and has one again** (2026-08-15). The search wall's printing
+ * count was the second, on the argument that a mark the eye finds before it reads the card only
+ * works if both surfaces draw the same object — and what that shared shape cost was the *word*:
+ * a bare `132` on a search tile is a quantity of nothing in particular, and the only thing
+ * saying which quantity was the surface it was on. The wall says `132 printings` in the tile's
+ * own corner chip now. So the shape is the deck stack's again, where a bare number is honest
+ * because the tag it is printed on says what is being counted.
+ *
+ * It stays in `components/` rather than moving back into `features/decks/`: the geometry here —
+ * the slant, the height, the mono face — is a primitive, and a second surface that has room for
+ * a number and not for a word is a reasonable thing to expect.
  *
  * **The number alone, never `×N`.** A banner in a card's corner is already saying "this many";
  * the multiplication sign is a second glyph in a 22px box spending the room the digits need.
