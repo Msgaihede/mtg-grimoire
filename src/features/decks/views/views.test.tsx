@@ -478,7 +478,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
   });
 
   /**
-   * **Where the card landed, for the ten seconds after it did.**
+   * **Where the card landed, for the five seconds after it did.**
    *
    * Keyed by `deck_cards.id` rather than by the printing, which is the difference that matters:
    * `deck_add_card` folds, so what the reader wants pointed at is the *row* the write landed in
