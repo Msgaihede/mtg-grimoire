@@ -244,6 +244,34 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
   always lost. **One arm was not driven** — the _coloured_ tag, since the deck to hand carried no
   tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
+- **And the printing count stopped being that tag the next day — it says the word now**
+  (2026-08-15). `132 printings`, in the wall's own `bg-bg/85` chip, at `text-[10px]`. The bullet
+  above is the record of the shape it replaced and every figure in it was true of that shape; what
+  it got wrong is the half it argued hardest for. "One object for both statements" is right about
+  the _drawing_ and wrong about the _statement_: the deck stack's bare number is printed **on a
+  tag**, so the thing beside it says which quantity is being counted, and the search wall's bare
+  number had nothing beside it at all. Both earlier shapes put the meaning somewhere the eye is
+  not — `×132` in a tooltip, `132` in a silhouette shared with "copies in this pile" and told
+  apart only by which surface you were looking at. A search tile has room for the word, so it
+  spends it, and the corner reads with no hover and no legend.
+  Three things follow, and the third is the one to check before touching this again:
+  **(1)** `CardGrid`'s `topLeft` carries the same backing as `badge` — the no-backing exception
+  existed only because a `CountTag` brings its own paint, so all three of a tile's corners are the
+  felt-at-85 % chip again;
+  **(2)** the mark is **plain visible text**, not `aria-hidden` with an `sr-only` twin, which is
+  only legitimate because the corner is a _sibling_ of the tile's button and outside its
+  accessible name — the `title` survives for the one word the corner has no room for, **matched**,
+  since the number counts the printings that got past the filters rather than the card's whole
+  print run;
+  **(3)** **it cannot be drawn clear of the printed card name at the default zoom, and that is
+  geometry rather than a placement to fix.** A card's black border is ~3.4 % of its height, so on
+  a 170 × 238 tile the strip above the nameplate is **~8px** and the nameplate itself runs to
+  ~22px. The chip is ~14px tall and `CardGrid` insets every corner by 4px (a box at 0,0 hangs off
+  the art's `rounded-lg`, which does not clip a sibling), so it occupies **4–18px**: clear of the
+  card's top border, over the left end of the name. The mark does not scale with the zoom and the
+  card does, so the overlap shrinks with every step and by ~2× the chip sits in the border strip
+  outright. Making it clear at 1× means shrinking the type below the app's smallest, or moving the
+  mark out of the art — both were weighed and neither was taken.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one.** `CardGrid` had
   it against "117 k results is 117 k requests", which the virtualiser had already made false
   — the wall mounts the rows on screen plus two, about two dozen images — so the browser's

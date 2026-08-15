@@ -102,17 +102,23 @@ export const AddingFromAWall: Story = {};
  *
  * The glyph is `→` rather than `+`, because none of these is an add — the reference this was
  * drawn from puts a `+` on every zone, which is right for one drag and a lie during the other.
- * **`Auto` is greyed**, and structurally so: a `deck-card` payload carries no type line, so
- * there is nothing for the filing rule to read. Re-filing a card the deck already holds is the
- * Categories dialog's bulk action, not this.
+ *
+ * **All four are live, `Auto` included** (changed 2026-08-15). It used to grey here, on the
+ * argument that a `deck-card` payload carries no type line and so the filing rule had nothing to
+ * read — true about the payload and the wrong place to conclude it from, because the editor is
+ * holding the row. `Auto` now re-files the card by what it does: the same rule an add goes
+ * through, run a second time on a card that is already in the deck.
  */
 export const MovingADeckCard: Story = {
   args: { payload: FROM_THE_DECK },
   play: async ({ canvasElement }) => {
     const zone = (label: string) =>
       canvasElement.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="${label}"]`);
-    await expect(zone("Auto")).toHaveClass("opacity-40");
-    await expect(zone("Sideboard")).not.toHaveClass("opacity-40");
+    // All four live: `Auto` re-files a card the deck already holds (2026-08-15), where it used
+    // to grey and refuse.
+    for (const label of ["Auto", "New category", "Maybeboard", "Sideboard"]) {
+      await expect(zone(label)).not.toHaveClass("opacity-40");
+    }
   },
 };
 

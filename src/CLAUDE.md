@@ -44,17 +44,26 @@ Every one of these has its measurement and its story in
   this), differing only in the room each has. One gold (`text-pie-gold`) everywhere, never the
   destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns the whole
   chip off, crown included, for a frame that names these somewhere else.
-- **A count laid _on_ a card is `components/CountTag`, and it draws the number with no `×`.** One
-  object for two statements — the deck stack's copies in a pile and the search wall's printings a
-  collapsed tile stands for — because a mark the eye finds before it reads the card only works if
-  both are the same shape. Filled and cut off at a slant, since a square chip on art reads as
-  something to press; **grey unless something colours it**, so gold stays a thing a deck _tag_
-  means. It is `aria-hidden` for `FoilOverlay`'s reason, so its `title` is the whole of what a
-  pointer gets and the words belong to whatever names the card. **A count laid _beside_ a card
-  keeps its `×`** — `OwnedBadge` in a caption, the search table's `×132 printings` — where the
-  sign is what tells a count from a set number. A surface hosting one supplies the corner and
-  nothing else: `CardGrid`'s `topLeft` is the one corner with no `bg-bg/85` backing under it,
-  because a chip behind a banner frames a frame.
+- **A bare number laid _on_ a card is `components/CountTag`, and it draws that number with no
+  `×`** — filled and cut off at a slant, since a square chip on art reads as something to press;
+  **grey unless something colours it**, so gold stays a thing a deck _tag_ means. It is
+  `aria-hidden` for `FoilOverlay`'s reason, so its `title` is the whole of what a pointer gets and
+  the words belong to whatever names the card. **A count laid _beside_ a card keeps its `×`** —
+  `OwnedBadge` in a caption, the search table's `×132 printings` — where the sign is what tells a
+  count from a set number.
+- **A bare number is only honest where something beside it says what is being counted, and that
+  is why the search wall stopped drawing one** (2026-08-15). `CountTag` had two callers for a
+  day: the deck stack's copies in a pile, and the search wall's printings a collapsed tile stands
+  for — one object, on the argument that a mark the eye finds before it reads the card has to be
+  the same shape on both. The stack earns the bare number, because the tag it is printed on is
+  what says which quantity. The wall did not: `132` on a search tile is a quantity of nothing in
+  particular, and the only thing naming it was a tooltip and the surface you happened to be on.
+  It says **`132 printings`** now, in the wall's own chip, so a tile has one corner that reads
+  without a hover. Two consequences: **`CardGrid`'s `topLeft` carries the same `bg-bg/85` backing
+  as `badge`** — the exception it was for a day is gone, and all three of a tile's corners are one
+  box now — and **the mark is plain visible text rather than `aria-hidden` with an `sr-only`
+  twin**, which is legitimate here only because the corner is a _sibling_ of the tile's button and
+  not inside its accessible name.
 - **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
   `pointer-events-none` is a tooltip that can never be shown — and nothing goes red.** A hit
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is

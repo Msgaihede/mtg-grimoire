@@ -351,7 +351,13 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
         // press over one such row would undo nothing and finish nothing. A target that is only
         // held by a switched-off pile is skipped the same way, and reaches here as `undefined`.
         if (to === undefined || to === card.categoryId) continue;
-        await ipc.deckMoveCard(deck, card.cardId, card.categoryId, to, variant);
+        // The **id** arm, even though this rule names its target: the pile has already been
+        // found or made above, in a loop that reads the deck's live categories once for the
+        // whole press. Sending the name instead would re-resolve it per card, and would take
+        // this bulk action's three deliberate refusals — a switched-off target, a pile the
+        // reader made, a card the rule cannot place — out of TypeScript's hands and hand them
+        // to `category_for_name`, which knows none of them.
+        await ipc.deckMoveCard(deck, card.cardId, card.categoryId, to, null, variant);
         moved += 1;
       }
       return moved;

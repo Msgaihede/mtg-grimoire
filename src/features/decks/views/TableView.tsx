@@ -225,8 +225,9 @@ export function TableView({
         headerClassName: "text-right",
         cellClassName: "text-right font-mono text-xs tabular-nums",
         // The one price the read answered with, at the selected marketplace, and never a
-        // chain to another one's: a deck card is priced at its printing's nonfoil rate, so
-        // this is an em dash exactly where that marketplace does not quote that printing.
+        // chain to another one's: a deck card is priced at whichever finish that marketplace
+        // sells its printing in, so this is an em dash exactly where that marketplace quotes
+        // that printing in none of them.
         cell: (row) =>
           row.kind === "card" ? formatPrice(row.card.unitPrice, marketplace.currency) : null,
       },

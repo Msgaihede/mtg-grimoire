@@ -1088,28 +1088,30 @@ describe("the result layout toggle", () => {
   });
 
   /**
-   * The tile's top-left corner is hoverable, so the bare number it draws has plain words to
-   * offer — and they say **matched**, because that is what the number counts: a collapsed row
-   * groups the printings that got past the filters, not the card's whole print run. The words
-   * are the whole of what a pointer user gets here, since `CountTag` is `aria-hidden`.
+   * The tile's top-left corner **names what it counts, on the card** — `132 printings`, not
+   * `×132` and not a bare `132`. Two earlier shapes each put the meaning somewhere the eye is
+   * not: in a tooltip, and in a banner's silhouette. This asks for the whole string, which is
+   * the only assertion that fails for either of them.
    *
-   * **The `×` is gone and the exact text is what pins that.** `toHaveTextContent` is a substring
-   * match, so `"132"` passes against `"×132"` too — the `not` is the half of this that would
-   * fail if the sign came back. The mark is the deck editor's `CountTag` now, whose slanted
-   * banner says "this many" by its shape.
+   * The words are visible text rather than an `sr-only` twin, so the same query reaches a
+   * screen reader's reading of the wall — `getByText` would pass on a hidden span, so the
+   * corner's *box* is checked too: the app's table felt at 85 %, which is what makes words
+   * legible on a photograph and is the same backing the owned badge opposite it carries.
+   *
+   * The `title` keeps the one word the corner has no room for — **matched** — because a
+   * collapsed row groups the printings that got past the filters, not the card's whole print
+   * run.
    */
-  it("spells out what a tile's printings corner counts, without an ×", async () => {
+  it("names what a tile's printings corner counts, in words on the card", async () => {
     searchCards.mockResolvedValue(page([{ ...BOLT, printings: 132 }]));
     wrap(<SearchPage />);
 
     await screen.findByAltText("Lightning Bolt");
 
-    const corner = screen.getByTitle("132 printings matched these filters");
-    expect(corner).toHaveTextContent("132");
-    expect(corner).not.toHaveTextContent("×");
-    // Grey, and grey specifically: a printing count has no tag to take a colour from, so it
-    // draws in `CountTag`'s neutral fill rather than in the gold a tag means.
-    expect(corner.style.backgroundColor).toBe("var(--color-pie-c)");
+    const mark = screen.getByText("132 printings");
+    expect(mark).toBeVisible();
+    expect(mark).toHaveAttribute("title", "132 printings matched these filters");
+    expect(mark.parentElement).toHaveClass("bg-bg/85", "absolute", "top-1", "left-1");
   });
 
   /**

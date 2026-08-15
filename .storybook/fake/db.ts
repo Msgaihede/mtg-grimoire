@@ -975,14 +975,25 @@ function finishPricesAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): F
 }
 
 /**
- * `price_expr(marketplace)` at the **nonfoil** grain — a deck card's and a theory row's figure.
+ * `printing_price_by_finish_expr(marketplace)` — a deck card's, a category total's and a theory
+ * row's figure.
  *
- * A deck names a printing and not a finish, so there is no chain here and never has been:
- * `deck.rs` reads `$.usd`/`$.eur` flat, and the feed arm reads the nonfoil row flat beside it.
+ * A deck names a printing and not a finish, so there is no finish to price at and the row is
+ * quoted in whichever one the marketplace sells it in. **It used to read `$.usd`/`$.eur` flat, on
+ * the reasoning that "no finish" means nonfoil — and 13 515 foil-only printings have no nonfoil
+ * price at any marketplace**, so every one of them drew an em dash in a deck while the search
+ * wall beside it quoted the same printing.
+ *
+ * {@link finishPriceAt} once per finish rather than {@link priceColumnAt}'s column, which is the
+ * composition `sorting.rs` uses: each marketplace's own holes then travel with it, so Cardmarket
+ * keeps the `eur_etched` one it has always had and an etched-only printing stays unpriced there.
  */
-function nonfoilPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
-  if (isFeed(mp)) return feedPrice(db, card?.id ?? null, "nonfoil", mp);
-  return priceKey(card, mp === "cardmarket" ? "eur" : "usd");
+function deckPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
+  return (
+    finishPriceAt(db, card, "nonfoil", mp) ??
+    finishPriceAt(db, card, "foil", mp) ??
+    finishPriceAt(db, card, "etched", mp)
+  );
 }
 
 /**
@@ -2196,7 +2207,7 @@ function toDeckCategory(
   const totalPrice = ((): number | null => {
     const priced = rows
       .map((dc) => {
-        const unit = nonfoilPriceAt(db, cardById(db, dc.cardId), mp);
+        const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
         return unit === null ? null : unit * dc.quantity;
       })
       .filter((n): n is number => n !== null);
@@ -2495,10 +2506,11 @@ function toDeckCard(
     // recomputation answers `false` and a legal commander renders ineligible. `false` for an
     // orphan, because nothing is known about a card that is not there.
     everUncommon: card?.everUncommon ?? false,
-    // The nonfoil price at the marketplace this read named: a deck names a printing, not a
-    // finish, and nonfoil is the cheapest way to satisfy it. Never the `price_usd` column,
-    // which is a chain across finishes and must not be summed.
-    unitPrice: nonfoilPriceAt(db, card, mp),
+    // What this printing costs at the marketplace this read named, in whichever finish it is
+    // sold in: a deck names a printing and not a finish, so a foil-only one is quoted at its
+    // foil rate rather than reading as unpriced. Never the `price_usd` column, which is that
+    // chain precomputed for the search's sort and is the one a total must not sum.
+    unitPrice: deckPriceAt(db, card, mp),
     ownedQuantity,
   };
 }
@@ -4660,8 +4672,8 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           categoryName: categoryById(db, dc.categoryId)?.name ?? "",
           // Filled below, once both sides are summed.
           quantity: 0,
-          // The same flat nonfoil price the deck read uses, at the same marketplace.
-          unitPrice: nonfoilPriceAt(db, card, mp),
+          // The same price the deck read uses, at the same marketplace.
+          unitPrice: deckPriceAt(db, card, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
           ownedSpare: 0,
@@ -5154,10 +5166,7 @@ export function writeHandlers(db: FakeDb) {
       // own: a bare `12` is a number no reader can resolve once the pile has been renamed. `null`
       // on either side is `AUTO_CATEGORY`, where there is no pile to name.
       const defaultCategoryWas = before.defaultCategoryId ?? 0;
-      if (
-        patch.defaultCategoryId !== undefined &&
-        patch.defaultCategoryId !== defaultCategoryWas
-      ) {
+      if (patch.defaultCategoryId !== undefined && patch.defaultCategoryId !== defaultCategoryWas) {
         field(
           "defaultCategory",
           categoryNameOf(db, defaultCategoryWas),
@@ -5533,21 +5542,37 @@ export function writeHandlers(db: FakeDb) {
      * tidying, and a move that needed the id to resolve would refuse the one row that most
      * needs moving. `tagId` travels with it for the same reason — a label is the user's word
      * about this card in this deck, and re-filing it is not a reason to lose it.
+     *
+     * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deck_add_card`'s two-arm
+     * target, mirrored here because the crate mirrors it there. The name arm is the quick zones'
+     * `Auto` and goes through {@link categoryForName}, so a pile it invents is `"auto"` and stops
+     * being drawn once its last card leaves. The id wins when both arrive.
+     *
+     * Answers the category the copies are now in. **The `from === to` check moved below the
+     * resolution and that is not a tidy-up**: the name arm cannot know the target's id until it
+     * has resolved it, and a card the rule files where it already is has to be answered rather
+     * than moved — so the early return is `Ok(to)` with nothing written, `updatedAt` included.
      */
     deck_move_card: (args: {
       deckId: number;
       cardId: string;
       fromCategoryId: number;
-      toCategoryId: number;
+      toCategoryId: number | null;
+      toCategoryName: string | null;
       variant: DeckVariant;
-    }): void => {
+    }): number => {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
-      // Before the deck is even looked up, exactly as the Rust returns before its transaction.
-      if (args.fromCategoryId === args.toCategoryId) return;
+      if (args.toCategoryId === null && args.toCategoryName === null) throw refuse(NO_CATEGORY);
       const deck = requireDeck(db, args.deckId);
       const from = categoryOfDeck(db, args.deckId, args.fromCategoryId);
-      const to = categoryOfDeck(db, args.deckId, args.toCategoryId);
+      const to =
+        args.toCategoryId !== null
+          ? categoryOfDeck(db, args.deckId, args.toCategoryId)
+          : categoryForName(db, args.deckId, args.toCategoryName!);
+      // After the resolution, and it writes nothing at all — not even `updatedAt`, which the
+      // Rust rolls back with its transaction for the same reason.
+      if (from.id === to.id) return to.id;
       const row = deckCardAt(db, args.deckId, args.cardId, from.id, variant);
       if (!row) throw refuse(cardGone(from.name));
       const target = deckCardAt(db, args.deckId, args.cardId, to.id, variant);
@@ -5565,6 +5590,7 @@ export function writeHandlers(db: FakeDb) {
       }
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
+      return to.id;
     },
 
     /**
