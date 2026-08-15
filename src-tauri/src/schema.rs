@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -1503,6 +1503,65 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         // Literal `16`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 16;")?;
+        tx.commit()?;
+    }
+    if v < 17 {
+        let tx = conn.unchecked_transaction()?;
+        // **Undo's own journal, and deliberately not a column on `deck_audit`.**
+        //
+        // That table is append-only, never pruned, and read whole every time the history
+        // drawer opens. A step for a category delete carries the rows the CASCADE took — a
+        // whole pile of a deck — which is orders of magnitude larger than the sentence it
+        // would have sat beside, and `deck_audit_list` selects its columns by name, so the
+        // blob would have ridden along on every read of a feature that never wants it.
+        // `src/features/decks/auditText.ts` is the only reader of `payload` and stays so.
+        //
+        // **`audit_id` is the primary key**, so the journal is 1:1 with a history row by
+        // construction and one change cannot grow two steps. `deck_id` is denormalized from
+        // `deck_audit` because it is what the cursor's index needs, and the cursor is the
+        // hottest query in the feature; the join it saves is on every keystroke of a Ctrl+Z.
+        //
+        // **Both CASCADEs are load-bearing, and they are load-bearing for different reasons.**
+        // `deck_id` is what keeps `deleting_a_deck_takes_its_history_with_it` true of this
+        // table for free. `audit_id` is the sharper one: a step describing a change no history
+        // row can be found for is a step undo would apply into nothing, silently, and the row
+        // it named is not there to disagree with it — `deck_audit::record`'s own argument for
+        // writing inside the caller's transaction, one table along.
+        //
+        // **`undone_at` NULL means "still applied", and it persists on purpose.** Undo
+        // therefore survives a restart and carries on below where it stopped, which is what
+        // "as far back as the history allows" means. Redo does not: it is a list of ids in
+        // the webview's memory and dies with the window, which is the one asymmetry this
+        // feature was asked for.
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid
+        // is renumbered, so no `cards_fts` rebuild is owed either.
+        //
+        // **`AUDIT_KINDS` is untouched and stays at nine.** An undo records `kind = 'deck'`
+        // with a `{"field":"undo","of":<id>}` payload rather than a tenth word, because
+        // `deck_audit.kind`'s CHECK cannot be altered — SQLite has no `ALTER … CHECK` — and a
+        // tenth word would mean rebuilding every reader's whole deck history for a spelling.
+        // `deck_import::commit_import` met this first and reused `add`/`remove` for it.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS deck_undo (
+                audit_id INTEGER PRIMARY KEY
+                    REFERENCES deck_audit(id) ON DELETE CASCADE,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                -- The reversal, both ways: {\"undo\":[Op,…],\"redo\":[Op,…]}. JSON for
+                -- `deck_audit.payload`'s reason one table over: the shapes are Rust's, they
+                -- grow with the write sites, and a step written by a newer build must not
+                -- fail an older build's read of the rows beside it.
+                step TEXT NOT NULL CHECK (json_valid(step)),
+                -- NULL while the change is still applied. Stamped by an undo, cleared by a
+                -- redo; the cursor is the newest row of this deck that is still NULL.
+                undone_at INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS idx_deck_undo_deck
+                ON deck_undo (deck_id, audit_id DESC);",
+        )?;
+        // Literal `17`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 17;")?;
         tx.commit()?;
     }
     Ok(())
@@ -4235,6 +4294,19 @@ pub(crate) mod tests {
     /// express "back to Auto", and a rewind therefore has nothing to take down first.
     const UNDO_V16: &str = "ALTER TABLE decks DROP COLUMN default_category_id;";
 
+    /// And v17's undo journal.
+    ///
+    /// Owed for [`UNDO_V14`]'s **quieter** reason rather than [`UNDO_V13`]'s: the DDL is
+    /// `CREATE TABLE IF NOT EXISTS`, so a fixture that forgot this one would still migrate
+    /// cleanly — it would simply be a database claiming to be v16 while carrying v17's table,
+    /// which is a fixture that has stopped describing the version it is named for. That is why
+    /// the fixtures below assert the absence rather than trusting the rewind.
+    ///
+    /// One `DROP TABLE` takes the index with it. Nothing has to come down first: `deck_undo`'s
+    /// two foreign keys point *outward*, at `deck_audit` and `decks`, and nothing anywhere
+    /// references `deck_undo`.
+    const UNDO_V17: &str = "DROP TABLE deck_undo;";
+
     /// A database that stopped at version 9 — the last version below the step that replays
     /// [`CARDS_INDEXES`], which is the property this fixture exists for.
     ///
@@ -4281,6 +4353,7 @@ pub(crate) mod tests {
              {UNDO_V14}
              {UNDO_V15}
              {UNDO_V16}
+             {UNDO_V17}
              PRAGMA user_version = 9;",
         ))
         .unwrap();
@@ -4478,6 +4551,7 @@ pub(crate) mod tests {
              {UNDO_V14}
              {UNDO_V15}
              {UNDO_V16}
+             {UNDO_V17}
              PRAGMA user_version = 10;",
         ))
         .unwrap();
@@ -4497,7 +4571,8 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} PRAGMA user_version = 11;"
+            "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} \
+             PRAGMA user_version = 11;"
         ))
         .unwrap();
         conn
@@ -4570,7 +4645,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} PRAGMA user_version = 12;"
+            "{UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} PRAGMA user_version = 12;"
         ))
         .unwrap();
         conn
@@ -4883,7 +4958,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V14} {UNDO_V15} {UNDO_V16} PRAGMA user_version = 13;"
+            "{UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -5189,7 +5264,9 @@ pub(crate) mod tests {
     fn v14_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V15} {UNDO_V16} PRAGMA user_version = 14;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V15} {UNDO_V16} {UNDO_V17} PRAGMA user_version = 14;"
+        ))
             .unwrap();
         conn
     }
@@ -5362,31 +5439,124 @@ pub(crate) mod tests {
     fn v15_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V16} PRAGMA user_version = 15;"))
+        conn.execute_batch(&format!("{UNDO_V16} {UNDO_V17} PRAGMA user_version = 15;"))
             .unwrap();
         conn
     }
 
-    /// [`v15_database`] must really sit one step below head, or the tests below it are a fresh
+    // ---- v17: the undo journal -------------------------------------------------------
+
+    /// A database at version 16: everything v16 left behind, and none of v17.
+    ///
+    /// [`v13_database`]'s trick four rungs up, and honest for [`UNDO_V17`]'s reason: one
+    /// `CREATE TABLE` and its index are the whole of what v17's DDL did, and one `DROP TABLE`
+    /// takes both back off. Nothing references `deck_undo`, so nothing has to come down first
+    /// — the trap [`v9_database`] documents on `legal_mask`, which this rung does not have.
+    ///
+    /// **It is the "one step below head" fixture now**, the title [`v15_database`] held.
+    fn v16_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V17} PRAGMA user_version = 16;"))
+            .unwrap();
+        conn
+    }
+
+    /// The undo journal is 1:1 with a history row, and dies with it.
+    ///
+    /// Both CASCADEs are asserted here rather than read off the DDL, because a foreign key
+    /// declared without `PRAGMA foreign_keys=ON` is a comment — and `seeded()`-style fixtures
+    /// elsewhere in this crate deliberately do not set it, while `db::open` always does.
+    /// `Connection::open_in_memory` plus [`migrate`] is the pairing that has it on.
+    #[test]
+    fn the_undo_journal_cascades_from_its_history_row_and_its_deck() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO decks (id, name, created_at, updated_at)
+                   VALUES (1, 'Burn', unixepoch(), unixepoch());
+               INSERT INTO deck_audit (id, deck_id, at, variant, kind, payload, delta)
+                   VALUES (7, 1, unixepoch(), 'live', 'add', '{}', 1);
+               INSERT INTO deck_undo (audit_id, deck_id, step)
+                   VALUES (7, 1, '{"undo":[],"redo":[]}');"#,
+        )
+        .unwrap();
+        let left = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(left(&conn), 1);
+
+        conn.execute("DELETE FROM deck_audit WHERE id = 7", [])
+            .unwrap();
+        assert_eq!(
+            left(&conn),
+            0,
+            "a deleted history row must take its step with it — a step whose change nobody \
+             can see is a step undo would apply into nothing"
+        );
+    }
+
+    /// The rewind is honest: a database claiming 16 must not be carrying v17's table.
+    ///
+    /// [`UNDO_V17`]'s DDL is `CREATE TABLE IF NOT EXISTS`, so a forgotten rewind costs
+    /// `migrate` nothing and this fixture its name — which is exactly why the absence is
+    /// asserted rather than assumed. Reaching [`SCHEMA_VERSION`] afterwards is the other half.
+    #[test]
+    fn the_v17_step_creates_the_undo_journal_over_a_v16_database() {
+        let conn = v16_database();
+        assert_eq!(
+            table_count(&conn, "deck_undo"),
+            0,
+            "a v16 database may not already carry v17's table"
+        );
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(table_count(&conn, "deck_undo"), 1);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// `sqlite_master` rows with this name — 0 or 1. A helper rather than an inline query
+    /// because two tests above ask the same question about the same table.
+    fn table_count(conn: &Connection, name: &str) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            rusqlite::params![name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// [`v16_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    ///
+    /// **The fixture named here has changed three times** — v14's, then v15's, then v16's — and
+    /// each move was this assertion going red, which is the whole reason it is written against
+    /// `SCHEMA_VERSION - 1` rather than a number.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v15_database();
+        let conn = v16_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
-        assert!(
-            !deck_columns(&conn).contains(&"default_category_id".to_owned()),
-            "the v16 column must not be there yet"
+        assert_eq!(
+            table_count(&conn, "deck_undo"),
+            0,
+            "the v17 table must not be there yet"
         );
 
-        // v15's own column is standing, because this fixture undoes one rung rather than two.
+        // v16's own column is standing, because this fixture undoes one rung rather than two.
         assert!(
-            category_columns(&conn).contains(&"origin".to_owned()),
-            "v15's column belongs to this version and must survive the rewind"
+            deck_columns(&conn).contains(&"default_category_id".to_owned()),
+            "v16's column belongs to this version and must survive the rewind"
         );
     }
 
@@ -5467,14 +5637,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_sixteen() {
+    fn the_schema_version_is_seventeen() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 16);
+        assert_eq!(SCHEMA_VERSION, 17);
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole
