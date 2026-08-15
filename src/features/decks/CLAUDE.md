@@ -428,7 +428,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   no exemption from the app's option-list rule; the two that are (an order that _is_ the
   information, an order the reader arranged) are in [`src/CLAUDE.md`](../../CLAUDE.md). The view
   is still session state — `useState` in the editor, never `rememberView`, which remembers the
-  variant, the grouping and the sort and not this.
+  variant, the grouping and the sort and not this. **Driven in the shipped window 2026-08-15**
+  (debug build, 1280×800): all three selects at `top: 182`, 36px tall, on one line, and each of
+  the four rows drew its own view with no horizontal overflow — the figures are in
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The deck stats are a band at the foot of the editor, and there is no control that hides
   them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
   the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
