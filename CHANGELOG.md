@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.9.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.8.0...v0.9.0) (2026-08-15)
+
+
+### Features
+
+* **decks:** add Clear stack and Remove card to the deckbuilder menus ([3ed6aaf](https://github.com/Msgaihede/mtg-grimoire/commit/3ed6aafd32c19518521db41802302342be33e737))
+* **decks:** add Clear stack and Remove card to the deckbuilder menus ([55c7c86](https://github.com/Msgaihede/mtg-grimoire/commit/55c7c868708b1c686fe73e975aab0dd60e72ef90))
+* **decks:** an unplaceable card is filed under "Uncategorized", not left put ([4f9c6fd](https://github.com/Msgaihede/mtg-grimoire/commit/4f9c6fddaeb23da6743f4b8d77ee80f6b3e06c44))
+* **decks:** an unplaceable card is filed under "Uncategorized", not left put ([5e9ce34](https://github.com/Msgaihede/mtg-grimoire/commit/5e9ce34ea2452564a79427e3bdc9ae68d101b2a9))
+* **decks:** deck_undo_state, deck_undo_apply and deck_redo_apply ([5800cde](https://github.com/Msgaihede/mtg-grimoire/commit/5800cdec784b8c0a06e88db6a0be8f971d8b9c95))
+* **decks:** double the quantity stepper on a deck card ([5ac1659](https://github.com/Msgaihede/mtg-grimoire/commit/5ac1659d26f61cd76861faa02cff38ba6ec3240a))
+* **decks:** double the quantity stepper on a deck card ([0073ada](https://github.com/Msgaihede/mtg-grimoire/commit/0073adaecedbfa8c47219231e87145fbb4c903b7))
+* **decks:** draw the deck editor's View switch as a select ([49d50fa](https://github.com/Msgaihede/mtg-grimoire/commit/49d50fa60b069c6bbfac1905f73f876c106b62d4))
+* **decks:** draw the deck editor's View switch as a select ([98ae271](https://github.com/Msgaihede/mtg-grimoire/commit/98ae2711ba49808884aef35f4d66d4d117d366a0))
+* **decks:** export a whole deck from the editor header ([a7dacb0](https://github.com/Msgaihede/mtg-grimoire/commit/a7dacb0e44185a1de491d92c494aa052483a2c49))
+* **decks:** file an imported line by the pile its file named ([eda1a8a](https://github.com/Msgaihede/mtg-grimoire/commit/eda1a8a880d9f94a6a7362e02dd624ac3777a61c))
+* **decks:** let an import switch off a pile it creates ([711328e](https://github.com/Msgaihede/mtg-grimoire/commit/711328e9a429d112a6787fe2476b9c2a0aee80ea))
+* **decks:** make the landed mark gold, glowing, and half as long ([9d18aef](https://github.com/Msgaihede/mtg-grimoire/commit/9d18aefda21147232d4f5f5079b27c452bed4d93))
+* **decks:** make the landed mark gold, glowing, and half as long ([f684001](https://github.com/Msgaihede/mtg-grimoire/commit/f684001d62c90f318368a9c3152e65fe3a280672))
+* **decks:** move the default add category into deck settings ([5480dbb](https://github.com/Msgaihede/mtg-grimoire/commit/5480dbb5a845b1954abfdbe17938ea1711777a79))
+* **decks:** move the default add category into deck settings ([40544fa](https://github.com/Msgaihede/mtg-grimoire/commit/40544fa3e8ea27d7c5354dff234647aa12005afd))
+* **decks:** offer six export formats and say what one leaves out ([8ea1d22](https://github.com/Msgaihede/mtg-grimoire/commit/8ea1d2292db371ef6992cfba3dc7a8c62baa9344))
+* **decks:** quick zones — four drop targets across the top of the deck ([8c66d8e](https://github.com/Msgaihede/mtg-grimoire/commit/8c66d8e442e200832da5b5ea554f0e99ffaf0306))
+* **decks:** quick zones — four drop targets across the top of the deck ([519b52c](https://github.com/Msgaihede/mtg-grimoire/commit/519b52cc8cfddd6711e515611dda768cadb7564e))
+* **decks:** read a decklist's own category headings ([cf413cd](https://github.com/Msgaihede/mtg-grimoire/commit/cf413cd204723f122d5f87ea133b2b7a15730249))
+* **decks:** read an empty set hint, an Archidekt tag and a category bracket ([8207385](https://github.com/Msgaihede/mtg-grimoire/commit/8207385c8789c295278ca5a78409389ea38e8e7b))
+* **decks:** record an undo step at every card write ([d9ca00b](https://github.com/Msgaihede/mtg-grimoire/commit/d9ca00b57b7d376bccb652f416e5ec0642922def))
+* **decks:** record an undo step at every category and tag write ([ce7351d](https://github.com/Msgaihede/mtg-grimoire/commit/ce7351df49143648699ec789ba22ebeebe204dbf))
+* **decks:** record an undo step at every deck-row, import and theory write ([87ad269](https://github.com/Msgaihede/mtg-grimoire/commit/87ad269d200b202fa7d58d4f672f6a49be90380e))
+* **decks:** schema v17 adds the deck_undo journal ([5fcfd56](https://github.com/Msgaihede/mtg-grimoire/commit/5fcfd5637f4e75ce1e02e775a07eefc9c8ae870f))
+* **decks:** the Auto quick zone re-files a card the deck already holds ([d59c9ca](https://github.com/Msgaihede/mtg-grimoire/commit/d59c9ca44abe9225a007ffc5db54800a41df2ce4))
+* **decks:** the Auto quick zone re-files a card the deck already holds ([8c58ca6](https://github.com/Msgaihede/mtg-grimoire/commit/8c58ca683346c5a70b20a597c9704ea0d9e12348))
+* **decks:** the undo hook, its session redo queue and its sentences ([83a6928](https://github.com/Msgaihede/mtg-grimoire/commit/83a69288b192cc1833e6d82e1b96056fbcba95bb))
+* **decks:** the undo step and its four restore primitives ([c88588e](https://github.com/Msgaihede/mtg-grimoire/commit/c88588e3aa5ac80a1141f0c299335a62300f4de9))
+* **decks:** undo and redo in the editor, on Ctrl+Z and Ctrl+Y ([9fdf0a7](https://github.com/Msgaihede/mtg-grimoire/commit/9fdf0a784ab5f0b4d574433307122a93ecaff4a4))
+* **decks:** write Arena, Archidekt and a sectioned Moxfield export ([8fe595a](https://github.com/Msgaihede/mtg-grimoire/commit/8fe595a3156678ace1f981ebc7cbba4b059df994))
+* **search:** say "12 printings" on a collapsed tile, in the wall's own chip ([f2f8dff](https://github.com/Msgaihede/mtg-grimoire/commit/f2f8dff9dabf73025efc383a51b35e3a54cdbfca))
+* **search:** say "12 printings" on a collapsed tile, in the wall's own chip ([50dfafd](https://github.com/Msgaihede/mtg-grimoire/commit/50dfafd76d174758a2e259b43a467f6aaa2a2c83))
+
+
+### Bug Fixes
+
+* **decks:** align a wrapped stack to the pile above it, not to a virtual row ([1f9c8f3](https://github.com/Msgaihede/mtg-grimoire/commit/1f9c8f34c4fb91a26aafe23523083cb79d72db19))
+* **decks:** align a wrapped stack to the pile above it, not to a virtual row ([6864178](https://github.com/Msgaihede/mtg-grimoire/commit/68641789d2b7c0cc47d8fa5aae13cd7ce590f390))
+* **decks:** carry ImportItem.inactive into the undo journal test ([b1b9528](https://github.com/Msgaihede/mtg-grimoire/commit/b1b9528a586f64ca9cc99b161bc0136752a16d6a))
+* **decks:** carry main move_card name arm into the undo step ([6b4fb90](https://github.com/Msgaihede/mtg-grimoire/commit/6b4fb903d73cf307a704995ac682771281a71e02))
+* **decks:** price a deck card in the finish its printing is sold in ([89ae5a8](https://github.com/Msgaihede/mtg-grimoire/commit/89ae5a8c708bbf431dba87cb0daeefb0198e89fe))
+* **decks:** price a deck card in the finish its printing is sold in ([3050d8a](https://github.com/Msgaihede/mtg-grimoire/commit/3050d8aee3a5264d05ef5448c7f903a71dcc57a8))
+* **decks:** stop the editor's sr-only labels opening a window scrollbar ([d5fed47](https://github.com/Msgaihede/mtg-grimoire/commit/d5fed47a24257d8e29e4ab689a0d109935f455f5))
+* **decks:** stop the editor's sr-only labels opening a window scrollbar ([892b255](https://github.com/Msgaihede/mtg-grimoire/commit/892b255b52a633fb767051f907dc9379a41011ec))
+
 ## [0.8.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.7.0...v0.8.0) (2026-08-15)
 
 
