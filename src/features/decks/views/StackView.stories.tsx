@@ -558,6 +558,6 @@ export const ByManaValue: Story = {
   },
 };
 
-/** Grouped by type, which is the same vocabulary the add path files an uncategorised card by
+/** Grouped by type, which is the same vocabulary the add path files an uncategorized card by
  *  — one list, so a sort and a grouping cannot disagree about what a type is. */
 export const ByType: Story = { args: { groups: deckGroups("type", "type") } };

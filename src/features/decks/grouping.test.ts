@@ -867,7 +867,7 @@ describe("buildGroups by a derived key", () => {
       "alphabetical",
     );
 
-    expect(names(groups)).toEqual(["Creature", "Artifact", "Instant", "Land", "Uncategorised"]);
+    expect(names(groups)).toEqual(["Creature", "Artifact", "Instant", "Land", "Uncategorized"]);
   });
 
   it("buckets mana value 0 through 7 exactly, 8 and up together, and unknown last", () => {

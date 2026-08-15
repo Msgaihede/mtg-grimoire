@@ -237,9 +237,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   free, `audit_id` stops a step outliving the change it describes.
   - **The audit log could not have been replayed backwards, which is why this exists.** Five kinds
     are lossy in exactly the direction undo needs: `swap` records `fromSet`/`toSet` and **not the
-    from-printing id** (`card_id` is the printing the deck plays *now*); a `category` delete
+    from-printing id** (`card_id` is the printing the deck plays _now_); a `category` delete
     records `cards: 7`, a count of what the CASCADE took; a `reorder` records `{"action":
-    "reorder"}` and no order either side; a clear and an import `replace` record counts; and the
+"reorder"}` and no order either side; a clear and an import `replace` record counts; and the
     theory toggle records `{field:"theory",from:false,to:true}` while having **moved the whole
     live list**. Two softer ones: every payload names categories and tags by **name**, and
     `folder` records the destination with no `from`.
@@ -304,7 +304,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   leaving live empty, and it does so only on the off → on _transition_. So a deck **born** with
   theory on has made that transition at birth, no later patch will ever move anything for it, and
   the reader's route is `deck_theory_copy_from_live`, which is unchanged. The two routes differ in
-  what they *do* and agree exactly on what a new deck ends up with. **(4)** a deck's birth stays
+  what they _do_ and agree exactly on what a new deck ends up with. **(4)** a deck's birth stays
   **one** audit row, `{field:"name", from:null, to:name}`, however many fields it was born with:
   `deck_update` records one row per changed field because each of those is an event, and being
   born is one event. `folderId` is fenced by the real foreign key rather than by Rust — which is
@@ -357,7 +357,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   spells the same number `deck::AUTO_CATEGORY`. The alternative — nullable, with
   `REFERENCES deck_categories(id) ON DELETE SET NULL` — is what SQLite would even allow in an
   `ADD COLUMN` (a `REFERENCES` clause needs a NULL default), and it fails on `DeckPatch`'s
-  convention: `coalesce(?n, column)` reads a bound NULL as *leave it*, so "back to Auto" would have
+  convention: `coalesce(?n, column)` reads a bound NULL as _leave it_, so "back to Auto" would have
   needed a command of its own, which is the price `decks.folder_id` pays through `set_folder`.
   **What the sentinel costs is the clean-up that key would have done, and it is two sites**:
   `deck_meta::delete_category` puts a deck filing by the deleted pile back to `0` **before** the
@@ -365,15 +365,15 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   with no pile behind it, and `deck_cards.category_id`'s real foreign key then refuses the reader's
   next quick add on a deck whose settings still read the deleted name — and `deck::duplicate_deck`
   **remaps** it through the `category_map` it already builds for the cards, because the copy's piles
-  are new rows; carried across verbatim it would point the duplicate at a pile of the *original*,
+  are new rows; carried across verbatim it would point the duplicate at a pile of the _original_,
   which breaks nothing and quietly files every add into a deck the reader is not looking at. That
   is why the copy's `INSERT … SELECT` does not name the column at all: it is written after the map
   exists. `schema.rs`'s `the_default_category_is_a_sentinel_rather_than_a_foreign_key` asserts the
   key's **absence**, so a later step that rebuilds `decks` and adds one fails there and takes the
   paragraph with it rather than leaving two stories.
-  **Rust owns one fence and no more**: a non-zero id must name a category *of this deck*
+  **Rust owns one fence and no more**: a non-zero id must name a category _of this deck_
   (`category_of_deck`, the same two sentences every card write answers), because nothing in the DDL
-  says so. What Auto *does* — Removal, Ramp, Draw, off a card's Oracle tags — is `autoCategoryFor`'s
+  says so. What Auto _does_ — Removal, Ramp, Draw, off a card's Oracle tags — is `autoCategoryFor`'s
   and stays in TypeScript.
 - **The audit word is `"defaultCategory"` and its payload carries the pile's _name_.** The second
   multi-word field name `record_deck_edit` writes, so the `"xGroup"` paragraph above applies to it
@@ -412,7 +412,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   - **It answers the category the copies are now in**, which was `()` before. The name arm's
     caller has no other way to learn what was found or made, and the caret follows a moved card
     to its new pile — so that id is load-bearing rather than a convenience.
-  - **`from == to` is checked *after* the resolution, and returns without committing.** The name
+  - **`from == to` is checked _after_ the resolution, and returns without committing.** The name
     arm cannot know the target's id until it has resolved it, and a card the rule files where it
     already is has to be answered rather than moved. Dropping the transaction rolls back the
     `touch_deck` above it, because bumping `updated_at` to leave the list exactly as it was is
@@ -603,7 +603,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   the first two runs dropped: `deck_import_resolve` over the 105-line reference list **120.4 ms**
   (116.9–141.3, 9 warm of 11), and `deck_import_commit` over its 105 items **7.9 ms** (7.1–8.0, 5
   warm of 7, `replace` into a deck already holding them; outcome `added 117, removed 117,
-  categoriesCreated 0`). **That resolve figure does not contradict `resolve_lines`' 11.5 ms
+categoriesCreated 0`). **That resolve figure does not contradict `resolve_lines`' 11.5 ms
   above** — that one is a **release** build, Rust-only, over a file; this one is **debug** and
   carries the answer back across the IPC boundary, which is **152.9 KB for 105 rows** (1.49 KB
   each, because every `ImportMatch` ships oracle text and the whole `legalities` object). Quote
@@ -622,8 +622,8 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `Imported 11 cards into 4 categories`, against a bare `Imported 7 cards into 3 categories`.
 - **Commander eligibility is right against the live corpus, including the 2026 Spacecraft rule.**
   The reference list offered **56** candidates: its **55** legendary creatures **and `The
-  Seriema`**, a `Legendary Artifact — Spacecraft` with a 5/5 P/T box (CR 903.3). `Delighted
-  Halfling`, the one non-legendary creature among its 56 creatures, was correctly not offered.
+Seriema`**, a `Legendary Artifact — Spacecraft` with a 5/5 P/T box (CR 903.3). `Delighted
+Halfling`, the one non-legendary creature among its 56 creatures, was correctly not offered.
   This is the first time the `power`/`toughness` columns schema v5 added have been shown doing the
   job they were added for, on real data rather than on a fixture.
 - **A hint narrows which _printing of the named card_ to take. It never overrides which card** —
@@ -683,7 +683,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   already exists. That arrangement is the whole point: the rule stays one TypeScript function
   (CLAUDE.md's boundary — Rust supplies facts, TS draws conclusions) and **no add pays a round
   trip to discover what it is adding**. `null` (an orphan, or a layout with no bucket word) is
-  `Uncategorised`; **absent** — a caller with nothing to say — is `DEFAULT_CATEGORY_NAME`, a
+  `Uncategorized`; **absent** — a caller with nothing to say — is `DEFAULT_CATEGORY_NAME`, a
   fence no surface reaches today.
 - **The "Add to" select's default is `AUTO_CATEGORY`, which is `0`, and that zero fixed a real
   bug.** `DeckEditor` already held `0` as a sentinel meaning "nothing picked yet" that its clamp
@@ -756,20 +756,20 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
     again. `groupBy` itself came back at its default in that pass, which was the state of the
     tree it was measured on — **v12's `last_group_by` landed the same day** and a reopened deck
     now returns to the grouping it was left in, so the pair comes back together. The reason the
-    chip is a *deck* answer is unchanged and is now the reason both are: each says how _this_
+    chip is a _deck_ answer is unchanged and is now the reason both are: each says how _this_
     list is read.
   - **The audit sentence is right end to end**, which is the check that could only fail
-    silently: the history drew *"Split the X spells into their own group"* and *"Folded the X
-    spells back into their mana values"*. A `"xGroup"` that disagreed with `deck.rs` would have
+    silently: the history drew _"Split the X spells into their own group"_ and _"Folded the X
+    spells back into their mana values"_. A `"xGroup"` that disagreed with `deck.rs` would have
     rendered `auditText`'s default arm — a plain "Changed the deck" — and gone unnoticed.
-  - **The curve is the arithmetic, not an estimate.** Ten `<li>`s, the tenth reading *"1 card
-    with X in their cost"*, the list **216px** wide at **18px** cells, and `scrollWidth ===
-    clientWidth` — so the tenth bar fitted the 250px content box with no overflow, as derived.
+  - **The curve is the arithmetic, not an estimate.** Ten `<li>`s, the tenth reading _"1 card
+    with X in their cost"_, the list **216px** wide at **18px** cells, and `scrollWidth ===
+clientWidth` — so the tenth bar fitted the 250px content box with no overflow, as derived.
     **Those two numbers are history rather than the current build**: the pass was driven against
     the 280px stats aside, and `main` moved the stats to a full-width band below the deck hours
     later. The cells are 20px again — see the bullet on the curve's width below. What the pass
     actually proved outlives the geometry: the derivation and the paint agreed to the pixel, and
-    `scrollWidth === clientWidth` is the assertion that says a bar *fits* rather than merely
+    `scrollWidth === clientWidth` is the assertion that says a bar _fits_ rather than merely
     computes.
   - **`Avg. mana value 2.67` with the switch on and off.** The one number the split does not
     reach, confirmed against a live deck rather than a fixture.
@@ -901,7 +901,7 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   with no column to point at — the sidebar's Decks entry, which files by `autoCategoryFor`. It is
   **normalised rather than validated**: `readDragData` refuses a bad `cardId` or `name` (they
   decide _what_ is dropped) and turns anything unusable here into `null`, because the pile is all
-  this decides and `Uncategorised` is already the answer for not knowing. The pane's rows carry
+  this decides and `Uncategorized` is already the answer for not knowing. The pane's rows carry
   the **card's** type line, not the printing's — a `Printing` has none, and which pile a card
   belongs in is a fact about the card. A category column treats `"card"` exactly as the panel's
   `"search-card"`: add one copy. The remove tray narrows to `"deck-card"`, so a card from another wall never draws

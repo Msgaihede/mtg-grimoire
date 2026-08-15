@@ -11,13 +11,13 @@ import {
 } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { autoCategoryFor, UNCATEGORISED } from "./autoCategory";
+import { autoCategoryFor } from "./autoCategory";
 
 /**
  * What a re-file did — the quick zones' `Auto` for a card already in the deck.
  *
  * `moved: false` is an **answer**, not a failure: the rule either could not place the card
- * ({@link UNCATEGORISED}) or named the pile it is already in. `category` is the word the rule
+ * (`UNCATEGORIZED`) or named the pile it is already in. `category` is the word the rule
  * produced in every case, so a caller can say which it was; `categoryId` is `null` unless
  * something actually moved, because it exists to be handed the caret.
  */
@@ -61,7 +61,7 @@ export const DEFAULT_VARIANT: DeckVariant = "live";
  * category (see {@link useDeck}'s `addCard`), and every surface in the app hands this hook a
  * type line to file by — so this word is what is left for a caller that has neither a category
  * nor a type line, which is a shape the app does not currently produce. It is kept because the
- * alternative is filing such a card under `Uncategorised`, and "the caller told us nothing" and
+ * alternative is filing such a card under `UNCATEGORIZED`, and "the caller told us nothing" and
  * "the card's type line is unrecognised" are different states that should not land in one pile.
  *
  * Exported for two readers: `useDeckMeta` has to know which piles are *nobody's choice* before
@@ -287,7 +287,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * its type-line pile, which is where every card landed before the taxonomy existed.
    *
    * So: the card id and the type line come in, the name goes out, and `null` — an orphan, or a
-   * layout with no bucket word — answers `Uncategorised` whatever the tags said.
+   * layout with no bucket word — answers `UNCATEGORIZED` whatever the tags said.
    *
    * With neither, {@link DEFAULT_CATEGORY_NAME}. No surface in the app sends neither today.
    *
@@ -440,12 +440,14 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * a column nobody asked for standing for ever; the create and the move are one transaction, so
    * a refused move cannot strand an empty pile; and it is one round trip rather than three.
    *
-   * **Two outcomes write nothing, and both are answers rather than failures.** A card the rule
-   * cannot place ({@link UNCATEGORISED} — an orphan, or a layout with no bucket word) stays where
-   * it is, because moving it from a pile somebody chose into the bin is a downgrade dressed as
-   * tidying; and a card already in the pile the rule names is already filed. Neither reaches IPC
-   * at all — the comparison is against the row's own `categoryName`, which the caller is holding
-   * — so the common "press it again" costs a tag read and nothing else.
+   * **One outcome writes nothing, and it is an answer rather than a failure**: a card already in
+   * the pile the rule names is already filed. It does not reach IPC at all — the comparison is
+   * against the row's own `categoryName`, which the caller is holding — so the common "press it
+   * again" costs a tag read and nothing else.
+   *
+   * **There were two until 2026-08-16.** A card the rule could not place (`UNCATEGORIZED` —
+   * an orphan, or a layout with no bucket word) used to stay put as well; it is filed into that
+   * pile now, like any other answer. See the site.
    *
    * `categoryId` is `null` on both of those, and it is what the caller hands the caret to: there
    * is nowhere to send it when nothing moved.
@@ -460,8 +462,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       cardId: string;
       /** The pile the card is in now — the slot the move leaves. */
       from: number;
-      /** The row's own type line. `null` is a real value and files under
-       *  {@link UNCATEGORISED}, which this then declines to move it to. */
+      /** The row's own type line. `null` is a real value and files the card under
+       *  `UNCATEGORIZED`, which is a destination like any other. */
       typeLine: string | null;
       /** What the card's current pile is called, so "already filed" is answered without a round
        *  trip. The row carries it denormalized for exactly this kind of reason. */
@@ -470,7 +472,14 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       // The one read, and it cannot fail the re-file: `oracleTagsFor` catches and answers `[]`,
       // which is `autoCategoryFor`'s supported floor and files by type line instead.
       const target = autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
-      if (target === UNCATEGORISED) return { moved: false, category: target, categoryId: null };
+      // **No arm for `UNCATEGORIZED`**, and its absence is the 2026-08-16 change. It used
+      // to return here unmoved, on the argument that moving a card out of a pile somebody chose
+      // into the bin is a downgrade dressed as tidying. That reasoning was about the *bulk*
+      // press, where it still holds and still runs (`useDeckMeta.autoCategorise`); here the
+      // reader has picked up one card and pointed at `Auto`, and answering "no" to a question
+      // they asked deliberately is the worse half of the trade. `Uncategorized` is a pile like
+      // any other — `origin: 'auto'`, gone with its last card — so the card lands somewhere it
+      // can be seen and dragged out of, rather than staying put with a sentence.
       if (target === categoryName) return { moved: false, category: target, categoryId: null };
       const categoryId = await ipc.deckMoveCard(opened(id), cardId, from, null, target, variant);
       return { moved: true, category: target, categoryId };

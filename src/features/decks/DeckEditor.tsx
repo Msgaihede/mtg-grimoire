@@ -39,7 +39,7 @@ import {
   LANDED_MS,
   type DeckCardActions,
 } from "./cardControl";
-import { AUTO_CATEGORY, UNCATEGORISED } from "./autoCategory";
+import { AUTO_CATEGORY } from "./autoCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
@@ -1084,9 +1084,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       (c) => c.cardId === refileSlot.cardId && c.categoryId === refileSlot.from,
     );
     const named = card ? `“${card.name}”` : "That card";
-    return refileAnswer.category === UNCATEGORISED
-      ? `${named} has no pile of its own to go in — it stays where it is.`
-      : `${named} is already filed under ${refileAnswer.category}.`;
+    // **One sentence, where there were two.** The other said a card had no pile of its own to go
+    // in and had stayed put; since 2026-08-16 it goes to `Uncategorized` instead, so the only
+    // press that changes nothing is one aimed at the pile the card is already in.
+    return `${named} is already filed under ${refileAnswer.category}.`;
   }, [refileAnswer, refileSlot, deck.cards]);
 
   /**

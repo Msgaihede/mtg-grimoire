@@ -39,7 +39,7 @@ import { buildImportPlan, tallyOf, toImportItems, type ImportPlan } from "./impo
  * Two consequences worth naming rather than discovering:
  *
  * * **Every card's `typeLine` is `null`**, so any line that named no pile of its own falls to
- *   `autoCategoryFor`'s last rung and lands in `Uncategorised`. That is honest — this file knows
+ *   `autoCategoryFor`'s last rung and lands in `Uncategorized`. That is honest — this file knows
  *   what a decklist *says*, not what a card *is* — and it is why every pile assertion below is
  *   made against `ARCHIDEKT_SECTIONED`, whose 105 lines each name their own pile. The other two
  *   fixtures are asserted on counts, which the type line cannot reach.

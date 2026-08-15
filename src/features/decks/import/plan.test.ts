@@ -6,7 +6,7 @@ import type {
   ImportResolveRow,
   PrintingTags,
 } from "@/lib/ipc";
-import { PREDEFINED_CATEGORY_NAMES } from "../autoCategory";
+import { PREDEFINED_CATEGORY_NAMES, UNCATEGORIZED } from "../autoCategory";
 import { spec } from "../validation/fixtures";
 // `match` is the stubbed resolver, and it lives beside the corpus because `decklists.test.ts`
 // needs the same one — see its doc for what it claims and what it refuses to claim.
@@ -124,10 +124,10 @@ describe("buildImportPlan", () => {
    * genuinely has none — never the "the caller said nothing" case `DEFAULT_CATEGORY_NAME`
    * answers for a single add.
    */
-  it("files a card with no type line as Uncategorised", () => {
+  it("files a card with no type line as Uncategorized", () => {
     const plan = planFor("1 Undercity", { Undercity: match({ name: "Undercity" }) });
 
-    expect(plan.cards[0].categoryName).toBe("Uncategorised");
+    expect(plan.cards[0].categoryName).toBe("Uncategorized");
   });
 
   it("lets a file section name the category", () => {
@@ -248,7 +248,7 @@ Maybeboard
       "Artifact",
       "Instant",
       "Land",
-      "Uncategorised",
+      "Uncategorized",
     ]);
   });
 
@@ -627,7 +627,13 @@ describe("filing an imported line by the pile its file named", () => {
     expect(items.filter((i) => i.categoryName === "Commander")).toHaveLength(1);
     // Every other line named a pile of the file's own, so nothing fell through to the type-line
     // fallback these stubbed printings would otherwise all land in.
-    expect(items.filter((i) => i.categoryName === "Uncategorised")).toHaveLength(0);
+    //
+    // **The constant, never the word.** This read `"Uncategorised"` until 2026-08-16, when the
+    // fallback pile was respelled `Uncategorized` on another branch — after which the filter
+    // matched nothing whatever the planner did, and the assertion passed by being vacuous. A
+    // rename is exactly the event that hollows out a string-literal assertion with nothing
+    // going red.
+    expect(items.filter((i) => i.categoryName === UNCATEGORIZED)).toHaveLength(0);
   });
 });
 
