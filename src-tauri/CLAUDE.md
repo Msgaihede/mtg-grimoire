@@ -66,7 +66,7 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v15** — see
+  never reuse one. Schema is at **v16** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
 - **`deck_categories.origin` says who made the pile** (schema v15) — `'auto'` the app, filing a
   card it had to invent a column for; `'user'` the reader pressing "New category", and the four
@@ -201,6 +201,20 @@ Full detail, with the measurements and the traps behind each rule, is in
   for `live` only and cards that just left it must release them.
   `deck_theory_copy_from_live` still means "copy what is sleeved up into the plan" and is no
   longer what the switch does.
+- **`decks.default_category_id` says where an add that names no pile lands, and `0` is `Auto`**
+  (schema v16, `deck::AUTO_CATEGORY`). **A sentinel in a `NOT NULL` column rather than a nullable
+  foreign key, and the reason is [`DeckPatch`]'s convention**: `coalesce(?n, column)` reads a
+  bound NULL as "leave it", so a nullable column could not express "back to Auto" without a
+  command of its own — `decks.folder_id`'s exact problem, and `deck::set_folder` is the price it
+  pays. `deck_categories.id` is an `INTEGER PRIMARY KEY`, so no pile can ever be `0`, and the
+  frontend spells the same number `AUTO_CATEGORY`. **What it costs is the two clean-ups no
+  `ON DELETE SET NULL` is doing, and they are the sites to remember**: `deck_meta::delete_category`
+  puts a deck filing by the deleted pile back to `0` in the transaction that deletes it, and
+  `deck::duplicate_deck` **remaps** the id onto the copy's own categories (a verbatim copy would
+  point the duplicate at a pile of the original). Rust owns one fence — a non-zero id must name a
+  category **of this deck**, `category_of_deck`, because nothing in the DDL says so — and knows
+  nothing about what Auto *does*: `autoCategoryFor` reads Oracle tags and is a conclusion.
+  The history row names the **pile**, resolved at write time, `null` for Auto.
 - **The editor's last view lives on the deck, and reading a deck is not editing it.** v12's
   `decks.last_variant`/`last_group_by`/`last_sort_by`, written by `deck_set_view_state(deckId,
 viewState)` — absent field means "leave it". It moves **no `updated_at`**, records **no

@@ -163,6 +163,7 @@ const BURN: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 const BOLT: CardSummary = {

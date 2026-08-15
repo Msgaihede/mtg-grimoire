@@ -2,7 +2,8 @@ import { useState } from "react";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { DeckFolder } from "@/lib/ipc";
+import type { DeckCategory, DeckFolder } from "@/lib/ipc";
+import { AUTO_CATEGORY } from "./autoCategory";
 import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 import {
   DeckSettingsForm,
@@ -37,7 +38,31 @@ const VALUE: DeckSettingsValue = {
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
   folderId: null,
+  defaultCategoryId: AUTO_CATEGORY,
 };
+
+/**
+ * The deck's piles, **in `sortOrder` and not alphabetically** — the order the reader dragged
+ * them into, which is what this select has to offer.
+ *
+ * `Maybeboard` is seeded `isActive: false` in the app and is written that way here on purpose:
+ * an inactive pile is offered like any other, because `isActive` decides what a pile *counts*
+ * toward and never whether cards may be filed into it.
+ */
+const CATEGORIES: DeckCategory[] = [
+  { id: 11, name: "Main deck", isActive: true },
+  { id: 12, name: "Sideboard", isActive: true },
+  { id: 13, name: "Maybeboard", isActive: false },
+].map((c, i) => ({
+  deckId: 4,
+  kind: "main" as const,
+  origin: "user" as const,
+  sortOrder: i,
+  cardCount: 0,
+  totalPrice: null,
+  cardCountAllVariants: 0,
+  ...c,
+}));
 
 /** Already alphabetical, because the host sorts: `pickerFormats` is where that rule is applied. */
 const FORMATS = [
@@ -95,6 +120,10 @@ function Harness({
       onSubmit={rest.onSubmit}
       formats={rest.formats ?? FORMATS}
       folders={rest.folders ?? { paths: PATHS, unread: null, loading: false, pending: false }}
+      // `"categories" in rest` rather than `??`, because **absent is a state with its own
+      // meaning here** — the create host, which has no deck yet and therefore draws no
+      // "Add cards to" row at all. A default would make that case untestable.
+      categories={"categories" in rest ? rest.categories : CATEGORIES}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -384,6 +413,79 @@ describe("DeckSettingsForm", () => {
     form({ value: { ...VALUE, folderId: 99 } });
 
     expect(screen.getByText("In a folder this list does not carry")).toBeInTheDocument();
+  });
+
+  /**
+   * The deck editor's old "Add to" select, asked here — `Auto` pinned above the deck's own piles
+   * in the deck's own order, and **every pile, switched off ones included**.
+   *
+   * The order is the assertion worth having: `sortOptions` is the app-wide rule and this list is
+   * one of the exemptions it names, because the reader arranged it themselves. Alphabetising it
+   * would put `Main deck` under `Maybeboard` here and nowhere else in the app.
+   */
+  it("offers Auto and then every pile of the deck, in the deck's order", () => {
+    form();
+
+    const select = screen.getByLabelText("Add cards to");
+    expect(select).toHaveValue(String(AUTO_CATEGORY));
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Auto (by what it does)", "Main deck", "Sideboard", "Maybeboard (off)"]);
+  });
+
+  /** A select, so it settles in one act: `onChange` and never `onCommit`, like the format, the
+   *  theory switch and the folder. **`0` is a value**, which is what the round trip back to Auto
+   *  is here to pin — a host reading it as an absence would report success and write nothing. */
+  it("fires only onChange for the default category, by id, Auto included", async () => {
+    const { onChange, onCommit } = form();
+
+    const select = screen.getByLabelText("Add cards to");
+    await userEvent.selectOptions(select, "12");
+    expect(onChange).toHaveBeenLastCalledWith({ defaultCategoryId: 12 });
+
+    await userEvent.selectOptions(select, String(AUTO_CATEGORY));
+    expect(onChange).toHaveBeenLastCalledWith({ defaultCategoryId: AUTO_CATEGORY });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /** The caption is what the row is for: a select reading `Sideboard` says where, and the line
+   *  under it says what that means — including the one fact most likely to surprise, which is a
+   *  pile that has since been switched off. */
+  it("says in words where an add will land, and flags a pile that is switched off", () => {
+    const auto = form();
+    expect(
+      screen.getByText("Removal, Ramp, Draw — decided per card from what it does."),
+    ).toBeInTheDocument();
+    auto.unmount();
+
+    const picked = form({ value: { ...VALUE, defaultCategoryId: 12 } });
+    expect(screen.getByText("Every add lands in Sideboard.")).toBeInTheDocument();
+    picked.unmount();
+
+    form({ value: { ...VALUE, defaultCategoryId: 13 } });
+    expect(
+      screen.getByText(
+        "Every add lands in Maybeboard, which is switched off and counts toward nothing.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The create host, which renders this same form before `deck_create` has seeded a single
+   * category — so there is no pile to offer and no id to write, and the row is not drawn at all.
+   *
+   * That is the one field of `DeckSettingsValue` the two hosts do not both ask about, and it is
+   * asserted rather than assumed because the failure is an empty select offering only `Auto`
+   * over a deck that does not exist: a question that reads answerable and is not.
+   */
+  it("draws no default-category row for a host with no deck yet", () => {
+    form({ categories: undefined });
+
+    expect(screen.queryByLabelText("Add cards to")).toBeNull();
+    // And the rest of the form is untouched by its absence.
+    expect(screen.getByLabelText("Folder")).toBeInTheDocument();
   });
 });
 

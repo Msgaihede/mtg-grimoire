@@ -1,7 +1,8 @@
 import type { JSX } from "react";
-import type { DeckFolder } from "@/lib/ipc";
+import type { DeckCategory, DeckFolder } from "@/lib/ipc";
 import { compareLabels } from "@/lib/options";
 import { cn } from "@/lib/utils";
+import { AUTO_CATEGORY, AUTO_CATEGORY_LABEL } from "./autoCategory";
 import { FOCUS } from "./cardControl";
 import { DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 import { CAPTION, FIELD } from "./formFields";
@@ -17,6 +18,15 @@ export interface DeckSettingsValue {
   notes: string;
   theoryEnabled: boolean;
   folderId: number | null;
+  /**
+   * Which pile an add that names none lands in — `AUTO_CATEGORY` (`0`) for "by what the card
+   * does", which is what a deck is born on.
+   *
+   * On the value even though only one host draws a control for it, because a value shape that
+   * changed with the host would be two shapes; the create dialog holds `AUTO_CATEGORY` here and
+   * sends nothing, which is exactly what a deck with no categories yet can honestly answer.
+   */
+  defaultCategoryId: number;
 }
 
 export interface DeckSettingsFormProps {
@@ -79,6 +89,24 @@ export interface DeckSettingsFormProps {
     loading: boolean;
     pending: boolean;
   };
+  /**
+   * Every pile this deck has, **in the order the deck draws them** — `sortOrder`, the reader's
+   * own arrangement, and one of the exemptions `src/lib/options.ts` names: sorting them here
+   * would make this select disagree with the columns on the desk.
+   *
+   * **Active and inactive alike, and that is deliberate rather than an omission.** `isActive`
+   * means "counts toward nothing" — not size, not copy limits, not legality, not the allocator —
+   * and it has never meant "cannot be filed into"; a switched-off Maybeboard is exactly the pile
+   * a reader building a shortlist wants every add to land in. Nothing here draws the switch,
+   * because this select answers *where*, and the Categories dialog is where a pile is switched.
+   *
+   * **Absent is a host with no deck yet**, and then no "Add cards to" row is drawn at all:
+   * `CreateDeckDialog` renders this form before `deck_create` has seeded the four zones, so it
+   * has no pile to offer and no id to write. That is the one field of {@link DeckSettingsValue}
+   * the two hosts do not both ask about, and the asymmetry is the honest one — the question is
+   * not answerable yet, rather than answerable and skipped.
+   */
+  categories?: readonly DeckCategory[];
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -132,6 +160,7 @@ export function DeckSettingsForm({
   onSubmit,
   formats,
   folders,
+  categories,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -154,6 +183,14 @@ export function DeckSettingsForm({
         />
 
         <div className="space-y-2.5 border-t border-border pt-3.5">
+          {categories !== undefined && (
+            <DefaultCategoryRow
+              categoryId={value.defaultCategoryId}
+              categories={categories}
+              onPick={(defaultCategoryId) => onChange({ defaultCategoryId })}
+              id={idPrefix}
+            />
+          )}
           <TheorySwitch
             on={value.theoryEnabled}
             onChange={(theoryEnabled) => onChange({ theoryEnabled })}
@@ -299,6 +336,86 @@ function Fields({
         />
       </div>
     </>
+  );
+}
+
+/**
+ * Where a card goes when the reader adds one without saying — the editor's old "Add to" select,
+ * asked here.
+ *
+ * **It sat in the deck builder's own chrome until 2026-08-15**, on the docked search panel's
+ * header row, and it was `useState` in `DeckEditor`: a reader who pointed it at their Sideboard
+ * lost that the moment they closed the deck, and the *other* surface it governed — the toolbar's
+ * quick-add field — drew no control at all, so the only way to find out where a quick add would
+ * land was to read the field's label. It is `decks.default_category_id` now, one question asked
+ * beside the format and the folder and remembered with them.
+ *
+ * **`Auto` is pinned first and is not a category** — {@link AUTO_CATEGORY}, `0`, which no pile's
+ * id can collide with. Everything under it is the deck's own piles in the deck's own order, and
+ * an inactive one is in that list like any other: `isActive` decides what a pile *counts*
+ * toward, never whether cards may be put in it.
+ *
+ * A `<select>` speaks strings and a category is addressed by number, so the id makes the round
+ * trip through `String`/`Number` here rather than anywhere the write can see it: every value in
+ * this list was written out of a `DeckCategory.id` or out of the constant, so the parse cannot
+ * meet anything else.
+ */
+function DefaultCategoryRow({
+  categoryId,
+  categories,
+  onPick,
+  id,
+}: {
+  categoryId: number;
+  categories: readonly DeckCategory[];
+  onPick: (categoryId: number) => void;
+  id: string;
+}) {
+  const picked = categories.find((c) => c.id === categoryId);
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <label htmlFor={`${id}-default-category`} className="block text-sm">
+          Add cards to
+        </label>
+        {/* What the answer *means*, in the reader's terms — the same job the folder row's
+            second line does. Under `Auto` it names the rule rather than a pile, because there
+            is no one pile: it is decided per card. A picked pile that is switched off says so,
+            because that is the fact most likely to surprise somebody who set this weeks ago and
+            has since switched the pile off in the Categories dialog — the cards still land
+            there, and they still count toward nothing. */}
+        <p className="mt-0.5 truncate text-[0.6875rem] text-dim">
+          {picked === undefined
+            ? "Removal, Ramp, Draw — decided per card from what it does."
+            : picked.isActive
+              ? `Every add lands in ${picked.name}.`
+              : `Every add lands in ${picked.name}, which is switched off and counts toward nothing.`}
+        </p>
+      </div>
+      <select
+        id={`${id}-default-category`}
+        value={String(categoryId)}
+        onChange={(e) => onPick(Number(e.target.value))}
+        className={cn(
+          "h-8 w-44 shrink-0 rounded-md border border-border bg-surface px-2 text-xs",
+          FOCUS,
+        )}
+      >
+        {/* Pinned above the piles, and the one row here that is not one. **Deliberately not
+            alphabetical** below it, and one of the exceptions `src/lib/options.ts` names: the
+            categories arrive in `sort_order, id` — the order the reader dragged them into in the
+            Categories dialog, and the order every deck view draws its columns in. Sorting them
+            here would make this select disagree with the deck it is about. */}
+        <option value={String(AUTO_CATEGORY)}>{AUTO_CATEGORY_LABEL}</option>
+        {categories.map((category) => (
+          <option key={category.id} value={String(category.id)}>
+            {category.name}
+            {category.isActive ? "" : " (off)"}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 

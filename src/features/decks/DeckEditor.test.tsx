@@ -157,6 +157,11 @@ const DECK: DeckRow = {
   // Schema v13, and `0` is the column's own default: a deck counts an `{X}` spell at the mana
   // value Scryfall gives it until the reader says otherwise.
   separateXGroup: false,
+  // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
+  // is born in: an add that names no pile is filed by what the card does. A test about the
+  // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
+  // `useState` in this component with a select in the docked search panel until 2026-08-15.
+  defaultCategoryId: 0,
 };
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */
@@ -348,6 +353,20 @@ async function openSearchPanel() {
   const toggle = await screen.findByRole("button", { name: "Search cards" });
   if (toggle.getAttribute("aria-expanded") !== "true") await userEvent.click(toggle);
   return screen.findByRole("searchbox", { name: "Search cards" });
+}
+
+/**
+ * The deck settings dialog's `Add cards to` select, opened.
+ *
+ * **This is where "every pile of this deck, drawn or not" is now asked**, and it is one of the
+ * two surfaces built from `deck.categories` rather than from the drawn groups — the card's
+ * right-click `Move to` being the other. The docked search panel's own `Add to` select carried
+ * that claim until 2026-08-15, when the choice became a deck setting; the claim did not move,
+ * only the control that shows it.
+ */
+async function openAddTo() {
+  await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
+  return (await screen.findByLabelText("Add cards to")) as HTMLSelectElement;
 }
 
 /** A group, by the heading it draws. Every view labels its section with the group's name and
@@ -910,12 +929,9 @@ describe("DeckEditor", () => {
 
     expect(screen.queryByRole("region", { name: "Ramp" })).not.toBeInTheDocument();
     expect(within(group("Draw")).getByText("0 cards")).toBeInTheDocument();
-    // Every pile of the deck is still filable-into, drawn or not. The select lives in the docked
-    // search panel, which opens collapsed, so the panel is opened to read it — the claim is that
-    // it is built from `deck_category_list` and not from the drawn groups, which the disclosure
-    // does not touch.
-    await openSearchPanel();
-    const addTo = within(screen.getByLabelText("Add to"));
+    // Every pile of the deck is still filable-into, drawn or not — the claim is that the list is
+    // built from `deck.categories` and not from the drawn groups.
+    const addTo = within(await openAddTo());
     expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
     expect(addTo.getByRole("option", { name: "Draw" })).toBeInTheDocument();
   });
@@ -994,16 +1010,15 @@ describe("DeckEditor", () => {
     // Both are still somewhere a card can be filed while one of them is not a heading — the whole
     // reason hiding one is survivable is that no surface a reader files a card with is built
     // from the drawn groups. The per-card "Move…" select made the same point and was removed on
-    // 2026-08-14, so the toolbar's "Add to" is what carries it now. It sits in the docked
-    // search panel, which opens collapsed since the same day — so the panel is opened here to
-    // read it. That the select is built from `deck_category_list` rather than from the drawn
-    // groups is what the assertion is about, and the disclosure changes neither.
-    await openSearchPanel();
-    const addTo = within(screen.getByLabelText("Add to"));
+    // 2026-08-14, and the docked panel's "Add to" carried it until 2026-08-15, when the choice
+    // became a deck setting; `Add cards to` in the settings dialog is what carries it now, built
+    // from the same `deck.categories` the filter never touches.
+    const addTo = within(await openAddTo());
     expect(addTo.getByRole("option", { name: "Sunday brew" })).toBeInTheDocument();
     // The auto pile too: its heading is gone from the desk and it is still a place to file a
     // card, which is the half that makes losing the heading survivable.
     expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close deck settings" }));
 
     await userEvent.clear(box);
 
@@ -1510,20 +1525,24 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * …and an explicit "Add to" overrides the rule, which is the other half of it: a reader filing
-   * ten cards into the Sideboard makes one choice and then ten presses, and every press sends
-   * the **id** with no name at all.
+   * …and a deck whose settings name a pile overrides the rule, which is the other half of it: a
+   * reader filing ten cards into the Sideboard makes one choice and then ten presses, and every
+   * press sends the **id** with no name at all.
+   *
+   * **The choice arrives on the deck row** (`defaultCategoryId`) rather than from a control in
+   * this editor, which is the whole of what moved on 2026-08-15: it was a `useState` here, set
+   * from a select in the docked search panel, so it survived neither closing the deck nor the
+   * reader looking for it anywhere a *setting* would be.
    */
-  it("sends the picked category instead when the reader named one", async () => {
+  it("sends the deck's default category instead when it names one", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],
       total: 1,
       totalIsCapped: false,
     });
+    deckGet.mockResolvedValue(detail({ defaultCategoryId: SIDE }, [bolt()]));
 
     await open();
-    await openSearchPanel();
-    await userEvent.selectOptions(await screen.findByLabelText("Add to"), String(SIDE));
     await userEvent.type(
       screen.getByLabelText("Quick add a card to Sideboard"),
       "goblin guide{Enter}",
@@ -1625,12 +1644,12 @@ describe("DeckEditor", () => {
   });
 
   /** Every category the deck has, in the order the groups are drawn — one list, one source —
-   *  behind the one option that is not a category and is the default. */
+   *  behind the one option that is not a category and is the default. Read from **deck
+   *  settings**, which is where the question is asked since 2026-08-15. */
   it("offers auto first, then every category, as add targets", async () => {
     await open();
-    await openSearchPanel();
 
-    const select = (await screen.findByLabelText("Add to")) as HTMLSelectElement;
+    const select = await openAddTo();
     expect([...select.options].map((o) => o.textContent)).toEqual([
       "Auto (by what it does)",
       "Main deck",
@@ -1639,50 +1658,51 @@ describe("DeckEditor", () => {
       // is data the user made, not a slot the format implies.
       "Commander",
       "Companion",
-      "Maybeboard",
+      // Seeded switched off, and offered like any other: `isActive` decides what a pile counts
+      // toward and never whether a card may be filed into it.
+      "Maybeboard (off)",
     ]);
-    // The default, and the whole of the fix: it used to be `categories[0]`, which on a deck with
-    // no user category of its own is the seeded **Commander** pile.
+    // The default, and the whole of the fix that came with the sentinel: it used to be
+    // `categories[0]`, which on a deck with no user category of its own is the seeded
+    // **Commander** pile.
     expect(select.value).toBe("0");
   });
 
   /**
    * A category can leave the deck under an open editor — deleted from another window, or
-   * renamed away — and a select left holding an id that is not among its own options shows
-   * nothing selected while every press files a card into a group nothing is drawing.
+   * renamed away — and an editor left filing into an id no pile answers to would write every add
+   * into a group nothing is drawing.
    *
    * The fallback is **auto** rather than another category: the reader's choice is gone, so the
-   * honest replacement is "nobody has said", not somebody else's first column. It used to be
-   * `categories[0]`, which was also what the initial state fell through — see the select's
-   * default above.
+   * honest replacement is "nobody has said", not somebody else's first column.
+   *
+   * **It is a read now rather than the repairing write it was**, and that is what the move to a
+   * deck column bought: the backend puts every deck filing by a deleted pile back to `0` in the
+   * transaction that deletes it, so what is left for this layer is the single commit where the
+   * row and the category list disagree. Reading it as Auto there is not a repair, it is where
+   * the deck already is.
    */
-  it("falls back to auto when the category it was holding leaves the deck", async () => {
+  it("falls back to auto when the category it was filing into leaves the deck", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],
       total: 1,
       totalIsCapped: false,
     });
+    deckGet.mockResolvedValue(detail({ defaultCategoryId: SIDE }, []));
 
     await open();
     await openSearchPanel();
-    await userEvent.selectOptions(await screen.findByLabelText("Add to"), String(SIDE));
     await screen.findByRole("button", { name: "Add Goblin Guide to Sideboard" });
 
-    // The same deck, one category short — and it is the one the picker is pointed at.
+    // The same deck, one category short — and it is the one the row still points at, which is
+    // exactly the half-commit the read-side fallback is for.
     deckGet.mockResolvedValue(
-      detail(
-        {},
-        [],
-        CATEGORIES.filter((c) => c.id !== SIDE),
-      ),
+      detail({ defaultCategoryId: SIDE }, [], CATEGORIES.filter((c) => c.id !== SIDE)),
     );
     await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
 
-    // Read off the Add button rather than off the select, because the select cannot see this
-    // bug: HTML selects the first option when the selected one is removed, so the control
-    // *shows* the first option whatever the state behind it says. Without the reset, every press
-    // would still file its card into a category the editor is no longer drawing — and now that
-    // the first option *is* auto, reading the select would pass even with the reset deleted.
+    // Read off the Add button, which is where the answer is visible: `Creature` is what
+    // `autoCategoryFor` makes of this card, so the editor is on Auto.
     expect(
       await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     ).toBeInTheDocument();
@@ -2751,20 +2771,24 @@ describe("DeckEditor drag and drop", () => {
   }
 
   /**
-   * **The pile that took the card decides, not the "Add to" select** — which is still saying
-   * Sideboard while the card lands in the main deck. That is the whole difference between the
-   * drag and the button beside it, and the reason a drop carries its own category.
+   * **The pile that took the card decides, not the deck's default** — which is still Sideboard
+   * while the card lands in the main deck. That is the whole difference between the drag and the
+   * button beside it, and the reason a drop carries its own category.
+   *
+   * And the drop writes no setting: the deck goes on filing unnamed adds into the Sideboard
+   * afterwards, which is what the second assertion is about — a drag is not a reader changing
+   * their mind about where cards go.
    */
   it("adds a card dragged out of the panel to the group it was dropped on", async () => {
     const tile = panelHolds("Goblin Guide");
+    deckGet.mockResolvedValue(detail({ defaultCategoryId: SIDE }, [bolt()]));
     await open();
     await openSearchPanel();
-    await userEvent.selectOptions(await screen.findByLabelText("Add to"), String(SIDE));
 
     await dragOnto(await tile(), group("Main deck"));
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", 1);
-    expect(screen.getByLabelText("Add to")).toHaveValue(String(SIDE));
+    expect(deckUpdate).not.toHaveBeenCalled();
   });
 
   /**

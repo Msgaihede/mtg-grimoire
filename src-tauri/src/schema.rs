@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -1459,6 +1459,50 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         // Literal `15`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 15;")?;
+        tx.commit()?;
+    }
+    if v < 16 {
+        let tx = conn.unchecked_transaction()?;
+        // **Which pile an add with no pile named lands in** — the deck editor's "Add to" answer,
+        // which was a `useState` in `DeckEditor` until this rung and is a fact about the deck
+        // from here on. It moved because it is asked in the deck's settings now, and a setting
+        // that a reader sets in a settings dialog and loses when they close the deck is not one.
+        //
+        // **`0` is `Auto` and is a real value rather than a missing one**, which is the whole
+        // reason this column is `NOT NULL` with no foreign key. Three things follow from it and
+        // each is load-bearing:
+        //
+        // 1. `deck_categories.id` is an `INTEGER PRIMARY KEY`, so no category can ever *be* 0 —
+        //    the same guarantee `src/features/decks/autoCategory.ts`'s `AUTO_CATEGORY` already
+        //    rests on. One word for "the card's own text decides" on both sides of the IPC.
+        // 2. [`crate::deck::DeckPatch`] writes `coalesce(?n, column)`, where a bound NULL means
+        //    *leave it*. A nullable column would therefore need a command of its own to say
+        //    "back to Auto" — `decks.folder_id`'s exact problem, and `deck::set_folder` is the
+        //    price it pays. A sentinel inside the value space costs nothing and needs no second
+        //    command.
+        // 3. **The price is that `ON DELETE SET NULL` cannot do the clean-up**, so a deleted
+        //    pile is put back to 0 by hand, in the transaction that deletes it
+        //    (`deck_meta::delete_category`), and a duplicated deck's answer is **remapped** onto
+        //    the copy's own categories in `deck::duplicate_deck` rather than copied. Those two
+        //    sites are what an enforced FK would have bought, and they are named here because
+        //    nothing in the DDL points at them.
+        //
+        // `DEFAULT 0` fills every deck that predates the column, which is exactly the behaviour
+        // those decks already had: the editor opened on Auto every time and nothing remembered
+        // otherwise. There is no backfill because there is nothing to recover — the value it
+        // would recover was never stored anywhere.
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // (the error log), v11 (the price tables), v12/v13 (the two earlier `decks` rungs), v14
+        // (the oracle-tag tables) and v15 (`deck_categories.origin`) left it. Nothing here is
+        // FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild is owed either: the
+        // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
+        tx.execute_batch(
+            "ALTER TABLE decks ADD COLUMN default_category_id INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        // Literal `16`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 16;")?;
         tx.commit()?;
     }
     Ok(())
@@ -4181,6 +4225,16 @@ pub(crate) mod tests {
     /// the column is what goes.
     const UNDO_V15: &str = "ALTER TABLE deck_categories DROP COLUMN origin;";
 
+    /// And v16's one column on `decks`: which pile an unfiled add lands in.
+    ///
+    /// Owed for [`UNDO_V13`]'s reason — `ALTER TABLE … ADD COLUMN` again, so a fixture that
+    /// forgot it could not migrate at all — and undone the same way. No index names
+    /// `decks.default_category_id` and **no foreign key does either**, which is the one thing
+    /// worth noting here: the column holds a sentinel (`0` is Auto) rather than a nullable
+    /// reference, precisely so that [`crate::deck::DeckPatch`]'s `coalesce` convention can
+    /// express "back to Auto", and a rewind therefore has nothing to take down first.
+    const UNDO_V16: &str = "ALTER TABLE decks DROP COLUMN default_category_id;";
+
     /// A database that stopped at version 9 — the last version below the step that replays
     /// [`CARDS_INDEXES`], which is the property this fixture exists for.
     ///
@@ -4226,6 +4280,7 @@ pub(crate) mod tests {
              {UNDO_V13}
              {UNDO_V14}
              {UNDO_V15}
+             {UNDO_V16}
              PRAGMA user_version = 9;",
         ))
         .unwrap();
@@ -4422,6 +4477,7 @@ pub(crate) mod tests {
              {UNDO_V13}
              {UNDO_V14}
              {UNDO_V15}
+             {UNDO_V16}
              PRAGMA user_version = 10;",
         ))
         .unwrap();
@@ -4441,7 +4497,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} PRAGMA user_version = 11;"
+            "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} PRAGMA user_version = 11;"
         ))
         .unwrap();
         conn
@@ -4514,7 +4570,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V13} {UNDO_V14} {UNDO_V15} PRAGMA user_version = 12;"
+            "{UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} PRAGMA user_version = 12;"
         ))
         .unwrap();
         conn
@@ -4821,12 +4877,15 @@ pub(crate) mod tests {
     /// state) and v13 (the X group) landed first, so it became v14 and this fixture moved two
     /// rungs with it. A version that has shipped is spent — the ladder only ever grows, and the
     /// fixtures follow it. **It briefly held the "one step below head" title and no longer
-    /// does** — v15 (the category's origin) took it, and [`v14_database`] carries it now.
+    /// does** — v15 (the category's origin) took it, then v16 (the deck's default category), and
+    /// [`v15_database`] carries it now.
     fn v13_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V14} {UNDO_V15} PRAGMA user_version = 13;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V14} {UNDO_V15} {UNDO_V16} PRAGMA user_version = 13;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -4854,6 +4913,10 @@ pub(crate) mod tests {
         assert!(
             !category_columns(&conn).contains(&"origin".to_owned()),
             "and nor may v15's column"
+        );
+        assert!(
+            !deck_columns(&conn).contains(&"default_category_id".to_owned()),
+            "and nor may v16's"
         );
 
         // v13's own column and v11's own tables are standing, because this fixture undoes the
@@ -5109,40 +5172,54 @@ pub(crate) mod tests {
         cols
     }
 
-    /// A database one step below head: everything v14 left behind, and none of v15.
+    /// A database at version 14: everything v14 left behind, and none of v15 or v16.
     ///
     /// [`v13_database`]'s trick one rung up, and honest for the same reason: one `ADD COLUMN`
     /// is the whole of what v15's DDL did, and `ALTER TABLE … DROP COLUMN` undoes it exactly —
     /// no index names `deck_categories.origin`, so nothing has to come down before it (the trap
-    /// [`v9_database`] documents on `legal_mask`).
+    /// [`v9_database`] documents on `legal_mask`). [`UNDO_V16`] rides along for [`UNDO_V15`]'s
+    /// own reason one rung down: a v14 database runs *every* step above 14, and v16's
+    /// `ADD COLUMN` over a `decks` table already carrying the column would not migrate at all.
     ///
     /// **The backfill is not rewound, and does not need to be**: it wrote to that column and to
     /// nothing else, so dropping the column takes it with it.
+    ///
+    /// **It held the "one step below head" title and no longer does** — v16 (the deck's default
+    /// category) took it, and [`v15_database`] carries it now.
     fn v14_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V15} PRAGMA user_version = 14;"))
+        conn.execute_batch(&format!("{UNDO_V15} {UNDO_V16} PRAGMA user_version = 14;"))
             .unwrap();
         conn
     }
 
-    /// [`v14_database`] must really sit one step below head, or the tests below it are a fresh
-    /// install compared against itself. The next step added to the ladder renumbers this
-    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    /// [`v14_database`] must really be **at** version 14, or the v15 step below is being tested
+    /// against a database that already carries its column. A literal, not `SCHEMA_VERSION - 1`:
+    /// this fixture is pinned to the version below `deck_categories.origin`, and it stopped
+    /// following the ladder when v16 landed.
     #[test]
-    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+    fn the_v14_fixture_really_sits_where_the_v15_step_can_run_over_it() {
         let conn = v14_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(
+            version, 14,
+            "below the step that adds the category's origin"
+        );
         assert!(
             !category_columns(&conn).contains(&"origin".to_owned()),
             "the v15 column must not be there yet"
         );
+        assert!(
+            !deck_columns(&conn).contains(&"default_category_id".to_owned()),
+            "and nor may v16's column"
+        );
 
-        // v14's own tables are standing, because this fixture undoes one rung rather than two.
+        // v14's own tables are standing, because this fixture undoes the rungs above 14 rather
+        // than the one it is named for.
         assert_eq!(
             oracle_tag_table_count(&conn),
             5,
@@ -5274,6 +5351,113 @@ pub(crate) mod tests {
         .expect("SQL accepts anything here; the four write sites are the fence");
     }
 
+    // ---- v16: the deck's default category ---------------------------------------------
+
+    /// A database one step below head: everything v15 left behind, and none of v16.
+    ///
+    /// [`v14_database`]'s trick one rung up, and honest for the same reason: one `ADD COLUMN`
+    /// is the whole of what v16's DDL did, and `ALTER TABLE … DROP COLUMN` undoes it exactly —
+    /// no index and **no foreign key** names `decks.default_category_id`, so nothing has to come
+    /// down before it.
+    fn v15_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V16} PRAGMA user_version = 15;"))
+            .unwrap();
+        conn
+    }
+
+    /// [`v15_database`] must really sit one step below head, or the tests below it are a fresh
+    /// install compared against itself. The next step added to the ladder renumbers this
+    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    #[test]
+    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+        let conn = v15_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert!(
+            !deck_columns(&conn).contains(&"default_category_id".to_owned()),
+            "the v16 column must not be there yet"
+        );
+
+        // v15's own column is standing, because this fixture undoes one rung rather than two.
+        assert!(
+            category_columns(&conn).contains(&"origin".to_owned()),
+            "v15's column belongs to this version and must survive the rewind"
+        );
+    }
+
+    /// The step itself, from the version below it: the column arrives, every existing deck reads
+    /// `0`, and a rerun is a no-op.
+    ///
+    /// **`DEFAULT 0` is the whole of the upgrade's promise, and `0` is `Auto`.** There is nothing
+    /// to back-fill — the value this column now holds lived in a `useState` in the editor and was
+    /// thrown away every time a deck was closed — so every deck that predates the step reads
+    /// exactly what the editor used to open on.
+    ///
+    /// The `NOT NULL` is asserted beside it because it is what makes the sentinel a sentinel: a
+    /// nullable column would give "Auto" two spellings, and [`crate::deck::DeckPatch`]'s
+    /// `coalesce(?n, column)` reads one of them as "leave it alone".
+    #[test]
+    fn the_v16_step_gives_every_deck_the_auto_sentinel() {
+        let conn = v15_database();
+        let old = deck(&conn, "Old Deck");
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        let (notnull, default): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT \"notnull\", dflt_value FROM pragma_table_info('decks')
+                  WHERE name = 'default_category_id'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(notnull, 1, "there is no second spelling of Auto");
+        assert_eq!(default.as_deref(), Some("0"));
+
+        let stored: i64 = conn
+            .query_row(
+                "SELECT default_category_id FROM decks WHERE id = ?1",
+                rusqlite::params![old],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 0, "a deck that predates the column files by Auto");
+    }
+
+    /// **No foreign key on `default_category_id`, and that is the decision rather than an
+    /// omission** — so the two sites that stand in for `ON DELETE SET NULL` are named at the
+    /// step and asserted here. SQLite will not add a `REFERENCES` clause in an `ADD COLUMN`
+    /// whose default is anything but NULL, and a nullable column is exactly what the sentinel
+    /// exists to avoid; `deck_meta::delete_category` and `deck::duplicate_deck` are what pay
+    /// for it.
+    ///
+    /// This asserts the absence so that a later step which rebuilds `decks` and adds the key
+    /// fails here and takes the step's paragraph with it, rather than leaving two stories.
+    #[test]
+    fn the_default_category_is_a_sentinel_rather_than_a_foreign_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        let deck_id = deck(&conn, "Burn");
+
+        conn.execute(
+            "UPDATE decks SET default_category_id = 4040404 WHERE id = ?1",
+            rusqlite::params![deck_id],
+        )
+        .expect("SQL accepts anything here; the two clean-up sites are the fence");
+    }
+
     /// The ladder ends where the constant says it does. Written as a literal so that
     /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
     /// step and forgetting the constant — fails here rather than in the field.
@@ -5283,14 +5467,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_fifteen() {
+    fn the_schema_version_is_sixteen() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 15);
+        assert_eq!(SCHEMA_VERSION, 16);
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole
@@ -5381,8 +5565,9 @@ pub(crate) mod tests {
             // otherwise not cover. `v13` is head minus one.
             ("v12", v12_database()),
             ("v13", v13_database()),
-            // `v14` is head minus one.
             ("v14", v14_database()),
+            // `v15` is head minus one.
+            ("v15", v15_database()),
         ] {
             migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
 

@@ -280,6 +280,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
   ...over,
 });
 

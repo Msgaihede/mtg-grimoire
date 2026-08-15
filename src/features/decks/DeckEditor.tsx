@@ -39,13 +39,14 @@ import {
   LANDED_MS,
   type DeckCardActions,
 } from "./cardControl";
+import { AUTO_CATEGORY } from "./autoCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
 import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
-import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
@@ -710,19 +711,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [overTray, setOverTray] = useState(false);
 
   /**
-   * Where the docked panel's adds land, and the quick add with them. Here rather than in the
-   * panel because it is a fact about the deck being edited, and the categories it may take are
-   * this editor's own.
-   *
-   * {@link AUTO_CATEGORY} (`0`) is the one value that is not a category, and it is the
-   * **default**: an add nobody filed is filed by its type line. It used to mean "nothing picked
-   * yet" and the clamp below replaced it with `categories[0]` — which is the seeded **Commander**
-   * pile, so on a fresh deck every quick add and every panel press landed there and the
-   * quick-add field said so in its own label.
-   */
-  const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
-
-  /**
    * Which cards have just arrived, so the deck can point at them for five seconds.
    *
    * Held here rather than in a view, because the three surfaces that add a card — the quick-add
@@ -965,8 +953,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * reinstating anything here, because the change looks like a revert of that decision and is
    * not.** What the spec answers now is {@link emptyGroupRules}, which `buildGroups` consults
    * about a group holding **nothing**: a Modern deck draws no empty command zone. This array is
-   * untouched by it and is still every category of the deck. It is what the toolbar's "Add to"
-   * select and `CategoriesDialog` are built from, so every pile
+   * untouched by it and is still every category of the deck. It is what deck settings' "Add
+   * cards to" select, a card's `Move to` submenu and `CategoriesDialog` are built from, so every pile
    * stays reachable by name whether or not a heading is drawn for it — and a pile that *holds*
    * a card draws whatever the format says, because `drawsWhenEmpty` is never asked about a
    * group with cards in it. Nothing holding cardboard is hidden, and nothing at all is hidden
@@ -1005,25 +993,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => categoryExport(exportedId, categories, deck.cards, row?.name ?? ""),
     [exportedId, categories, deck.cards, row?.name],
   );
-
-  // The add target has to be a category this deck still has — a category deleted or renamed
-  // away under an open editor would otherwise leave the select holding an id that is not in its
-  // own options, with every press filing a card somewhere nothing is drawing. Reset during
-  // render, which is React's own answer to state that has to follow a prop.
-  //
-  // **Back to `AUTO_CATEGORY`, and only from a real id that has gone.** This used to fire on the
-  // *initial* value too, because `0` meant "nothing picked yet" — so the first render with a
-  // deck replaced it with `categories[0]`, which is the seeded Commander pile. Now zero is a
-  // choice with a meaning, so the clamp is what it always claimed to be in its own first
-  // sentence: a repair for a pile that is not there any more. A reader whose Sideboard is
-  // deleted under them lands on Auto rather than silently on somebody else's first column.
-  if (
-    targetCategoryId !== AUTO_CATEGORY &&
-    categories.length > 0 &&
-    !categories.some((c) => c.id === targetCategoryId)
-  ) {
-    setTargetCategoryId(AUTO_CATEGORY);
-  }
 
   // A deck deleted under an open layer takes its trigger with it — but not the state that says
   // one is open, and an `"inner"` layer nothing draws is a layer that eats the first Escape of
@@ -1197,7 +1166,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * **This exists because the desk stopped having a height** (2026-08-14). The deck's views grow
    * to hold their piles now, so the desk row is as tall as the deck is — 3 000px for a large
    * one — and the panel is its sibling. Left to the flex row's own `stretch` it would be drawn
-   * 3 000px tall too: its search field and its "Add to" select would scroll off the top with the
+   * 3 000px tall too: its search field and its filter row would scroll off the top with the
    * deck's header, its virtualised wall would mount tiles for a wall nobody can see at once, and
    * the reader would be dragging cards from a control at the top of the page to a pile near the
    * bottom of it. Pinned instead, the search stays exactly where it was while the deck scrolls
@@ -2036,6 +2005,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.cards],
   );
 
+  /**
+   * Where the docked panel's adds land, and the quick add with them — **the deck row's answer**
+   * (`decks.default_category_id`), read here and handed down.
+   *
+   * {@link AUTO_CATEGORY} (`0`) is the one value that is not a category, and it is what a deck is
+   * born on: an add nobody filed is filed by what the card *does*.
+   *
+   * **It was `useState` in this component until 2026-08-15, and the move is the whole point of
+   * this being a deck setting.** A reader who pointed the panel at their Sideboard lost the
+   * choice the moment they closed the deck, and the control that set it sat in the editor's own
+   * chrome — where a *setting* was being asked for on the row a reader adds cards from, and
+   * where the second surface it governs (the toolbar's quick-add field) drew nothing at all.
+   * `DeckSettingsForm` asks it once now, beside the format and the folder.
+   *
+   * **An id the deck's categories do not carry reads as Auto**, and that fallback is a *read*
+   * rather than the repairing write the old clamp was. Nothing needs repairing: deleting a pile
+   * puts every deck filing by it back to zero in the same transaction. What is left is the one
+   * render a deleted pile can be caught in, where the deck row and the category list arrive on
+   * the same commit and nothing orders them — and Auto is the honest answer there, because it is
+   * where the deck is about to land anyway.
+   */
+  const targetCategoryId =
+    row !== null && categories.some((c) => c.id === row.defaultCategoryId)
+      ? row.defaultCategoryId
+      : AUTO_CATEGORY;
+
   /** What the add target is called, or `null` under {@link AUTO_CATEGORY} — where there is no
    *  one answer, because the pile is per card. */
   const targetName =
@@ -2379,8 +2374,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       {row && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border pb-3">
           {/* The fastest way to put a card in a deck you already know the name of. Where it
-              lands is the panel's "Add to" — one control for one decision, rather than a second
-              select of the same categories two inches away. */}
+              lands is the deck's own `defaultCategoryId`, chosen in deck settings — one place
+              for one decision, rather than a select of the same categories on this row and
+              another on the panel's. This field draws no control for it and never did: it was
+              the panel's select that answered for both, which is the asymmetry that made the
+              choice worth moving out to a *setting*. What the field shows instead is the answer,
+              in its own label ({@link targetName}). */}
           <div className="flex items-center gap-1.5">
             <span className="text-[0.6875rem] text-dim">Quick add</span>
             {/* The field, its suggestions and its status line are one control and live in one
@@ -2651,7 +2650,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               onAdded={markLanded}
               categories={categories}
               targetCategoryId={targetCategoryId}
-              onTargetCategoryChange={setTargetCategoryId}
               defaultFormat={searchFormatDefault}
               cardMenu={panelCardMenu}
               cardMenuKey={panelCardMenuKey}

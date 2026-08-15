@@ -728,6 +728,11 @@ pub fn reorder_categories(
 /// One command for both, because the confirm dialog offers both and a caller that had to do
 /// the move and the delete as two round trips could lose the cards between them if the second
 /// one failed.
+///
+/// **It also puts the deck back on Auto when the pile it deletes was the deck's default**
+/// ([`crate::deck::AUTO_CATEGORY`]) — the clean-up an `ON DELETE SET NULL` would do for free on
+/// a nullable column, and `decks.default_category_id` is deliberately not one. The two sites
+/// that stand in for that key are this one and [`crate::deck::duplicate_deck`]'s remap.
 pub fn delete_category(
     conn: &Connection,
     id: i64,
@@ -791,6 +796,21 @@ pub fn delete_category(
         tx.execute("DELETE FROM deck_cards WHERE category_id = ?1", params![id])
             .map_err(|e| e.to_string())?;
     }
+    // **What an `ON DELETE SET NULL` would have done, done by hand** — and the reason it has to
+    // be is at the v16 step: `decks.default_category_id` holds a sentinel (`0` is Auto) rather
+    // than a nullable reference, so it carries no foreign key and nothing in the DDL notices
+    // this row going. Left undone, the deck would keep filing every unnamed add at an id with no
+    // pile behind it, which is a card written to a `category_id` the FK on `deck_cards` refuses:
+    // the reader's next quick add fails, on a deck whose settings still read the deleted name.
+    //
+    // Before the DELETE, so it is one predicate on this deck rather than a scan, and in this
+    // transaction, so a rolled-back delete leaves the deck pointing where it did.
+    tx.execute(
+        "UPDATE decks SET default_category_id = ?2
+          WHERE id = ?1 AND default_category_id = ?3",
+        params![deck_id, crate::deck::AUTO_CATEGORY, id],
+    )
+    .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM deck_categories WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     record_category(

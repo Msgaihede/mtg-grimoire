@@ -2,7 +2,8 @@ import { useId, useMemo, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { deckCoverUrl } from "@/lib/images";
-import type { DeckCard, DeckRow } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckRow } from "@/lib/ipc";
+import { AUTO_CATEGORY } from "./autoCategory";
 import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
@@ -56,6 +57,10 @@ function Form({
       key={deck.deck?.id ?? "new"}
       row={deck.deck}
       cards={deck.cards}
+      // **`undefined` for the create shape**, which is what stops the "Add cards to" row being
+      // drawn there at all: a deck that does not exist has no piles to offer. `useDeck(null)`
+      // answers `[]`, and an empty *array* would draw the row over nothing but `Auto`.
+      categories={deckId === null ? undefined : deck.categories}
       foldersUnread={foldersUnread}
       onChange={onChange}
       onCommit={onCommit}
@@ -68,6 +73,7 @@ function Form({
 function Body({
   row,
   cards,
+  categories,
   foldersUnread,
   onChange,
   onCommit,
@@ -75,6 +81,7 @@ function Body({
 }: {
   row: DeckRow | null;
   cards: readonly DeckCard[];
+  categories: readonly DeckCategory[] | undefined;
   foldersUnread: string | null;
   onChange: (patch: Partial<DeckSettingsValue>) => void;
   onCommit: (patch: Partial<DeckSettingsValue>) => void;
@@ -91,6 +98,9 @@ function Body({
     notes: row?.notes ?? "",
     theoryEnabled: row?.theoryEnabled ?? false,
     folderId: row?.folderId ?? null,
+    // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
+    // only answer a deck with no categories could honestly give.
+    defaultCategoryId: row?.defaultCategoryId ?? AUTO_CATEGORY,
   }));
   /**
    * The cover, and **the artist goes with the card rather than surviving it**.
@@ -156,6 +166,7 @@ function Body({
           loading: folders.query.isPending,
           pending: false,
         }}
+        categories={categories}
         cover={coverProps}
         idPrefix={id}
       />
@@ -177,7 +188,16 @@ function Body({
  * single act and on `onCommit` for the text; the create dialog merges every `onChange` into a
  * draft and ignores `onCommit` entirely. Watch the Actions panel — both are logged.
  *
- * **A third is about one key rather than one control.** `onSubmit` is Enter in the **Name**
+ * **`Add cards to` is the newest question here and the one the two hosts do not both ask**
+ * (2026-08-15). Where an add that names no pile lands was the deck builder's own state — a
+ * `useState` in `DeckEditor` behind a select on the docked search panel — so a reader who pointed
+ * it at their Sideboard lost the choice the moment they closed the deck, and the *other* surface
+ * it governed, the toolbar's quick-add field, drew no control at all. It is
+ * `decks.default_category_id` now. The row is drawn only where a `categories` prop arrives, which
+ * is the edit shape: a deck being created has no piles yet, so **New deck** below asks nothing
+ * about it and the column's `DEFAULT 0` — `Auto` — is what the new deck gets.
+ *
+ * **A third callback is about one key rather than one control.** `onSubmit` is Enter in the **Name**
  * field and nowhere else: the two textareas keep the newline they exist for and the cover
  * picker's search box refuses the key outright, because "I have finished typing a card name"
  * must never mean "make the deck". A host that passes nothing — the settings dialog — keeps
