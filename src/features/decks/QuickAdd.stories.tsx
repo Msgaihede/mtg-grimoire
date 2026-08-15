@@ -93,9 +93,9 @@ const meta = {
   component: Field,
   tags: ["autodocs"],
   args: {
-    // `null` is the field's resting state in the app, not an edge case: the editor's "Add to"
-    // select defaults to `AUTO_CATEGORY`, where there is no one pile to name because the pile is
-    // per card. {@link NamedTarget} is the other half.
+    // `null` is the field's resting state in the app, not an edge case: a deck is born on
+    // `AUTO_CATEGORY`, where there is no one pile to name because the pile is per card.
+    // {@link NamedTarget} is the other half — a deck whose settings name one.
     targetName: null,
     onAdd: fn(),
   },

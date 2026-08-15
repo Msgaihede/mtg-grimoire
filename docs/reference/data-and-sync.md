@@ -307,7 +307,33 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v15.** v15 adds `deck_categories.origin`
+- **Schema is v16.** v16 adds one column — `decks.default_category_id INTEGER NOT NULL DEFAULT 0`,
+  **which of the deck's own categories an add that names no pile lands in**. It is the deck
+  editor's old "Add to" answer, which lived in a `useState` in `DeckEditor` and a select on the
+  docked search panel until 2026-08-15: a reader who pointed it at their Sideboard lost the choice
+  the moment they closed the deck, and the *other* surface it governed — the toolbar's quick-add
+  field — drew no control at all. It is asked in the deck settings dialog now, beside the format
+  and the folder.
+  **`0` is `Auto` and is a value rather than an absence**, which is the whole of why this is a
+  `NOT NULL` sentinel and not a nullable foreign key. Three things follow. `deck_categories.id` is
+  an `INTEGER PRIMARY KEY`, so rowids start at 1 and no pile can ever collide with the sentinel —
+  the frontend already rested on that, spelling it `AUTO_CATEGORY`, and Rust now spells the same
+  number `deck::AUTO_CATEGORY`. `DeckPatch` writes `coalesce(?n, column)`, where a bound NULL means
+  *leave it alone*, so a nullable column would have needed a command of its own to say "back to
+  Auto" — `decks.folder_id`'s exact problem, and `deck::set_folder` is the price it pays. And **the
+  cost is that `ON DELETE SET NULL` cannot do the clean-up**, so two sites do it by hand and are
+  named at the step: `deck_meta::delete_category` puts a deck filing by the deleted pile back to
+  `0` in the transaction that deletes it, and `deck::duplicate_deck` **remaps** the id onto the
+  copy's own categories — a verbatim copy would point the duplicate at a pile of the original,
+  which breaks nothing and files every add into a deck the reader is not looking at.
+  **The `DEFAULT` is the whole of the upgrade's promise and there is no backfill**, because there
+  is nothing to recover: the value it would recover was never stored anywhere, and every deck that
+  predates the column opens exactly where the editor used to open. Rust owns one fence — a non-zero
+  id must name a category **of this deck** (`category_of_deck`), since nothing in the DDL says so —
+  and knows nothing about what Auto *does*: `autoCategoryFor` reads Oracle tags and is TypeScript's.
+  The step touches `cards` not at all, so like v8, v9, v11, v12, v13, v14 and v15 it neither needs
+  the `CARDS_INDEXES` replay nor takes it from v10, and owes no `cards_fts` rebuild.
+- v15 adds `deck_categories.origin`
   (`TEXT NOT NULL DEFAULT 'user'`) — **who made the pile**: `'auto'` is the app, filing a card it
   had to invent a column for, `'user'` is the reader pressing "New category", and the four seeded
   zones count as the reader's. TypeScript hides an *empty* `auto` pile and always draws a `user`
@@ -383,7 +409,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
   `idx_cards_collapse` share a name. **Since v12 it compares `decks`' columns too, in _ordinal_
   order** (`deck_columns`, `card_columns`' counterpart): `decks` has an `ALTER` ladder of its own
-  now — v8's three columns, v12's three and v13's one — and every read of a deck row is
+  now — v8's three columns, v12's three, v13's one and v16's one — and every read of a deck row is
   **positional**, so a route that reaches head with the same column _set_ in a different order is
   a `DeckRow` reading the wrong fields with no error anywhere. **Since v15 it compares
   `deck_categories`' columns as well** (`category_columns`), for the half of that reasoning that is
@@ -394,7 +420,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
   `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
-  to a new **`v12_database`**, v14 to **`v13_database`** and v15 to **`v14_database`**. The fixtures it passes stay exactly where they are, each pinned to
+  to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`** and v16 to
+  **`v15_database`**. The fixtures it passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
   actually run over, and `v10_database` to 10 before it, for
@@ -403,15 +430,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   which is the only thing that can prove a machine entering the ladder under v10 still ends up
   with every index a fresh install has.
   **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
-  for every one of them whose DDL is not idempotent.** All six rewind fixtures —
-  `v9_database`, `v10_database`, `v11_database`, `v12_database`, `v13_database`, `v14_database` —
-  are built the same way, because
+  for every one of them whose DDL is not idempotent.** All seven rewind fixtures —
+  `v9_database`, `v10_database`, `v11_database`, `v12_database`, `v13_database`, `v14_database`,
+  `v15_database` — are built the same way, because
   only version 1's DDL is frozen and there is no way to _build_ a later database forwards:
   migrate to head, undo by hand, renumber. `migrate` then reads `user_version` once and walks
   every step above it, so each of those steps is **replayed** over the fixture.
   `CREATE TABLE IF NOT EXISTS` survives that; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
-  answers `duplicate column name`. That is why v15's `deck_categories.origin` has to come back out
-  in all five below it, v13's `separate_x_group` in the four below **it**, and v12's three
+  answers `duplicate column name`. That is why v16's `decks.default_category_id` has to come back
+  out in all six below it, v15's `deck_categories.origin` in the five below **it**, v13's
+  `separate_x_group` in the four below that, and v12's three
   view-state columns in the three below that, `v9_database` and
   `v10_database` included — the three travel together as one `UNDO_V12` constant, so they cannot
   drift apart fixture by fixture — while v11's `CREATE TABLE IF NOT EXISTS` tables need no line in

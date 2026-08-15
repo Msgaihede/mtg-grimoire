@@ -1319,6 +1319,20 @@ export interface DeckPatch {
    * preference, so switching it writes one column and touches not one `deck_cards` row.
    */
   separateXGroup?: boolean;
+  /**
+   * Which of this deck's categories an add that names none lands in. See
+   * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
+   * absence: sending it puts the deck back on "by what the card does".
+   *
+   * That is the one thing to know about this field against the rest of the patch. Every other
+   * key here reads absent as "leave it" (`coalesce(?n, column)`) and has no way to say "clear
+   * it" — {@link ipc.deckSetFolder} exists because `folderId` cannot. This column needs no such
+   * command, because its cleared state is a number.
+   *
+   * A non-zero id must name a category **of this deck**; Rust refuses anything else by name,
+   * since no foreign key says so.
+   */
+  defaultCategoryId?: number;
 }
 
 /**
@@ -1451,6 +1465,24 @@ export interface DeckRow {
    * {@link ipc.deckUpdate} with the rename and the Built toggle.
    */
   separateXGroup: boolean;
+  /**
+   * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
+   * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
+   *
+   * Read on the row for {@link theoryEnabled}'s reason — a setting the app can write and never
+   * see is a setting nothing can draw — and it is the deck editor's "Add to" answer: the docked
+   * search panel's Add button and the quick-add field both file by it. It is chosen in **deck
+   * settings** and nowhere else; it was a `useState` in `DeckEditor` until then, which is why a
+   * reader who set it lost it the moment they closed the deck.
+   *
+   * Zero can never collide with a real pile — `deck_categories.id` is an `INTEGER PRIMARY KEY`,
+   * so rowids start at 1 — and Rust spells the same sentinel `deck::AUTO_CATEGORY`.
+   *
+   * **An id this deck's `categories` does not carry reads as Auto**, and no writer has to
+   * arrange that: deleting a pile puts every deck filing by it back to zero in the same
+   * transaction, and a duplicate is remapped onto its own copy of the pile.
+   */
+  defaultCategoryId: number;
 }
 
 /**

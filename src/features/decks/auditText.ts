@@ -378,6 +378,21 @@ function deckLine(p: Record<string, unknown>): AuditLine {
           : "Folded the X spells back into their mana values",
         detail: null,
       };
+    // `decks.default_category_id` (schema v16), and the **second** multi-word field name in
+    // this switch — the paragraph above applies to it word for word, and the word is
+    // `deck.rs`'s.
+    //
+    // **The payload carries names, not ids**, which is the whole reason this arm can print
+    // anything: a bare `12` is a number no reader can resolve once the pile has been renamed or
+    // deleted, so `record_deck_edit` resolves it at the moment it is true — `record_filed`'s
+    // rule for the folder path, and this is the only other column that points at a row with a
+    // name of its own. `null` on either side is `AUTO_CATEGORY`, and the sentence for it names
+    // the rule rather than a pile, because under Auto there is no one pile: it is per card.
+    case "defaultCategory":
+      return {
+        text: to ? `New cards now go to ${to}` : "New cards now go by what the card does",
+        detail: was,
+      };
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

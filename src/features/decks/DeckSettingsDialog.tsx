@@ -192,6 +192,11 @@ function Settings({ deckId }: { deckId: number }) {
     if (patch.notes !== undefined) notes.onChange(patch.notes);
     if (patch.formatKey !== undefined) update({ formatKey: patch.formatKey });
     if (patch.theoryEnabled !== undefined) update({ theoryEnabled: patch.theoryEnabled });
+    // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
+    // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
+    // number the patch can carry, so "back to filing by what the card does" is an ordinary
+    // write. See `DeckPatch.defaultCategoryId`.
+    if (patch.defaultCategoryId !== undefined) update({ defaultCategoryId: patch.defaultCategoryId });
     // `undefined` is "not in this patch" and `null` is the top level, which is why the guard is
     // `!== undefined` rather than a truthiness test — see this file's doc for what `null` costs
     // when it is sent as a patch instead.
@@ -239,10 +244,17 @@ function Settings({ deckId }: { deckId: number }) {
               notes: notes.value,
               theoryEnabled: row.theoryEnabled,
               folderId: row.folderId,
+              defaultCategoryId: row.defaultCategoryId,
             }}
             onChange={change}
             onCommit={commit}
             formats={formats}
+            // Every pile the deck has, in the deck's own order — `useDeck`'s own list, the same
+            // one the editor's views and its Categories dialog are built from, so this select
+            // cannot offer a pile the desk is not drawing or miss one it is. Passing it is what
+            // draws the "Add cards to" row at all: the create dialog has no deck yet and passes
+            // nothing.
+            categories={deck.categories}
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,

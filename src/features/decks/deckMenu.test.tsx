@@ -44,6 +44,7 @@ const ATRAXA: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 /** Three folders, one of them inside another: `Budget` is what `Commander` may not be moved

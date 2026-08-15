@@ -137,6 +137,7 @@ const DECK: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
   updatedAt: 1_800_000_000,
 };
 
