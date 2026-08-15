@@ -5762,7 +5762,13 @@ export function writeHandlers(db: FakeDb) {
           // a sentence the preview promises.
           const existed = db.deckCategories.some((c) => c.deckId === deck.id && c.name === name);
           category = categoryForName(db, deck.id, name);
-          if (!existed) categoriesCreated += 1;
+          if (!existed) {
+            categoriesCreated += 1;
+            // Archidekt's `{noDeck}`: the file says this pile counts toward nothing, which is
+            // what `isActive: false` means. **Only a pile this import made** — a name the reader
+            // already has keeps whatever they set, exactly as `commit_import` does it.
+            if (item.inactive === true) category.isActive = false;
+          }
           categories.set(name, category);
         }
         const card = requireCard(db, item.cardId);
