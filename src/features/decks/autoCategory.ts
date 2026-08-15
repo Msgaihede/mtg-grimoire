@@ -39,6 +39,39 @@
 import type { DeckCard } from "@/lib/ipc";
 
 /**
+ * The stored answer meaning **this rule decides** — `DeckRow.defaultCategoryId` when the reader
+ * has picked no pile, and the one value in the settings dialog's "Add cards to" select that is
+ * not a category.
+ *
+ * `0`, because `deck_categories.id` is an `INTEGER PRIMARY KEY` and `dnd.ts`'s `isCategoryId`
+ * refuses anything but a positive safe integer, so no real category can ever collide with it.
+ * Rust spells the same number `deck::AUTO_CATEGORY`, and the two are one vocabulary on purpose:
+ * a sentinel that meant "unset" on one side of the IPC and "auto" on the other is exactly how
+ * the editor once filed every quick add on a fresh deck into the seeded **Commander** pile —
+ * `0` was "nothing picked yet" and a clamp replaced it with `categories[0]`. Giving the sentinel
+ * a meaning instead of a replacement was the whole of the fix.
+ *
+ * **It lives here rather than beside a control, and that is newer than most of the prose about
+ * it.** It was `DeckSearchPanel`'s export while the deck editor's toolbar drew the select; the
+ * choice is a deck setting now, so the constant belongs with the rule it names rather than with
+ * whichever surface happens to draw it.
+ */
+export const AUTO_CATEGORY = 0;
+
+/**
+ * What a select calls {@link AUTO_CATEGORY}. Named for what it reads rather than for what it
+ * does — "Auto" alone would not say *how*, and the how is the whole predictability of it.
+ *
+ * It read `Auto (by card type)` while the type line was the whole of the rule, and that was
+ * still on screen after the rule changed — **found by driving the shipped window on 2026-08-14,
+ * not by the suite**, which pinned the string in four places and so agreed with itself. The
+ * wording matches the Categories dialog's button ("File cards by what they do") on purpose: they
+ * are the same rule, and a reader who meets it twice under two names has to work out that it is
+ * one rule.
+ */
+export const AUTO_CATEGORY_LABEL = "Auto (by what it does)";
+
+/**
  * One entry in the functional list: the category name, and the slugs that mean it.
  *
  * `anchors` are **anchor** slugs rather than the whole of Tagger's vocabulary for the idea —

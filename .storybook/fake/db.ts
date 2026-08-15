@@ -320,6 +320,20 @@ export interface FakeDeck {
    * the app would have to think about.
    */
   separateXGroup?: boolean;
+  /**
+   * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
+   * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
+   *
+   * **Optional for {@link separateXGroup}'s reason** — `NOT NULL DEFAULT 0`, so a seed that says
+   * nothing is a deck on Auto rather than a deck missing an answer — and resolved in
+   * {@link toDeckRow} the same way.
+   *
+   * **The fake owes the crate's two clean-up sites, because no foreign key does them here
+   * either**: `deck_category_delete` puts a deck filing by the deleted pile back to `0`, and
+   * `deck_duplicate` remaps this onto the copy's own categories. Neither is optional polish — a
+   * fake that skipped them would story the editor against a state the app cannot reach.
+   */
+  defaultCategoryId?: number;
   updatedAt: number;
 }
 
@@ -2121,6 +2135,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // v13's, and the one column whose absence on the row is an answer rather than a gap —
     // `NOT NULL DEFAULT 0`, so a deck that has never been asked is a deck that says no.
     separateXGroup: d.separateXGroup ?? false,
+    // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
+    // `DEFAULT 0` says about a deck nobody has asked.
+    defaultCategoryId: d.defaultCategoryId ?? 0,
   };
 }
 
@@ -4113,6 +4130,19 @@ function recordFiled(db: FakeDb, deckId: number, folderId: number | null): void 
   );
 }
 
+/**
+ * `deck::category_name` — what a pile is called, for the one `deck` history row that names one.
+ *
+ * `null` for `AUTO_CATEGORY` (`0`) **and** for an id with no pile behind it, and the two being
+ * one answer is deliberate: this is asked about the *past* — what the deck's default pile was
+ * before an edit replaced it — where "there was no pile" and "the pile has since gone" read the
+ * same to somebody looking at the drawer.
+ */
+function categoryNameOf(db: FakeDb, categoryId: number): string | null {
+  if (categoryId === 0) return null;
+  return categoryById(db, categoryId)?.name ?? null;
+}
+
 /** `deck::folder_path` — `Ideas › Modern`, root-first. Depth-capped for the reason the Rust's
  *  is: a cycle is refused at the write, and a walk that trusts that is a walk that hangs on a
  *  fixture written by hand. */
@@ -5116,6 +5146,24 @@ export function writeHandlers(db: FakeDb) {
       if (patch.separateXGroup !== undefined && patch.separateXGroup !== separateXWas) {
         field("xGroup", separateXWas, patch.separateXGroup);
       }
+      // v16's, and the second multi-word field name in that switch — `deck.rs` writes
+      // `"defaultCategory"`, and the paragraph above applies word for word.
+      //
+      // **The payload carries the pile's *name*, never its id**, which is `recordFiled`'s rule
+      // for the folder path applied to the one other column pointing at a row with a name of its
+      // own: a bare `12` is a number no reader can resolve once the pile has been renamed. `null`
+      // on either side is `AUTO_CATEGORY`, where there is no pile to name.
+      const defaultCategoryWas = before.defaultCategoryId ?? 0;
+      if (
+        patch.defaultCategoryId !== undefined &&
+        patch.defaultCategoryId !== defaultCategoryWas
+      ) {
+        field(
+          "defaultCategory",
+          categoryNameOf(db, defaultCategoryWas),
+          categoryNameOf(db, patch.defaultCategoryId),
+        );
+      }
       if (patch.folderId !== undefined && patch.folderId !== before.folderId) {
         recordFiled(db, deck.id, patch.folderId);
       }
@@ -5147,6 +5195,11 @@ export function writeHandlers(db: FakeDb) {
       // this one only changes how the same cards are read — the curve is regrouped in TS, by
       // `buildGroups`, on the rows the next read hands back.
       deck.separateXGroup = patch.separateXGroup ?? deck.separateXGroup;
+      // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
+      // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
+      // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would
+      // read it as no change at all.
+      deck.defaultCategoryId = patch.defaultCategoryId ?? deck.defaultCategoryId;
       deck.updatedAt = stamp(db);
       return toDeckRow(db, deck);
     },
@@ -5307,6 +5360,14 @@ export function writeHandlers(db: FakeDb) {
         db.deckCategories.push(made);
         categoryMap.set(c.id, made.id);
       }
+      // **Remapped, not inherited** — and the spread above is precisely what would have
+      // inherited it, which is why this line sits here rather than being left to `...source`.
+      // The column holds a `deck_categories.id` and the copy's piles are the rows just made, so
+      // carrying the number across points the duplicate at a pile of the *original*: nothing
+      // breaks, and every add lands in a column of a deck the reader is not looking at.
+      // `?? 0` covers a source on Auto (in no map) and a source pointing at a pile that has
+      // gone, which the delete handler's clean-up means cannot happen.
+      copy.defaultCategoryId = categoryMap.get(source.defaultCategoryId ?? 0) ?? 0;
       const tagMap = new Map<number, number>();
       for (const t of db.deckTags.filter((row) => row.deckId === source.id)) {
         const made: FakeDeckTag = { ...t, id: nextId(db.deckTags), deckId: copy.id };
@@ -5900,6 +5961,12 @@ export function writeHandlers(db: FakeDb) {
       // (and is now a duplicate) or is being taken by the cascade.
       db.deckCards = db.deckCards.filter((dc) => dc.categoryId !== category.id);
       db.deckCategories = db.deckCategories.filter((c) => c.id !== category.id);
+      // What an `ON DELETE SET NULL` would have done — and `decks.default_category_id` carries
+      // no foreign key on either side of the IPC, because `0` is Auto and a nullable column
+      // could not have said that through `DeckPatch`'s `coalesce`. Left undone, the deck keeps
+      // filing every unnamed add at an id with no pile behind it, and the next quick add is
+      // refused on a deck whose settings still read the deleted name.
+      if (deck.defaultCategoryId === category.id) deck.defaultCategoryId = 0;
       recordCategory(db, deck.id, { action: "delete", name: category.name, cards });
       deck.updatedAt = stamp(db);
     },

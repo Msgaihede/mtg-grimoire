@@ -81,6 +81,20 @@ pub const NO_CATEGORY: &str = "A card needs a category to go in.";
 /// What an adjustment says when the deck it names is not there.
 pub const GONE: &str = "That deck is not there any more.";
 
+/// `decks.default_category_id` when the deck files an unnamed add by **what the card does**
+/// rather than into a pile the reader chose — schema v16's default, and the value every deck is
+/// born with.
+///
+/// `0`, and it can never collide with a real pile because `deck_categories.id` is an
+/// `INTEGER PRIMARY KEY`: SQLite's rowids start at 1. The frontend spells the same number
+/// `AUTO_CATEGORY` (`src/features/decks/autoCategory.ts`), and the two are one vocabulary on
+/// purpose — a sentinel that meant "unset" on one side of the IPC and "auto" on the other is
+/// exactly how the editor once filed every quick add into a fresh deck's Commander pile.
+///
+/// **What Auto *does* is TypeScript's and stays there.** Rust holds the number; the rule that
+/// turns a card into a pile name reads Oracle tags and is a conclusion.
+pub const AUTO_CATEGORY: i64 = 0;
+
 /// `decks.cover_kind` when the deck shows a card's art crop — the DDL's own default, and what
 /// [`update_deck`] puts back the moment a `coverCardId` arrives.
 const COVER_CARD_ART: &str = "card_art";
@@ -223,6 +237,21 @@ pub struct DeckPatch {
     /// Per deck rather than per user, like [`Self::theory_enabled`]: it is a statement about how
     /// *this* list is read, so two decks may disagree and a duplicate must not.
     pub separate_x_group: Option<bool>,
+    /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
+    /// answer, asked in the deck's settings.
+    ///
+    /// **`0` is `Auto` and is a value like any other**, which is why this is an `Option<i64>`
+    /// over a `NOT NULL` column rather than a nullable one: absent still means "leave it", and
+    /// `Some(0)` means "let each card's own text decide". A nullable column would have needed a
+    /// command of its own to say that — `Self::folder_id`'s problem exactly, and [`set_folder`]
+    /// is the price it pays.
+    ///
+    /// **Storage only, on this side**, [`Self::separate_x_group`]'s rule. *Which* pile Auto
+    /// picks is `src/features/decks/autoCategory.ts` — a card's Oracle tags read as a
+    /// conclusion — and Rust neither knows nor may learn it. What Rust does own is the fence:
+    /// a non-zero id here must name a category **of this deck** ([`category_of_deck`]), because
+    /// nothing in the DDL says so.
+    pub default_category_id: Option<i64>,
 }
 
 /// Where the reader was last looking at one deck — the editor's own tab, grouping and sort.
@@ -316,6 +345,19 @@ pub struct DeckRow {
     /// an answer about the deck that a copy of it inherits. `duplicate_deck` carries this and
     /// resets nothing, which is the difference stated as code.
     pub separate_x_group: bool,
+    /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
+    /// for **Auto**, where the card's own text decides.
+    ///
+    /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s
+    /// reason: a setting the app can write and never see is a setting nothing can draw. This is
+    /// the one that setting *is* — the editor's docked search panel and its quick-add field both
+    /// file by it, and the deck settings dialog is where it is chosen.
+    ///
+    /// **Not a fourth `last_*` field**, [`Self::separate_x_group`]'s distinction: it is not how
+    /// the reader was looking at the deck a moment ago, it is an answer about the deck that a
+    /// copy of it inherits — remapped onto the copy's own categories by [`duplicate_deck`],
+    /// because the copy's piles are new rows with new ids.
+    pub default_category_id: i64,
     /// Which of the two lists the reader last had open, one of
     /// [`crate::schema::DECK_VARIANTS`] — schema v12.
     ///
@@ -496,6 +538,26 @@ fn category_of_deck(conn: &Connection, deck_id: i64, category_id: i64) -> Result
     })
 }
 
+/// What a category is called, or `None` for [`AUTO_CATEGORY`] and for a pile that is not there.
+///
+/// [`category_of_deck`]'s quiet counterpart, and deliberately **not** a fence: this answers a
+/// question about the past — what the deck's default pile *was* before an edit replaced it — so
+/// the two ways of having no name are one answer here. `0` is Auto and never named a pile; an id
+/// with no row behind it is a pile deleted since, which the history should record as "no pile"
+/// rather than refuse an unrelated write over.
+fn category_name(conn: &Connection, category_id: i64) -> Result<Option<String>, String> {
+    if category_id == AUTO_CATEGORY {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT name FROM deck_categories WHERE id = ?1",
+        params![category_id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// Every column of a [`DeckRow`], from the one query shape the list and the single read
 /// share. Both LEFT JOINs are load-bearing: a vanished cover printing or a format key the
 /// specs no longer carry must never hide a deck from its owner.
@@ -520,7 +582,8 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND cat.is_active = 1
                          AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
-            d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group
+            d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
+            d.default_category_id
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -551,6 +614,11 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // proof: it read 15 on the branch that wrote it, where v12's three did not exist yet,
         // and reading 15 after the merge would have handed a `TEXT` variant to a `bool`.
         separate_x_group: r.get(18)?,
+        // 19, at the end of the list, for the reason written on the line above it. This one is
+        // the second proof of that rule: the branch that wrote it was cut from a head where
+        // `separate_x_group` was the last column, and inserting it anywhere but here would have
+        // handed an `INTEGER` category id to a `bool` with nothing going red.
+        default_category_id: r.get(19)?,
     })
 }
 
@@ -680,6 +748,7 @@ struct DeckBefore {
     notes: Option<String>,
     theory_enabled: bool,
     separate_x_group: bool,
+    default_category_id: i64,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id when the deck is
@@ -731,7 +800,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     let before: DeckBefore = tx
         .query_row(
             "SELECT name, format_key, description, cover_card_id, cover_kind, is_built,
-                    archived, folder_id, notes, theory_enabled, separate_x_group
+                    archived, folder_id, notes, theory_enabled, separate_x_group,
+                    default_category_id
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -747,12 +817,23 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     notes: r.get(8)?,
                     theory_enabled: r.get(9)?,
                     separate_x_group: r.get(10)?,
+                    default_category_id: r.get(11)?,
                 })
             },
         )
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| GONE.to_owned())?;
+    // **The fence the DDL cannot hold.** `default_category_id` carries no foreign key — `0`
+    // means Auto and a `REFERENCES` clause cannot be added to a column whose default is not
+    // NULL — so this is where "a deck's default pile is a pile of *that* deck" actually lives,
+    // exactly as [`category_of_deck`] is where the same rule lives for every card write. The
+    // name it hands back is what the history row below quotes, so the check costs no second
+    // query. `Some(0)` is Auto and names no category, so it is not asked about.
+    let default_category_name = match patch.default_category_id.filter(|c| *c != AUTO_CATEGORY) {
+        Some(category_id) => Some(category_of_deck(&tx, id, category_id)?),
+        None => None,
+    };
     let changed = tx
         .execute(
             "UPDATE decks SET
@@ -776,6 +857,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- rather than spelled. A new column takes the next number at the **end** of the
                 -- list, never the next one that reads free.
                 separate_x_group = coalesce(?12, separate_x_group),
+                default_category_id = coalesce(?13, default_category_id),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -791,6 +873,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.theory_enabled,
                 COVER_CARD_ART,
                 patch.separate_x_group,
+                patch.default_category_id,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -815,7 +898,15 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         && !before.theory_enabled
         && crate::deck_theory::theory_is_empty(&tx, id)?
         && crate::deck_theory::move_live_into_theory(&tx, id)? > 0;
-    record_deck_edit(&tx, id, patch, &name, &format_key, &before)?;
+    record_deck_edit(
+        &tx,
+        id,
+        patch,
+        &name,
+        &format_key,
+        default_category_name.as_deref(),
+        &before,
+    )?;
     // Two edits here change what this deck reserves, so these are the two that reallocate —
     // **once**, whichever of them happened and however many did. Sleeving a deck up (or taking
     // it apart) is the obvious one. The move is the quiet one: `deck_allocations` reserves
@@ -850,6 +941,9 @@ fn record_deck_edit(
     patch: &DeckPatch,
     name: &Option<String>,
     format_key: &Option<String>,
+    // The name [`update_deck`]'s fence already resolved for `patch.default_category_id`, or
+    // `None` where the patch names no pile *or* names [`AUTO_CATEGORY`].
+    default_category_name: Option<&str>,
     before: &DeckBefore,
 ) -> Result<(), String> {
     let field = |field: &str, from: serde_json::Value, to: serde_json::Value| {
@@ -913,6 +1007,29 @@ fn record_deck_edit(
         .filter(|x| *x != before.separate_x_group)
     {
         field("xGroup", json!(before.separate_x_group), json!(to))?;
+    }
+    // **Names, never ids** — `record_filed`'s rule one bullet down, for its reason: a bare
+    // category id in a `to` is a number no reader can resolve once the pile has been renamed or
+    // deleted, and this drawer is read months later. `null` is Auto on both sides, which is what
+    // `auditText.ts` words as "by what the card does".
+    //
+    // The `from` side is looked up here rather than carried on [`DeckBefore`], because it is
+    // wanted only on the writes that move this field and a join on every deck edit to answer a
+    // question nobody asked is a query per rename.
+    if let Some(to) = patch
+        .default_category_id
+        .filter(|c| *c != before.default_category_id)
+    {
+        let was = category_name(tx, before.default_category_id)?;
+        field(
+            "defaultCategory",
+            json!(was),
+            json!(if to == AUTO_CATEGORY {
+                None
+            } else {
+                default_category_name
+            }),
+        )?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         record_filed(tx, id, Some(to))?;
@@ -1254,6 +1371,11 @@ struct CopiedCard {
 /// rather than keeping a claim it cannot honour. Best-effort like [`delete_deck`]'s removal: a
 /// failure is logged, never fatal, and a duplicate is never refused over a picture.
 ///
+/// **`default_category_id` is the one column that comes across *remapped* rather than copied**,
+/// and it is why the `INSERT … SELECT` below does not name it: it holds a `deck_categories.id`,
+/// and the copy's categories do not exist yet at that statement. The copy is born on
+/// [`AUTO_CATEGORY`] and pointed at its own pile once the map is built.
+///
 /// **Categories and tags are new rows with new ids**, and the cards are remapped onto them.
 /// This is the part a "copy the cards" implementation gets wrong invisibly: `deck_cards`
 /// stores a `category_id`, so copying a card row verbatim would file the copy's card under
@@ -1338,6 +1460,32 @@ pub fn duplicate_deck(
             )
             .map_err(|e| e.to_string())?;
         category_map.insert(old, new);
+    }
+
+    // **The default pile is remapped, not copied** — and it is the one `decks` column the
+    // `INSERT … SELECT` above deliberately leaves at its own DEFAULT for that reason. It holds a
+    // `deck_categories.id`, and the copy's piles are the new rows just written, so carrying the
+    // number across verbatim would point the duplicate at a pile of the *original* — the exact
+    // failure the two id maps exist to prevent for `deck_cards`, and a quieter one here, because
+    // nothing would break: adds would simply file into a column the reader is not looking at.
+    //
+    // `AUTO_CATEGORY` is the answer for a source that was already on Auto (it is in no map, and
+    // it is what the copy was born with) and for a source pointing at a pile that has gone,
+    // which the clean-up in [`crate::deck_meta::delete_category`] means cannot happen and which
+    // is the honest answer if it ever does — `tag_id`'s fallback below, for its reason.
+    let source_default: i64 = tx
+        .query_row(
+            "SELECT default_category_id FROM decks WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if let Some(mapped) = category_map.get(&source_default) {
+        tx.execute(
+            "UPDATE decks SET default_category_id = ?2 WHERE id = ?1",
+            params![copy, mapped],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     let tags: Vec<(i64, String, String)> = tx
@@ -5048,6 +5196,7 @@ mod tests {
             last_group_by: "manaValue".to_owned(),
             last_sort_by: "price".to_owned(),
             separate_x_group: true,
+            default_category_id: 12,
         })
         .unwrap();
         assert_eq!(
@@ -5066,7 +5215,10 @@ mod tests {
                 // `manaValue` above is not an accident either: it is the one grouping the
                 // `Split X` chip is drawn under, so this fixture is a deck that would open with
                 // the switch on screen and on.
-                "separateXGroup": true
+                "separateXGroup": true,
+                // A real id rather than `0`, because zero is [`AUTO_CATEGORY`] and would be the
+                // answer whether or not the column reached the wire at all.
+                "defaultCategoryId": 12
             })
         );
 
@@ -5414,6 +5566,235 @@ mod tests {
         let copy = duplicate_deck(&conn, deck.id, None).unwrap();
         assert!(copy.separate_x_group, "how it is read comes across");
         assert!(!copy.archived, "what state it is in does not");
+    }
+
+    /// The deck's default pile, end to end: a new deck is on Auto, a patch moves it, an absent
+    /// field leaves it, and `Some(0)` is a real answer that puts it back rather than a "leave
+    /// it" the `coalesce` swallows.
+    ///
+    /// **That last assertion is the whole reason this column is `NOT NULL` with a sentinel.** A
+    /// nullable one would have spelled Auto as `None`, which is exactly what [`DeckPatch`]'s
+    /// convention reads as *make no change* — so "back to Auto" would have needed a command of
+    /// its own, `set_folder`'s price. Zero costs nothing and cannot collide: rowids start at 1.
+    #[test]
+    fn the_default_category_round_trips_and_zero_really_means_auto() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        assert_eq!(
+            deck.default_category_id, AUTO_CATEGORY,
+            "a new deck files by what the card does — the column's own DEFAULT 0"
+        );
+
+        let set = |v: i64| {
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    default_category_id: Some(v),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            set(main).default_category_id,
+            main,
+            "the readback is the write"
+        );
+        assert_eq!(
+            read_deck(&conn, deck.id)
+                .unwrap()
+                .unwrap()
+                .default_category_id,
+            main,
+            "…including through `DECK_SELECT`'s positional reads, which is where a column \
+             added anywhere but the end goes wrong silently"
+        );
+
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert_eq!(
+            after.default_category_id, main,
+            "an absent field means leave it"
+        );
+        assert_eq!(after.name, "Burn", "and touches no neighbour");
+
+        assert_eq!(
+            set(AUTO_CATEGORY).default_category_id,
+            AUTO_CATEGORY,
+            "zero is a value, not an absence"
+        );
+    }
+
+    /// The fence the DDL cannot hold: no foreign key names this column, so "a deck's default
+    /// pile is a pile of *that* deck" lives in [`category_of_deck`] — the same two sentences
+    /// every card write answers, because "gone" and "not yours" are different things to tell a
+    /// stale editor.
+    #[test]
+    fn the_default_category_must_be_a_pile_of_this_deck() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let other = create_deck(&conn, &input("Elves", "modern")).unwrap();
+        let theirs = main_of(&conn, other.id);
+
+        let refuse = |v: i64| {
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    default_category_id: Some(v),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err()
+        };
+
+        assert_eq!(refuse(theirs), crate::deck_meta::CATEGORY_WRONG_DECK);
+        assert_eq!(refuse(404_040), crate::deck_meta::CATEGORY_GONE);
+        assert_eq!(
+            read_deck(&conn, deck.id)
+                .unwrap()
+                .unwrap()
+                .default_category_id,
+            AUTO_CATEGORY,
+            "and neither refusal wrote anything"
+        );
+    }
+
+    /// The history says the pile's **name**, and Auto is `null` on both sides.
+    ///
+    /// A bare category id in a `to` is a number no reader can resolve once the pile has been
+    /// renamed or deleted, and this drawer is read months later — `record_filed`'s reasoning for
+    /// resolving a folder to its path, applied to the one other column that points at a row with
+    /// a name of its own.
+    #[test]
+    fn the_default_category_history_names_the_pile() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let main_name: String = conn
+            .query_row(
+                "SELECT name FROM deck_categories WHERE id = ?1",
+                params![main],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        for v in [main, main, AUTO_CATEGORY] {
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    default_category_id: Some(v),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        let words: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 10)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .filter(|p: &serde_json::Value| p["field"] == "defaultCategory")
+            .collect();
+        assert_eq!(
+            words,
+            vec![
+                json!({ "field": "defaultCategory", "from": main_name, "to": null }),
+                json!({ "field": "defaultCategory", "from": null, "to": main_name }),
+            ],
+            "newest first, two moves, and the patch repeating the value recorded nothing"
+        );
+    }
+
+    /// Deleting the pile a deck files by puts that deck back on Auto — the clean-up an
+    /// `ON DELETE SET NULL` would do for free on a nullable column, and one of the two sites
+    /// that pay for the sentinel.
+    ///
+    /// **The cost of leaving it undone is not cosmetic**: `deck_cards.category_id` carries a real
+    /// foreign key, so the next unfiled add would be written at an id with no pile behind it and
+    /// refused — on a deck whose settings still read the deleted name.
+    #[test]
+    fn deleting_the_default_pile_puts_the_deck_back_on_auto() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let pile = crate::deck_meta::create_category(&conn, deck.id, "Removal")
+            .unwrap()
+            .id;
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                default_category_id: Some(pile),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        crate::deck_meta::delete_category(&conn, pile, None).unwrap();
+
+        assert_eq!(
+            read_deck(&conn, deck.id)
+                .unwrap()
+                .unwrap()
+                .default_category_id,
+            AUTO_CATEGORY
+        );
+    }
+
+    /// A copy files where its original filed — into **its own** pile of that name, never the
+    /// original's row. The number is a `deck_categories.id`, and the copy's categories are new
+    /// rows, so this is `deck_cards`' remap applied to the one `decks` column that needs it.
+    ///
+    /// Getting it wrong is quiet: nothing breaks, and every add made in the duplicate lands in a
+    /// column of a deck the reader is not looking at.
+    #[test]
+    fn a_duplicate_files_into_its_own_copy_of_the_default_pile() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let pile = crate::deck_meta::create_category(&conn, deck.id, "Removal")
+            .unwrap()
+            .id;
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                default_category_id: Some(pile),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+
+        assert_ne!(
+            copy.default_category_id, pile,
+            "never the original's row — that is the failure the id maps exist to prevent"
+        );
+        let (owner, name): (i64, String) = conn
+            .query_row(
+                "SELECT deck_id, name FROM deck_categories WHERE id = ?1",
+                params![copy.default_category_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((owner, name.as_str()), (copy.id, "Removal"));
+
+        // And a source on Auto stays on Auto, because zero is in no map.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                default_category_id: Some(AUTO_CATEGORY),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let plain = duplicate_deck(&conn, deck.id, None).unwrap();
+        assert_eq!(plain.default_category_id, AUTO_CATEGORY);
     }
 
     /// The allocator's whole contract in one scene: 4 Bolts wanted, 3 owned across two

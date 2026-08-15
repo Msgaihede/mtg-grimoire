@@ -128,6 +128,7 @@ const DECK_ROW: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };

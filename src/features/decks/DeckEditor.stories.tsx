@@ -266,7 +266,7 @@ type Story = StoryObj<typeof meta>;
  * deck made today.
  *
  * **Neither category is gone, and neither is unreachable.** `deck.categories` is still all five —
- * the toolbar's "Add to" select and `CategoriesDialog` are built from
+ * deck settings' "Add cards to" select and `CategoriesDialog` are built from
  * that list and not from the drawn groups — and the moment a card is filed into the Commander
  * pile the heading arrives with it, because `drawsWhenEmpty` is never asked about a group holding
  * cards.
@@ -785,7 +785,7 @@ export const EmptyDeck: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("region", { name: "Sideboard" })).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
-    // Seeded, reachable by name from the "Add to" select, and not drawn: Modern
+    // Seeded, reachable by name from deck settings' "Add cards to" select, and not drawn: Modern
     // has no command zone, and an empty companion slot is drawn in no format.
     await expect(canvas.queryByRole("region", { name: "Commander" })).toBeNull();
     await expect(canvas.queryByRole("region", { name: "Companion" })).toBeNull();
@@ -855,9 +855,9 @@ export const EmptyCommandZone: Story = {
  *
  * **Then the card is stepped out again, which is the assertion the story exists for.** The heading
  * `Ramp` goes with its last card, because nobody asked for that pile; `Combo pieces` stays, empty,
- * because somebody did. Neither *category* was deleted — the toolbar's "Add to" still offers both
- * by name, which is what makes hiding one survivable: no surface a card is filed with is built
- * from the drawn groups.
+ * because somebody did. Neither *category* was deleted — deck settings' "Add cards to" still
+ * offers both by name, which is what makes hiding one survivable: no surface a card is filed with
+ * is built from the drawn groups.
  *
  * A fresh deck rather than a seeded one, because the two facts have to be **made** rather than
  * asserted: a hand-written seed row could claim any `origin` it liked and would be a story about
@@ -905,12 +905,12 @@ export const AutoPileArrivesWithItsCard: Story = {
     await waitFor(async () => await expect(heading("Ramp")).toBeNull(), { timeout: 4000 });
     // Empty since it was made, and still drawn: a place the reader chose to keep.
     await expect(canvas.getByRole("region", { name: "Combo pieces" })).toBeVisible();
-    // The row is still in `deck.categories`, which is what the "Add to" select is built from —
-    // undrawn is not deleted, and the next Sol Ring lands back in it by name. That select lives
-    // in the docked search panel, which opens collapsed, so it is disclosed here; what is being
-    // asserted is where the options come from, which the disclosure does not touch.
-    await userEvent.click(await canvas.findByRole("button", { name: "Search cards" }));
-    const addTo = within(await canvas.findByLabelText("Add to"));
+    // The row is still in `deck.categories`, which is what deck settings' "Add cards to" select
+    // is built from — undrawn is not deleted, and the next Sol Ring lands back in it by name.
+    // That select was the docked panel's until 2026-08-15, when where an unfiled add lands
+    // became a deck setting; the claim is unchanged and only the surface moved.
+    await userEvent.click(canvas.getByRole("button", { name: "Deck settings" }));
+    const addTo = within(await canvas.findByLabelText("Add cards to"));
     await expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
     await expect(addTo.getByRole("option", { name: "Combo pieces" })).toBeInTheDocument();
   },
@@ -1064,16 +1064,20 @@ export const SwapFolds: Story = {
       "Sol Ring",
     );
 
-    // **The add target is chosen, not assumed.** The picker opens on the deck's *first* category
-    // — which for a deck the v8 migration converted is its Commander pile, `sortOrder` 0 — and
-    // this fold is about the printing sitting in the main deck. Picked by the option's own text,
+    // **The add target is chosen, not assumed** — and since 2026-08-15 it is chosen in **deck
+    // settings**, because where an unfiled add lands is a fact about the deck rather than about
+    // the search column beside it. This fold is about the printing sitting in the main deck, so
+    // the deck is pointed there and the dialog closed again. Picked by the option's own text,
     // because a category's id is the fake's own row numbering and not something a story writes
     // down.
-    const target = await canvas.findByLabelText("Add to");
+    await userEvent.click(canvas.getByRole("button", { name: "Deck settings" }));
+    const target = await canvas.findByLabelText("Add cards to");
     await userEvent.selectOptions(
       target,
       within(target).getByRole("option", { name: "Main deck" }),
     );
+    await userEvent.click(canvas.getByRole("button", { name: "Close deck settings" }));
+    await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
 
     // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
     // Ring is one tile — its newest printing — which is the right default for building a deck

@@ -3,7 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import type { DeckCard, DeckDetail, DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
+import type {
+  DeckCard,
+  DeckCategory,
+  DeckDetail,
+  DeckFolder,
+  DeckRow,
+  FormatSpec,
+} from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { card, spec } from "./validation/fixtures";
 
@@ -52,6 +59,7 @@ const BURN: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];
@@ -61,9 +69,30 @@ const FOLDERS: DeckFolder[] = [
   { id: 2, parentId: 1, name: "Legends", sortOrder: 0 },
 ];
 
+/**
+ * The deck's piles, in `sortOrder` — what the "Add cards to" select is built from.
+ *
+ * Two of them, which is the least that can show the order is the deck's rather than the
+ * alphabet's: `Sideboard` before `Combo pieces`.
+ */
+const CATEGORIES: DeckCategory[] = [
+  { id: 11, name: "Sideboard" },
+  { id: 12, name: "Combo pieces" },
+].map((c, i) => ({
+  deckId: 4,
+  kind: "main" as const,
+  origin: "user" as const,
+  isActive: true,
+  sortOrder: i,
+  cardCount: 0,
+  totalPrice: null,
+  cardCountAllVariants: 0,
+  ...c,
+}));
+
 /** The deck the dialog reads, with whatever this test needs changed about it. */
 function detail(deck: Partial<DeckRow> = {}, cards: DeckCard[] = []): DeckDetail {
-  return { deck: { ...BURN, ...deck }, cards, categories: [], tags: [] };
+  return { deck: { ...BURN, ...deck }, cards, categories: CATEGORIES, tags: [] };
 }
 
 function wrap(ui: ReactElement) {
@@ -231,6 +260,43 @@ describe("DeckSettingsDialog", () => {
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(4, 2));
     expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The deck editor's old "Add to" select, asked here since 2026-08-15 — and written as an
+   * ordinary patch, which is the contrast with the folder rows above.
+   *
+   * **The two look alike and are not.** `folderId` cannot express "the top level" through
+   * `coalesce(?n, folder_id)`, so filing needs `deckSetFolder`. `defaultCategoryId` can express
+   * its own cleared state, because that state is a **number** — `AUTO_CATEGORY`, `0` — so it
+   * rides `deckUpdate` like the format and the theory switch, and the round trip back to Auto is
+   * what pins that this really is one command rather than two.
+   */
+  it("writes the default category with deckUpdate, Auto included", async () => {
+    open();
+    await loaded();
+
+    const select = await screen.findByLabelText("Add cards to");
+    await userEvent.selectOptions(select, "12");
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { defaultCategoryId: 12 }));
+
+    await userEvent.selectOptions(select, "0");
+    await waitFor(() => expect(deckUpdate).toHaveBeenLastCalledWith(4, { defaultCategoryId: 0 }));
+    expect(deckSetFolder).not.toHaveBeenCalled();
+  });
+
+  /** The list is the deck's own `categories`, in the deck's own order — never sorted here, and
+   *  never the drawn groups. `Auto` is pinned above them and is not a pile. */
+  it("offers Auto and then the deck's piles in the deck's order", async () => {
+    open();
+    await loaded();
+
+    const select = (await screen.findByLabelText("Add cards to")) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      "Auto (by what it does)",
+      "Sideboard",
+      "Combo pieces",
+    ]);
   });
 
   /** The deck's own filing, said in words a reader can check the select against. */

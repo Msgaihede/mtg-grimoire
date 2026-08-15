@@ -90,10 +90,37 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   `recursion` and `card-advantage`, so Eternal Witness and Regrowth match both. **Burn is last and
   tiny for the same kind of reason** — `burn-creature`'s parents are `removal-burn` and
   `removal-creature`, so Removal claims Lightning Bolt first. Neither is a defect to tidy.
-- **The "Add to" select's default is `AUTO_CATEGORY`, which is `0`, and that zero fixed a real
-  bug** — a deck's seeded categories are in `PREDEFINED_CATEGORIES` order, so a clamp to
-  `categories[0]` put every quick add on a fresh deck into **Commander**. Zero now _means_ auto,
-  nothing overwrites it, and an explicit pick **stays** picked.
+- **Where an unfiled add lands is a _deck setting_, not editor state** (changed 2026-08-15).
+  `decks.default_category_id` (schema v16), read as `DeckRow.defaultCategoryId`, written through
+  the ordinary `deckUpdate` beside the format and the theory switch, and asked in
+  **`DeckSettingsForm`**. It was a `useState` in `DeckEditor` with an `Add to` select on the
+  docked search panel's header row, and both halves of that were wrong: a reader who pointed it
+  at their Sideboard lost the choice the moment they closed the deck, and the *other* surface it
+  governed — the toolbar's quick-add field — drew no control at all, so the only way to find out
+  where a quick add would land was to read that field's label. The editor now derives
+  `targetCategoryId` from the row and the panel takes it read-only.
+- **`AUTO_CATEGORY` is `0`, it lives in `autoCategory.ts`, and that zero fixed a real bug** — a
+  deck's seeded categories are in `PREDEFINED_CATEGORIES` order, so a clamp to `categories[0]`
+  put every quick add on a fresh deck into **Commander**. Zero now _means_ auto and nothing
+  overwrites it. Rust spells the same number `deck::AUTO_CATEGORY` and the column is
+  `NOT NULL DEFAULT 0`: **a sentinel rather than a nullable reference, deliberately**, because
+  `DeckPatch`'s `coalesce(?n, column)` reads a bound NULL as "leave it" — a nullable column could
+  not have said "back to Auto" without a command of its own, which is the price `folder_id` pays
+  through `deckSetFolder`. What it costs instead is the two clean-ups no foreign key is doing:
+  `deck_category_delete` puts a deck filing by the deleted pile back to `0`, and `duplicate_deck`
+  **remaps** the id onto the copy's own categories.
+- **An id the deck's `categories` does not carry reads as `AUTO_CATEGORY`, and that is a _read_
+  rather than the repairing write the old clamp was.** There is nothing to repair — the backend
+  cleans up at the delete — so what is left is the one commit where the deck row and the category
+  list disagree, and Auto is where the deck already is.
+- **The list is every pile, active and inactive.** `isActive` means "counts toward nothing"
+  (size, copy limits, legality, the allocator) and has never meant "cannot be filed into"; a
+  switched-off Maybeboard is exactly the pile a reader building a shortlist wants adds to land
+  in. The option is marked `(off)` and the row's caption says what that costs, which is the fact
+  most likely to surprise somebody who set this weeks ago.
+- **The history row names the pile, never its id** — `defaultCategory`, resolved to the name in
+  `record_deck_edit` at the moment it is true, `null` for Auto. `record_filed`'s rule for a folder
+  path, applied to the only other column pointing at a row with a name of its own.
 - **The X pile is a _heading_, not a category, and its key says so.** `X_GROUP_KEY` is `"mv-x"`
   and shares the `mv-…` namespace deliberately: it is one more mana-value heading, so no
   `deck_cards.category_id` points at it, nothing can be dropped into it, and it is gone the moment
@@ -103,9 +130,18 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 ## Deck settings, and the two surfaces that draw them
 
 Everything a deck carries that is not a card in it — name, format, description, notes, cover,
-folder, theory — is **one component, `DeckSettingsForm`, drawn by two hosts** (2026-08-14). The
-"New deck" dialog used to ask two questions and leave the reader to configure the deck they had
-just made; it now asks all of them.
+folder, theory, and **where an unfiled add lands** — is **one component, `DeckSettingsForm`,
+drawn by two hosts** (2026-08-14). The "New deck" dialog used to ask two questions and leave the
+reader to configure the deck they had just made; it now asks all of them.
+
+- **`defaultCategoryId` is the one field of `DeckSettingsValue` the two hosts do not both ask
+  about, and the asymmetry is the honest one** (2026-08-15). The row is drawn only when a
+  `categories` prop arrives, and `CreateDeckDialog` passes none: `deck_create` seeds the four
+  zones in the same transaction that makes the deck, so at create there is no pile to offer and
+  no id to write. The question is not answerable yet rather than answerable and skipped — an
+  empty select offering only `Auto` would be a control that reads as a choice and is not. The
+  field stays **required on the value** so that the shape does not change with the host; the
+  create draft holds `AUTO_CATEGORY`, sends nothing, and the column's `DEFAULT 0` agrees.
 
 - **The form owns no mutation and imports no hook that reaches the backend** — not `useDeck`,
   not `useDeckFolders`, not `useFormatSpecs`. Every value and every write arrives as a prop, and
@@ -648,7 +684,8 @@ price | type`). An **inactive category stays its own group in all three grouping
   can see is what a pointer reaches for first.
 - **Nothing but a view reads the drawn groups, which is what makes a missing heading survivable.**
   `DeckEditor`'s `categories` is still _every_ category the deck has, in `sortOrder`, and it is what
-  the toolbar's "Add to" select and `CategoriesDialog` are built from — never the groups. **For an
+  deck settings' "Add cards to" select, a card's `Move to` submenu and `CategoriesDialog` are built
+  from — never the groups. **For an
   emptied auto pile that panel is the only surface it appears on at all**, so "every row, always" is
   load-bearing rather than tidy: it is where such a pile is found, renamed, reordered, switched or
   deleted. The panel has **no format branch and no origin branch** and must never grow one — its
@@ -662,7 +699,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   select built from the `categories` array rather than from the drawn groups, so it reached a pile
   that had no heading; a *drop* target has to be on screen. For the two classes a reader files into
   deliberately the heading costs nothing — every pile of their own draws, filter or no filter, and
-  so do the fixed zones — and the "Add to" select is a third route to both. **The one pile with no
+  so do the fixed zones — and deck settings' "Add cards to" is a third route to both. **The one pile with no
   drag route is an auto pile that has gone empty**, which is the class nobody asked for, and it is
   exactly why `Move to` is built from `categories` too: the pile is listed there whether or not a
   heading is drawn for it, by pointer and by keyboard alike. The next card the rule files there
@@ -1115,7 +1152,8 @@ price | type`). An **inactive category stays its own group in all three grouping
 ## The quick add
 
 `QuickAdd.tsx` — the toolbar field, its dropdown and its status line, one component. `DeckEditor`
-keeps only the _decision_: which pile the add lands in (`targetCategoryId`) and the write that
+keeps only the _decision_: which pile the add lands in (`targetCategoryId`, which since
+2026-08-15 is the deck row's `defaultCategoryId` rather than a `useState`) and the write that
 puts it there. `QuickAdd.test.tsx` covers the field itself; the Escape hand-off below is pinned in
 `DeckEditor.test.tsx`, because that one is about the ladder rather than about this control. The
 longer-form record of the two hand-rolled comboboxes and their shared panel is

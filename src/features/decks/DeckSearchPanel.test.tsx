@@ -184,18 +184,9 @@ interface Props {
   maxWidth?: number;
 }
 
-function Harness({
-  onTargetCategoryChange,
-  ...props
-}: Props & { onTargetCategoryChange: (categoryId: number) => void }) {
+function Harness(props: Props) {
   const deck = useDeck(4);
-  return (
-    <DeckSearchPanel
-      add={deck.addCard}
-      onTargetCategoryChange={onTargetCategoryChange}
-      {...props}
-    />
-  );
+  return <DeckSearchPanel add={deck.addCard} {...props} />;
 }
 
 function panel({
@@ -207,7 +198,6 @@ function panel({
   // assignable.
   defaultFormat = null as FormatFilterOption | null,
   maxWidth = undefined as number | undefined,
-  onTargetCategoryChange = vi.fn(),
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -215,19 +205,18 @@ function panel({
   let props: Props = { categories, targetCategoryId, roomy, defaultFormat, maxWidth };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
-      <Harness {...p} onTargetCategoryChange={onTargetCategoryChange} />
+      <Harness {...p} />
     </QueryClientProvider>
   );
   const view = render(ui(props));
-  /** Re-render with one prop changed — what the editor does when the select moves, or when it
-   *  re-measures the row the deck and the panel share. */
+  /** Re-render with one prop changed — what the editor does when the deck row answers a new
+   *  default category, or when it re-measures the row the deck and the panel share. */
   const update = (patch: Partial<Props>) => {
     props = { ...props, ...patch };
     view.rerender(ui(props));
   };
   return {
     ...view,
-    onTargetCategoryChange,
     update,
     retarget: (categoryId: number) => update({ targetCategoryId: categoryId }),
   };
@@ -249,18 +238,7 @@ async function openPanel(options: Parameters<typeof panel>[0] = {}) {
 }
 
 /**
- * What the target-category select offers, by name.
- *
- * Read off the select rather than by `role: "option"`: the filter bar's format picker sits in
- * the same panel and offers a "Commander" of its own, which is a format and not a category.
- */
-const categoryOptions = (): string[] => {
-  const select = screen.getByLabelText("Add to") as HTMLSelectElement;
-  return [...select.options].map((o) => o.textContent ?? "");
-};
-
-/**
- * The filter row's Format select, reached by its label the way "Add to" is above.
+ * The filter row's Format select, reached by its label.
  *
  * `FilterBar`'s own, drawn inside this panel and named by an `sr-only` "Format" — the row's
  * other controls are deliberately worded to keep clear of that word, so the exact string matches
@@ -419,35 +397,19 @@ describe("DeckSearchPanel", () => {
   });
 
   /**
-   * The select is the click path's category choice and therefore the keyboard's, which is what
-   * makes drag optional. Its options are the deck's own categories in the order the editor
-   * draws its columns — and its **value is an id**, because that is what an add is addressed
-   * by now that a category's name is the reader's to change.
+   * **The `Add to` select is gone from this panel** (2026-08-15) — it is the deck's own setting
+   * now, asked in `DeckSettingsForm` and stored on `decks.default_category_id`, so what arrives
+   * here is a value and there is nothing to hand back.
+   *
+   * Asserted rather than merely deleted, because the failure this guards against is the control
+   * coming back beside the settings one: two places to answer one question is exactly the shape
+   * that made the toolbar's quick-add field and this panel able to disagree.
    */
-  it("offers the deck's own categories as targets, in the editor's order", async () => {
+  it("draws no category control of its own", async () => {
     await openPanel();
 
-    expect(screen.getByLabelText("Add to")).toHaveValue(String(MAIN.id));
-    expect(categoryOptions()).toEqual([
-      // Not a category, first, and the editor's default — where a card is filed by its own type
-      // line (`AUTO_CATEGORY`). This panel is driven with an explicit `targetCategoryId` here,
-      // which is why the value above is still `MAIN`.
-      "Auto (by what it does)",
-      "Main deck",
-      "Sideboard",
-      "Maybeboard",
-    ]);
-  });
-
-  /** The other half of the same rule, and the reason the list is a prop: the categories are
-   *  the deck's own rows, so one deck has a pile another has never made. */
-  it("offers exactly the categories it is handed, and no others", async () => {
-    const seeded = await openPanel();
-    expect(categoryOptions()).not.toContain("Ramp");
-    seeded.unmount();
-
-    await openPanel({ categories: [MAIN, category({ id: 9, name: "Ramp", sortOrder: 2 })] });
-    expect(categoryOptions()).toEqual(["Auto (by what it does)", "Main deck", "Ramp"]);
+    expect(screen.queryByLabelText("Add to")).toBeNull();
+    expect(screen.queryByText("Auto (by what it does)")).toBeNull();
   });
 
   /**
@@ -533,20 +495,10 @@ describe("DeckSearchPanel", () => {
     expect(deckAddCard).toHaveBeenCalledWith(4, "1", SIDE.id, null, "live", 1);
   });
 
-  /** A `<select>` speaks strings and a category is addressed by number, so the parse back is
-   *  the panel's own job and the editor is handed an id it can write with. */
-  it("hands the category choice back to the editor as an id", async () => {
-    const view = await openPanel();
-
-    await userEvent.selectOptions(screen.getByLabelText("Add to"), String(SIDE.id));
-
-    expect(view.onTargetCategoryChange).toHaveBeenCalledWith(SIDE.id);
-  });
-
   /**
    * A picked id the handed-down list does not hold, which is a single commit's worth of state:
-   * a category deleted elsewhere reaches the editor's clamp and this select together, and
-   * nothing orders those two.
+   * a deleted category reaches the deck row and the category list together, and nothing orders
+   * those two.
    *
    * The button says what it can honestly say rather than reading `.name` off `undefined` and
    * taking the whole panel down over a label.

@@ -91,6 +91,7 @@ const BURN: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 /** No cover, so no art and — the plan's ruling — no credit line at all. */

@@ -9,7 +9,6 @@ import {
 } from "react";
 import { Plus, Search } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
@@ -19,7 +18,7 @@ import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { autoCategoryFor } from "./autoCategory";
+import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { FOCUS } from "./cardControl";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
@@ -71,36 +70,6 @@ export const MIN_PANEL_WIDTH_PX = 206;
 /** How far one arrow press moves the edge. A pointer drags continuously; a caret needs a step
  *  big enough to be worth pressing and small enough to aim with. */
 const RESIZE_STEP_PX = 24;
-
-/**
- * The "Add to" value meaning **the card's type line decides** — the default, and the one value
- * in that select that is not a category.
- *
- * `0`, because `deck_categories.id` is an `INTEGER PRIMARY KEY` and `dnd.ts`'s `isCategoryId`
- * refuses anything but a positive safe integer, so no real category can ever collide with it.
- * `DeckEditor` already held `0` as a sentinel meaning "nothing picked yet", replaced by its
- * clamp on the first render that had a deck — and *that* is what made a fresh deck file every
- * quick add into `categories[0]`, which is the seeded **Commander** pile. Giving the sentinel a
- * meaning instead of a replacement is the whole of the fix: nothing overwrites it, so an add
- * nobody filed is filed by `autoCategoryFor`.
- *
- * Exported because the editor owns the state and this panel draws the choice; one constant is
- * one place for the two of them to agree what zero means.
- */
-export const AUTO_CATEGORY = 0;
-
-/**
- * What the select calls {@link AUTO_CATEGORY}. Named for what it reads rather than for what it
- * does — "Auto" alone would not say *how*, and the how is the whole predictability of it.
- *
- * It read `Auto (by card type)` while the type line was the whole of the rule, and that was
- * still on screen after the rule changed — **found by driving the shipped window on 2026-08-14,
- * not by the suite**, which pinned the string in four places and so agreed with itself. The
- * wording matches the Categories dialog's button ("File cards by what they do") on purpose: they
- * are the same rule, and a reader who meets it twice under two names has to work out that it is
- * one rule.
- */
-const AUTO_LABEL = "Auto (by what it does)";
 
 /**
  * How wide a tile is in here at 100%, and the number that decides whether this column shows one
@@ -177,10 +146,19 @@ export interface DeckSearchPanelProps {
    * a panel starts offering a pile the editor is not drawing.
    */
   categories: readonly DeckCategory[];
-  /** The category every add lands in, by id. Owned by the editor, which clamps it when the
-   *  picked category is renamed away, switched off or deleted under it. */
+  /**
+   * The category every add from this panel lands in, by id — `AUTO_CATEGORY` (`0`) for "let
+   * each card's own text decide", which is what a deck is born on.
+   *
+   * **Read-only here, and that is the change of 2026-08-15.** This panel drew the select that
+   * set it, in its own header row; the choice is a **deck setting** now
+   * (`DeckSettingsForm`, written to `decks.default_category_id`), so what arrives here is the
+   * deck row's answer and there is nothing to hand back. Two things follow, and both are the
+   * point of the move: a pick survives the deck being closed, and the two surfaces that file by
+   * it — this panel's Add button and the toolbar's quick-add field — cannot come to two answers,
+   * because there is only one place it can be set.
+   */
   targetCategoryId: number;
-  onTargetCategoryChange: (categoryId: number) => void;
   /**
    * The format the filter row's Format select **opens** on — the open deck's, handed down
    * rather than read here, for the reason {@link DeckSearchPanelProps.categories} is: the
@@ -285,7 +263,6 @@ export function DeckSearchPanel({
   onAdded,
   categories,
   targetCategoryId,
-  onTargetCategoryChange,
   defaultFormat,
   cardMenu,
   cardMenuKey,
@@ -330,7 +307,6 @@ export function DeckSearchPanel({
   const [open, setOpen] = useState(false);
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const categoryFieldId = useId();
   const bodyId = useId();
 
   /**
@@ -502,43 +478,15 @@ export function DeckSearchPanel({
           shown ? "shrink-0 items-center" : "min-h-0 flex-1 items-stretch",
         )}
       >
+        {/* **The "Add to" select was here until 2026-08-15 and is now in deck settings.** It
+            was the click path's answer to "where does this go" and it was the wrong place to
+            answer it from: the choice was `useState` in `DeckEditor`, so a reader who set the
+            panel to their Sideboard lost it the moment they closed the deck, and the same
+            answer governed the toolbar's quick-add field, which drew no control at all. It is
+            `decks.default_category_id` now, asked once in the settings dialog and remembered.
+            Nothing on this row replaced it: every Add button below already names the pile it
+            files into, per card, which is where the question is actually being asked. */}
         {toggle}
-        {/* The category choice sits above the results rather than on each of them: it is the
-            click path's answer to "where does this go", and therefore the keyboard's — which is
-            what makes the drag a shortcut rather than the only way in. */}
-        {shown && (
-          <>
-            <label htmlFor={categoryFieldId} className="ml-auto shrink-0 text-xs text-dim">
-              Add to
-            </label>
-            {/* A `<select>` speaks strings and a category is addressed by number, so the id
-                makes the round trip through `String`/`Number` here rather than anywhere the
-                write can see it: every value in this list is one this component wrote out of a
-                `DeckCategory.id`, so the parse cannot meet anything else.
-
-                **Deliberately not alphabetical**, and one of the exceptions `src/lib/options.ts`
-                names. The categories arrive in `cat.sort_order, cat.id` — the order the reader
-                dragged them into in `CategoriesDialog`, and the order every deck view draws its
-                columns in. Sorting them here would make this dropdown disagree with the deck
-                beside it and would overwrite an order the reader chose. */}
-            <select
-              id={categoryFieldId}
-              value={String(targetCategoryId)}
-              onChange={(e) => onTargetCategoryChange(Number(e.target.value))}
-              className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
-            >
-              {/* First and default. A pick made here *stays* picked, which is what makes
-                  "everything into the Sideboard" one choice and then ten presses rather than ten
-                  choices — and why this is a plain option rather than a mode that resets. */}
-              <option value={String(AUTO_CATEGORY)}>{AUTO_LABEL}</option>
-              {categories.map((category) => (
-                <option key={category.id} value={String(category.id)}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
       </div>
 
       {/* Everything below the row, and only once the reader has asked for it — see
@@ -722,10 +670,12 @@ function ResizeHandle({
  *
  * **What stays in the root is what a collapse must not be able to take**: the disclosure button,
  * whose identity across the two states the caret depends on, and the `roomy` refusal drawn on
- * it. The "Add to" select is drawn up there too and is **not** an example of that — it sits
- * inside the row's own `shown` gate and goes with everything else. What actually outlives a
- * collapse is the *choice* it draws, `targetCategoryId`, and it outlives it because the
- * **editor** owns it (`DeckEditor.tsx`) rather than because of where the control is rendered.
+ * it. That is the whole of it now — the "Add to" select used to be drawn up there beside them
+ * and was never an example of it, sitting inside the row's own `shown` gate and going with
+ * everything else. What outlived a collapse was the *choice* it drew, and it still does, for a
+ * better reason than it did: `targetCategoryId` is the **deck row's** answer
+ * (`decks.default_category_id`) rather than a `useState` one component up, so it outlives the
+ * deck being closed too.
  */
 function OpenPanel({
   add,
@@ -774,13 +724,13 @@ function OpenPanel({
    * What the picked id is *called*, for the two names every Add button carries — or `null` under
    * {@link AUTO_CATEGORY}, where the pile is not chosen here at all and is named per card below.
    *
-   * The editor clamps `targetCategoryId` to a category it is drawing, so the miss below is not
-   * a state this panel expects — but it is one a single render can be caught in, because a
-   * category that has just been deleted or renamed reaches the clamp and the select above on the
-   * same commit and nothing orders those two. "this deck" is the honest thing to say about an
-   * id whose name is not in hand: the deck is what the press writes to, and if the id really is
-   * stale `deck_add_card` refuses it in words (`category_of_deck`) into the alert above the
-   * wall. Reading `.name` off `undefined` would instead take the whole panel down over a label.
+   * The editor answers `AUTO_CATEGORY` for an id its `categories` does not carry, so the miss
+   * below is not a state this panel expects — but it is one a single render can be caught in,
+   * because a deleted pile reaches the deck row and the category list on the same commit and
+   * nothing orders those two. "this deck" is the honest thing to say about an id whose name is
+   * not in hand: the deck is what the press writes to, and if the id really is stale
+   * `deck_add_card` refuses it in words (`category_of_deck`) into the alert above the wall.
+   * Reading `.name` off `undefined` would instead take the whole panel down over a label.
    */
   const auto = targetCategoryId === AUTO_CATEGORY;
   const targetName = auto

@@ -66,6 +66,7 @@ const DECK: DeckRow = {
   // rides through `update` untouched — so it is here to satisfy the row's shape, not to be
   // asserted on.
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 /**

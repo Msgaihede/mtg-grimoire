@@ -516,8 +516,8 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
 
   /**
    * **The pile you let go over is the one that takes the card.** A single target over the whole
-   * view would land every drop in whatever the toolbar's "Add to" happened to say, which is a
-   * silent difference between the drag and the button beside it.
+   * view would land every drop in whatever the deck's default category happened to be, which is
+   * a silent difference between the drag and the button beside it.
    */
   it("takes a dropped card into the group it was dropped on", async () => {
     const spies = draw();

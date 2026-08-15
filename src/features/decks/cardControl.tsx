@@ -576,8 +576,9 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
  * A group as a drop target: **the category you let go over is the one that takes the card.**
  *
  * That is what the old zone columns did and it is the whole point of a per-group target — a
- * single target over the whole view would land every drop in whatever the "Add to" select
- * happened to say, which is a silent difference between the drag and the button beside it.
+ * single target over the whole view would land every drop in whatever the deck's default
+ * category happened to be, which is a silent difference between the drag and the button beside
+ * it.
  *
  * `categoryId: null` registers nothing, and that is `grouping.ts`'s rule rather than a special
  * case here: a derived group is a heading and no more, so there is nothing for a card to be

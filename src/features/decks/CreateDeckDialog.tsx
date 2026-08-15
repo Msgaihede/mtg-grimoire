@@ -9,6 +9,7 @@ import { dialog as dialogMotion, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { AUTO_CATEGORY } from "./autoCategory";
 import { FOCUS } from "./cardControl";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
@@ -33,6 +34,12 @@ const BLANK: DeckSettingsValue = {
   notes: "",
   theoryEnabled: false,
   folderId: null,
+  // **The one field this dialog never asks about**, and the only honest answer it could give:
+  // a deck being created has no categories — `deck_create` seeds the four zones in the same
+  // transaction that makes the row — so there is no pile to offer and no id to write. This form
+  // is passed no `categories`, so no "Add cards to" row is drawn, and the create sends nothing
+  // for it: `decks.default_category_id` has `DEFAULT 0`, which is this same value.
+  defaultCategoryId: AUTO_CATEGORY,
 };
 
 /**

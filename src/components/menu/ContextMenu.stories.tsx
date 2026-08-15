@@ -267,6 +267,7 @@ const DECK: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 /** The folder that deck is in — a child of `Constructed`, which is what makes its own **Move to**

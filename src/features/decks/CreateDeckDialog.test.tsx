@@ -77,6 +77,7 @@ const MADE: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
   updatedAt: 1786266000,
 };
 

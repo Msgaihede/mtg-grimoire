@@ -1,8 +1,8 @@
-import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
-import { AUTO_CATEGORY, DeckSearchPanel } from "./DeckSearchPanel";
+import { AUTO_CATEGORY } from "./autoCategory";
+import { DeckSearchPanel } from "./DeckSearchPanel";
 import { useDeck } from "./useDeck";
 
 /**
@@ -20,12 +20,13 @@ import { useDeck } from "./useDeck";
  * the list and both the editor and this wrapper read the same one. Hand-copying it here would
  * be a story asserting against ids the fake's database does not have.
  *
- * `targetCategoryId` is controlled, so the state lives here; **until the reader picks, it is
- * {@link AUTO_CATEGORY}**, which is the editor's own default. It needs no clamp to a real id and
- * that is the point of it: the deck read settles a beat after the first render, so a wrapper (or
- * an editor) that reached for `categories[0]` before then held an id naming nothing — and once
- * the read landed, `categories[0]` on a deck with no user pile of its own is the seeded
- * **Commander** category, which is where every plain add used to go.
+ * **`targetCategoryId` is read-only now, and the wrapper reads it off the deck row** — the
+ * `useState` that used to be here went with the select the panel used to draw (2026-08-15). It
+ * is `decks.default_category_id`, chosen in the settings dialog, and {@link AUTO_CATEGORY} until
+ * somebody chooses: it needs no clamp to a real id and that is the point of it. A wrapper (or an
+ * editor) that reached for `categories[0]` instead would hold an id naming nothing until the
+ * deck read settled — and once it landed, `categories[0]` on a deck with no user pile of its own
+ * is the seeded **Commander** category, which is where every plain add used to go.
  *
  * **`defaultFormat` is an arg here and is deliberately *not* derived from the deck this wrapper
  * already reads.** Deriving it is `DeckEditor`'s job and it carries a fence this panel never
@@ -47,13 +48,11 @@ function Panel({
   maxWidth?: number;
 }) {
   const deck = useDeck(deckId);
-  const [picked, setPicked] = useState<number>(AUTO_CATEGORY);
   return (
     <DeckSearchPanel
       add={deck.addCard}
       categories={deck.categories}
-      targetCategoryId={picked}
-      onTargetCategoryChange={setPicked}
+      targetCategoryId={deck.deck?.defaultCategoryId ?? AUTO_CATEGORY}
       defaultFormat={defaultFormat}
       roomy={roomy}
       maxWidth={maxWidth}
@@ -91,13 +90,15 @@ const meta = {
           "43 printings less the two the fake's `paperOnly` default excludes and the three its " +
           "`playableOnly` default does, collapsed to one row per card), and the Add " +
           "button writes through `deck_add_card`.\n\n" +
-          "**The category choice sits above the results rather than on each of them.** It is " +
-          "the click path's answer to “where does this go”, and therefore the keyboard's — " +
-          "which is what makes dragging a shortcut rather than the only way in. The select's " +
-          "value is a category **id**, because a category's name is the reader's to change; " +
-          "every Add button is named for the card *and* that category's name, because where " +
-          "the card is going is the one thing about the press that is not visible on the " +
-          "tile.\n\n" +
+          "**Where a card goes is a deck setting, and this panel only reads it** " +
+          "(2026-08-15). An `Add to` select sat on the header row here until then, backed by a " +
+          "`useState` in `DeckEditor` — so a reader who pointed it at their Sideboard lost that " +
+          "the moment they closed the deck, and the *other* surface it governed, the toolbar's " +
+          "quick-add field, drew no control at all. It is `decks.default_category_id` now, " +
+          "asked once in the deck settings dialog beside the format and the folder. What is " +
+          "still here is where it shows: **every Add button is named for the card *and* the " +
+          "pile it will land in**, because where the card is going is the one thing about the " +
+          "press that is not visible on the tile.\n\n" +
           "**The format filter opens on the open deck's format** ({@link DeckFormat}), because " +
           "a deck is built out of what is legal in it. It is a *default* and not a " +
           "constraint — the select is live, `Any format` stays in it under the wider " +
@@ -164,36 +165,23 @@ export const Docked: Story = {
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
 
-    // The category is in every Add button's name, and it is the only part of the press a
+    // The pile is in every Add button's name, and it is the only part of the press a
     // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
     // reader cannot tell apart.
     //
-    // **The first option is not a category**, it is `Auto (by what it does)`, and it is the
-    // default — so the name on the button is the pile *this card's type line* earns rather than
-    // the option's own text. Ancient Tomb is a Land, and it is written out here because that is
-    // the claim: the button promises the pile before the press, and it can only do that because
-    // `autoCategoryFor` reads the type line and nothing else.
-    const select = within(panel).getByLabelText("Add to") as HTMLSelectElement;
-    const options = within(select).getAllByRole("option") as HTMLOptionElement[];
-    await expect(options.length).toBeGreaterThan(1);
-    await expect(select).toHaveValue(options[0].value);
-    await expect(options[0].textContent).toBe("Auto (by what it does)");
+    // **This deck is on `AUTO_CATEGORY`**, which the seed leaves every deck on — so the name on
+    // the button is the pile *this card* earns rather than one pile for the whole wall. Ancient
+    // Tomb is a Land, and it is written out here because that is the claim: the button promises
+    // the pile before the press, and it can only do that because `autoCategoryFor` is a pure
+    // function of the card.
+    //
+    // **And there is no control here to change it.** The select this play used to drive is in
+    // the settings dialog, whose own story is where a pick is made; what this asserts instead is
+    // that nothing was left behind on the row when it moved.
+    await expect(within(panel).queryByLabelText("Add to")).toBeNull();
     await expect(
       await within(panel).findByRole("button", { name: "Add Ancient Tomb to Land" }),
     ).toBeInTheDocument();
-
-    // And the button follows the pick, which is the whole of what the select does. Read off the
-    // option rather than written out, because from here down the list is the **deck's** — the
-    // fake seeds the categories every deck is born with, and a story that retyped their names
-    // would be asserting against the seed instead of against this panel.
-    await userEvent.selectOptions(select, options[1].value);
-    await waitFor(async () => {
-      await expect(
-        within(panel).getByRole("button", {
-          name: `Add Ancient Tomb to ${options[1].textContent}`,
-        }),
-      ).toBeInTheDocument();
-    });
   },
 };
 

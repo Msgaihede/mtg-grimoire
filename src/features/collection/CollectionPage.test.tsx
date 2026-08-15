@@ -115,6 +115,7 @@ const BURN: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  defaultCategoryId: 0,
 };
 
 const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({

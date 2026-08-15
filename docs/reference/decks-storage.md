@@ -265,6 +265,48 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   which is the only fence either side has. Neither sentence claims a card moved ("Split the X
   spells into their own group" / "Folded the X spells back into their mana values"), because
   nothing was added, removed or refiled: it changes how the deck is read and not what is in it.
+- **`decks.default_category_id` is where an unfiled add lands, and `0` is `Auto`.**
+  `INTEGER NOT NULL DEFAULT 0`, **schema v16** — the deck editor's old "Add to" answer, which was a
+  `useState` in `DeckEditor` with a select on the docked search panel until 2026-08-15 and is now
+  asked in the deck settings dialog. It rides `DeckPatch`, `DeckRow`, `DeckBefore` and
+  `DECK_SELECT` exactly as `separate_x_group` does, takes the **last** index in `deck_row` and the
+  **next** `?` hole at the end of `update_deck`'s `SET` list (`?13`), and is deliberately **not on
+  `DeckInput`**: a deck being born has no categories to point at — `create_deck` seeds the four
+  zones in the same transaction — so it takes its DDL default like the columns beside it.
+  **It is a sentinel in a `NOT NULL` column rather than a nullable foreign key, and that is the
+  decision worth knowing.** `deck_categories.id` is an `INTEGER PRIMARY KEY`, so rowids start at 1
+  and nothing can collide with `0`; the frontend already rested on that as `AUTO_CATEGORY` and Rust
+  spells the same number `deck::AUTO_CATEGORY`. The alternative — nullable, with
+  `REFERENCES deck_categories(id) ON DELETE SET NULL` — is what SQLite would even allow in an
+  `ADD COLUMN` (a `REFERENCES` clause needs a NULL default), and it fails on `DeckPatch`'s
+  convention: `coalesce(?n, column)` reads a bound NULL as *leave it*, so "back to Auto" would have
+  needed a command of its own, which is the price `decks.folder_id` pays through `set_folder`.
+  **What the sentinel costs is the clean-up that key would have done, and it is two sites**:
+  `deck_meta::delete_category` puts a deck filing by the deleted pile back to `0` **before** the
+  DELETE and inside the same transaction — left undone, the deck files every unnamed add at an id
+  with no pile behind it, and `deck_cards.category_id`'s real foreign key then refuses the reader's
+  next quick add on a deck whose settings still read the deleted name — and `deck::duplicate_deck`
+  **remaps** it through the `category_map` it already builds for the cards, because the copy's piles
+  are new rows; carried across verbatim it would point the duplicate at a pile of the *original*,
+  which breaks nothing and quietly files every add into a deck the reader is not looking at. That
+  is why the copy's `INSERT … SELECT` does not name the column at all: it is written after the map
+  exists. `schema.rs`'s `the_default_category_is_a_sentinel_rather_than_a_foreign_key` asserts the
+  key's **absence**, so a later step that rebuilds `decks` and adds one fails there and takes the
+  paragraph with it rather than leaving two stories.
+  **Rust owns one fence and no more**: a non-zero id must name a category *of this deck*
+  (`category_of_deck`, the same two sentences every card write answers), because nothing in the DDL
+  says so. What Auto *does* — Removal, Ramp, Draw, off a card's Oracle tags — is `autoCategoryFor`'s
+  and stays in TypeScript.
+- **The audit word is `"defaultCategory"` and its payload carries the pile's _name_.** The second
+  multi-word field name `record_deck_edit` writes, so the `"xGroup"` paragraph above applies to it
+  verbatim; what is new is the value. A bare category id in a `to` is a number no reader can resolve
+  once the pile has been renamed or deleted, and this drawer is read months later — so the name is
+  resolved at the moment it is true, which is `record_filed`'s reasoning for a folder path applied
+  to the only other column pointing at a row with a name of its own. `null` on either side is
+  `AUTO_CATEGORY`, and `auditText.ts` words it as the rule rather than as a pile ("New cards now go
+  by what the card does"), because under Auto there is no one pile: it is decided per card. The
+  `from` side is looked up at the write rather than carried on `DeckBefore`, so a rename or a cover
+  change pays no join for a question nobody asked.
 - **The six single-card commands, and what each takes** (the seventh, `deck_import_commit`, is
   the bulk one and has its own bullet below).\
   `deck_get(id, variant)`;
