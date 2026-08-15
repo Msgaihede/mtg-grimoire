@@ -298,9 +298,9 @@ describe("useDeckMeta.autoCategorise", () => {
     expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p5", "p1"]);
     // The deck already has a Removal column, so the tagged card joins it rather than making a
     // second one; the untagged one gets the type pile it has always got.
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p5", MAIN.id, REMOVAL.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p5", MAIN.id, REMOVAL.id, null, "live");
     expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Creature");
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, null, "live");
   });
 
   /**
@@ -321,7 +321,7 @@ describe("useDeckMeta.autoCategorise", () => {
     expect(moved).toBe(1);
     expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Land");
     expect(deckCategoryCreate).not.toHaveBeenCalledWith(4, "Tutor");
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p6", MAIN.id, 43, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p6", MAIN.id, 43, null, "live");
   });
 
   /**
@@ -374,8 +374,8 @@ describe("useDeckMeta.autoCategorise", () => {
     expect(moved).toBe(2);
     // Asked once, about one id — the second row costs no read and is filed by the same slugs.
     expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p7"]);
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p7", MAIN.id, RAMP.id, "live");
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p7", LOOSE.id, RAMP.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p7", MAIN.id, RAMP.id, null, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p7", LOOSE.id, RAMP.id, null, "live");
   });
 
   /**
@@ -416,8 +416,8 @@ describe("useDeckMeta.autoCategorise", () => {
     expect(moved).toBe(2);
     expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Creature");
     expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Land");
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, "live");
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, 41, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, null, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, 41, null, "live");
   });
 
   /** A pile the deck already has is used, not made again — `deck_category_create` refuses a
@@ -430,7 +430,7 @@ describe("useDeckMeta.autoCategorise", () => {
     await result.current.autoCategorise.mutateAsync([CREATURE]);
 
     expect(deckCategoryCreate).not.toHaveBeenCalled();
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, null, "live");
   });
 
   /**
@@ -540,7 +540,7 @@ describe("useDeckMeta.autoCategorise", () => {
 
     expect(moved).toBe(1);
     expect(deckCategoryCreate).not.toHaveBeenCalled();
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, null, "live");
   });
 
   /** `autoCategoryFor` answers "Uncategorised" for an orphan or a layout it has no word for.
@@ -603,6 +603,6 @@ describe("useDeckMeta.autoCategorise", () => {
     await result.current.autoCategorise.mutateAsync([CREATURE]);
 
     expect(deckCategoryCreate).not.toHaveBeenCalled();
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, null, "live");
   });
 });

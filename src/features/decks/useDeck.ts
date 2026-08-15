@@ -11,7 +11,21 @@ import {
 } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { autoCategoryFor } from "./autoCategory";
+import { autoCategoryFor, UNCATEGORISED } from "./autoCategory";
+
+/**
+ * What a re-file did — the quick zones' `Auto` for a card already in the deck.
+ *
+ * `moved: false` is an **answer**, not a failure: the rule either could not place the card
+ * ({@link UNCATEGORISED}) or named the pile it is already in. `category` is the word the rule
+ * produced in every case, so a caller can say which it was; `categoryId` is `null` unless
+ * something actually moved, because it exists to be handed the caret.
+ */
+export interface RefileResult {
+  moved: boolean;
+  category: string;
+  categoryId: number | null;
+}
 
 /** Stable identity for "no cards" — an unloaded deck and a deck that is gone both read this,
  *  and the editor's `useMemo`s key off it. */
@@ -405,8 +419,68 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    *  like the rest. */
   const moveCard = useMutation({
     mutationFn: ({ cardId, from, to }: { cardId: string; from: number; to: number }) =>
-      ipc.deckMoveCard(opened(id), cardId, from, to, variant),
+      ipc.deckMoveCard(opened(id), cardId, from, to, null, variant),
     onSuccess: invalidate,
+  });
+
+  /**
+   * Re-file a card the deck already holds by what it *does* — the quick zones' `Auto` for a card
+   * dragged off the desk.
+   *
+   * **`addCard`'s auto arm read backwards, and deliberately the same three steps in the same
+   * order**: the card's Oracle tags, then `autoCategoryFor`, then a command that finds-or-creates
+   * the pile that names. One rule, applied at two entrances — a card filed on the way *in* and
+   * the same card filed again later must not disagree about where it belongs, and two spellings
+   * of the rule is how they would.
+   *
+   * **The pile is resolved in Rust, in the move's own transaction**, rather than by a
+   * `deckCategoryList` + `deckCategoryCreate` pair out here. Three things follow from that and
+   * each is why: a pile the app invents comes out `origin: 'auto'`, so `drawsWhenEmpty` takes it
+   * off the desk once its last card leaves — `deckCategoryCreate` writes `'user'` and would leave
+   * a column nobody asked for standing for ever; the create and the move are one transaction, so
+   * a refused move cannot strand an empty pile; and it is one round trip rather than three.
+   *
+   * **Two outcomes write nothing, and both are answers rather than failures.** A card the rule
+   * cannot place ({@link UNCATEGORISED} — an orphan, or a layout with no bucket word) stays where
+   * it is, because moving it from a pile somebody chose into the bin is a downgrade dressed as
+   * tidying; and a card already in the pile the rule names is already filed. Neither reaches IPC
+   * at all — the comparison is against the row's own `categoryName`, which the caller is holding
+   * — so the common "press it again" costs a tag read and nothing else.
+   *
+   * `categoryId` is `null` on both of those, and it is what the caller hands the caret to: there
+   * is nowhere to send it when nothing moved.
+   */
+  const refileCard = useMutation({
+    mutationFn: async ({
+      cardId,
+      from,
+      typeLine,
+      categoryName,
+    }: {
+      cardId: string;
+      /** The pile the card is in now — the slot the move leaves. */
+      from: number;
+      /** The row's own type line. `null` is a real value and files under
+       *  {@link UNCATEGORISED}, which this then declines to move it to. */
+      typeLine: string | null;
+      /** What the card's current pile is called, so "already filed" is answered without a round
+       *  trip. The row carries it denormalized for exactly this kind of reason. */
+      categoryName: string;
+    }): Promise<RefileResult> => {
+      // The one read, and it cannot fail the re-file: `oracleTagsFor` catches and answers `[]`,
+      // which is `autoCategoryFor`'s supported floor and files by type line instead.
+      const target = autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
+      if (target === UNCATEGORISED) return { moved: false, category: target, categoryId: null };
+      if (target === categoryName) return { moved: false, category: target, categoryId: null };
+      const categoryId = await ipc.deckMoveCard(opened(id), cardId, from, null, target, variant);
+      return { moved: true, category: target, categoryId };
+    },
+    // **Only when something moved.** The two no-op answers touched no row, so re-reading the
+    // deck for them would be a round trip and a re-render for a press that changed nothing —
+    // and "press it again" is the common case this path is built for.
+    onSuccess: (result) => {
+      if (result.moved) invalidate();
+    },
   });
 
   /**
@@ -520,6 +594,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     setQuantity,
     clearCategory,
     moveCard,
+    refileCard,
     swapPrinting,
     setTag,
     missingToWishlist,

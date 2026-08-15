@@ -1697,7 +1697,11 @@ describe("DeckEditor", () => {
     // The same deck, one category short — and it is the one the row still points at, which is
     // exactly the half-commit the read-side fallback is for.
     deckGet.mockResolvedValue(
-      detail({ defaultCategoryId: SIDE }, [], CATEGORIES.filter((c) => c.id !== SIDE)),
+      detail(
+        { defaultCategoryId: SIDE },
+        [],
+        CATEGORIES.filter((c) => c.id !== SIDE),
+      ),
     );
     await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
 
@@ -2803,7 +2807,7 @@ describe("DeckEditor drag and drop", () => {
     await dragOnto(card_("Lightning Bolt"), group("Sideboard"));
 
     await waitFor(() =>
-      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
+      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live"),
     );
     await waitFor(() => expect(group("Sideboard")).toHaveFocus());
   });
@@ -2927,8 +2931,69 @@ describe("DeckEditor drag and drop", () => {
       await held.drop();
 
       await waitFor(() =>
-        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
+        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live"),
       );
+    });
+
+    /**
+     * **`Auto` re-files a card the deck already holds** (2026-08-15), where it used to grey and
+     * refuse. End to end this is the add rule run backwards: the card's Oracle tags, then
+     * `autoCategoryFor`, then the move's **name arm** — `toCategoryId` null — so the pile is
+     * found or created inside the move's own transaction and comes out `origin: 'auto'`.
+     *
+     * The type line reaching the rule is the half only this test can see: it is read off the
+     * deck's own row rather than carried in the drag, which is `dnd.ts`'s decision and the reason
+     * the payload did not have to grow a field.
+     */
+    it("re-files a deck card dropped on Auto by what it does", async () => {
+      oracleTagsForPrintings.mockResolvedValue([
+        { cardId: "c-Lightning Bolt", slugs: ["removal"] },
+      ]);
+      await open();
+
+      const held = await startDrag(card_("Lightning Bolt"));
+      await held.over(zone("Auto"));
+      await held.drop();
+
+      await waitFor(() =>
+        expect(deckMoveCard).toHaveBeenCalledWith(
+          4,
+          "c-Lightning Bolt",
+          MAIN,
+          null,
+          "Removal",
+          "live",
+        ),
+      );
+    });
+
+    /**
+     * The two answers that move nothing say so, because a deliberate gesture that changes the
+     * screen not at all is the shape of thing that reads as a broken control. `Lightning Bolt`
+     * is in `Main deck` and the rule with no tags files an `Instant` under `Instant`, so this
+     * is the *unplaceable* half's sibling: a pile the card is not in, reached with no IPC.
+     */
+    it("says when a re-file had nothing to do, and writes nothing", async () => {
+      oracleTagsForPrintings.mockResolvedValue([]);
+      deckGet.mockResolvedValue(
+        detail(
+          {},
+          [bolt({ categoryName: "Instant" })],
+          [category(1, "Instant", "main"), ...CATEGORIES.slice(1)],
+        ),
+      );
+      await open();
+
+      const held = await startDrag(card_("Lightning Bolt"));
+      await held.over(zone("Auto"));
+      await held.drop();
+
+      // By its text, not by its role: the quick-add field keeps a `role="status"` mounted for
+      // the life of the toolbar (a live region that first appears with its sentence already
+      // inside announces nothing), so this view has two and `getByRole` finds both.
+      const note = await screen.findByText(/already filed under Instant/);
+      expect(note).toHaveAttribute("role", "status");
+      expect(deckMoveCard).not.toHaveBeenCalled();
     });
 
     /**
@@ -3151,7 +3216,14 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Move to/);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
 
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      RECURSION.id,
+      null,
+      "live",
+    );
   });
 
   /**
@@ -3172,7 +3244,14 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Move to/);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
 
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      RECURSION.id,
+      null,
+      "live",
+    );
   });
 
   /**
@@ -3267,6 +3346,7 @@ describe("DeckEditor — a card's menu", () => {
       "c-Atraxa, Praetors' Voice",
       MAIN,
       CATEGORIES[2].id,
+      null,
       "live",
     );
   });

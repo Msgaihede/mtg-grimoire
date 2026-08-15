@@ -269,7 +269,7 @@ describe("useDeck", () => {
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", 1);
 
     await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, "theory");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, null, "theory");
 
     // The clear is variant-scoped like the rest, and that is the whole difference between it
     // and `deckCategoryDelete`, which takes both lists because the CASCADE does. Emptying the
@@ -361,7 +361,7 @@ describe("useDeck", () => {
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, null, "live", 1);
 
     await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, null, "live");
   });
 
   /**
@@ -440,6 +440,100 @@ describe("useDeck", () => {
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Instant", quantity: 1 });
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", 1);
+  });
+
+  /**
+   * `refileCard` — the quick zones' `Auto` for a card the deck already holds, and the add rule
+   * above read backwards.
+   *
+   * **The same three steps in the same order**, which is the point of it being here rather than a
+   * second implementation somewhere: the card's tags, `autoCategoryFor`, then a command that
+   * finds-or-creates the pile that names. It sends the **name arm** — `toCategoryId` null — so
+   * the pile is resolved inside the move's own transaction and a pile the app invents comes out
+   * `origin: 'auto'`.
+   */
+  it("re-files a deck card by what it does, through the move's name arm", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    deckMoveCard.mockResolvedValue(31);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      typeLine: "Instant",
+      categoryName: MAIN.name,
+    });
+
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Removal", "live");
+    // The id the command answered with, which is what the caret is handed — the caller has no
+    // other way to learn what was found or made.
+    expect(answer).toEqual({ moved: true, category: "Removal", categoryId: 31 });
+  });
+
+  /**
+   * **A card already in the pile the rule names writes nothing and reaches IPC not at all.**
+   *
+   * The comparison is against the row's own `categoryName`, which the caller is holding, so
+   * "press it again" costs one tag read and no round trip. `moved: false` is an answer rather
+   * than a failure and `categoryId` is `null`, because there is nowhere to send the caret.
+   */
+  it("says a card is already filed rather than moving it to where it is", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      typeLine: "Instant",
+      categoryName: "Removal",
+    });
+
+    expect(answer).toEqual({ moved: false, category: "Removal", categoryId: null });
+    expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A card the rule cannot place is **left where it is**. `autoCategoryFor` answers
+   * `Uncategorised` for an orphan or a layout it has no word for, and moving a card out of a
+   * pile somebody chose into the bin is a downgrade dressed as tidying — the same call the
+   * Categories dialog's bulk action makes, for the same reason.
+   */
+  it("leaves a card the rule cannot place where it is", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      typeLine: null,
+      categoryName: MAIN.name,
+    });
+
+    expect(answer).toEqual({ moved: false, category: "Uncategorised", categoryId: null });
+    expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /** A refused tag read never fails a re-file, exactly as it never fails an add: `oracleTagsFor`
+   *  catches and answers `[]`, so the card files by its type line instead. */
+  it("re-files by type line when the tag read is refused", async () => {
+    oracleTagsForPrintings.mockRejectedValue("the database is busy");
+    deckMoveCard.mockResolvedValue(12);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      typeLine: "Artifact",
+      categoryName: MAIN.name,
+    });
+
+    expect(answer.moved).toBe(true);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Artifact", "live");
   });
 
   /**
