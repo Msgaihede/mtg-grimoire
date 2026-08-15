@@ -229,6 +229,21 @@ Every one of these has its measurement and its story in
   and never on the box around the rows, which is what the `ResizeObserver` measures, so padding
   there feeds back into the width it is computed from. Driven in the shipped window; every figure
   is in [frontend-design.md](../docs/reference/frontend-design.md).
+- **A scroll container is `relative`, because a scroll container has to be the containing block
+  for its own absolutely positioned content.** `overflow` clips a descendant only when the
+  scroller lies between it and that descendant's **containing block** — and Tailwind's `.sr-only`
+  is `position: absolute`, so a screen-reader label with no positioned ancestor takes the
+  *initial* containing block, is laid out at its static position inside the scrolled content, and
+  is clipped by nothing. It then stretches the **document**. That shipped: the deck editor drew a
+  window scrollbar beside its own, and the `h-screen` shell slid up off its own window when you
+  used it — `documentElement.scrollHeight` **1704** against a `clientHeight` of 800 while
+  `body.scrollHeight`, the shell root and every box in the tree read 800 and the shell's
+  `overflow-hidden` said nothing was overflowing. **Nothing in the box tree names the culprit and
+  jsdom cannot see any of it**, which is what makes this worth a rule rather than a bug report.
+  The class goes on **whichever box carries the `overflow`** and one level up is not the same
+  fix — `relative` on `main` instead moved the phantom scroll into `main` (`scrollHeight`
+  742 → 1646) rather than removing it. Both figures, and the four-view scrollbar count after:
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against

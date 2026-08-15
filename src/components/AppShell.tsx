@@ -277,7 +277,21 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           )}
         </AnimatePresence>
 
-        <main className="min-h-0 flex-1 overflow-auto p-5">{children}</main>
+        {/* **`relative`, because this is a scroll container and a scroll container has to be the
+            containing block for its own absolutely positioned content.** Tailwind's `.sr-only` is
+            `position: absolute`, and `overflow` clips a descendant only when the scroller sits
+            between it and its containing block — so a label with no positioned ancestor resolves
+            to the *initial* containing block, is laid out at its static position and is clipped by
+            nothing, stretching the **document** instead. Probed here 2026-08-15: three of them in
+            this box alone (two filter labels and a view heading) had `offsetParent` of `body`.
+            They cost nothing today only because every view they sit in happens to keep them near
+            the top; the deck editor is where one finally sat 1704px down and opened a second
+            scrollbar across the whole window. That instance is fixed on the editor's own section,
+            which is the scroller its content belongs to and the only place that can fix it —
+            `relative` *here* moved that phantom scroll from the document into `main` rather than
+            removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
+            applied to the outermost scroller, so a view that grows cannot reach the document. */}
+        <main className="relative min-h-0 flex-1 overflow-auto p-5">{children}</main>
       </div>
     </div>
   );

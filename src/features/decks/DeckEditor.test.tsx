@@ -715,6 +715,40 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The page scroller is `relative`, and that one word is a whole second scrollbar.**
+   *
+   * `overflow` clips a descendant only when the scroller sits between it and that descendant's
+   * *containing block*. Tailwind's `.sr-only` is `position: absolute`, so every screen-reader
+   * label in this editor with no positioned ancestor resolved to the **initial** containing block:
+   * laid out at its static position deep inside the scrolled column, and clipped by nothing. The
+   * label stretched the *document*, which is a window scrollbar beside this editor's own and an
+   * `h-screen` app that slides up off its own window when you use it.
+   *
+   * Measured in the shipped window 2026-08-15 (`tauri dev`, a debug build, 1280×800, a 24-card
+   * deck): `documentElement.scrollHeight` **1704** against a `clientHeight` of 800, with
+   * `window.innerWidth - documentElement.clientWidth` reading **15** — while `body.scrollHeight`
+   * and the `h-screen` shell root both read 800 and the shell's `overflow-hidden` reported nothing
+   * overflowing, which is why no box in the tree named the culprit. The deepest escapee was
+   * `DeckStats`' curve label `"0 cards at mana value 8 or more"` at y **1703**. This class took it
+   * to **800 / 0**, and the editor to one scrollbar in Stacks, Grid and Text.
+   *
+   * **jsdom has no layout engine, so none of that is checkable here** — and the same is true of
+   * the wrong fix, which is the reason this test exists rather than a comment. `relative` on
+   * `AppShell`'s `main` looks identical in every DOM assertion and is *not* the same repair: the
+   * label is then contained by main but its static position is still inside this column's scrolled
+   * content, so the phantom scroll moved rather than went (`main.scrollHeight` **742 → 1646**,
+   * same pass). The rule is that a scroll container is the containing block for its own absolutely
+   * positioned content, so the class belongs on whichever box carries the `overflow`.
+   */
+  it("makes the page scroller the containing block for its own absolute content", async () => {
+    await open();
+
+    const page = screen.getByRole("region", { name: /^Deck editor:/ });
+    expect(page.className).toContain("overflow-y-auto");
+    expect(page.className).toContain("relative");
+  });
+
+  /**
    * **The docked panel is pinned, not stretched** — the other half of the deck growing.
    *
    * A sibling of a 7 000px desk row is drawn 7 000px tall unless it opts out, which takes its

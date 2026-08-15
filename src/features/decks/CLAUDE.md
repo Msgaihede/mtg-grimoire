@@ -841,6 +841,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   what it *is*, and given no height it draws its own scrollbar **and** the page's. So the desk row
   keeps `DECK_HEIGHT_FLOOR` under that one view and the view box keeps `min-h-0 overflow-auto` —
   the arrangement all four used to share.
+  **The page section is `relative`, and that word is a second scrollbar** (2026-08-15). It was
+  missing, so the editor's `.sr-only` labels — `position: absolute`, no positioned ancestor —
+  took the *initial* containing block, were laid out at their static position deep inside the
+  scrolled column, and were clipped by nothing: `DeckStats`' `"0 cards at mana value 8 or more"`
+  sat at y **1703** and stretched the **document** to 1704 against an 800px window. The reader saw
+  the editor's scrollbar with the window's beside it, and an `h-screen` app that slid up off its
+  own window leaving page background under it. One class took it to **800 / 0**, and it belongs on
+  this section rather than on `AppShell`'s `main` — there the phantom scroll merely moved
+  (`main.scrollHeight` 742 → 1646). The general rule and both measurements are in
+  [`src/CLAUDE.md`](../../CLAUDE.md) and
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
   **`min-h-96` moved from the desk row to the view box, and that is the load-bearing half.** A
   flex item's automatic minimum size is what stops it being squeezed below its content, and a
   `min-height` number *replaces* that `auto` — so on the row it was a ceiling as well as a floor:

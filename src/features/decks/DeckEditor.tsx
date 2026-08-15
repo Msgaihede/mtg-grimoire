@@ -2175,7 +2175,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // sticks to the foot of the window for the length of a drag (the price strip). The
       // virtualised table is the one view still given a height, because a virtualiser is a
       // scrollport by construction.
-      className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
+      //
+      // **`relative` is not decoration and it is the whole of a two-scrollbar bug** (2026-08-15).
+      // `overflow` clips a descendant only when this box is between that descendant and its
+      // *containing block* — and Tailwind's `.sr-only` is `position: absolute`, so every
+      // screen-reader label in here whose nearest positioned ancestor was missing resolved to the
+      // **initial** containing block instead. Laid out at its static position, deep inside the
+      // scrolled column, and clipped by nothing: the label stretched the **document**, which is a
+      // window scrollbar beside this one and an app that slides up off its own window when you use
+      // it. Measured live at 1280×800 on a 24-card deck (`tauri dev`, debug):
+      // `documentElement.scrollHeight` **1704** against a `clientHeight` of 800 — a 904px scroll
+      // the window had no content for — with `window.innerWidth - documentElement.clientWidth`
+      // reading **15**, while `body.scrollHeight` and the `h-screen` shell root both read 800 and
+      // the shell's own `overflow-hidden` said nothing was overflowing. The deepest escapee was
+      // `DeckStats`' curve label "0 cards at mana value 8 or more" at y **1703**, which is the
+      // 1704 exactly. One `relative` here took it to **800 / 0**.
+      //
+      // **It belongs on the box that scrolls, and putting it one level up is not the same fix.**
+      // With `relative` on `AppShell`'s `main` instead, the document came right (800) and
+      // `main.scrollHeight` went **742 → 1646**: the label was contained by main but its static
+      // position is still inside *this* column's scrolled content, so the phantom bar moved rather
+      // than went. The rule that generalises is "a scroll container is the containing block for
+      // its own absolutely positioned content", and the scroller here is this element.
+      className={cn("relative flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it
