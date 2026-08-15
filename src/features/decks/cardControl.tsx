@@ -132,7 +132,7 @@ export function deckCardSelectedProps(selected: boolean) {
 }
 
 /**
- * The same question for the landed mark: which cards are inside their ten seconds.
+ * The same question for the landed mark: which cards are inside their five seconds.
  *
  * It sits on {@link LandedMark} itself rather than on the card, because the mark is what an
  * expiry removes — so `[data-deck-landed]` answers "is it still saying so" rather than "was it
@@ -158,9 +158,14 @@ export const SELECTED_ROW = "bg-surface ring-1 ring-inset ring-accent";
 /**
  * **Landed**: how long a card the reader has just added goes on saying so.
  *
- * Ten seconds, because the gesture that adds a card happens in the docked search panel and the
+ * Five seconds, because the gesture that adds a card happens in the docked search panel and the
  * card lands somewhere in a deck the reader is not looking at — the mark has to survive the trip
  * their eye makes from one to the other, twice, with a moment to be sure at the end of it.
+ *
+ * **It was ten until 2026-08-15**, and it was halved by the same change that made the mark gold
+ * and gave it a glow. The two are one decision: ten seconds was buying a *quiet* mark the time it
+ * needed to be found, and a mark that is found at a glance does not need that time. Ten seconds of
+ * a mark this loud is the app still pointing at a card long after the reader has moved on.
  *
  * **This number is also in `src/index.css`**, as `--animate-card-landed`'s duration, and the two
  * halves are genuinely two consumers rather than a copy: the stylesheet fades the mark and this
@@ -169,22 +174,41 @@ export const SELECTED_ROW = "bg-surface ring-1 ring-inset ring-accent";
  * 260ms and `motion.test.ts` enforces the cap, correctly, because everything in it is a
  * *transition*. This is a mark that decays, which is a different kind of thing.
  */
-export const LANDED_MS = 10_000;
+export const LANDED_MS = 5_000;
 
 /**
- * The mark itself: a wash and a hairline over the card, fading to nothing over
- * {@link LANDED_MS}.
+ * The mark itself: a gold wash, a gold hairline and a glow inside the card's edge, fading to
+ * nothing over {@link LANDED_MS}.
  *
- * ## Why it is parchment and not gold
+ * ## Why it is gold, and how it stays apart from the other three golds
  *
- * Gold is taken. It is focus, it is {@link SELECTED_CARD}, and it is both halves of the drop
- * affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`) — so a gold mark on a card the reader has
- * just added would be a fourth meaning for one colour, on the very surface where the other three
- * are all in play. Red is the rule break's and green would be a five-colour token used for
- * something that is not mana, which the visual direction forbids in as many words. What is left,
- * and what is right anyway, is the app's own text colour: a card that has just landed **lights
- * up** rather than being tinted, which is what a highlight has meant since somebody first ran a
- * marker over a page.
+ * It was `--color-text` — parchment — until 2026-08-15, on the argument that gold was already
+ * taken three times over on this one surface: focus, {@link SELECTED_CARD}, and both halves of
+ * the drop affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`). The argument was sound about the
+ * colour and wrong about the outcome. Parchment is the app's *text* colour, which means it is
+ * the colour of nearly everything on screen already, so the mark read as a card that had gone
+ * slightly pale — and a mark whose whole job is to be found across a deck the reader is not
+ * looking at cannot be the quietest thing they are looking at. Driven in the real window, it was
+ * missed.
+ *
+ * What keeps it apart from the other three is **shape and place**, which is the axis they were
+ * always distinguished on and is stronger than hue: every one of them is a *line around the
+ * outside* of a box — a ring on the card, a ring on the pile — and this is a **filled face**,
+ * washed and lit from its own rim inward. A picked card wears a gold ring around an unwashed
+ * card; a card that has just landed is gold all the way through and wears no ring; a pile being
+ * dropped into is ringed while the cards inside it are untouched. The two can be true at once and
+ * still read as two facts. Red stays the rule break's, and green would be a five-colour token
+ * spent on something that is not mana, which the visual direction forbids in as many words.
+ *
+ * ## The glow is `inset`, and that is a clipping fact rather than a preference
+ *
+ * The mark is drawn inside the card's **face**, which is `overflow-hidden` in `CardStack` (it is
+ * what clips the picture's corners). Anything painted outside the mark's border box — a plain
+ * `box-shadow`, a `drop-shadow()` filter — is therefore clipped away in the stack view and drawn
+ * in the other three, which is a mark that looks like two different marks depending on which
+ * view the reader left the deck in. An inset shadow is painted *by* this element inside its own
+ * box, so it survives every clip, and it lands the light exactly where this mark needs it: along
+ * the top edge, which is the 34px of itself a card in the middle of a pile still shows.
  *
  * ## Why it is a border and not a ring
  *
@@ -215,16 +239,26 @@ export function LandedMark({ className }: { className?: string }) {
       {...{ [LANDED_ATTR]: "" }}
       className={cn(
         // Over the whole card and hittable by nothing: the card under it is a button, and a
-        // mark that swallowed a press for ten seconds would be worse than no mark at all.
+        // mark that swallowed a press for five seconds would be worse than no mark at all.
         "pointer-events-none absolute inset-0",
         // **Top-weighted, and that is the reveal strip's doing rather than taste.** A flat wash
-        // strong enough to find in a 34px strip is a wash that whites out the open card, and one
+        // strong enough to find in a 34px strip is a wash that floods the open card, and one
         // gentle enough for the open card is invisible in the strip — measured both ways in
-        // Storybook over CDP (2026-08-14). The gradient answers both: 35 % where the strip is,
-        // 10 % by the card's foot. It is the same trade `CARD_MARKS_STRIP`'s own scrim makes one
-        // element away, which is the precedent for spending a gradient here at all.
-        "border-2 border-text bg-gradient-to-b from-text/35 to-text/10",
-        // `animate-none` under reduced motion leaves the mark at full strength for its ten
+        // Storybook over CDP (2026-08-14). The gradient answers both: 40 % where the strip is,
+        // 12 % by the card's foot. It is the same trade `CARD_MARKS_STRIP`'s own scrim makes one
+        // element away, which is the precedent for spending a gradient here at all. The two
+        // percentages are a little over the parchment version's 35/10 because gold sits at 0.75
+        // lightness against parchment's 0.93 — the same alpha is less light on the card.
+        "border-2 border-accent bg-gradient-to-b from-accent/40 to-accent/12",
+        // The glow, and every part of this is load-bearing. `inset` for the clipping reason in
+        // the doc above. No offset, because the light is the card's own edge rather than
+        // something above it. A blur far wider than the spread, so the band falls off into the
+        // art instead of drawing a second border inside the first. `color-mix` rather than the
+        // bare token, because a full-strength gold at this radius is a lamp — and rather than a
+        // `/60` opacity modifier, which Tailwind offers on colour utilities and not inside an
+        // arbitrary shadow value.
+        "shadow-[inset_0_0_26px_4px_color-mix(in_oklab,var(--color-accent)_60%,transparent)]",
+        // `animate-none` under reduced motion leaves the mark at full strength for its five
         // seconds and then takes it away with the element — the information survives, only the
         // fade goes. Nothing here moves, so there is nothing else to reduce.
         "animate-card-landed motion-reduce:animate-none",

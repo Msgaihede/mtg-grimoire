@@ -340,18 +340,23 @@ export const PickedCard: Story = {
 };
 
 /**
- * **Just landed**: a card the reader has this second added, saying so for ten seconds and fading
+ * **Just landed**: a card the reader has this second added, saying so for five seconds and fading
  * the whole way.
  *
- * Parchment rather than gold, because gold is already focus, the picked card and both halves of
- * the drop affordance — and because a card that has just arrived should read as *lit up* rather
- * than as tinted. It is drawn inside the card's face, which is the half that matters here: in a
- * fanned pile a card shows only the 34px of its own printed title bar, so what the reader sees
- * from four cards away is a bright hairline across the top of one card and a lit strip under it.
- * That is the difference between "somewhere in this pile" and "this one".
+ * Gold, washed across the whole face and glowing inward from its own rim — a card that has just
+ * arrived should read as *lit up*. It was parchment until 2026-08-15, on the argument that gold
+ * was already focus, the picked card and both halves of the drop affordance; what that missed is
+ * that parchment is the app's text colour, so the quiet mark was the same value as everything else
+ * on screen. The three golds stay apart by **shape**: they are all lines around the outside of a
+ * box, and this is a filled face.
+ *
+ * It is drawn inside the card's face, which is the half that matters here: in a fanned pile a card
+ * shows only the 34px of its own printed title bar, so what the reader sees from four cards away
+ * is a bright hairline across the top of one card and a lit strip under it. That is the difference
+ * between "somewhere in this pile" and "this one".
  *
  * The third card here is mid-pile deliberately. Watch the fade: full strength for two seconds,
- * then eight seconds down to nothing.
+ * then three seconds down to nothing.
  */
 export const JustLanded: Story = {
   args: { landed: new Map([[RAMP[2].id, 1]]) },
@@ -372,10 +377,12 @@ export const JustLanded: Story = {
  * Both marks on one card, which is the ordinary end of an add: the reader presses Add in the
  * panel, the card lands, and they click it to read what it does.
  *
- * They have to stay tellable apart while they overlap. The ring is gold and stands **outside**
- * the card's edge; the landed mark is parchment and is drawn **inside** the face. So the card
- * has a gold outline, a bright hairline just inside its picture, and a wash between them that is
- * gone ten seconds later.
+ * They have to stay tellable apart while they overlap, and since 2026-08-15 they are the same
+ * gold — so the thing telling them apart is **shape and place**. The ring is a line standing
+ * **outside** the card's edge and touches nothing inside it; the landed mark is a filled face
+ * drawn **inside**, washed and glowing from its rim. So the card has a gold outline around a card
+ * that is itself lit, and the lit part is gone five seconds later while the outline stays for as
+ * long as the pane is open on it.
  */
 export const PickedAndJustLanded: Story = {
   args: { selectedCardId: RAMP[2].cardId, landed: new Map([[RAMP[2].id, 1]]) },

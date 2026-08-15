@@ -243,17 +243,23 @@
      `src/lib/motion.ts` may not hold**. That module's whole discipline is a three-tier scale
      capped at 260ms, and `motion.test.ts` walks its namespace and fails any duration off the
      scale or over the cap — correctly, because those are *transitions*, things the pixels do
-     on the way between two states. This is not one. It is a mark that decays: ten seconds is
+     on the way between two states. This is not one. It is a mark that decays: five seconds is
      how long a reader has to look up from the search panel, find where their card landed, and
      still be told. So it lives here, and `LANDED_MS` in `features/decks/cardControl.tsx` is
-     the same ten seconds spelled in TypeScript, because the mark is also *unmounted* when it
+     the same five seconds spelled in TypeScript, because the mark is also *unmounted* when it
      expires. `cardControl.test.ts` reads this file and fails if the two ever disagree.
 
-     Held at full for the first fifth, then linear to nothing. A fade that starts the instant
-     the card lands is at 80 % before the eye has arrived; two seconds of hold is what makes
-     the other eight readable as "this one, still". `forwards` so the last frame sticks for the
-     few milliseconds between the animation ending and the mark being taken out of the DOM. */
-  --animate-card-landed: card-landed 10s linear forwards;
+     **It was ten seconds until 2026-08-15**, halved in the same change that made the mark gold
+     and gave it a glow: the old parchment wash was quiet enough to need a long look, and a mark
+     the reader cannot miss does not have to stay on the card as long as one they might.
+
+     Held at full for the first **two fifths**, then linear to nothing. A fade that starts the
+     instant the card lands is most of the way down before the eye has arrived, and the two
+     seconds of hold are what make the remaining three readable as "this one, still" — so the
+     hold is the same **two seconds** it was at ten, because what it measures is the trip a
+     reader's eye makes and not a fraction of the total. `forwards` so the last frame sticks for
+     the few milliseconds between the animation ending and the mark leaving the DOM. */
+  --animate-card-landed: card-landed 5s linear forwards;
 }
 
 /* Motion, as tokens — the same three durations and three curves `src/lib/motion.ts` hands to
@@ -303,13 +309,15 @@
   }
 }
 
-/* See `--animate-card-landed` above for the ten seconds and the hold. Opacity only: the mark
-   is a wash and a hairline drawn over a card that is not moving, so there is nothing here for
-   `prefers-reduced-motion` to reduce — the consumer still writes `motion-reduce:animate-none`,
-   which leaves the mark at full strength for its ten seconds and then takes it away. */
+/* See `--animate-card-landed` above for the five seconds and the hold. Opacity only: the mark
+   is a wash, a hairline and a glow drawn over a card that is not moving, so there is nothing
+   here for `prefers-reduced-motion` to reduce — the consumer still writes
+   `motion-reduce:animate-none`, which leaves the mark at full strength for its five seconds and
+   then takes it away. Fading the whole overlay is also what fades the glow: an `inset`
+   box-shadow is painted by this element, so its opacity is this element's. */
 @keyframes card-landed {
   0%,
-  20% {
+  40% {
     opacity: 1;
   }
   100% {

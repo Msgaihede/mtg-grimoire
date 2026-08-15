@@ -131,7 +131,7 @@ export interface DeckSearchPanelProps {
    * It exists because this panel is the one add path in the editor that does not go through the
    * editor's own `addTo`: it holds the mutation and presses it itself, which is what makes the
    * button predictable (see the button's own note on never being disabled). The editor marks
-   * that row as freshly landed for ten seconds so the reader can find it in a deck they are not
+   * that row as freshly landed for five seconds so the reader can find it in a deck they are not
    * looking at, and nothing here knows or cares what it does with it.
    *
    * Optional, so a story or a test can mount this panel with a mutation and nothing else.
@@ -907,7 +907,7 @@ function OpenPanel({
                 // computes the *word on the button* and the hook computes the word it sends, from
                 // the same function over the same fact.
                 // The per-call `onSuccess` carries the row the write landed in back to the
-                // editor, which marks it for ten seconds — the whole point being that the deck
+                // editor, which marks it for five seconds — the whole point being that the deck
                 // is over *there* and the reader is looking *here*. It is per call rather than
                 // on the mutation because the mutation is shared: `useDeck`'s own `onSuccess`
                 // answers for every surface that borrows it, including one with no editor on
