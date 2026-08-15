@@ -19,12 +19,15 @@
  */
 
 /**
- * Where the reader put a line.
+ * Which of the deck's four zones a line is in — **the fixed word the rules read**, beside
+ * {@link ParsedLine.categoryName}, which is the name the user (or their exporter) gave a pile.
  *
- * The starting section is `deck`, which is what makes a list with no headings at all — the
- * reference list, and most of what people paste — read as a deck rather than as nothing.
+ * That is `deck_categories`' own distinction — the name is the reader's and the kind is what the
+ * engine sizes a deck by — applied to a parsed line, and the rename from `Section` is what says
+ * so. The starting value is `deck`, which is what makes a list with no headings at all read as a
+ * deck rather than as nothing.
  */
-export type Section = "deck" | "commander" | "sideboard" | "companion" | "maybeboard";
+export type SectionKind = "deck" | "commander" | "sideboard" | "companion" | "maybeboard";
 
 /** One line that named a card. */
 export interface ParsedLine {
@@ -39,14 +42,14 @@ export interface ParsedLine {
   setCode: string | null;
   /** Verbatim. Collector numbers are TEXT (`123★`, `A-45`, `285`), so nothing is parsed out. */
   collectorNumber: string | null;
-  section: Section;
+  section: SectionKind;
   /**
    * The pile the **file** named for this line, or `null` when it named none.
    *
-   * A bracket's first entry. It is `null` whenever `section` is not `"deck"`, and that invariant
-   * is the whole of what keeps `plan.ts`'s precedence chain three rungs rather than four: a
-   * bracket naming one of the four seeded zones sets the *section*, and only a name the section
-   * vocabulary has never heard of lands here.
+   * A bracket's first entry, else the name of an unknown section heading. It is `null` whenever
+   * `section` is not `"deck"`, and that invariant is the whole of what keeps `plan.ts`'s
+   * precedence chain three rungs rather than four: a bracket naming one of the four seeded zones
+   * sets the *section*, and only a name the section vocabulary has never heard of lands here.
    */
   categoryName: string | null;
   /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's
@@ -83,7 +86,7 @@ export interface ParsedList {
  * They are listed rather than normalised: a rule that folded `main deck` into `maindeck` by
  * deleting spaces would be a rule about every heading, including the ones added later.
  */
-const SECTIONS = new Map<string, Section>([
+const SECTIONS = new Map<string, SectionKind>([
   ["deck", "deck"],
   ["main", "deck"],
   ["maindeck", "deck"],
@@ -189,7 +192,7 @@ const LINE_BREAK = /\r\n|\r|\n/;
  * and `Sideboard (15)` are one heading spelled three ways. The colon comes off first so that
  * `Sideboard (15):` — both at once — is reached by the count strip afterwards.
  */
-function sectionFor(line: string): Section | null {
+function sectionFor(line: string): SectionKind | null {
   const word = line
     .replace(/\s*:\s*$/, "")
     .replace(/\s*\(\d+\)$/, "")
@@ -254,6 +257,58 @@ function bracketCategory(bracket: string): { name: string; excluded: boolean } {
   };
 }
 
+/** A count at the head of a line — the strongest signal that a line is a card and not a
+ *  heading, and the same shape {@link LINE}'s `qty` group reads. */
+const QUANTITY = /^\d{1,4}[xX]?\s/;
+
+/** A trailing `(SET) 123`, `(SET)` or `() 123` — {@link LINE}'s hint, on its own, so a heading
+ *  candidate can be refused for carrying one. */
+const HINT_TAIL = /\s+\(\w{0,10}\)(?:\s+\S+)?$/;
+
+/**
+ * The first row after `index` that makes a claim — not blank, not a comment.
+ *
+ * `null` at the end of the text, which is one of the things that stops a trailing word being
+ * read as a heading over nothing.
+ */
+function nextClaim(rows: readonly string[], index: number): string | null {
+  for (let at = index + 1; at < rows.length; at += 1) {
+    const trimmed = rows[at].trim();
+    if (trimmed === "" || trimmed.startsWith("//") || trimmed.startsWith("#")) continue;
+    return trimmed;
+  }
+  return null;
+}
+
+/**
+ * Is this line a section heading whose name is a pile?
+ *
+ * `Anthem`, `Creature` and `Land` are indistinguishable from card lines to a per-line reader, and
+ * a custom category name can be a real card (`Fog`, `Wrath`, `Duress`). This is the one rule in
+ * the file that reads past the line in front of it, and each clause pays for itself:
+ *
+ * * **No quantity, no printing hint, no bracket.** A heading is a bare word; every card line in
+ *   an export that writes headings carries at least one of the three.
+ * * **The next line that makes a claim carries a count.** This is what leaves a list of bare
+ *   names alone — `Sol Ring` followed by `Arcane Signet` fails it — and it is *also* what makes
+ *   a heading over an empty section impossible, which is how "nothing is ever silently dropped"
+ *   stays true: a line consumed as a heading always opened at least one card.
+ * * **Preceded by a blank line.** Without it `Sol Ring` / `4 Shock` — a hand-written list mixing
+ *   bare names with counted ones — loses its first card.
+ * * **Or the first line of the file, when that next line carries a bracket.** An Archidekt deck
+ *   with no commander opens on a category heading with nothing above it, and Archidekt writes a
+ *   bracket on every one of its lines while a hand-written list writes none.
+ *
+ * **The failure it keeps**, named rather than hidden: a hand-written list with a blank line, then
+ * a bare card name, then a counted line, loses that name. No exporter in scope emits that shape.
+ */
+function namesASection(rows: readonly string[], index: number, trimmed: string): boolean {
+  if (QUANTITY.test(trimmed) || HINT_TAIL.test(trimmed) || trimmed.includes("[")) return false;
+  const next = nextClaim(rows, index);
+  if (next === null || !QUANTITY.test(next)) return false;
+  return index === 0 ? next.includes("[") : rows[index - 1].trim() === "";
+}
+
 /**
  * Read a pasted decklist.
  *
@@ -263,7 +318,8 @@ function bracketCategory(bracket: string): { name: string; excluded: boolean } {
 export function parseDecklist(text: string): ParsedList {
   const lines: ParsedLine[] = [];
   const issues: ParseIssue[] = [];
-  let section: Section = "deck";
+  let section: SectionKind = "deck";
+  let sectionCategory: string | null = null;
   let suggestedName: string | null = null;
   let inAbout = false;
 
@@ -272,7 +328,12 @@ export function parseDecklist(text: string): ParsedList {
   // line for the sake of the first.
   const rows = text.replace(/^\uFEFF/, "").split(LINE_BREAK);
 
-  for (const [index, raw] of rows.entries()) {
+  // Indexed rather than `rows.entries()` because {@link namesASection} reads the row before the
+  // candidate and the rows after it — the one lookahead in this file. `lineNumber` is still
+  // `index + 1`, counted over every row including the blanks, because it is what the preview
+  // quotes back.
+  for (let index = 0; index < rows.length; index += 1) {
+    const raw = rows[index];
     const lineNumber = index + 1;
     const trimmed = raw.trim();
 
@@ -291,8 +352,18 @@ export function parseDecklist(text: string): ParsedList {
     // writes `About`, `Name …`, then `Deck`, and that `Deck` has to both close the block and
     // switch the section. Reading the block first would swallow it.
     const header = sectionFor(trimmed);
-    if (header) {
+    if (header !== null) {
       section = header;
+      sectionCategory = null;
+      inAbout = false;
+      continue;
+    }
+
+    // A heading whose name is not one of the section words is a **pile**, and it puts the reader
+    // back in the deck proper: after `Commander`, a `Ramp` heading is not still the command zone.
+    if (namesASection(rows, index, trimmed)) {
+      section = "deck";
+      sectionCategory = trimmed;
       inAbout = false;
       continue;
     }
@@ -324,10 +395,13 @@ export function parseDecklist(text: string): ParsedList {
     const decorated = stripDecorations(body);
     body = decorated.body;
 
-    // The pile the file named for this line. A bracket naming one of the section words is the
-    // *section* — `[Commander{top}]` has to reach the command zone through the one mechanism the
-    // seeded piles already use — and only an unknown name is a category.
-    let categoryName: string | null = null;
+    // The pile the file named for this line: the open heading, which a bracket then overrides
+    // rather than replaces — Archidekt writes both and they agree, and a list that disagreed
+    // with itself is naming the pile twice, where the nearer naming is the one on the line. A
+    // bracket naming one of the section words is the *section* — `[Commander{top}]` has to reach
+    // the command zone through the one mechanism the seeded piles already use — and only an
+    // unknown name is a category.
+    let categoryName: string | null = sectionCategory;
     let excluded = false;
     if (decorated.bracket !== null && !FINISH_WORDS.test(decorated.bracket.trim())) {
       const read = bracketCategory(decorated.bracket);

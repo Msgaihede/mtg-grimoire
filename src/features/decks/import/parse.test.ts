@@ -267,6 +267,88 @@ describe("parseDecklist", () => {
     expect(lines.every((l) => l.collectorNumber !== null)).toBe(true);
   });
 
+  it("reads an unknown heading as the pile its cards are in", () => {
+    const { lines, issues } = parseDecklist("Flash Enabler\n\n\nRamp\n1x Sol Ring (fic) 358");
+    expect(issues).toEqual([]);
+    // Only the second is a heading: the first is followed by a blank and then a line with no
+    // quantity, so the lookahead refuses it.
+    expect(lines.map((l) => l.name)).toEqual(["Flash Enabler", "Sol Ring"]);
+  });
+
+  it("opens a section on an unknown heading and closes it on the next", () => {
+    const { lines } = parseDecklist(
+      "Deck\n1 Sol Ring\n\nRamp\n1 Arcane Signet\n\nRemoval\n1 Path to Exile",
+    );
+    expect(lines.map((l) => [l.name, l.categoryName])).toEqual([
+      ["Sol Ring", null],
+      ["Arcane Signet", "Ramp"],
+      ["Path to Exile", "Removal"],
+    ]);
+  });
+
+  it("puts an unknown heading back in the deck proper", () => {
+    // A `Ramp` heading after `Commander` is a pile, not still the command zone — which is the
+    // whole of why the heading arm assigns `section` as well as the name.
+    const { lines } = parseDecklist("Commander\n1 Captain Sisay\n\nRamp\n1 Sol Ring");
+    expect(lines.map((l) => [l.section, l.categoryName])).toEqual([
+      ["commander", null],
+      ["deck", "Ramp"],
+    ]);
+  });
+
+  it("leaves a list of bare names alone", () => {
+    // The lookahead is what does this: `Sol Ring` is followed by a line with no quantity, so it
+    // is a card and not a heading.
+    const { lines } = parseDecklist("Sol Ring\nArcane Signet\nPath to Exile");
+    expect(lines.map((l) => l.name)).toEqual(["Sol Ring", "Arcane Signet", "Path to Exile"]);
+  });
+
+  it("does not eat the first card of a hand-written list that mixes counts in", () => {
+    const { lines } = parseDecklist("Sol Ring\n4 Shock\n2 Duress");
+    expect(lines.map((l) => l.name)).toEqual(["Sol Ring", "Shock", "Duress"]);
+  });
+
+  it("reads an unknown heading on the first line only when the cards carry brackets", () => {
+    // An Archidekt deck with no commander opens on a category heading with nothing above it, and
+    // Archidekt writes a bracket on every line — which is what tells it from the list above.
+    const archidekt = parseDecklist("Anthem\n1x Day of Destiny (dmc) 99 [Anthem]");
+    expect(archidekt.lines.map((l) => l.name)).toEqual(["Day of Destiny"]);
+    const handwritten = parseDecklist("Anthem\n4 Shock");
+    expect(handwritten.lines.map((l) => l.name)).toEqual(["Anthem", "Shock"]);
+  });
+
+  it("never lets a heading open a section with no cards in it", () => {
+    // The lookahead requires a counted line *after* the candidate, so a heading with nothing
+    // under it has nothing to open: it stays a card line and is resolved or quoted rather than
+    // silently swallowed. `Ramp` opens a section here — the bracket on the line below is what
+    // admits a heading on the first row — and `Removal`, at the foot of the text, does not.
+    const { lines } = parseDecklist("Ramp\n1x Sol Ring (fic) 358 [Ramp]\n\nRemoval");
+    expect(lines.map((l) => l.name)).toEqual(["Sol Ring", "Removal"]);
+  });
+
+  it("reads the sectioned Archidekt export whole", () => {
+    const { lines, issues, totalCards } = parseDecklist(ARCHIDEKT_SECTIONED);
+    expect(issues).toEqual([]);
+    expect(lines).toHaveLength(105);
+    expect(totalCards).toBe(117);
+    expect(lines.filter((l) => l.excluded)).toHaveLength(17);
+    expect(lines.filter((l) => l.section === "commander")).toHaveLength(1);
+    // The 10 cards under the `Maybeboard` heading reach the seeded pile through the section, so
+    // they carry no free-form name; the 7 under `(New) Maybeboard` do.
+    expect(lines.filter((l) => l.section === "maybeboard")).toHaveLength(10);
+    expect(lines.filter((l) => l.categoryName === "(New) Maybeboard")).toHaveLength(7);
+  });
+
+  it("agrees with the flat export about the same deck", () => {
+    const sectioned = parseDecklist(ARCHIDEKT_SECTIONED);
+    const flat = parseDecklist(ARCHIDEKT_FLAT);
+    const counted = (l: { excluded: boolean }) => !l.excluded;
+    expect(sectioned.lines.filter(counted)).toHaveLength(flat.lines.length);
+    expect(sectioned.lines.filter(counted).reduce((n, l) => n + l.quantity, 0)).toBe(
+      flat.totalCards,
+    );
+  });
+
   it("is empty for empty input", () => {
     expect(parseDecklist("")).toEqual({
       lines: [],

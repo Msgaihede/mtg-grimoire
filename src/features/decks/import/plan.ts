@@ -36,7 +36,7 @@ import {
 } from "../autoCategory";
 import { commanderIneligibility } from "../validation/commanders";
 import type { CardIdentity } from "../validation/types";
-import type { ParseIssue, ParsedLine, ParsedList, Section } from "./parse";
+import type { ParseIssue, ParsedLine, ParsedList, SectionKind } from "./parse";
 
 /**
  * What a section heading calls the pile it opens.
@@ -51,14 +51,14 @@ import type { ParseIssue, ParsedLine, ParsedList, Section } from "./parse";
  * `deck` is not a key: a line in the deck section is filed by the app's auto rule — Land, then
  * what the card does, then what it is — which is the next function down. `satisfies` rather
  * than a type annotation so the strings stay literal *and* a
- * new {@link Section} arm fails to compile here rather than filing itself under `undefined`.
+ * new {@link SectionKind} arm fails to compile here rather than filing itself under `undefined`.
  */
 export const SECTION_CATEGORY = {
   commander: "Commander",
   sideboard: "Sideboard",
   companion: "Companion",
   maybeboard: "Maybeboard",
-} as const satisfies Record<Exclude<Section, "deck">, string>;
+} as const satisfies Record<Exclude<SectionKind, "deck">, string>;
 
 /**
  * The one seeded category that arrives switched off.
