@@ -2315,13 +2315,19 @@ pub struct DeckCardRow {
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
     pub ever_uncommon: bool,
-    /// What one copy costs at the marketplace the read was given, **nonfoil** —
-    /// `WishRow::unit_price`'s rule over [`DECK_FINISH`]. Never `cards.price_usd`, which is a
-    /// display fallback chain and must not be summed.
+    /// What one copy costs at the marketplace the read was given —
+    /// [`crate::sorting::printing_price_by_finish_expr`], the **printing** grain.
     ///
-    /// A deck names a *printing* and never a finish, so this is the nonfoil rate everywhere
-    /// and the etched hole cannot arise: an etched-only printing simply has no nonfoil price
-    /// at any marketplace, and reads `None` at all of them.
+    /// A deck names a printing and never a finish, so there is no finish to price at and the row
+    /// is quoted in whichever one that marketplace sells it in: nonfoil where there is a nonfoil
+    /// price, else foil, else etched. **The literal `'nonfoil'` this used to pass was a bug** —
+    /// 13 515 foil-only and 892 etched-only printings have no nonfoil price at any marketplace,
+    /// so every one of them read `None` while the search wall quoted the same printing.
+    ///
+    /// Still never `cards.price_usd`, which is that chain precomputed for the search's `ORDER
+    /// BY`: the numbers agree, and what a deck may not do is sum the display column.
+    /// The euro etched hole is unchanged, because it lives in
+    /// [`crate::sorting::price_expr`] — an etched-only printing is unpriced on Cardmarket.
     pub unit_price: Option<f64>,
     /// Copies of this oracle card the allocator secured for this deck, attributed to this
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
@@ -2408,17 +2414,9 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND dc.variant = ?2
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::price_expr(marketplace, DECK_FINISH)
+        price = crate::sorting::printing_price_by_finish_expr(marketplace)
     )
 }
-
-/// The finish every deck price is quoted at.
-///
-/// **A deck row names a printing and has no finish** — `deck_cards`' grain is
-/// `(deck_id, variant, category_id, card_id)` and stops there, so there is nothing in the
-/// model that says whether a copy is foil. Nonfoil is the answer that reads as "what this
-/// card costs", and it is the one every deck total in this crate has always used.
-pub(crate) const DECK_FINISH: &str = "'nonfoil'";
 
 /// The whole deck in one read: the gallery's row, one variant's cards, every category, every
 /// tag, every fact, every number.
@@ -6364,9 +6362,9 @@ mod tests {
     }
 
     /// A deck row's one price comes from the marketplace the read was given, and from nowhere
-    /// else. A deck names a *printing* and never a finish, so the price is the nonfoil rate
-    /// everywhere — which is what makes the etched-only printing read `None` on all four,
-    /// where the collection's etched *entry* is priced by two of them.
+    /// else — no cross-marketplace fallback, at any finish. The etched-only printing is what
+    /// separates the four: two of them quote it and two do not, and neither pair borrows the
+    /// other's number.
     #[test]
     fn a_deck_row_is_priced_by_the_marketplace_the_read_was_given() {
         let conn = seeded();
@@ -6385,8 +6383,8 @@ mod tests {
             &conn,
             &[
                 ("cardkingdom", "both", "nonfoil", 9.00),
-                // Card Kingdom has never listed `bolt-lea`, and the etched printing has only
-                // an etched row — which a deck, being nonfoil, does not read.
+                // Card Kingdom has never listed `bolt-lea`, and the etched printing has only an
+                // etched row — the last link of the chain, and the only one it can be sold in.
                 ("cardkingdom", "etched-only", "etched", 0.60),
                 ("manapool", "both", "nonfoil", 11.00),
                 ("manapool", "bolt-lea", "nonfoil", 390.00),
@@ -6411,12 +6409,23 @@ mod tests {
         assert_eq!(price("both", Cardkingdom), Some(9.0));
         assert_eq!(price("both", Manapool), Some(11.0));
 
-        for marketplace in [Tcgplayer, Cardmarket, Cardkingdom, Manapool] {
+        assert_eq!(
+            price("etched-only", Tcgplayer),
+            Some(0.71),
+            "the printing is sold in one finish and TCGplayer quotes it"
+        );
+        assert_eq!(
+            price("etched-only", Cardkingdom),
+            Some(0.60),
+            "the feed's own etched row, not the blob's figure"
+        );
+        for marketplace in [Cardmarket, Manapool] {
             assert_eq!(
                 price("etched-only", marketplace),
                 None,
-                "{marketplace:?}: a deck reads the nonfoil rate, and there is not one — \
-                 `price_usd`'s 0.71 fallback chain is not it, and neither is an etched feed row"
+                "{marketplace:?} does not quote this printing in any finish it is sold in — \
+                 Cardmarket because `eur_etched` is a key Scryfall does not have, Mana Pool \
+                 because it has never listed it — and neither borrows the other's 0.71"
             );
         }
 
@@ -6431,6 +6440,86 @@ mod tests {
             "and a printing the feed has never listed is unpriced too"
         );
         assert_eq!(price("bolt-lea", Manapool), Some(390.0));
+    }
+
+    /// **A printing sold only in foil is priced at its foil rate, and this is the bug that made
+    /// the rule.**
+    ///
+    /// A deck row was priced at the literal `'nonfoil'`, on the reasoning that a deck names a
+    /// printing and not a finish — but the corpus has **13 515 foil-only and 892 etched-only
+    /// printings, and not one of them has a nonfoil price at any marketplace** (measured against
+    /// a synced database on 2026-08-15). So the finish a deck row does not name was answered
+    /// with a price that does not exist, and a Secret Lair or a promo drew an em dash on the
+    /// card's foot while the search panel beside it quoted the same printing.
+    ///
+    /// The chain is [`crate::sorting::printing_price_by_finish_expr`]'s, so the euro hole is
+    /// still the euro hole: `eur_etched` is a key Scryfall does not have, and an etched-only
+    /// printing stays unpriced on Cardmarket rather than being quoted at a rate nobody published.
+    #[test]
+    fn a_foil_only_printing_is_priced_at_the_finish_it_is_sold_in() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    finishes,prices,raw)
+               VALUES
+                 ('foil-only','o5','Foil Only','sld','780','en','normal','["foil"]',
+                  '{"usd":null,"usd_foil":"3.48","usd_etched":null,
+                    "eur":null,"eur_foil":"2.90"}','{}'),
+                 ('etched-only','o6','Etched Only','tst','2','en','normal','["etched"]',
+                  '{"usd":null,"usd_foil":null,"usd_etched":"0.71",
+                    "eur":null,"eur_foil":null}','{}');"#,
+        )
+        .unwrap();
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "foil-only", "foil", 3.83),
+                ("cardkingdom", "etched-only", "etched", 0.60),
+                ("manapool", "foil-only", "foil", 3.20),
+            ],
+        );
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "foil-only", main, 1);
+        add(&conn, deck.id, "etched-only", main, 1);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+
+        let price = |card: &str, marketplace| {
+            card_row(
+                &get_deck(&conn, deck.id, LIVE, marketplace)
+                    .unwrap()
+                    .unwrap(),
+                card,
+                main,
+            )
+            .unit_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+
+        assert_eq!(price("foil-only", Tcgplayer), Some(3.48));
+        assert_eq!(price("foil-only", Cardmarket), Some(2.90));
+        assert_eq!(price("foil-only", Cardkingdom), Some(3.83));
+        assert_eq!(price("foil-only", Manapool), Some(3.20));
+
+        assert_eq!(price("etched-only", Tcgplayer), Some(0.71));
+        assert_eq!(price("etched-only", Cardkingdom), Some(0.60));
+        assert_eq!(
+            price("etched-only", Cardmarket),
+            None,
+            "there is no `eur_etched` key in Scryfall's data, and a chain must not reach past a \
+             hole into the nonfoil rate"
+        );
+        assert_eq!(
+            price("etched-only", Manapool),
+            None,
+            "a printing this feed has never listed is unpriced, in any finish"
+        );
+
+        assert_eq!(
+            price("bolt-lea", Tcgplayer),
+            Some(400.0),
+            "a printing quoted nonfoil is still quoted nonfoil — the chain starts there"
+        );
     }
 
     /// Rows in `marketplace_prices` — [`crate::collection`]'s helper, kept per module.

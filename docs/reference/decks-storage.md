@@ -145,12 +145,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws every
   conclusion. `oldschool` is the one printing-sensitive key, and it comes out right with no
   special case because each row carries its own printing's answer.
-- **A deck card's unit price is that printing's nonfoil price at the marketplace the read was
-  given** — a deck names a printing, not a finish, so nonfoil is the cheapest way to satisfy it.
-  Built by `sorting::price_expr`, never by hand: for TCGplayer and Cardmarket that is the `usd`
-  or `eur` key of the printing's `prices` blob, and for Card Kingdom and Mana Pool a lookup in
-  `marketplace_prices`. `cards.price_usd` is a fallback chain and is never summed, here least of
-  all. A deck-write readback with no marketplace of its own quotes `marketplace::stored(conn)`,
+- **A deck card's unit price is what that printing costs at the marketplace the read was given,
+  in whichever finish it is _sold_ in** — `nonfoil → foil → etched`, first link that answers.
+  Built by `sorting::printing_price_by_finish_expr`, which is `price_expr` once per finish and a
+  `coalesce`, so each marketplace's own holes travel with it: on Cardmarket the etched link is
+  `NULL` by construction (there is no `eur_etched` key), and on either feed a link is a row
+  `marketplace_prices` may simply not have.
+  **It was the flat `'nonfoil'` literal until 2026-08-15, and that was the bug this rule
+  replaced.** A deck names a printing rather than a finish, and "no finish" was read as
+  "nonfoil" — but **13 515 foil-only and 892 etched-only printings have no nonfoil price at any
+  marketplace** (measured on a synced corpus that day: every one of the 13 515 has a null
+  `$.usd`, and 11 860 a real `$.usd_foil`). So a Secret Lair, an Invocation or a set promo in a
+  deck drew an em dash on its card foot, was skipped by its pile's heading total and by
+  `DeckStats`' figure, and did all of that beside a docked search panel quoting the same
+  printing off `printing_price_expr`. On the machine it was reported from, **8 of 49 deck rows**
+  were unpriced; the chain recovers 7, and the eighth (`hoc 204` Elvish Archdruid) is quoted in
+  euros and in no dollar finish at all — an em dash that is now the truth rather than an
+  artefact.
+  **The two chains agree and are still not interchangeable**: `cards.price_usd` is this same
+  order precomputed by `card_row` for the search's `ORDER BY`, it is in `idx_cards_collapse`, and
+  it stays the column nothing in the crate sums — a deck total is a `sum()`, which is why the
+  deck reads the expression instead. Only **36** paper printings in that corpus are sold nonfoil
+  yet quoted in a premium finish only, so the chain answers the same number as the old literal
+  on everything but the foil-only case it was written for.
+  A deck-write readback with no marketplace of its own quotes `marketplace::stored(conn)`,
   so renaming a category does not answer a Cardmarket reader in dollars.
 - **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
   deck's rows inside the caller's transaction, greedily and deterministically: `KIND_PRIORITY`

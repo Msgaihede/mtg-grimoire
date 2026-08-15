@@ -1024,9 +1024,10 @@ export interface TheoryDiffRow {
   /** How many more copies theory wants than live has. **Always positive**: a card live has as
    *  many of is not on this list, and one it has more of is a cut rather than a purchase. */
   quantity: number;
-  /** Nonfoil unit price for this printing at the marketplace the read named —
-   *  {@link DeckCard.unitPrice}'s rule. Never `cards.price_usd`, which is a display fallback
-   *  chain and must not be summed. */
+  /** What one copy of this printing costs at the marketplace the read named —
+   *  {@link DeckCard.unitPrice}'s rule, so a foil-only printing is quoted at its foil rate
+   *  rather than reading as unpriced. Never `cards.price_usd`, the same chain precomputed for
+   *  the search's sort, which nothing here sums. */
   unitPrice: number | null;
   setCode: string;
   collectorNumber: string;
@@ -1618,12 +1619,22 @@ export interface DeckCard {
    *  about a card that is not there. */
   everUncommon: boolean;
   /**
-   * Nonfoil unit price for this printing at the marketplace the read named, per copy —
-   * {@link WishRow.unitPrice}'s rule. Never `cards.price_usd`, which is a display fallback
-   * chain and must not be summed.
+   * What one copy of this printing costs at the marketplace the read named.
    *
-   * **A deck names a printing, not a finish**, which is why this is the nonfoil figure rather
-   * than a chain across finishes: `deck_cards` stores no finish and there is none to price by.
+   * **A deck names a printing, not a finish** — `deck_cards` stores none — so there is no finish
+   * to price by, and the figure is the printing's own: the first finish that marketplace quotes
+   * it in, `nonfoil → foil → etched` (`sorting::printing_price_by_finish_expr`).
+   *
+   * **It was the flat nonfoil rate until 2026-08-15, and that was a bug with a reader-visible
+   * shape.** 13 515 foil-only and 892 etched-only printings have no nonfoil price at *any*
+   * marketplace, so an Invocation, a Secret Lair or a set promo drew an em dash on its card
+   * foot, was skipped by its pile's heading total and by the deck's, and did all of that beside
+   * a search panel quoting the same printing.
+   *
+   * Still never `cards.price_usd`: that is this chain precomputed for the search's `ORDER BY`,
+   * the numbers agree, and the column is the one nothing here may sum. A `null` is still the
+   * answer and never a reason to reach for another marketplace's figure — an etched-only
+   * printing has no euro price at all, because Scryfall has no `eur_etched` key.
    */
   unitPrice: number | null;
   /**
