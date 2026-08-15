@@ -507,6 +507,63 @@ describe("ContextMenu", () => {
     );
   });
 
+  /**
+   * The same armed timer, against the other thing that can happen while it runs: the reader
+   * **opening the very submenu it was going to open**, by a route the timer knows nothing about.
+   *
+   * `handBack` reads `openPath` out of the closure of the render that armed the timer, and a
+   * `setTimeout` callback is a macrotask — so a click or an ArrowRight inside the 120ms window
+   * leaves the callback reasoning about a cascade that no longer exists. The pointer settles on
+   * "Open on" (armed: `next` is `["open-on"]`, closure `openPath` is `[]`), the reader clicks it
+   * inside the window, `focusInto` puts the caret on the first row of the panel that opened — and
+   * then the timer fires against the stale `[]`, computes that everything below depth 0 is doomed,
+   * and hands the caret back to the row it came from. `setOpenPath(["open-on"])` writes what is
+   * already there, so **the submenu stays open with the caret outside it**: ArrowDown then walks
+   * the root panel, and Enter collapses the panel the reader had just asked for.
+   *
+   * Nothing defuses it. `clearHover` is called from `onPointerOver`, the `[openId]` effect and the
+   * unmount — and a click made without moving the mouse fires no `pointerover`, because the panel
+   * opens *beside* the row rather than under the pointer. The hand-back is what made this bite: it
+   * used to be a `setOpenPath` with an equal path, i.e. a wasted render.
+   */
+  it("does not let a pending hover yank the caret out of a submenu the reader just opened", () => {
+    vi.useFakeTimers();
+    open([
+      {
+        kind: "submenu",
+        id: "open-on",
+        label: "Open on",
+        items: [
+          { kind: "action", id: "sf", label: "Scryfall", onSelect: vi.fn() },
+          { kind: "action", id: "ck", label: "Card Kingdom", onSelect: vi.fn() },
+        ],
+      },
+      { kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() },
+    ]);
+    rightClick(screen.getByRole("button", { name: "target" }));
+
+    const row = screen.getByRole("menuitem", { name: /Open on/ });
+    fireEvent.pointerOver(row);
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS - 20));
+    expect(screen.queryByRole("menuitem", { name: "Scryfall" })).not.toBeInTheDocument();
+
+    // The click, with the pointer left where it already was.
+    fireEvent.click(row);
+    expect(screen.getByRole("menuitem", { name: "Scryfall" })).toHaveFocus();
+
+    act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
+
+    // The submenu is open either way -- the stale write is equal to the live path -- so the caret
+    // is the whole of what this pins.
+    expect(screen.getByRole("menuitem", { name: "Scryfall" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Scryfall" })).toHaveFocus();
+
+    // ...and the keys therefore belong to the panel the reader opened, rather than to the one
+    // behind it: the caret walks to the submenu's second row, not to the root panel's.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Card Kingdom" })).toHaveFocus();
+  });
+
   it("takes Home and End to the ends of the list", async () => {
     const user = userEvent.setup();
     open([

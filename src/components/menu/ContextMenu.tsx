@@ -448,6 +448,38 @@ export function ContextMenu({
     setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
   }, [openId]);
 
+  /**
+   * **A pending hover is only valid for the cascade state it was armed in** — so any change to
+   * that state disarms it, whatever moved it.
+   *
+   * The timer's callback is a macrotask closed over the `openPath` of the render that armed it,
+   * and until this line the only things that disarmed one were `onPointerOver`, a new `openId` and
+   * the unmount. `openSubmenu`/`closeSubmenu` touch no timer, so a click or an ArrowRight inside
+   * the 120ms window left a callback reasoning about a cascade that had already moved: the pointer
+   * settles on "Open on" (armed with `next` = `["open-on"]`, closure `openPath` = `[]`), the reader
+   * clicks it, `focusInto` puts the caret in the panel that opened — and the timer then computes
+   * `keptDepth(["open-on"], [])` = 0 against the *stale* path, finds the caret two levels below
+   * that, and hands it back out of the panel it had just been put in. `setOpenPath` writes an equal
+   * path, so the submenu stays open with the caret outside it: ArrowDown walks the root panel and
+   * Enter collapses what the reader had just asked for. It was harmless before the hand-back
+   * existed — one wasted render — which is what kept it out of sight.
+   *
+   * **Disarming rather than reading the live path out of a ref at fire time**, and the difference
+   * is which half is stale. A ref would fix `handBack`'s arithmetic and leave the callback's
+   * *intent* stale — `next` was computed from the old path too, so a hover that resolved to
+   * "collapse everything" would still collapse a submenu the reader opened by keyboard a
+   * moment later, correctly handing the caret back on its way. The whole callback is out of date,
+   * not one of its inputs.
+   *
+   * It costs the ordinary cases nothing. A timer that has already fired nulls the ref before it
+   * writes, so the effect this write triggers clears nothing; a pointer sweeping between rows
+   * re-arms through `onPointerOver`, which clears first anyway; and a hover that opens or
+   * collapses is the very write whose state the next hover must be armed against.
+   */
+  useLayoutEffect(() => {
+    clearHover();
+  }, [openPath]);
+
   // No dependency array: this has to run after *whichever* commit drew the panel that was just
   // asked for, and it changes no state, so running every time costs a null check.
   useLayoutEffect(() => {
