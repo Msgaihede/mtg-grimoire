@@ -108,14 +108,23 @@ consulted and `auditText.ts` is still the only thing that words a sentence.
 - The cursor falls out of `deck_id`, so every deck keeps its own position with no state stored
   anywhere and no cross-deck ordering to invent.
 
-### The two new audit kinds
+### An undo is a `deck` row, and adds no audit kind
 
-`undo` and `redo` join `schema::AUDIT_KINDS`, making eleven. The CHECK on `deck_audit.kind` is
-rebuilt in the v17 step. Payload is `{ "of": <audit_id>, "kind": "<the kind undone>" }`; `delta`
-is the negation of the undone row's delta on an undo and the original delta on a redo, so the day
-header's roll-up still adds up. `auditText.ts` gains two arms that render the undone row's own
-sentence inside the verb — "Undid: Removed 2 × Lightning Bolt" — by recursion into
-`auditSentence`, which is why the id is in the payload.
+`AUDIT_KINDS` stays at nine. A tenth would mean rebuilding the CHECK on `deck_audit.kind`, and
+SQLite cannot alter one — that is a full rebuild of the reader's whole deck history for a word.
+`deck_import_commit` already faced this and reused `add`/`remove` with a keyed payload, stating
+the reason ("no new `AUDIT_KINDS` value, so no CHECK rebuild and no migration"); this follows it.
+
+An undo records **`kind: "deck"`** with payload `{ "field": "undo", "of": <audit_id> }`, and a
+redo the same with `"redo"`. Two more multi-word-free field names in `record_deck_edit`'s
+vocabulary, read by `auditText.ts`'s `deckLine` — whose `default` arm already answers an
+unrecognised field with "Changed the deck", so an older build degrades to a true sentence rather
+than a hole.
+
+`delta` is the **negation** of the undone row's delta on an undo, and the original delta on a
+redo, so the day header's `+7 / −6` roll-up still adds up. `auditText.ts` renders the undone
+row's own sentence inside the verb — "Undid: Removed 2 × Lightning Bolt" — which is why the id
+is in the payload and why `DeckHistoryDialog` passes the day's entries to the renderer.
 
 ## 6. What every write site owes
 
