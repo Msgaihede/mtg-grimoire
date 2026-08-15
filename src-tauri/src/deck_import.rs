@@ -798,6 +798,13 @@ pub fn commit_import(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
 
+    // The undo step's two "before" halves, read ahead of everything this command writes: the
+    // list as it stood, and which piles the deck already had, so a `replace` can be put back
+    // and the piles this import invents can be taken away with it. Both are one query and this
+    // command already reads the whole variant to count what it is about to clear.
+    let cards_before = crate::deck_undo::read_variant(&tx, deck_id, variant)?;
+    let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
+
     // **Copies, not rows.** `removed` becomes the `remove` row's `delta`, and that column is
     // signed *copies* — the number the day header adds up and the number a reader recognises.
     let removed: i64 = if mode == REPLACE {
@@ -920,7 +927,7 @@ pub fn commit_import(
             -removed,
         )?;
     }
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -935,6 +942,20 @@ pub fn commit_import(
             }
         }),
         added,
+    )?;
+    // **One step for the whole import, keyed to the `add` row** — the last of the one or two
+    // this writes. A `replace` records a `remove` and an `add` because one signed delta cannot
+    // be both, but it is one press, and a cursor that could land between them would put the
+    // cleared deck back without the import that replaced it. `record_variant` is the whole
+    // reversal: the audit rows carry counts (`cleared: 42`, `cards: 117`) and a count cannot
+    // rebuild a decklist.
+    crate::deck_undo::record_variant(
+        &tx,
+        audit_id,
+        deck_id,
+        variant,
+        cards_before,
+        Some(categories_before),
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(ImportOutcome {

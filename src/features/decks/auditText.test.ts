@@ -492,6 +492,54 @@ describe("auditSentence over a contract it does not fully know", () => {
       ),
     ).toEqual({ text: "Changed the deck's folder", detail: null });
   });
+
+  /**
+   * An undo is a `deck` row and not a tenth audit kind — `deck_audit.kind` carries a CHECK,
+   * SQLite cannot alter one, and a tenth word would rebuild every reader's whole deck history.
+   * So the sentence has to come out of a `field` this switch had never heard of before.
+   */
+  describe("an undo and a redo", () => {
+    it("words the change they reversed, when the drawer has it", () => {
+      const removed = entry("remove", { category: "Ramp", quantity: 2, reason: null });
+      const undone = entry("deck", { field: "undo", of: removed.id }, { cardId: null });
+
+      expect(auditSentence(undone, [removed, undone])).toEqual({
+        text: "Undid: Removed 2 × Sol Ring",
+        detail: "from Ramp",
+      });
+      expect(
+        auditSentence(entry("deck", { field: "redo", of: removed.id }, { cardId: null }), [
+          removed,
+        ]),
+      ).toEqual({ text: "Redid: Removed 2 × Sol Ring", detail: "from Ramp" });
+    });
+
+    /** The drawer is capped at 500 rows and a caller may pass no list at all, so the row it
+     *  names can genuinely be out of reach. A true short sentence beats "Changed the deck",
+     *  which is the `default` arm's answer and is true of every deck edit ever recorded. */
+    it("falls back to the bare verb when the row it names is not in reach", () => {
+      const undone = entry("deck", { field: "undo", of: 9999 }, { cardId: null });
+      expect(auditSentence(undone, [])).toEqual({ text: "Undid a change", detail: null });
+      expect(auditSentence(undone)).toEqual({ text: "Undid a change", detail: null });
+    });
+
+    /** A payload with no `of` at all — an older or newer build — must not throw and must not
+     *  claim a change it cannot name. */
+    it("survives a payload with no id in it", () => {
+      expect(auditSentence(entry("deck", { field: "undo" }, { cardId: null }), [])).toEqual({
+        text: "Undid a change",
+        detail: null,
+      });
+    });
+
+    /** The recursion is one level deep by construction — an undo's own row records no step, so
+     *  nothing can ever name one — but the renderer must not depend on that to terminate. */
+    it("does not recurse when an undo names another undo", () => {
+      const first = entry("deck", { field: "undo", of: 1 }, { cardId: null });
+      const second = entry("deck", { field: "undo", of: first.id }, { cardId: null });
+      expect(auditSentence(second, [first, second]).text).toBe("Undid: Undid a change");
+    });
+  });
 });
 
 describe("auditDays", () => {

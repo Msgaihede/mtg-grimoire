@@ -67,6 +67,10 @@ const deckCategoryDelete = vi.hoisted(() => vi.fn());
  *  the three above — a clear empties a pile and changes nothing about the category itself. */
 const deckCategoryClear = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
+// Undo and redo: the cursor read, and the two writes behind Ctrl+Z / Ctrl+Y.
+const deckUndoState = vi.hoisted(() => vi.fn());
+const deckUndoApply = vi.hoisted(() => vi.fn());
+const deckRedoApply = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
@@ -119,6 +123,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCategoryDelete,
     deckCategoryClear,
     deckAuditList,
+    deckUndoState,
+    deckUndoApply,
+    deckRedoApply,
     deckTheoryDiff,
     deckFolderList,
     deckImportResolve,
@@ -130,6 +137,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { categoryExport, DeckEditor, exportFileName } from "./DeckEditor";
 import { useAppStore } from "@/lib/store";
+
+/** The change the Undo button would reverse — a history row like any other, because that is
+ *  what the state command answers and what `auditText` words the button's name from. */
+const UNDOABLE = {
+  id: 77,
+  deckId: 4,
+  at: 1_800_000_000,
+  variant: "live" as const,
+  kind: "remove" as const,
+  cardId: "p1",
+  cardName: "Lightning Bolt",
+  payload: '{"category":"Main deck","quantity":2,"reason":null}',
+  delta: -2,
+};
 
 const DECK: DeckRow = {
   id: 4,
@@ -517,6 +538,11 @@ beforeEach(() => {
   // The copies it removed, which is what the command answers.
   deckCategoryClear.mockReset().mockResolvedValue(4);
   deckAuditList.mockReset().mockResolvedValue([]);
+  // One change to undo and nothing to redo — the state a deck that has just been edited is in,
+  // and the one that makes both buttons' two halves testable in the same render.
+  deckUndoState.mockReset().mockResolvedValue({ undo: UNDOABLE, redo: null });
+  deckUndoApply.mockReset().mockResolvedValue(undefined);
+  deckRedoApply.mockReset().mockResolvedValue(undefined);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
@@ -1630,6 +1656,94 @@ describe("DeckEditor", () => {
     // Heard every time, and consumed by nothing: the pane's bubble-phase listener acts on
     // exactly this.
     expect(heard).toEqual([false, false, false]);
+  });
+
+  describe("undo and redo", () => {
+    /** The glyph says nothing, so the accessible name is the whole sentence — and it is the
+     *  same sentence the history drawer draws, out of `auditText` rather than written here. */
+    it("names the change each button would reverse", async () => {
+      await open();
+
+      await screen.findByRole("button", { name: "Undo — Removed 2 × Lightning Bolt" });
+      // Nothing has been undone in this session, so the other half is the bare verb.
+      expect(screen.getByRole("button", { name: "Redo" })).toBeInTheDocument();
+    });
+
+    it("undoes on Ctrl+Z and redoes on Ctrl+Y and Ctrl+Shift+Z", async () => {
+      // The backend's actual contract rather than two canned answers: the redo half is
+      // answered **for the id the webview hands in**, because the redo stack lives in the page
+      // and dies with the window. Modelling that is what makes the press order below real.
+      deckUndoState.mockImplementation((_deckId: number, redoId: number | null) =>
+        Promise.resolve(
+          redoId === null ? { undo: UNDOABLE, redo: null } : { undo: null, redo: UNDOABLE },
+        ),
+      );
+      await open();
+      await screen.findByRole("button", { name: /^Undo —/ });
+
+      await userEvent.keyboard("{Control>}z{/Control}");
+      await waitFor(() => expect(deckUndoApply).toHaveBeenCalledWith(4, 77));
+
+      // Both spellings, because both are what a reader's hands know: Ctrl+Y is Windows' and
+      // Ctrl+Shift+Z is everywhere else's, and this app ships to people who use both.
+      await screen.findByRole("button", { name: /^Redo —/ });
+      await userEvent.keyboard("{Control>}y{/Control}");
+      await waitFor(() => expect(deckRedoApply).toHaveBeenCalledWith(4, 77));
+
+      deckRedoApply.mockClear();
+      await userEvent.keyboard("{Control>}z{/Control}");
+      await waitFor(() => expect(deckUndoApply).toHaveBeenCalledTimes(2));
+      await screen.findByRole("button", { name: /^Redo —/ });
+      await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+      await waitFor(() => expect(deckRedoApply).toHaveBeenCalledWith(4, 77));
+    });
+
+    /**
+     * **The one that keeps the editor usable.** Ctrl+Z inside a text field is the browser's own
+     * undo — the only thing that can put back a character the reader just typed — and a
+     * shortcut that swallowed it would take that away in the quick-add box, the deck name and
+     * the notes. `isTextField` is `useContextMenu`'s, the same predicate the native
+     * context-menu carve-out turns on.
+     */
+    it("leaves Ctrl+Z to the browser when the caret is in a text field", async () => {
+      await open();
+      await screen.findByRole("button", { name: /^Undo —/ });
+
+      screen.getByLabelText("Quick add a card").focus();
+      await userEvent.keyboard("{Control>}z{/Control}");
+      screen.getByLabelText("Deck name").focus();
+      await userEvent.keyboard("{Control>}z{/Control}");
+
+      expect(deckUndoApply).not.toHaveBeenCalled();
+    });
+
+    /** `aria-disabled`, never the attribute: this greys and un-greys as the reader edits, and a
+     *  `disabled` button drops out of the tab order under a caret sitting on it. */
+    it("greys rather than disables a button with nothing to do", async () => {
+      deckUndoState.mockResolvedValue({ undo: null, redo: null });
+      await open();
+
+      const undoButton = await screen.findByRole("button", { name: "Undo" });
+      expect(undoButton).toHaveAttribute("aria-disabled", "true");
+      expect(undoButton).not.toBeDisabled();
+
+      await userEvent.click(undoButton);
+      expect(deckUndoApply).not.toHaveBeenCalled();
+    });
+
+    /** A refusal goes in the banner the editor's other refused writes already use, rather than
+     *  a second line of its own — see `bannerFailure`. */
+    it("reports a refused undo in the deck's own banner", async () => {
+      deckUndoApply.mockRejectedValue("That is not the most recent change any more.");
+      await open();
+      await screen.findByRole("button", { name: /^Undo —/ });
+
+      await userEvent.keyboard("{Control>}z{/Control}");
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/Could not change this deck/);
+      expect(alert).toHaveTextContent(/most recent change/);
+    });
   });
 
   /**

@@ -7,6 +7,7 @@ pub mod deck_audit;
 pub mod deck_import;
 pub mod deck_meta;
 pub mod deck_theory;
+pub mod deck_undo;
 pub mod errors;
 pub mod export;
 pub mod filters;
@@ -326,6 +327,9 @@ pub fn run() {
             deck_meta::deck_folder_move,
             deck_meta::deck_folder_delete,
             deck_audit::deck_audit_list,
+            deck_undo::deck_undo_state,
+            deck_undo::deck_undo_apply,
+            deck_undo::deck_redo_apply,
             deck_theory::deck_theory_diff,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,

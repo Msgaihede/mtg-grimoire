@@ -215,8 +215,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   there is no tenth `AUDIT_KINDS` value and no migration. The only
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**
-  It is append-only, never pruned and **not undoable**; `DeckHistoryDialog.tsx` has no mutation
-  in it.
+  It is append-only and never pruned. `DeckHistoryDialog.tsx` has no mutation in it, and the
+  table still holds no reversal: **undo is a sibling table, `deck_undo`** (schema v17) — see
+  its own section below.
   **Seven writes record nothing on purpose**: `delete_deck` (CASCADE takes the history with the
   deck, so a row would be orphaned by its own event); **both** `missing_to_wishlist` commands,
   `deck`'s and `deck_theory`'s (they write the wishlist, not the deck); `deck_set_view_state`
@@ -226,6 +227,65 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_audit.deck_id` is `NOT NULL`. `deck_folder_delete` is the fourth and is **not** exempt:
   `decks.folder_id` is `ON DELETE SET NULL`, so it re-files N decks and writes one `folder` row
   per deck it un-filed.
+- **Undo is `deck_undo`, a journal beside the history and not a column on it** (schema v17).
+  `audit_id INTEGER PRIMARY KEY REFERENCES deck_audit(id) ON DELETE CASCADE`, a `deck_id`, a JSON
+  `step` and a nullable `undone_at`. **A sibling table because `deck_audit` is append-only and
+  read whole every time the drawer opens**: a category delete's step carries the rows the CASCADE
+  took, which is orders of magnitude larger than the sentence it would sit beside, and
+  `deck_audit_list`'s SELECT does not change. Both CASCADEs are load-bearing and for different
+  reasons — `deck_id` keeps `deleting_a_deck_takes_its_history_with_it` true of the new table for
+  free, `audit_id` stops a step outliving the change it describes.
+  - **The audit log could not have been replayed backwards, which is why this exists.** Five kinds
+    are lossy in exactly the direction undo needs: `swap` records `fromSet`/`toSet` and **not the
+    from-printing id** (`card_id` is the printing the deck plays *now*); a `category` delete
+    records `cards: 7`, a count of what the CASCADE took; a `reorder` records `{"action":
+    "reorder"}` and no order either side; a clear and an import `replace` record counts; and the
+    theory toggle records `{field:"theory",from:false,to:true}` while having **moved the whole
+    live list**. Two softer ones: every payload names categories and tags by **name**, and
+    `folder` records the destination with no `from`.
+  - **A step restores rows; it does not run a command backwards.** Four primitives — `cards`
+    (an exact set of `deck_cards` rows over an explicit scope of `(variant, categoryId, cardId)`
+    cells), `categories`, `tags`, `deck` — and `cards` alone covers add, remove, quantity, move,
+    swap **including the fold**, clear, both import modes and the theory move. There is no
+    `unswap_printing` and no un-import, and there could not be: `replace` cleared rows nothing
+    recorded.
+  - **`restore` and `patch` are two lists on the category and tag ops, because they are two
+    intents.** A patch is a rename, a switch or a reorder — the row is there and its columns go
+    back. A restore is a delete being undone, and whatever holds that id now is **somebody else's
+    pile**: `deck_categories.id` is a rowid alias, so deleting the highest-numbered pile and
+    making a new one reuses the number, and that new pile belongs to the same deck. A single list
+    deciding by "is there a row at this id" therefore renames the reader's newest pile into the
+    one they deleted and hands it the old cards. `apply` threads an id **remap** through the ops
+    so the cards follow the pile to whatever id it comes back under.
+  - **One press is one step, keyed to the last history row it wrote.** Three commands write more
+    than one — `deck_update` (one row per changed field), `deck_import_commit` in `replace` mode,
+    `deck_folder_delete` — and a cursor that could land mid-press would put half a settings form
+    back.
+  - **`AUDIT_KINDS` stays at nine.** An undo records `kind = 'deck'` with
+    `{"field":"undo"|"redo","of":<audit_id>}`, because `deck_audit.kind` carries a CHECK, SQLite
+    cannot alter one, and a tenth word would rebuild every reader's whole deck history for a
+    spelling — `deck_import_commit`'s own argument, one shelf over. `delta` is negated on an undo
+    and carried straight on a redo, so the day header's roll-up still adds up. **The reversal's
+    own row records no step**, which is what keeps the stack linear: Ctrl+Z twice goes back two
+    changes rather than toggling one.
+  - **`undone_at` persists and the redo queue does not.** Undo therefore survives a restart and
+    carries on below where it stopped; redo is a list of ids in the webview (`useDeckUndo`),
+    thrown away with the window and cleared by any other write to the deck. A database-backed
+    redo would offer to resurrect a fortnight-old branch of edits the reader had forgotten making.
+  - **Three commands**: `deck_undo_state(deckId, redoId)` — the two `DeckAuditEntry`s the buttons
+    name themselves from, the redo half answered only for the id the caller hands in —
+    and `deck_undo_apply` / `deck_redo_apply`, which check the id against the cursor rather than
+    trusting it and end with **one** `allocate_deck` run.
+  - **Four things are deliberately out of reach, and each has a reason rather than a gap.**
+    `deck_create`/`deck_duplicate`/`deck_delete` are gallery writes with no editor open, and
+    undoing "this deck was born" means deleting the deck the reader is standing in.
+    `deck_folder_delete` records history and **no step**: the cursor is per deck, that press
+    changes N of them, and `decks.folder_id` is a real foreign key — so restoring one deck's id
+    without resurrecting the shared subtree is an FK failure rather than a partial success. Rows
+    written before v17 carry no step and none can be invented, which is the honest floor of "as
+    far back as the history allows". And `deck_set_cover_image` restores its three columns but
+    **not the file**: `images::cover_file` is one path per deck, so a second upload overwrites
+    the first and only the row comes back.
 - **`deck_create` makes a whole deck in one INSERT, not a name to be configured afterwards**
   (changed 2026-08-14). `DeckInput` carries `name`, `formatKey`, `description`, `notes`,
   `coverCardId`, `folderId` and `theoryEnabled`, because the "New deck" dialog now hosts the same

@@ -416,7 +416,7 @@ function Section({ shown }: { shown: ShownDay }) {
 
       <ul className="flex flex-col gap-0.5 pt-2">
         {entries.map((entry) => (
-          <Row key={entry.id} entry={entry} />
+          <Row key={entry.id} entry={entry} others={entries} />
         ))}
       </ul>
     </section>
@@ -460,10 +460,17 @@ function Delta({ gained, lost }: { gained: number; lost: number }) {
  * all. Everything visual is `aria-hidden`: the glyph and the rail are two spellings of the band
  * the sentence already names, and a screen reader that read them would hear "right arrow" in
  * front of "Moved Avacyn".
+ *
+ * **`others` is the day's own entries**, and it is passed for exactly one pair of rows: an undo
+ * and a redo name the change they reversed rather than describing one of their own, so the
+ * renderer needs the row that id points at to write "Undid: Removed 2 × Lightning Bolt". The
+ * day rather than the whole history because a reversal is written the moment the reader presses
+ * the button, so the two are always in the same section — and the fallback for a row out of
+ * reach is a true short sentence rather than a hole.
  */
-function Row({ entry }: { entry: DeckAuditEntry }) {
+function Row({ entry, others }: { entry: DeckAuditEntry; others: readonly DeckAuditEntry[] }) {
   const band = bandOf(auditBand(entry));
-  const { text, detail } = auditSentence(entry);
+  const { text, detail } = auditSentence(entry, others);
   const when = at(entry);
 
   return (
