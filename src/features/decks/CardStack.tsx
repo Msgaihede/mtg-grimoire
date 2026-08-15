@@ -920,9 +920,13 @@ function StackedCard({
           {/* **Inside the face, which is what makes it findable in a fanned pile.** The face is
               the one box here that a collapsed card still shows 34px of, so a mark laid over it
               is a lit band and a bright hairline exactly where the reader is scanning. Laid
-              over the marks strip rather than under it — the strip's tag is 11px type on a
-              scrim and a 15 % wash does not touch it, while a mark the tag could cover would be
-              missing on precisely the cards that have one. See {@link LandedMark}.
+              over the marks strip rather than under it — the strip's tag is 11px type on its own
+              scrim, and a wash tints it without touching the contrast between the glyphs and the
+              chip they are printed on, while a mark the tag could cover would be missing on
+              precisely the cards that have one. That trade got louder on 2026-08-15, when the
+              wash went gold at 40 % over this strip with a glow behind it, and it is the one
+              place to look first if the quantity tag ever stops reading during an add. See
+              {@link LandedMark}.
 
               `rounded-[7px]` is the face's own corner, spelled again because the mark cannot
               inherit it — {@link LandedMark} has why. */}

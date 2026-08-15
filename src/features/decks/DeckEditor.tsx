@@ -526,7 +526,7 @@ interface RecentAdds {
  *
  * Two reasons, and neither is the fade. The mark has to **leave the DOM**, or a session's worth
  * of adds is a session's worth of invisible overlays sitting on cards; and the map has to empty,
- * or nothing above ever goes back to `NOTHING_LANDED`. {@link LANDED_MS} is the same ten seconds
+ * or nothing above ever goes back to `NOTHING_LANDED`. {@link LANDED_MS} is the same five seconds
  * the stylesheet fades over — see it for why the number is in two places and what holds them
  * together.
  */
@@ -551,8 +551,8 @@ function useRecentAdds(): RecentAdds {
     nonce.current += 1;
     const stamp = nonce.current;
     const running = timers.current;
-    // At most one timer per row: a card added three times in five seconds glows once, for ten
-    // seconds from the last press, rather than going dark while the reader is still pressing.
+    // At most one timer per row: a card added three times in quick succession glows once, for
+    // five seconds from the last press, rather than going dark while the reader is still pressing.
     const pending = running.get(entryId);
     if (pending !== undefined) clearTimeout(pending);
     running.set(
@@ -696,7 +696,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
 
   /**
-   * Which cards have just arrived, so the deck can point at them for ten seconds.
+   * Which cards have just arrived, so the deck can point at them for five seconds.
    *
    * Held here rather than in a view, because the three surfaces that add a card — the quick-add
    * field, a drop onto a pile, and the docked panel's own Add button — are all *this*
