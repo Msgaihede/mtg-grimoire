@@ -30,7 +30,7 @@ import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { RAIL_ATTR } from "./columns";
 import { GridView } from "./GridView";
-import { StackView, STACK_ATTR, stackColumnWidth } from "./StackView";
+import { flowRowSpan, StackView, STACK_ATTR, stackColumnWidth } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 
@@ -844,15 +844,23 @@ describe("StackView flow", () => {
   });
 
   /**
-   * …and it reaches the element as an **inline width**, in both halves of the `flex` shorthand.
+   * …and it reaches the element as an **inline width**, beside the row span the masonry places it
+   * by.
    *
    * A computed Tailwind class emits no CSS rule at all — the scanner reads source text — so a
    * pile sized by an interpolated class would lay itself out at whatever its contents came to
-   * and the whole view would drift wider as the reader zoomed. The `flex` basis is the half worth
-   * asserting separately: these piles are `flex` children, so a basis left at the old value
-   * would win over the width and nothing about the markup would look wrong.
+   * and the whole view would drift wider as the reader zoomed.
+   *
+   * **The `flex` basis this used to assert beside the width is gone with the flex box it belonged
+   * to** (2026-08-15). The flow is a grid of `auto-fill` tracks over one-pixel rows now, so a pile
+   * is placed by `grid-row: span <its own height>` and a `flex` shorthand on it would be inert
+   * decoration. The span is asserted in its place, and what it is asserted against says the other
+   * half out loud: **jsdom lays nothing out**, so every pile measures 0 here and the number below
+   * is `flowRowSpan(0)` — the gutter alone. What a pile really spans is the live pass's to see;
+   * what this can see is that the view writes a span at all, which is the half a regression would
+   * take away.
    */
-  it("writes the zoomed width onto the pile, basis included", () => {
+  it("writes the zoomed width onto the pile, and a row span beside it", () => {
     setDeckZoom(2);
     render(
       <StackView
@@ -863,8 +871,66 @@ describe("StackView flow", () => {
 
     const stack = stacks()[0] as HTMLElement;
     expect(stack.style.width).toBe(`${stackColumnWidth(2)}px`);
-    expect(stack.style.flex).toBe(`0 0 ${stackColumnWidth(2)}px`);
     expect(stack.style.width).toBe("434px");
+    expect(stack.style.gridRow).toBe(`span ${flowRowSpan(0)}`);
+    // The basis is asserted *absent*, because reinstating one is the shape the old layout would
+    // come back in and nothing else here would notice.
+    expect(stack.style.flex).toBe("");
+  });
+
+  /**
+   * **The span is a height plus one gutter, rounded up, and never zero.**
+   *
+   * Three cases and each is a live failure the arithmetic has to keep out. Rounding *down* a
+   * fractional height — every measured height is fractional — would let the pile below start a
+   * pixel inside this one, which reads as two piles touching. `span 0` is invalid CSS and is
+   * dropped entirely, so the pile would fall back to a single one-pixel row and every pile after
+   * it would be laid over it; that is the answer for an unmeasured box, which is what jsdom hands
+   * this view for every pile in the suite.
+   */
+  it("spans a pile's own height plus one gutter, and never nothing", () => {
+    expect(flowRowSpan(300)).toBe(320);
+    expect(flowRowSpan(300.2)).toBe(321);
+    expect(flowRowSpan(0)).toBe(20);
+    expect(flowRowSpan(-40)).toBe(1);
+  });
+
+  /**
+   * **The box the piles flow in is the masonry, and every clause of it is load-bearing.**
+   *
+   * `grid` with `repeat(auto-fill, <one pile>)` is CSS counting how many piles fit on a line —
+   * the number this view refuses to work out for itself, and the reason no `ResizeObserver` here
+   * watches the desk. `grid-auto-rows: 1px` is what makes a span a height: without it a row is
+   * content-sized and the layout collapses back to lines as tall as their tallest pile, which is
+   * the whole defect.
+   *
+   * **The absent row gap is the assertion that looks like tidiness and is not.** A grid gap is
+   * drawn at every row boundary an item crosses, so a `gap-y-5` here — the class this box carried
+   * until 2026-08-15, and the obvious thing to put back when the vertical spacing is being
+   * adjusted — would draw one 20px gutter per *pixel* of every pile's height. Nothing would go
+   * red, and the deck would be some hundreds of times taller than the window.
+   *
+   * jsdom lays nothing out, so this is the declaration and never the layout; what the rule
+   * actually does to a deck is the live pass's.
+   */
+  it("lays the flow out as a grid of one-pixel rows, with no row gap", () => {
+    render(
+      <StackView
+        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
+        marketplace={TCG}
+      />,
+    );
+
+    const box = (stacks()[0] as HTMLElement).parentElement!;
+    const classes = box.className.split(" ");
+    expect(classes).toContain("grid");
+    expect(classes).toContain("gap-x-4");
+    expect(classes).not.toContain("flex-wrap");
+    expect(box.className).not.toContain("gap-y");
+    expect(box.style.gridTemplateColumns).toBe(
+      `repeat(auto-fill, ${stackColumnWidth(DEFAULT_ZOOM)}px)`,
+    );
+    expect(box.style.gridAutoRows).toBe("1px");
   });
 
   /**
@@ -1332,8 +1398,13 @@ describe.each(COLUMN_VIEWS)(
      * follow the zoom the cards inside it took, and `TextView`'s has to ignore it. The failure
      * either way is silent — a width built by interpolating a Tailwind class emits no CSS rule
      * at all, so the rail keeps its markup and lays itself out at whatever its contents come to.
-     * The basis is worth its own assertion because these are `flex` children: one left at the
-     * old value wins over the width, and nothing about the markup looks wrong.
+     *
+     * **Only the width is read across the two boxes**, and the *rail's* basis is then read against
+     * the view's own number rather than against the flowing box's. It used to be read against both
+     * — one number out of the DOM twice — which stopped being possible on 2026-08-15, when
+     * `StackView`'s flow became a grid: its piles are placed by a row span and carry no `flex`
+     * basis at all, while `TextView`'s packed columns still carry one. The rail is a flex child of
+     * the root in both views and keeps its own basis, which is what the last line still pins.
      */
     it("makes the rail one column wide, in both halves of the shorthand", () => {
       setDeckZoom(2);
@@ -1341,7 +1412,6 @@ describe.each(COLUMN_VIEWS)(
 
       const column = flow().firstElementChild as HTMLElement;
       expect(rail()!.style.width).toBe(column.style.width);
-      expect(rail()!.style.flex).toBe(column.style.flex);
       expect(rail()!.style.width).toBe(zoomedWidth);
       expect(rail()!.style.flex).toBe(`0 0 ${zoomedWidth}`);
     });

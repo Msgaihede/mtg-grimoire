@@ -5,9 +5,10 @@
  * still packs: a decklist line is 21px and a column of them holds thirty, so filling a column to
  * the desk's height and opening the next is what makes that view readable. `StackView` stopped on
  * 2026-08-14 — a card is 300px tall, so a column there held two or three piles, and packing to a
- * *height* left the desk's **width** unspent whenever the window was tall. Its piles are flex
- * items now and CSS decides how many fit on a line. The pack below is unchanged and still correct
- * for the view that kept it.
+ * *height* left the desk's **width** unspent whenever the window was tall. Its piles are items of
+ * a masonry grid now: CSS decides how many fit on a line, and each pile spans its own measured
+ * height so that a wrapped one sits under the pile above it. The pack below is unchanged and still
+ * correct for the view that kept it.
  *
  * The text view lays a deck out as columns read left to right, and faces the question this file
  * answers: a deck has fifteen categories and a column fits two or three of them. The answer is a
@@ -130,8 +131,9 @@ export const RAIL_ATTR = "data-deck-rail";
  *
  * Order is preserved inside both halves, and both callers depend on it: `TextView` hands `flow`
  * to `packColumns`, whose whole constraint is the reader's own order, and `StackView` maps it
- * straight into a row of flex items. A split that reordered would break either from outside it,
- * where nothing would be looking.
+ * straight into the items of a masonry grid, where placement follows document order and never
+ * walks back up the page. A split that reordered would break either from outside it, where
+ * nothing would be looking.
  */
 export function splitRail<T extends { kind: CategoryKind | null }>(
   groups: readonly T[],

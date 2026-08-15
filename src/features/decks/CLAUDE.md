@@ -798,17 +798,42 @@ price | type`). An **inactive category stays its own group in all three grouping
   `DEFAULT_COLUMN_HEIGHT` and the view's `groupHeight` went with it. **`packColumns` is untouched
   and `TextView` still uses it**: a decklist line is 21px, so a column there holds thirty and
   filling one is what makes that view readable — the two views differ because a card is 300px tall
-  and a line of text is not. **The price is a ragged foot**: a line is as tall as its tallest pile,
-  so a 40-card Creature stack beside three one-card piles leaves space under the short ones that
-  the pack would have filled. That was the trade taken deliberately — reading order is now
-  left-to-right in the order the reader sorted, which is what a `sortOrder` is _for_, and unspent
-  width was the complaint.
+  and a line of text is not. **The price was a ragged foot**: a line is as tall as its tallest
+  pile, so a 40-card Creature stack beside three one-card piles left space under the short ones
+  that the pack would have filled — taken deliberately, because reading order became left-to-right
+  in the order the reader sorted, which is what a `sortOrder` is _for_, and unspent width was the
+  complaint. **The bullet below stopped paying it the next day**, keeping the order.
+- **The flow is a masonry, not a row of wrapped lines** (2026-08-15, and the third form of one bug).
+  A flex line is as tall as its tallest item, so the wrap above only moved the blank desk: a
+  40-card Creature pile set the height of every short pile on its line, and the reader was looking
+  at the empty part of it. The flowing box is `display: grid` with
+  `grid-template-columns: repeat(auto-fill, stackColumnWidth(zoom))`, `grid-auto-rows: 1px`, and
+  each pile placed by `grid-row: span <its own height + 20>` (`flowRowSpan`). **Grid's ordinary
+  placement is the masonry**: it fills the first free cell at or after the cursor and never walks
+  back up the page, so with pixel rows a wrapped pile starts at the foot of the pile _above_ it,
+  and the reader's `sortOrder` still reads down the page — DOM order, tab order and what a screen
+  reader hears are untouched, which is why this is a grid rather than N hand-assigned columns.
+  Four things carry it:
+  **(1) the column count is still CSS's** (`auto-fill` off a definite width), so nothing here
+  measures the desk and the rule two bullets down survives whole;
+  **(2) what _is_ measured is each pile** — a `useLayoutEffect` read on every render, before paint,
+  plus a `ResizeObserver` per pile for the changes no render causes (a heading wrapping as the
+  search panel is dragged). It cannot be computed: `stackHeight(n, zoom)` is exact for the stack
+  and the heading above it wraps or does not;
+  **(3) `items-start` is what makes that safe** — a grid item aligned to the start of its area is
+  content-sized, so its height does not depend on the span it was given; stretch it, the default,
+  and measure → span → measure oscillates;
+  **(4) the vertical gutter cannot be a `row-gap`** — a grid gap is drawn at every row boundary an
+  item crosses, so a `gap-y-5` here draws one 20px gutter per _pixel_ of a pile's height, silently.
+  The 20 rides inside each span instead; `gap-x-4` is unchanged.
 - **`STACK_ATTR` (`data-deck-stack`) marks one pile in the flow**, and it replaced
   `STACK_COLUMN_ATTR` (`data-stack-column`), which meant "a box `packColumns` produced". It sits on
-  `StackGroup`'s own `<section>` — there is no wrapper box left — beside the inline
-  `width`/`flex: 0 0 Npx` it draws at. **The rail's piles carry neither**, and the `flex` half is
-  why that is load-bearing rather than tidy: the rail is `flex-col`, so a basis on a child there
-  would be read down the main axis and become a _height_. It pairs with `RAIL_ATTR`
+  `StackGroup`'s own `<section>` — there is no wrapper box left — beside the inline `width` and the
+  `grid-row` span it is placed by. **The rail's piles carry none of the three**, and one prop says
+  so: `flowWidth` is absent there, because the rail is a `flex-col` box that carries the width for
+  the piles in it and in which a grid row means nothing. (It used to be the `flex: 0 0 Npx` basis
+  that was load-bearing here — a basis on a `flex-col` child is read down the main axis and becomes
+  a _height_ — and that shorthand went with the flex flow.) It pairs with `RAIL_ATTR`
   (`data-deck-rail`) — the two boxes a pile can be in, named the same way.
 - **The rail costs a column of flow, and at the app's own window that is the column.** Measured
   live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
@@ -854,9 +879,11 @@ price | type`). An **inactive category stays its own group in all three grouping
   it lands there, and a no-op at every other width. `min-w-0`/`flex-1` cannot say this, because a
   flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
   **this view has no business observing its own box** — the rule that outlived
-  `DEFAULT_COLUMN_HEIGHT`, and is now stronger rather than weaker: the view takes no measurement of
-  the desk at all, in either axis. A second reading of the same box answers a frame behind the
-  layout it is reacting to. The widths, and the law behind all three of these bullets:
+  `DEFAULT_COLUMN_HEIGHT`, and which the masonry above does **not** weaken: what that observes is
+  each _pile_, and how many piles fit on a line is still `auto-fill`'s answer, so the view still
+  takes no measurement of the desk at all, in either axis. A second reading of the same box answers
+  a frame behind the layout it is reacting to; a reading of something laid out _inside_ it does
+  not. The widths, and the law behind all three of these bullets:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The rail is a plain flex child and nothing about it is sticky**, which is the one thing to read
   before reinstating anything. It was briefly `sticky right-0` over an opaque `bg-bg` at
