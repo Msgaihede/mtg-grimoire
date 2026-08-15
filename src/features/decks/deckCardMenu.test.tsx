@@ -83,6 +83,7 @@ function deps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
     setTag: vi.fn(),
     tags: TAGS,
     createTag: vi.fn(),
+    remove: vi.fn(),
     ...over,
   };
 }
@@ -119,7 +120,40 @@ describe("buildDeckCardMenu", () => {
       "View all printings",
       "Add to",
     ]);
-    expect(labels(items).slice(5)).toEqual(["Move to", "Set as companion", "Tag card"]);
+    expect(labels(items).slice(5)).toEqual([
+      "Move to",
+      "Set as companion",
+      "Tag card",
+      "Remove card",
+    ]);
+  });
+
+  /**
+   * **`Remove card` sits below a rule of its own**, and the rule is the point: everything above
+   * it says where this card goes or what it is called, and this one takes the cardboard out. A
+   * row that removes a card must not sit flush against the row that renames its label.
+   *
+   * `labels` strips separators, so nothing else in this file can see one being dropped.
+   */
+  it("puts a rule between the card's filing rows and the row that removes it", () => {
+    const items = buildDeckCardMenu(bolt(), deps());
+    const shape = items.map((item) => (item.kind === "separator" ? `—${item.id}` : item.id));
+
+    expect(shape.slice(-2)).toEqual(["—sep-remove", "remove-card"]);
+  });
+
+  /**
+   * One press, no confirmation — where the *pile's* `Clear stack…` has one. The asymmetry is
+   * deliberate: one card is one add to put back and the reader can see which one it was, and a
+   * pile is a column they would have to rebuild.
+   */
+  it("removes the card that was right-clicked, with nothing to confirm", () => {
+    const remove = vi.fn();
+    const row = bolt({ categoryId: 1 });
+
+    (find(buildDeckCardMenu(row, deps({ remove })), "Remove card") as MenuAction).onSelect();
+
+    expect(remove).toHaveBeenCalledWith(row);
   });
 
   /**

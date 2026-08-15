@@ -183,7 +183,20 @@ function cardDeps(act: Act): CardMenuDeps {
 /** The command zone, and a pile the reader made and dragged to the end of their own order. Named
  *  rather than reached by index, because two stories are *about* which of the two they are. */
 const COMMANDER_ZONE: DeckCategory = deckCategory("commander");
-const RAMP_PILE: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp", sortOrder: 5 };
+/**
+ * **`cardCount` is spelled out because `Clear stack…` reads it**, and it is the count of the
+ * variant on screen — the reverse of what the delete confirmation quotes. A pile at zero draws a
+ * greyed row, which is {@link EmptyPileCannotBeCleared}'s subject; this one holds cards, so the
+ * row is live here.
+ */
+const RAMP_PILE: DeckCategory = {
+  ...deckCategory("main"),
+  id: 10,
+  name: "Ramp",
+  sortOrder: 5,
+  cardCount: 7,
+  cardCountAllVariants: 7,
+};
 
 /**
  * The deck's piles **in the reader's own order**, which is the array `DeckEditor` holds and never
@@ -242,6 +255,10 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     setTag: (card, tagId) => act(`tag:${card.cardId}:${tagId ?? "none"}`),
     tags: TAGS,
     createTag: (card, name) => act(`new-tag:${card.cardId}:${name}`),
+    // The stepper's zero by another road — there is no `remove` mutation in this app, because
+    // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
+    // card is one add to put back.
+    remove: (card) => act(`remove:${card.cardId}`),
   };
 }
 
@@ -305,6 +322,9 @@ function categoryDeps(act: Act): CategoryMenuDeps {
     openImport: (request) => act(`import-into:${request.forcedCategoryName}`),
     openExport: (request) => act(`export:${request.subject}:${request.cards.length}`),
     setActive: (category, isActive) => act(`active:${category.id}:${String(isActive)}`),
+    // Both destructions are a **question**, never the write — `CategoryMenuDeps` carries neither
+    // mutation, so this menu is structurally incapable of emptying or deleting a pile on its own.
+    askClear: (category) => act(`ask-clear-pile:${category.id}`),
     askDelete: (category) => act(`ask-delete-pile:${category.id}`),
   };
 }
@@ -779,7 +799,13 @@ export const Category: Story = {
     const rename = await canvas.findByRole("menuitem", { name: "Rename…" });
     await waitFor(async () => await expect(rename).toBeVisible(), { timeout: FRAME_WAIT });
 
-    for (const name of ["Import cards…", "Export cards…", "Deactivate", "Delete…"]) {
+    for (const name of [
+      "Import cards…",
+      "Export cards…",
+      "Deactivate",
+      "Clear stack…",
+      "Delete…",
+    ]) {
       await expect(canvas.getByRole("menuitem", { name })).toBeVisible();
     }
 
@@ -803,7 +829,7 @@ export const Category: Story = {
 export const PredefinedZone: Story = {
   args: {
     label: "Commander",
-    build: (act) => buildCategoryMenu(COMMANDER_ZONE, categoryDeps(act)),
+    build: (act) => buildCategoryMenu({ ...COMMANDER_ZONE, cardCount: 1 }, categoryDeps(act)),
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -815,5 +841,69 @@ export const PredefinedZone: Story = {
     // Present, because deactivating the command zone is a legal (if unwise) thing to do and the
     // validation panel reports the missing commander, which is the honest cost.
     await expect(canvas.getByRole("menuitem", { name: "Deactivate" })).toBeVisible();
+    // And the clear is present too, which is the row that shows the absences above are the
+    // *backend's* answer rather than a rule about predefined zones: nothing refuses a clear, so
+    // nothing takes it away. Emptying the Sideboard between two rounds is the obvious case.
+    await expect(canvas.getByRole("menuitem", { name: "Clear stack…" })).toBeVisible();
+  },
+};
+
+/**
+ * A pile with nothing in the list on screen: **the clear stays and greys**, where the two rows
+ * above are dropped.
+ *
+ * The difference is what the greying means. `Rename…` and `Delete…` are absent because
+ * `deck_meta.rs` refuses them on a `kind` that is not `main`, and an item existing only to be
+ * refused is worse than one that is not there. This row would simply write nothing — so it keeps
+ * its position, which is what lets a reader who has cleared this pile before find it where they
+ * left it, and carries `aria-disabled` rather than `disabled` so it stays readable and stays in
+ * the tab order.
+ *
+ * The count consulted is `cardCount`, **the variant on screen** — never `cardCountAllVariants`,
+ * which is what the delete confirmation quotes. This pile holds three copies in the theory list
+ * and none here, and a clear cannot reach them.
+ */
+export const EmptyPileCannotBeCleared: Story = {
+  args: {
+    label: "Ramp",
+    build: (act) =>
+      buildCategoryMenu(
+        { ...RAMP_PILE, cardCount: 0, cardCountAllVariants: 3 },
+        categoryDeps(act),
+      ),
+  },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const row = await canvas.findByRole("menuitem", { name: /Clear stack…/ });
+    await waitFor(async () => await expect(row).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await expect(row).toHaveAttribute("aria-disabled", "true");
+    await expect(within(row).getByText("already empty")).toBeInTheDocument();
+
+    await userEvent.click(row);
+    await expect(args.act).not.toHaveBeenCalled();
+  },
+};
+
+/**
+ * **Clearing a pile asks first, and the menu cannot reach the write.**
+ *
+ * `CategoryMenuDeps` carries an `askClear` and no clear mutation — the fence `Delete…` has, and
+ * the fence `buildDeckMenu` puts around a deck. The card menu's own `Remove card` deliberately
+ * has no such question: one card is one add to put back, and a pile is a column to rebuild.
+ */
+export const ClearingAPileAsksFirst: Story = {
+  args: {
+    label: "Ramp",
+    build: (act) => buildCategoryMenu(RAMP_PILE, categoryDeps(act)),
+  },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const row = await canvas.findByRole("menuitem", { name: "Clear stack…" });
+    await waitFor(async () => await expect(row).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await userEvent.click(row);
+
+    await expect(args.act).toHaveBeenCalledWith(`ask-clear-pile:${RAMP_PILE.id}`);
   },
 };

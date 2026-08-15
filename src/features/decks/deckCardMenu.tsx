@@ -1,6 +1,6 @@
 /**
  * What a card offers on a right-click **inside the deck editor** — the card menu every other
- * surface draws, plus the four things that only mean something about a card that is in a deck.
+ * surface draws, plus the five things that only mean something about a card that is in a deck.
  *
  * ```
  * … the card menu every surface draws …
@@ -9,6 +9,8 @@
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
  * Tag card             ▸  None / the deck's tags / New tag…
+ * ─────────────────────
+ * Remove card             every copy, out of this pile
  * ```
  *
  * **A pure builder whose dependencies are an argument**, exactly as `cardMenu`'s and
@@ -31,7 +33,7 @@
  * its format spec and its tags — three facts no view has.
  */
 import { useState } from "react";
-import { Crown, FolderInput, Tag, UserRound } from "lucide-react";
+import { CircleMinus, Crown, FolderInput, Tag, UserRound } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
@@ -127,6 +129,20 @@ export interface DeckCardMenuDeps {
    * is no menu left to draw it in.
    */
   createTag: (card: DeckCard, name: string) => void;
+  /**
+   * **Remove card** — take this row out of the pile it is in.
+   *
+   * `useDeck.setQuantity(…, 0)` at the surface, which is the app's **only** removal write: the
+   * remove tray's drop and the stepper's zero are already that call, and `useDeck` carries no
+   * `remove` mutation because zero is what removes a deck row. So this row is a third caller of
+   * one write rather than a second way to take a card out — nothing new can be refused, and the
+   * refusal that can arrive is already in the editor's banner family.
+   *
+   * **No confirmation, deliberately, where the pile's `Clear stack…` has one.** One card is one
+   * add to put back and the reader can see which one it was; a pile is a column they would have
+   * to rebuild, and the two rows differ by exactly that.
+   */
+  remove: (card: DeckCard) => void;
 }
 
 export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
@@ -146,6 +162,19 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     moveItem(card, deps),
     ...zoneItems(card, deps),
     { kind: "lazy", id: "tag-card", label: "Tag card", Icon: Tag, Content: TagBody },
+    // A second rule, and it is the same kind of line as the first: everything above says where
+    // this card goes or what it is called, and this one takes it out. A row that removes
+    // cardboard does not sit flush against a row that renames it.
+    { kind: "separator", id: "sep-remove" },
+    {
+      kind: "action",
+      id: "remove-card",
+      label: "Remove card",
+      // `CircleMinus`, not `Trash2`: the trash can means "delete the thing itself" across these
+      // menus — a deck, a folder, a pile — and this takes a card out of a pile that stays.
+      Icon: CircleMinus,
+      onSelect: () => deps.remove(card),
+    },
   ];
 }
 

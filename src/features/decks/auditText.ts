@@ -108,6 +108,17 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
       };
     }
     case "remove": {
+      // **A pile cleared wears this kind and names no card**, exactly as an import's replace row
+      // does one branch up — so `action` is what tells it from a card being taken out. Without
+      // this arm `deck_category_clear`'s row renders as "Removed 7 × a card": a sentence about a
+      // card the row has not got, and one that reads as a bug in the history rather than in the
+      // renderer. The word is `deck.rs`'s `clear_category`; copy it, never re-derive it.
+      if (text(p.action) === "clear") {
+        return {
+          text: `Cleared ${plural(count(p.cards), "card")} from ${text(p.category) ?? "a category"}`,
+          detail: null,
+        };
+      }
       const quantity = count(p.quantity);
       return {
         text: quantity > 1 ? `Removed ${quantity} × ${name}` : `Removed ${name}`,

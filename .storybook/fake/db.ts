@@ -5429,6 +5429,40 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck::clear_category` — a pile's right-click **Clear stack**, answering the **copies**
+     * it removed.
+     *
+     * **One variant**, which is the opposite of `deck_category_delete` below: that one cascades
+     * through both lists because a category is not variant-scoped, and this one leaves the pile
+     * standing so it empties only the list the reader is looking at. The `variant` in the filter
+     * is what a story about a theory-enabled deck exercises.
+     *
+     * **An empty pile writes nothing at all** — no `updatedAt` — where `deck_set_card_quantity`'s
+     * zero arm above deliberately still moves it: that path commits a transaction whatever it
+     * found, and this one returns before opening one.
+     */
+    deck_category_clear: (args: {
+      deckId: number;
+      categoryId: number;
+      variant: DeckVariant;
+    }): number => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const deck = requireDeck(db, args.deckId);
+      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const doomed = db.deckCards.filter(
+        (dc) =>
+          dc.deckId === args.deckId && dc.categoryId === category.id && dc.variant === variant,
+      );
+      // Copies, not rows — two printings at 2 and 3 is the 5 the confirmation quoted.
+      const cleared = doomed.reduce((copies, dc) => copies + dc.quantity, 0);
+      if (cleared === 0) return 0;
+      db.deckCards = db.deckCards.filter((dc) => !doomed.includes(dc));
+      deck.updatedAt = stamp(db);
+      return cleared;
+    },
+
+    /**
      * `deck::move_card` — every copy from one category to another, folding into what the
      * target already holds. **Within one variant**: a move is a re-filing, never a promotion
      * of a theory row into the live deck.

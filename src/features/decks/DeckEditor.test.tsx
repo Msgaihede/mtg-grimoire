@@ -59,6 +59,9 @@ const collectionAdd = vi.hoisted(() => vi.fn());
 const deckCategoryRename = vi.hoisted(() => vi.fn());
 const deckCategorySetActive = vi.hoisted(() => vi.fn());
 const deckCategoryDelete = vi.hoisted(() => vi.fn());
+/** `Clear stack…`'s write, and it is a **card** command through `useDeck` rather than one of
+ *  the three above — a clear empties a pile and changes nothing about the category itself. */
+const deckCategoryClear = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
@@ -108,6 +111,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCategoryRename,
     deckCategorySetActive,
     deckCategoryDelete,
+    deckCategoryClear,
     deckAuditList,
     deckTheoryDiff,
     deckFolderList,
@@ -483,6 +487,8 @@ beforeEach(() => {
   deckCategoryRename.mockReset().mockResolvedValue(CATEGORIES[0]);
   deckCategorySetActive.mockReset().mockResolvedValue(CATEGORIES[0]);
   deckCategoryDelete.mockReset().mockResolvedValue(undefined);
+  // The copies it removed, which is what the command answers.
+  deckCategoryClear.mockReset().mockResolvedValue(4);
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
@@ -2831,8 +2837,9 @@ describe("DeckEditor drag and drop", () => {
  * dialog.
  *
  * That is a stated compromise and not the usual preference: the export dialog is **one of the
- * two editor surfaces with no control in this view** — the delete-category confirmation is the
- * other, and both are opened from a category heading's right-click — so when this was written
+ * editor surfaces with no control in this view** — the delete-category and clear-stack
+ * confirmations are the others, and all three are opened from a category heading's right-click,
+ * which is why this sentence names them rather than counting them — so when this was written
  * there was nothing here to press and no rendered path to reach it through. Both functions are
  * exported for that reason.
  *
@@ -2944,6 +2951,30 @@ describe("DeckEditor — a card's menu", () => {
     expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Tag card/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
+  });
+
+  /**
+   * **`Remove card` is the stepper's zero by another road, and that is the whole of it.**
+   *
+   * There is no `remove` mutation in this app — the remove tray's drop and the stepper's last
+   * press are both `deck_set_card_quantity(…, 0)` — so this row adds a third caller of one write
+   * rather than a second way to take a card out. It gets that write's hand-off for free: the
+   * caret goes to the pile the card just left, which is what the tray and the stepper already do.
+   *
+   * **No confirmation**, unlike the pile's `Clear stack…`: one card is one add to put back.
+   */
+  it("removes a card straight from its menu, with nothing to confirm", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove card" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
+    await waitFor(() =>
+      expect(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)).toHaveFocus(),
+    );
   });
 
   /**
@@ -3337,7 +3368,108 @@ describe("DeckEditor — a category's menu", () => {
     expect(screen.getByRole("menuitem", { name: "Import cards…" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Export cards…" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
+    // A regex, because these fixture piles hold no cards and a greyed row's `reason` is part of
+    // its accessible name — "Clear stack… already empty" is deliberately one sentence. The
+    // greying itself is asserted below, where a pile with cards is seeded to sit beside it.
+    expect(screen.getByRole("menuitem", { name: /Clear stack…/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeInTheDocument();
+  });
+
+  /**
+   * The deck the fixtures build has `cardCount: 0` on every pile, so `Clear stack…` is greyed
+   * there — this is the deck the four cases below need: a Main deck holding four copies of one
+   * card in the live list, and one in the theory list it must not reach.
+   */
+  function withCardsInMain() {
+    const main = category(1, "Main deck", "main", { cardCount: 4, cardCountAllVariants: 5 });
+    const categories = [main, ...CATEGORIES.slice(1)];
+    deckGet.mockResolvedValue(detail({}, [bolt()], categories));
+    deckCategoryList.mockResolvedValue(categories);
+  }
+
+  /**
+   * **`Clear stack…` asks rather than writing**, exactly as `Delete…` does and for the same
+   * reason: `CategoryMenuDeps` carries no clear mutation at all, so the menu structurally cannot
+   * reach the command without the reader passing through the question.
+   */
+  it("asks before clearing a pile, and reaches no write until the reader says so", async () => {
+    withCardsInMain();
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
+    expect(deckCategoryClear).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove 4 cards" }));
+    await waitFor(() => expect(deckCategoryClear).toHaveBeenCalledWith(DECK.id, MAIN, "live"));
+  });
+
+  /** "Keep them" is the way out that writes nothing — the safe answer being the one a reader
+   *  reaches by pressing the button that is not the destructive one. */
+  it("writes nothing when the reader keeps the cards", async () => {
+    withCardsInMain();
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Keep them" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deckCategoryClear).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The question counts the list on screen and says the other one is safe.**
+   *
+   * `cardCount` is variant-scoped and `cardCountAllVariants` is not, so the difference is the
+   * copies in the list the reader is *not* looking at — and a clear cannot reach them. Quoting
+   * the wrong one of the two here would overstate a destructive press, which is the one
+   * direction a confirmation must never be wrong in. (The delete confirmation quotes the other
+   * number, correctly, because that command cascades through both lists.)
+   */
+  it("counts the variant on screen and says the other list is untouched", async () => {
+    withCardsInMain();
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
+    await waitFor(() =>
+      expect(within(dialog).getByText(/4 cards in it leave the live list/)).toBeVisible(),
+    );
+    expect(within(dialog).getByText(/1 card filed here in the other list/)).toBeInTheDocument();
+  });
+
+  /** A refused clear is said **inside** the dialog, for the reason the delete's refusal is: the
+   *  editor's own banner draws behind this dialog's scrim, and the press otherwise looks like a
+   *  press that did nothing. */
+  it("says so inside the clear dialog when the clear is refused", async () => {
+    withCardsInMain();
+    deckCategoryClear.mockRejectedValue("The database is busy");
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove 4 cards" }));
+
+    expect(await within(dialog).findByText(/Could not clear that stack/)).toBeInTheDocument();
+  });
+
+  /** Nothing to clear, so the row stays where the reader last found it and greys — `aria-disabled`
+   *  rather than `disabled`, so it is still readable and still in the tab order. */
+  it("greys the clear on a pile with nothing in the list on screen", async () => {
+    await open();
+    await rightClickGroup(SIDE);
+
+    const row = screen.getByRole("menuitem", { name: /Clear stack…/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(row);
+    expect(deckCategoryClear).not.toHaveBeenCalled();
   });
 
   /** The keyboard route, which is a requirement on every menu of this branch. The group element
