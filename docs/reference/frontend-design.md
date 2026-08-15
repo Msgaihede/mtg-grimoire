@@ -1221,6 +1221,63 @@ downward-opening panel off the bottom, and this database has **five** decks, so 
 170px and fits either way. And a browser process count is not proof that `openUrl` opened a tab —
 Edge was already running; the honest signal is that the call raised no refusal.
 
+## The second scrollbar nothing in the box tree accounted for
+
+**2026-08-15, `npm run tauri dev` (a debug build), at 1280×800 and again at 1975×885, on a
+24-card Standard deck.** Reported as "two scrollbars on the deck builder, and dead space at the
+bottom of the app".
+
+**What was on screen.** The deck editor drew its own page scrollbar, and the *window* drew a
+second one beside it. Scrolling that second one slid the whole application up and left the page
+background under it — the "dead space", which is what an `h-screen` shell looks like in a document
+that is taller than the window.
+
+**What the numbers said, in the order they were taken.**
+
+| read | before | after |
+| --- | --- | --- |
+| `documentElement.scrollHeight` | **1704** | 800 |
+| `documentElement.clientHeight` | 800 | 800 |
+| `window.innerWidth - documentElement.clientWidth` | **15** | **0** |
+| `window.scrollTo(0, 5000)` → `scrollY` | **904** | **0** |
+| `body.scrollHeight` | 800 | 800 |
+| `#root > div` (`h-screen overflow-hidden`) `scrollHeight` | 800 | 800 |
+
+**The third and fourth rows are the whole difficulty**: the document scrolled 904px while *every
+box in the tree measured 800*, the shell's own `overflow-hidden` included. Hiding the shell took
+`scrollHeight` to 800, so it was inside; forcing `overflow: hidden` onto the editor changed
+**nothing**, so it was not the editor's content escaping the editor's clip.
+
+**It was `.sr-only`, which is `position: absolute`.** An `overflow` clips a descendant only when
+the scroller lies between that descendant and its **containing block** — and a label with no
+positioned ancestor takes the *initial* containing block, so it is laid out at its static position
+(deep inside the scrolled column) and clipped by nothing at all. It then contributes that position
+to the **document's** scrollable overflow. The deepest one was `DeckStats`' curve label
+`"0 cards at mana value 8 or more"` at y **1703** — the 1704 above, exactly.
+
+**The fix is one class, and it belongs on the box that carries the `overflow`.** `relative` on
+`DeckEditor`'s page section: 1704 → 800, 15px → 0. `relative` on `AppShell`'s `main` **instead**
+looks like the same repair and is not — the document came right (800) while `main.scrollHeight`
+went **742 → 1646**, because the label is then contained by `main` but its static position is
+still inside the editor's scrolled content. The phantom bar moved rather than went. The rule that
+generalises: **a scroll container is the containing block for its own absolutely positioned
+content.** `main` carries `relative` too, as the same rule applied to the outermost scroller —
+three escapees were probed in it that day (two filter labels and a view heading, all with
+`offsetParent` of `body`), harmless only because the views they sit in keep them near the top.
+
+**Scrollbars actually drawn, after, counted by `offsetWidth - clientWidth - borders` over every
+element**: Stacks **1**, Grid **1**, Text **1**, Table **2**. The table's second is
+`VirtualTable`'s and is the documented exception — a virtualiser is a scrollport by construction.
+Opening the card detail pane over Stacks made it 2 as well, the pane being its own scroller for the
+printings preview; that was read in the editor only and not in the other views. Every other view
+was re-checked in the same pass: Search 1 (the wall), Settings
+1 (`main`), Collection, Wishlist and the deck gallery 0, and **no window scrollbar and zero
+document overflow in any of them**.
+
+**Why no test caught it and none can.** jsdom has no layout engine, so the 904px is invisible to
+the suite — and so is the difference between the fix and the wrong fix, which are identical in
+every DOM assertion. `DeckEditor.test.tsx` pins the class and states the figures instead.
+
 ## Vendored components and tokens
 
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).
