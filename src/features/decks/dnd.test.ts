@@ -211,4 +211,41 @@ describe("dropWrite", () => {
   it("refuses a search result dropped on the tray", () => {
     expect(dropWrite(SEARCH, { kind: "remove" })).toBeNull();
   });
+
+  /**
+   * The quick zones' `Auto`, from either wall: no category, because the pile is per card and
+   * `useDeck.addCard` names it. The type line is the whole of what travels, and it travels
+   * because the payload already carried it — see `DragPayload`.
+   */
+  it("files a card by what it does when it lands on the auto zone", () => {
+    expect(dropWrite(SEARCH, { kind: "auto" })).toEqual({
+      write: "auto-add",
+      cardId: "c-bolt",
+      typeLine: "Instant",
+    });
+    expect(dropWrite(CARD, { kind: "auto" })).toEqual({
+      write: "auto-add",
+      cardId: "c-bolt",
+      typeLine: "Instant",
+    });
+  });
+
+  /** A type line the app does not know is the answer rather than a refusal — `autoCategoryFor`
+   *  files a `null` under `Uncategorised`, which is the honest pile. */
+  it("carries an unknown type line onto the auto zone rather than refusing the drop", () => {
+    expect(dropWrite({ ...SEARCH, typeLine: null }, { kind: "auto" })).toEqual({
+      write: "auto-add",
+      cardId: "c-bolt",
+      typeLine: null,
+    });
+  });
+
+  /**
+   * A card already in the deck is refused, and structurally: `deck-card` carries no type line,
+   * so there is nothing for the rule to read. The zone greys instead of guessing — re-filing a
+   * card the deck already holds is the Categories dialog's bulk action.
+   */
+  it("refuses a deck row dropped on the auto zone", () => {
+    expect(dropWrite(ROW, { kind: "auto" })).toBeNull();
+  });
 });

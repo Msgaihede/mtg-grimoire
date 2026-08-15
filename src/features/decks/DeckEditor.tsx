@@ -59,6 +59,7 @@ import {
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { RenameField } from "./metaRows";
 import { QuickAdd } from "./QuickAdd";
+import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { DEFAULT_TAG_COLOR } from "./tagColors";
 import { TagsDialog } from "./TagsDialog";
@@ -464,6 +465,18 @@ type Layer =
    * mutation at all, so the menu structurally cannot reach the write without passing through here.
    */
   | { kind: "deleteCategory"; categoryId: number }
+  /**
+   * A card was let go over the quick zones' **New category**, and the pile it is going into has
+   * no name yet.
+   *
+   * **The whole payload, not a card id**, and it is the one arm that carries a drag: what the
+   * card is doing depends on where it was picked up — a printing off a wall is *added* to the
+   * new pile and a row of this deck is *moved* into it — and that is exactly what a
+   * {@link DragPayload} says and a card id does not. It is also frozen on purpose, unlike
+   * `export` and `deleteCategory` one line up: those name a row the deck is re-read into, while
+   * this names a gesture that is over. There is nothing live to look it up from.
+   */
+  | { kind: "quickCategory"; payload: DragPayload }
   | null;
 
 /** A `setTimeout` handle, as this project's DOM-only lib types one. */
@@ -1383,10 +1396,57 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const applyDrop = useCallback(
     (write: DeckWrite) => {
       if (write.write === "add") addTo(write.cardId, write.categoryId);
+      // The quick zones' `Auto`, and the same call the toolbar's `Add to → Auto (by what it
+      // does)` makes: the type line goes and the pile does not, because `useDeck.addCard` names
+      // it. The one drop in this editor that points at no column — see {@link QuickZones}.
+      else if (write.write === "auto-add") addTo(write.cardId, AUTO_CATEGORY, write.typeLine);
       else if (write.write === "move") moveTo(write.cardId, write.from, write.to);
       else setQuantityAt(write.cardId, write.categoryId, 0);
     },
     [addTo, moveTo, setQuantityAt],
+  );
+
+  /**
+   * The quick zones' **New category**, in two halves an act apart.
+   *
+   * The drop opens the dialog and writes nothing: a modal cannot be opened mid-gesture, and a
+   * pile has to be called something. The submit makes the pile and then files the card into it
+   * with the write the drag meant all along — {@link dropWrite} asked a second time, against the
+   * id the create just answered with, so the add/move branch is the *same* rule a drop onto a
+   * drawn heading goes through rather than a second copy of it.
+   */
+  const createCategory = meta.createCategory.mutate;
+  const resetCreateCategory = meta.createCategory.reset;
+  const openQuickCategory = useCallback(
+    (payload: DragPayload) => {
+      // The dialog draws this observer's refusal, and a sentence left over from a previous press
+      // would be on screen before the reader had typed anything — `resetCategoryDelete`'s reason.
+      resetCreateCategory();
+      // Nothing to hand the caret back to: the drop is a pointer gesture and no control opened
+      // this.
+      openLayer({ kind: "quickCategory", payload }, null);
+    },
+    [openLayer, resetCreateCategory],
+  );
+  const quickCategoryPayload = layer?.kind === "quickCategory" ? layer.payload : null;
+  const createQuickCategory = useCallback(
+    (name: string) => {
+      if (!quickCategoryPayload) return;
+      createCategory(name, {
+        // **Closed only on success**, which is what leaves a refused name in the field to be
+        // corrected. The second write's own refusal is the editor's banner, like every other add
+        // and move.
+        onSuccess: (category) => {
+          const write = dropWrite(quickCategoryPayload, {
+            kind: "category",
+            categoryId: category.id,
+          });
+          if (write) applyDrop(write);
+          close();
+        },
+      });
+    },
+    [applyDrop, close, createCategory, quickCategoryPayload],
   );
 
   /** The stepper's write, addressed by the card's own slot. */
@@ -1949,6 +2009,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // scrollport by construction.
       className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
+      {/* The four quick destinations, drawn across the top of this scroller for the length of a
+          drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it
+          has to be a child of the page scroller itself — a sticky box inside the ribbon row below
+          would scroll away with that row — and it costs no layout in either state, which is what
+          `h-0 -mb-3` is for. Every word of why, and why it owns a monitor of its own rather than
+          reading the `dragging` state the remove tray is drawn from: `QuickZones`. */}
+      <QuickZones categories={categories} onDrop={applyDrop} onNewCategory={openQuickCategory} />
+
       {/**
        * The deck's own ribbon, and the `py-1.5` on it is load-bearing rather than spacing.
        *
@@ -2772,6 +2840,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         subject={exported.subject}
         cards={exported.cards}
         suggestedFileName={exported.fileName}
+        onDismiss={dismiss}
+        onClose={close}
+      />
+
+      {/* The quick zones' New category, which is the third overlay in this view with no control
+          to open it — a drop is not a press, and there is nowhere to hand the caret back to. It
+          draws `createCategory`'s refusal itself rather than leaning on the editor's banner, for
+          the delete confirmation's reason one dialog up: that banner is behind this scrim. */}
+      <QuickCategoryDialog
+        open={layer?.kind === "quickCategory"}
+        cardName={quickCategoryPayload?.name ?? ""}
+        pending={meta.createCategory.isPending}
+        failure={
+          meta.createCategory.isError
+            ? `Could not make that category — ${ipcError(meta.createCategory.error)}`
+            : null
+        }
+        onCreate={createQuickCategory}
         onDismiss={dismiss}
         onClose={close}
       />

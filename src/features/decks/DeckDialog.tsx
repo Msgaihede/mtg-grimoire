@@ -154,8 +154,19 @@ function Panel({
   // controls are then the next thing Tab reaches, and Escape has something to hand back. **No
   // field is focused** — these are panels of settled values rather than questions, and dropping
   // the caret into the first text box would make the reader's first keystroke an edit.
+  //
+  // **Unless the body has already put it somewhere**, which is a body's decision to make and
+  // this must not undo. Child effects run before a parent's, so a body that focused one of its
+  // own controls has done so by the time this runs — and without the test it would be
+  // immediately overruled, silently and only in the shipped window, since the two effects agree
+  // about everything except which element ends up holding the caret. The one body that takes
+  // this route is the quick zones' New category (`QuickZones.tsx`), which is a single empty box
+  // asking one question rather than a panel of settled values. `contains` rather than a prop:
+  // there is nothing for a host to get wrong, and the fallback stands for every other body.
   useEffect(() => {
-    panelRef.current?.focus({ preventScroll: true });
+    const panel = panelRef.current;
+    if (!panel || panel.contains(document.activeElement)) return;
+    panel.focus({ preventScroll: true });
   }, []);
 
   return (
