@@ -2129,11 +2129,7 @@ export interface UpdateProgressEvent {
  * arm on the Rust side is a type error here rather than a blank badge.
  */
 export type ErrorSource =
-  | "scryfall_api"
-  | "scryfall_image"
-  | "github_update"
-  | "database"
-  | "image_store";
+  "scryfall_api" | "scryfall_image" | "github_update" | "database" | "image_store";
 
 /** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
 export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";
@@ -2720,16 +2716,39 @@ export const ipc = {
    */
   deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
     invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
-  /** Move every copy from one category to another **within one variant**, folding into
-   *  whatever the target already holds. The identity travels from the moved row, so an orphan
-   *  can be tidied out of the scratchpad like anything else. */
+  /**
+   * Move every copy from one category to another **within one variant**, folding into whatever
+   * the target already holds. The identity travels from the moved row, so an orphan can be
+   * tidied out of the scratchpad like anything else.
+   *
+   * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deckAddCard`'s two-arm
+   * target, and the id wins when both arrive. An id is a drop onto a column the reader pointed
+   * at; a **name** is the quick zones' `Auto`, found-or-created in the same transaction by
+   * `category_for_name`, which is what makes a pile the app invents come out `origin: 'auto'`
+   * and therefore stop being drawn once its last card leaves. The word is `autoCategoryFor`'s
+   * and is computed here, never in Rust.
+   *
+   * Answers **the category the copies are now in**, which is the only way the name arm's caller
+   * learns what was found or made — the caret follows a moved card to its new pile, so that id
+   * is load-bearing rather than a convenience. A name that resolves to the pile the card is
+   * already in writes nothing at all, answers that pile, and does not bump `updated_at`.
+   */
   deckMoveCard: (
     deckId: number,
     cardId: string,
     fromCategoryId: number,
-    toCategoryId: number,
+    toCategoryId: number | null,
+    toCategoryName: string | null,
     variant: DeckVariant,
-  ) => invoke<void>("deck_move_card", { deckId, cardId, fromCategoryId, toCategoryId, variant }),
+  ) =>
+    invoke<number>("deck_move_card", {
+      deckId,
+      cardId,
+      fromCategoryId,
+      toCategoryId,
+      toCategoryName,
+      variant,
+    }),
   /**
    * Swap a deck card to **another printing of the same card**: same category, same variant,
    * same copies, folding into whatever that category already holds of the printing swapped

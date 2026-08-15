@@ -5166,10 +5166,7 @@ export function writeHandlers(db: FakeDb) {
       // own: a bare `12` is a number no reader can resolve once the pile has been renamed. `null`
       // on either side is `AUTO_CATEGORY`, where there is no pile to name.
       const defaultCategoryWas = before.defaultCategoryId ?? 0;
-      if (
-        patch.defaultCategoryId !== undefined &&
-        patch.defaultCategoryId !== defaultCategoryWas
-      ) {
+      if (patch.defaultCategoryId !== undefined && patch.defaultCategoryId !== defaultCategoryWas) {
         field(
           "defaultCategory",
           categoryNameOf(db, defaultCategoryWas),
@@ -5545,21 +5542,37 @@ export function writeHandlers(db: FakeDb) {
      * tidying, and a move that needed the id to resolve would refuse the one row that most
      * needs moving. `tagId` travels with it for the same reason — a label is the user's word
      * about this card in this deck, and re-filing it is not a reason to lose it.
+     *
+     * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deck_add_card`'s two-arm
+     * target, mirrored here because the crate mirrors it there. The name arm is the quick zones'
+     * `Auto` and goes through {@link categoryForName}, so a pile it invents is `"auto"` and stops
+     * being drawn once its last card leaves. The id wins when both arrive.
+     *
+     * Answers the category the copies are now in. **The `from === to` check moved below the
+     * resolution and that is not a tidy-up**: the name arm cannot know the target's id until it
+     * has resolved it, and a card the rule files where it already is has to be answered rather
+     * than moved — so the early return is `Ok(to)` with nothing written, `updatedAt` included.
      */
     deck_move_card: (args: {
       deckId: number;
       cardId: string;
       fromCategoryId: number;
-      toCategoryId: number;
+      toCategoryId: number | null;
+      toCategoryName: string | null;
       variant: DeckVariant;
-    }): void => {
+    }): number => {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
-      // Before the deck is even looked up, exactly as the Rust returns before its transaction.
-      if (args.fromCategoryId === args.toCategoryId) return;
+      if (args.toCategoryId === null && args.toCategoryName === null) throw refuse(NO_CATEGORY);
       const deck = requireDeck(db, args.deckId);
       const from = categoryOfDeck(db, args.deckId, args.fromCategoryId);
-      const to = categoryOfDeck(db, args.deckId, args.toCategoryId);
+      const to =
+        args.toCategoryId !== null
+          ? categoryOfDeck(db, args.deckId, args.toCategoryId)
+          : categoryForName(db, args.deckId, args.toCategoryName!);
+      // After the resolution, and it writes nothing at all — not even `updatedAt`, which the
+      // Rust rolls back with its transaction for the same reason.
+      if (from.id === to.id) return to.id;
       const row = deckCardAt(db, args.deckId, args.cardId, from.id, variant);
       if (!row) throw refuse(cardGone(from.name));
       const target = deckCardAt(db, args.deckId, args.cardId, to.id, variant);
@@ -5577,6 +5590,7 @@ export function writeHandlers(db: FakeDb) {
       }
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
+      return to.id;
     },
 
     /**

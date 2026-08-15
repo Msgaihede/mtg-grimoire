@@ -2184,6 +2184,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
       cardId: BOLT.id,
       fromCategoryId: categoryId(1, "maybe"),
       toCategoryId: MAIN.categoryId,
+      toCategoryName: null,
       variant: "live",
     });
     expect(db.deckCards).toHaveLength(1);
@@ -2204,6 +2205,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
       cardId: BOLT.id,
       fromCategoryId: MAIN.categoryId,
       toCategoryId: SIDE.categoryId,
+      toCategoryName: null,
       variant: "live",
     });
     expect(db.deckCards.map((dc) => [dc.variant, dc.categoryId, dc.quantity]).sort()).toEqual([
@@ -2228,6 +2230,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
       cardId: BOLT.id,
       fromCategoryId: categoryId(1, "maybe"),
       toCategoryId: MAIN.categoryId,
+      toCategoryName: null,
       variant: "live",
     });
     const moved = db.deckCards.find((dc) => dc.cardId === BOLT.id)!;
@@ -2270,6 +2273,7 @@ describe("what a card write does to the deck row", () => {
         cardId: BOLT.id,
         fromCategoryId: categoryId(1, "main"),
         toCategoryId: categoryId(1, "side"),
+        toCategoryName: null,
         variant: "live",
       }),
     ).toThrow(/not in this deck's Main deck category/);

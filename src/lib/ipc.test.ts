@@ -365,13 +365,30 @@ describe("ipc argument names match the Rust command signatures", () => {
     // The one write that names **two** categories, so it spells neither of them `categoryId`
     // the way its siblings do — and `from`/`to` alone, which is what the zones took, would
     // deserialize into neither parameter.
-    invoke.mockResolvedValue(undefined);
-    await ipc.deckMoveCard(4, "p1", 9, 2, "live");
+    invoke.mockResolvedValue(2);
+    await ipc.deckMoveCard(4, "p1", 9, 2, null, "live");
     expect(invoke).toHaveBeenCalledWith("deck_move_card", {
       deckId: 4,
       cardId: "p1",
       fromCategoryId: 9,
       toCategoryId: 2,
+      toCategoryName: null,
+      variant: "live",
+    });
+
+    // The **name** arm — the quick zones' `Auto`, where the pile is `autoCategoryFor`'s answer
+    // and may not exist yet. Both halves are always sent, because Rust's parameters are
+    // `Option`s and an absent key deserializes to `None` on the wrong one as readily as on the
+    // right one. It answers the category the copies are now in, which is the only way this
+    // caller learns what was found or made.
+    invoke.mockResolvedValue(31);
+    expect(await ipc.deckMoveCard(4, "p1", 9, null, "Removal", "live")).toBe(31);
+    expect(invoke).toHaveBeenCalledWith("deck_move_card", {
+      deckId: 4,
+      cardId: "p1",
+      fromCategoryId: 9,
+      toCategoryId: null,
+      toCategoryName: "Removal",
       variant: "live",
     });
 
