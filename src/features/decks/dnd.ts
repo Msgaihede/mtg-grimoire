@@ -47,9 +47,17 @@ export type DragPayload =
   | { kind: "deck-card"; cardId: string; name: string; fromCategoryId: number }
   | { kind: "card"; cardId: string; name: string; typeLine: string | null };
 
-/** Where a payload was let go: one of the deck's categories, or the tray that takes cards
- *  out. */
-export type DropTarget = { kind: "category"; categoryId: number } | { kind: "remove" };
+/**
+ * Where a payload was let go: one of the deck's categories, the tray that takes cards out, or
+ * the quick zone that files a card by what it does.
+ *
+ * **`"auto"` is a target rather than a category id, because there is no id to name.** The pile
+ * an auto add lands in is decided *per card* by `autoCategoryFor` — over a type line and the
+ * card's Oracle tags — and that rule runs inside `useDeck.addCard`, one layer above this one.
+ * Spelling it as a category here would mean inventing an id for a pile that may not exist yet.
+ */
+export type DropTarget =
+  { kind: "category"; categoryId: number } | { kind: "remove" } | { kind: "auto" };
 
 /**
  * The write a drop means — named for the command it becomes, and carrying nothing the editor
@@ -61,6 +69,16 @@ export type DropTarget = { kind: "category"; categoryId: number } | { kind: "rem
  */
 export type DeckWrite =
   | { write: "add"; cardId: string; categoryId: number }
+  /**
+   * One copy, filed by what the card *does* — the quick zones' `Auto`, and the same write the
+   * toolbar's `Add to → Auto (by what it does)` makes.
+   *
+   * A separate arm rather than an `add` with a sentinel id, because it carries a different
+   * thing: `categoryId` names the pile and this names the **card**, leaving the pile to
+   * `autoCategoryFor`. The type line travels because the payload already has it — see
+   * {@link DragPayload} — and `null` is a real answer that files under `Uncategorised`.
+   */
+  | { write: "auto-add"; cardId: string; typeLine: string | null }
   | { write: "move"; cardId: string; from: number; to: number }
   | { write: "remove"; cardId: string; categoryId: number };
 
@@ -247,6 +265,15 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
     // the same reason.
     if (payload.kind !== "deck-card") return null;
     return { write: "remove", cardId: payload.cardId, categoryId: payload.fromCategoryId };
+  }
+  if (target.kind === "auto") {
+    // **A card already in the deck cannot be dropped here, and the refusal is structural rather
+    // than a policy.** `"deck-card"` carries no `typeLine` — it names a slot, and a move names
+    // its destination by construction — so there is nothing for `autoCategoryFor` to read. The
+    // zone greys for such a drag instead of guessing, and re-filing a card the app already holds
+    // is what the Categories dialog's "File cards by what they do" is for.
+    if (payload.kind === "deck-card") return null;
+    return { write: "auto-add", cardId: payload.cardId, typeLine: payload.typeLine };
   }
   if (payload.kind === "search-card" || payload.kind === "card") {
     // One copy, exactly as the panel's Add button sends — and `deck_add_card` folds, so

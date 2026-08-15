@@ -251,6 +251,39 @@ reader to configure the deck they had just made; it now asks all of them.
   **Both destructive rows ask first, and the type is what enforces it**: `CategoryMenuDeps` carries
   an `askClear` and an `askDelete` and neither mutation, so the menu structurally cannot reach
   either write — `buildDeckMenu`'s fence around a deck, twice over.
+- **A drag has two ends now, and they are the two ends of the window** (added 2026-08-15).
+  `QuickZones.tsx` draws four boxes across the top of the editor for the length of a drag —
+  `Auto`, `New category`, and the deck's own Maybeboard and Sideboard — against the remove tray's
+  `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
+  means the pile it landed on. Five things about it are decisions rather than details:
+  - **It owns its own `monitorForElements`, and that is the point of it being a component.**
+    `DeckEditor`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
+    answered for the docked panel's tiles would re-render the editor — and with it the panel and
+    the very tile the reader has hold of — mid-drag. These zones have to answer for exactly the
+    drags it refuses, so widening it was never available; a component with a monitor of its own
+    re-renders **itself** and leaves that rule true.
+  - **`{ kind: "auto" }` is a `DropTarget` and `auto-add` is a `DeckWrite`**, both new in `dnd.ts`.
+    An auto add names no category — the pile is per card, decided inside `useDeck.addCard` — so it
+    could not be spelled as a category id without inventing one. `deck-card` is **refused** there
+    and the box greys: that payload deliberately carries no `typeLine`, so there is nothing for
+    `autoCategoryFor` to read, and re-filing a card the deck already holds is the Categories
+    dialog's bulk action.
+  - **`New category` is two acts.** A modal cannot be opened mid-gesture, so the drop hands the
+    whole `DragPayload` up and `DeckEditor`'s `quickCategory` layer asks for a name; the submit
+    creates the pile and then puts `dropWrite` to the id it answered with — so an add stays an add
+    and a move stays a move, through the same rule a drop onto a drawn heading goes through. A
+    refused create keeps the dialog open with the name still in the field, and says so **inside**
+    the dialog, since the editor's banner is behind that scrim.
+  - **It costs no layout in either state**: `h-0 -mb-3` around an absolutely positioned bar, the
+    negative margin cancelling the editor column's own `gap-3`. The tray's rule, for the tray's
+    reason — an affordance that pushed every pile down on `dragstart` would move the deck at the
+    moment the reader was aiming at it. `sticky` rather than `fixed` so the bar is the editor's
+    width with nothing measured; the editor **is** the page scroller, so `top-0` is the top of what
+    the reader can see.
+  - **`aria-hidden`, like the tray**, and for the same argument: all four have a click path a caret
+    reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
+    dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
+    the bar has no accessible name and two of its labels are also headings on the desk behind it.
 - **A move has two routes: a drag, and the card's right-click `Move to`** (changed 2026-08-14, and
   again later the same day). Every deck card used to carry a native `Move…` `<select>` beside its
   stepper, listing every other category of the deck; it was removed whole, which left `moveCard`
