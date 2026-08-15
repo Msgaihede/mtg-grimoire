@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { Plus, Search } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
@@ -213,6 +221,22 @@ export interface DeckSearchPanelProps {
    */
   roomy?: boolean;
   /**
+   * What a tile offers on a right-click — **the handler already built**, from the editor.
+   *
+   * A tile here is a search result rather than a deck card, so it gets the plain card menu every
+   * other wall in the app draws: none of the deck editor's own rows (Move to, the two zones, Tag
+   * card) means anything about a printing that is in no deck. It is built by `DeckEditor` all the
+   * same, so that one `CardMenuDeps` serves both surfaces of that screen — two would be two
+   * collection-add observers and two places to draw one refusal.
+   *
+   * Absent is a panel with no menu, which is what a story or `DeckSearchPanel.test.tsx` mounts.
+   */
+  cardMenu?: (card: CardSummary) => (e: ReactMouseEvent) => void;
+  /** The same menu from the keyboard — Shift+F10 and the ContextMenu key, anchored at the
+   *  tile's own corner. Its own slot rather than something derived from the one above, because
+   *  a keypress has no coordinates; see `CardGrid`'s `cardMenuKey`. */
+  cardMenuKey?: (card: CardSummary) => (e: ReactKeyboardEvent) => void;
+  /**
    * The widest this panel may be drawn or dragged, in px — the editor's answer, because the
    * editor is what holds the two measurements it is made of.
    *
@@ -263,6 +287,8 @@ export function DeckSearchPanel({
   targetCategoryId,
   onTargetCategoryChange,
   defaultFormat,
+  cardMenu,
+  cardMenuKey,
   roomy = true,
   maxWidth = Number.POSITIVE_INFINITY,
 }: DeckSearchPanelProps) {
@@ -479,7 +505,7 @@ export function DeckSearchPanel({
         {toggle}
         {/* The category choice sits above the results rather than on each of them: it is the
             click path's answer to "where does this go", and therefore the keyboard's — which is
-            what makes drag a shortcut in Task 14 rather than the only way in. */}
+            what makes the drag a shortcut rather than the only way in. */}
         {shown && (
           <>
             <label htmlFor={categoryFieldId} className="ml-auto shrink-0 text-xs text-dim">
@@ -540,6 +566,8 @@ export function DeckSearchPanel({
             categories={categories}
             targetCategoryId={targetCategoryId}
             defaultFormat={defaultFormat}
+            cardMenu={cardMenu}
+            cardMenuKey={cardMenuKey}
           />
         </div>
       )}
@@ -705,9 +733,17 @@ function OpenPanel({
   categories,
   targetCategoryId,
   defaultFormat,
+  cardMenu,
+  cardMenuKey,
 }: Pick<
   DeckSearchPanelProps,
-  "add" | "onAdded" | "categories" | "targetCategoryId" | "defaultFormat"
+  | "add"
+  | "onAdded"
+  | "categories"
+  | "targetCategoryId"
+  | "defaultFormat"
+  | "cardMenu"
+  | "cardMenuKey"
 >) {
   // The deck's format seeds the Format select and nothing else — the hook owns what a default
   // does to filter state, this panel owns only handing it the deck's answer. See
@@ -886,6 +922,11 @@ function OpenPanel({
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.
           gameChanger={tileGameChanger}
+          // The whole tile is the target — the art, its corner chip and the caption under it.
+          // The wall's own `cardMenu` slot, so this panel knows nothing about menus beyond
+          // where a right-click lands.
+          cardMenu={cardMenu}
+          cardMenuKey={cardMenuKey}
           badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
           action={(card) => {
             // Where this card would land, named before the press rather than reported after it.

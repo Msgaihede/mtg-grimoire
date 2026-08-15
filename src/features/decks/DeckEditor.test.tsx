@@ -15,8 +15,15 @@ import type {
   ImportMatch,
   SyncStatus,
 } from "@/lib/ipc";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { dragOnto, startDrag } from "@/test-drag";
-import { CARD_BODY_ATTR, DECK_CARD_VARIANT, LANDED_ATTR } from "./cardControl";
+import {
+  CARD_BODY_ATTR,
+  DECK_CARD_VARIANT,
+  DECK_GROUP_ATTR,
+  LANDED_ATTR,
+} from "./cardControl";
+import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -40,6 +47,18 @@ const listSets = vi.hoisted(() => vi.fn());
 const deckCategoryList = vi.hoisted(() => vi.fn());
 const deckTagList = vi.hoisted(() => vi.fn());
 const deckTagSuggestions = vi.hoisted(() => vi.fn());
+// The two writes a card's own right-click reaches — the deck's label put on a row, and the
+// label made by the menu's own "New tag…" field. `setTag` had no control anywhere in the app
+// until that menu; this is its first caller.
+const deckCardSetTag = vi.hoisted(() => vi.fn());
+const deckTagCreate = vi.hoisted(() => vi.fn());
+// The one write a card's menu makes that is not a deck write at all — "Add to → Collection".
+// Its refusal is the editor's second banner, because the menu has closed by the time one lands.
+const collectionAdd = vi.hoisted(() => vi.fn());
+// The three category writes a pile's right-click reaches, through `useDeckMeta`.
+const deckCategoryRename = vi.hoisted(() => vi.fn());
+const deckCategorySetActive = vi.hoisted(() => vi.fn());
+const deckCategoryDelete = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
@@ -83,6 +102,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCategoryList,
     deckTagList,
     deckTagSuggestions,
+    deckCardSetTag,
+    deckTagCreate,
+    collectionAdd,
+    deckCategoryRename,
+    deckCategorySetActive,
+    deckCategoryDelete,
     deckAuditList,
     deckTheoryDiff,
     deckFolderList,
@@ -93,7 +118,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { DeckEditor } from "./DeckEditor";
+import { categoryExport, DeckEditor, exportFileName } from "./DeckEditor";
 import { useAppStore } from "@/lib/store";
 
 const DECK: DeckRow = {
@@ -268,11 +293,24 @@ const SYNCED: SyncStatus = {
   imageStoreFailures: 0,
 };
 
+/**
+ * The editor, under the two hosts the shipped app always puts above it.
+ *
+ * `ContextMenuProvider` is `App.tsx`'s and is what a right-click actually reaches:
+ * `useContextMenu` degrades to a **no-op** without one — deliberately, so an unwrapped story
+ * cannot redden the whole suite — which means a menu test that forgot it would pass by drawing
+ * nothing and asserting nothing. It costs the tests that are not about menus one `contextmenu`
+ * listener on `document` and no state at all: nothing else is registered until a menu opens.
+ */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <ContextMenuProvider>{ui}</ContextMenuProvider>
+    </QueryClientProvider>,
+  );
 }
 
 /** The editor, rendered and waited for — every test starts from a deck on screen. */
@@ -437,6 +475,14 @@ beforeEach(() => {
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckTagList.mockReset().mockResolvedValue([]);
   deckTagSuggestions.mockReset().mockResolvedValue([]);
+  deckCardSetTag.mockReset().mockResolvedValue(undefined);
+  deckTagCreate
+    .mockReset()
+    .mockResolvedValue({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+  collectionAdd.mockReset().mockResolvedValue(undefined);
+  deckCategoryRename.mockReset().mockResolvedValue(CATEGORIES[0]);
+  deckCategorySetActive.mockReset().mockResolvedValue(CATEGORIES[0]);
+  deckCategoryDelete.mockReset().mockResolvedValue(undefined);
   deckAuditList.mockReset().mockResolvedValue([]);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
@@ -2017,14 +2063,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **All six full-window overlays are modal, and Tab cannot leave one.**
+   * **The full-window overlays are modal, and Tab cannot leave one.**
    *
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
    * available right now — a pointer already cannot cross one. Two of them used to let the
    * caret walk back into the editor anyway, which offered the capability to one input method and
    * denied it to the other while the docs argued it was deliberate.
    *
-   * **Four of the six are one component now (`DeckDialog`) and two are not**: the import dialog
+   * **The editor has seven and this drives the six with a control in the view.** The seventh is
+   * the export dialog, opened from a category heading's right-click, so there is no button here
+   * to point the sweep at; it is a `DeckDialog` like four of the six, which is what the four
+   * cases below hold to the shell's behaviour.
+   *
+   * **Five of the seven are one component now (`DeckDialog`) and two are not**: the import dialog
    * and the theory diff still carry their own scrim, `aria-modal` and `onKeyDown={trapTab}`,
    * which is why this sweep is driven per surface rather than pointed at the shell. It is the
    * only thing holding the two copies to the shell's behaviour, and it is what would go red if
@@ -2082,9 +2133,18 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Two `"inner"` layers open at once are not ordered by the Escape protocol at all — both
-   * would consume one press — so the editor holds *one* piece of state for all seven, and
+   * Two of these open at once would be two scrims, two `aria-modal` panels and two focus traps
+   * over one screen — so the editor holds *one* piece of state for every member of `Layer`, and
    * opening any of them takes whichever was up down with it.
+   *
+   * **The Escape argument that used to stand here is gone rather than reworded.** It read "two
+   * `"inner"` layers open at once are not ordered by the Escape protocol at all — both would
+   * consume one press", and neither half survives: `useDismissOnEscape` keeps a stack of
+   * capture-phase registrations and only the token on top acts, so peers *are* ordered by mount
+   * depth; and the old hook did not close both either — its capture rung checks
+   * `defaultPrevented`, so the first-registered peer took the press and the newer one was
+   * starved. The reason above never depended on any of it. No count either: the union grew twice
+   * in one day, and a number here was wrong both times.
    */
   it("never has two of its own layers open at once", async () => {
     await open();
@@ -2126,11 +2186,18 @@ describe("DeckEditor", () => {
   /**
    * …and the second press *replaces* the first rather than stacking on it.
    *
-   * The `Layer` union already guarantees this — there is one slot — but the guarantee is the
-   * reason the Escape ladder is safe to have, and a guarantee nothing reads is a guarantee that
-   * survives being deleted. Two `"inner"` rungs enabled at once are not ordered at all: one
-   * press would close both and two focus hand-backs would race for the caret. These two are the
-   * pair most likely to be reached for in a row, because they were one surface until now.
+   * The `Layer` union already guarantees this — there is one slot — but a guarantee nothing
+   * reads is a guarantee that survives being deleted. These two are the pair most likely to be
+   * reached for in a row, because they were one surface until 2026-08-14.
+   *
+   * **What is *not* the reason any more, because the claim was false:** this used to read "two
+   * `"inner"` rungs enabled at once are not ordered at all — one press would close both and two
+   * focus hand-backs would race for the caret". `useDismissOnEscape` keeps a module-level stack
+   * of capture-phase registrations and only the token on top acts, so two `"inner"` peers *are*
+   * ordered, by mount depth. Nor did the old hook close both: its capture rung checked
+   * `defaultPrevented` too, so the **first-registered** peer consumed the press and the newer
+   * one — the thing on top — was starved. The reason for one slot is two scrims, two
+   * `aria-modal` panels and two focus traps over one screen, which never depended on Escape.
    */
   it("replaces the categories dialog with the tags one rather than stacking them", async () => {
     await open();
@@ -2255,9 +2322,9 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The **eighth** `"inner"` peer on this screen, and the one no state union covers: the set
+   * The **ninth** `"inner"` peer on this screen, and the one no state union covers: the set
    * filter inside the docked search panel owns its own Escape rung (`SetCombobox`). What keeps
-   * it exclusive with the editor's own seven is focus and click mechanics — each of them closes
+   * it exclusive with the editor's own eight is focus and click mechanics — each of them closes
    * on focus-out or on a press outside its root — so it is pinned here in the assembled editor,
    * both ways round. Neither direction is a structural guarantee, and a test is the only thing
    * that would notice one of them being dropped.
@@ -2604,8 +2671,11 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * One of the family's six writes has no control in this view — the printing swap is pressed
-   * on the **card pane**, which is a sibling of this editor rather than part of it.
+   * One member of the refused-write family has no control in this view — the printing swap is
+   * pressed on the **card pane**, which is a sibling of this editor rather than part of it.
+   * (No count: read `DeckEditor`'s `writes` array and the `newestWrite` call beside it. A
+   * number stood here, went stale twice in one day as the two menus landed, and is not coming
+   * back.)
    *
    * It cannot honestly be tested from here, and it is tested where the two components meet:
    * `App.test.tsx`'s "says a refused swap in the pane, and the deck behind it goes with it".
@@ -2753,5 +2823,818 @@ describe("DeckEditor drag and drop", () => {
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
     expect(deckMoveCard).not.toHaveBeenCalled();
     window.removeEventListener("keydown", listen);
+  });
+});
+
+/**
+ * The pure half of the export layer, asserted **directly** rather than through the rendered
+ * dialog.
+ *
+ * That is a stated compromise and not the usual preference: the export dialog is **one of the
+ * two editor surfaces with no control in this view** — the delete-category confirmation is the
+ * other, and both are opened from a category heading's right-click — so when this was written
+ * there was nothing here to press and no rendered path to reach it through. Both functions are
+ * exported for that reason.
+ *
+ * **The heading is wired now**, so the rendered path exists: `DeckEditor — a category's menu`
+ * presses `Export cards…` and asserts the dialog opens on the pile that was right-clicked.
+ * These stay all the same, because they pin the *pure* answers — the file name's punctuation
+ * rules, the deleted-category title — which an integration case would only reach through a
+ * dialog that draws one of them and not the other.
+ */
+describe("categoryExport", () => {
+  const REMOVAL = category(11, "Removal", "main");
+  const CARDS: DeckCard[] = [
+    card({ name: "Swords to Plowshares", categoryId: REMOVAL.id }),
+    card({ name: "Sol Ring", categoryId: 12 }),
+  ];
+
+  it("takes the pile's own cards and nothing from another", () => {
+    const exported = categoryExport(REMOVAL.id, [REMOVAL], CARDS, "Burn");
+
+    expect(exported.subject).toBe("Removal");
+    expect(exported.cards.map((c) => c.name)).toEqual(["Swords to Plowshares"]);
+    expect(exported.fileName).toBe("Burn - Removal");
+  });
+
+  /** Every render but the ones the dialog is up. `""` and **not** the deleted-pile wording: a
+   *  closed dialog is not a statement about a pile that has gone. */
+  it("says nothing at all while the layer is closed", () => {
+    expect(categoryExport(null, [REMOVAL], CARDS, "Burn")).toEqual({
+      subject: "",
+      cards: [],
+      fileName: "Burn",
+    });
+  });
+
+  /**
+   * Another surface — the Categories dialog, or a second window on the same database — can
+   * delete a category while this dialog is open over it, and the editor re-reads the deck
+   * without it. The empty card list is honest; `Export ""` as the dialog's accessible name was
+   * not, which is the whole of what this fallback is for.
+   */
+  it("names a pile that has been deleted rather than titling itself with nothing", () => {
+    // The re-read has lost the category **and** its rows — `deck_cards.category_id` is
+    // `ON DELETE CASCADE` — so this is the state the open dialog actually lands in. The filter
+    // itself is not what empties the list: it answers whatever rows still claim that id, which
+    // is the honest reading of a pile mid-delete.
+    const cascaded = CARDS.filter((c) => c.categoryId !== REMOVAL.id);
+    const exported = categoryExport(REMOVAL.id, [], cascaded, "Burn");
+
+    expect(exported.subject).toBe("a deleted category");
+    expect(exported.cards).toEqual([]);
+    // The category's **name**, never the subject: `Burn - a deleted category` is a sentence
+    // where a file name belongs.
+    expect(exported.fileName).toBe("Burn");
+  });
+
+  /** The point of the layer carrying an id and not the cards: a write under the open dialog is
+   *  followed rather than frozen at the moment the menu row was pressed. */
+  it("follows a rename made under the open dialog", () => {
+    const renamed = { ...REMOVAL, name: "Interaction" };
+
+    expect(categoryExport(REMOVAL.id, [renamed], CARDS, "Burn").subject).toBe("Interaction");
+  });
+});
+
+/**
+ * **The card's own right-click, driven through the real editor.**
+ *
+ * `deckCardMenu.test.tsx` owns what the rows *are*; this file owns that the editor builds them
+ * from the deck it has open and that a press reaches the write. The two halves are worth
+ * separating because the interesting failures live in the wiring: an editor building the menu
+ * from the drawn groups instead of its `categories` array would pass every unit test in that
+ * file and still be unable to reach the one pile this menu exists for.
+ */
+describe("DeckEditor — a card's menu", () => {
+  /**
+   * A pile the app made while filing a card, with nothing in it.
+   *
+   * `drawsWhenEmpty` keeps an empty `auto` pile off the desk entirely — nobody asked for it, and
+   * it comes back with the next card the rule files there — so it has **no heading**, and a
+   * heading that is not drawn is not a drop target. It is the one pile a drag cannot reach.
+   */
+  const RECURSION = category(7, "Recursion", "main", { origin: "auto", sortOrder: 5 });
+
+  const BUDGET: DeckTag = { id: 8, deckId: 4, name: "Budget swap", color: "moss", cardCount: 1 };
+
+  /** Right-click the card the editor drew, found by the slot every view stamps on it. */
+  async function rightClickCard(name: string) {
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, `c-${name}`)}"]`,
+    );
+    expect(el).not.toBeNull();
+    // A raw dispatch outside `act()` is not flushed synchronously, which is why every caller
+    // waits on the panel by role rather than reading it straight back.
+    fireEvent.contextMenu(el as HTMLElement);
+    return screen.findByRole("menu");
+  }
+
+  /** Open a submenu by pressing its row. Hover would do it too, after `SUBMENU_HOVER_MS` — a
+   *  press is the same code path with no timer in it. */
+  async function expand(name: RegExp) {
+    await userEvent.click(screen.getByRole("menuitem", { name }));
+  }
+
+  it("offers the deck's own rows under the card menu every other surface draws", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Tag card/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **Shift+F10, and it is not a nicety here.**
+   *
+   * The per-card `Move…` select was removed on 2026-08-14 and took the only keyboard path to
+   * moving a card with it — a caret cannot drag, and stepping to zero and adding again elsewhere
+   * is a different write that loses the slot. This menu is the replacement, so a menu only a
+   * mouse could open would restore nothing. The panel is anchored at the card's own corner
+   * rather than at a pointer that was never there, which is `menuKey`'s whole job.
+   */
+  it("opens a card's menu from the keyboard, and offers the move from there", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
+    await open();
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt")}"]`,
+    ) as HTMLElement;
+    el.focus();
+    fireEvent.keyDown(el, { key: "F10", shiftKey: true });
+
+    await screen.findByRole("menu");
+    await expand(/Move to/);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+  });
+
+  /**
+   * **The whole reason this menu exists.**
+   *
+   * The per-card `Move…` select was removed on 2026-08-14 and it was the one control built from
+   * the deck's `categories` rather than from the drawn groups — so it could reach a pile with no
+   * heading, which is the one thing a drag cannot do. This asserts both halves in one case: the
+   * pile draws no heading, and the menu moves a card into it anyway.
+   */
+  it("moves a card into a pile with no heading on screen", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
+    await open();
+    // Not drawn: an emptied auto pile is a heading about a card the deck does not contain.
+    expect(screen.queryByRole("region", { name: "Recursion" })).toBeNull();
+
+    await rightClickCard("Lightning Bolt");
+    await expand(/Move to/);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+  });
+
+  /**
+   * **Every category the deck has, in the reader's own `sortOrder`** — a documented exemption
+   * from `sortOptions`, of the kind whose order the reader arranged themselves. (No count and
+   * no ordinal: `src/CLAUDE.md` keeps no list of the exemptions any more, precisely because
+   * "exactly two" was false within a day of being written. The comment at each site is the
+   * record.) Sorted, this list would read Commander, Companion,
+   * Main deck, Maybeboard, Recursion, Sideboard, which is a different order in the menu from the
+   * one the desk and the Categories dialog draw.
+   */
+  it("keeps the reader's own category order rather than sorting it", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Move to/);
+
+    const panel = (await screen.findAllByRole("menu"))[1];
+    const rows = within(panel).getAllByRole("menuitem");
+    // The pile the card is already in is drawn and greyed rather than dropped — "every
+    // category" is what makes the list findable by position — so its row carries its reason.
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Main deckalready here",
+      "Sideboard",
+      "Commander",
+      "Companion",
+      "Maybeboard",
+      "Recursion",
+    ]);
+    expect(rows[0]).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /** Modern has no command zone, so neither zone row is a thing this deck can be asked about. */
+  it("offers no commander row in a format with no command zone", async () => {
+    await open();
+    await seeded();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.queryByRole("menuitem", { name: /Set as commander/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * …and in a format that has one, an ineligible card is **greyed with its reason** rather than
+   * hidden — the reason being `commanderIneligibility`'s, the rule the validation panel judges
+   * the built deck by.
+   *
+   * `aria-disabled` and never the `disabled` attribute: the row exists to be read, so it has to
+   * stay in the tab order.
+   */
+  it("greys the commander row with its reason in Commander", async () => {
+    deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]));
+    await open();
+    await seeded("Modern");
+
+    await rightClickCard("Lightning Bolt");
+    const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveTextContent(/legendary/i);
+  });
+
+  /**
+   * …and a card it *can* fill gets a live row, in the editor rather than only in the unit file.
+   *
+   * The second assertion is the one worth having here: the primitive omits `aria-disabled`
+   * **entirely** on a live row rather than writing `"false"`, so a test written against the
+   * string would pass on a row that had quietly become disabled and vice versa.
+   */
+  it("offers the commander row live for a card the rules allow", async () => {
+    const atraxa = card({
+      name: "Atraxa, Praetors' Voice",
+      typeLine: "Legendary Creature — Phyrexian Angel Horror",
+      power: "4",
+      toughness: "4",
+      quantity: 1,
+    });
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "commander", formatName: "Commander" }, [atraxa]),
+    );
+    await open();
+    await seeded("Modern");
+
+    await rightClickCard("Atraxa, Praetors' Voice");
+    const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
+    expect(row).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(row);
+    // Into the deck's own command zone — the write is a move, not a second kind of add.
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Atraxa, Praetors' Voice",
+      MAIN,
+      CATEGORIES[2].id,
+      "live",
+    );
+  });
+
+  /** A deck card wears at most one tag, so the rows are radios and the card's own is ticked. */
+  it("draws the tags as a radio group with the card's own ticked", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ tagId: 8, tagName: "Budget swap", tagColor: "moss" })], CATEGORIES, [
+        BUDGET,
+      ]),
+    );
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    expect(await screen.findByRole("menuitemradio", { name: "None" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(screen.getByRole("menuitemradio", { name: "Budget swap" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("puts the deck's label on the card that was right-clicked", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()], CATEGORIES, [BUDGET]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: "Budget swap" }));
+
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 8);
+  });
+
+  /**
+   * **"New tag…" is two writes, and the second one is the editor's rather than the menu's.**
+   *
+   * A `useMutation`'s callbacks belong to its observer, so a chain started inside the panel would
+   * lose its second half to any dismissal landing during the round trip — the label created and
+   * silently never attached. The mutation is mounted in `DeckEditor`, which is still on screen
+   * when the answer arrives, so the menu can close on the press and the chain still completes.
+   * That is what the second half of this case asserts: the panel is **already gone** before
+   * either command has answered.
+   */
+  it("makes a label from the menu's own field and puts it on the card", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    // The press closes the menu; it does not wait for a network to answer first.
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    // The default colour, silently — recolouring is what the Tags dialog is for.
+    await waitFor(() => expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "gold"));
+    // …and the chain's second half runs with the panel long gone.
+    await waitFor(() =>
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
+    );
+  });
+
+  /**
+   * **The create outlives the menu, driven the hard way**: the reader presses Escape while the
+   * label is still being written.
+   *
+   * This is the case the `mutate`-scoped chain could not survive and the reason the write moved
+   * to the editor. The create is held open until after the dismissal, so the observer would be
+   * long gone by the time it answered if it belonged to the panel.
+   */
+  it("attaches a label whose create was still in flight when the menu was dismissed", async () => {
+    let landed: (tag: DeckTag) => void = () => {};
+    deckTagCreate.mockImplementation(
+      () =>
+        new Promise<DeckTag>((resolve) => {
+          landed = resolve;
+        }),
+    );
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(deckCardSetTag).not.toHaveBeenCalled();
+
+    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+
+    await waitFor(() =>
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
+    );
+  });
+
+  /**
+   * …and a refused *create* is spoken for by the deck's own banner, which is why the mutation is
+   * in the editor's refused-write family rather than merely mounted in it.
+   *
+   * A label the reader typed and pressed Add on, that never appears and never says why, is the
+   * silent failure this family exists to prevent — and the menu it was typed in is gone by the
+   * time the answer arrives, so there is nowhere else it could be said.
+   */
+  it("says so when the menu's tag create is refused", async () => {
+    deckTagCreate.mockRejectedValue("The database is busy");
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(
+      await screen.findByText(/Could not change this deck — The database is busy/),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **A refused collection add from the menu has to be said somewhere, and this is the somewhere.**
+   *
+   * `useCardMenuDeps` states it plainly: a page that ignores that sentence is a page where a card
+   * silently fails to be added. The menu cannot draw it — `ctx.run` closes the panel before the
+   * row's handler even starts the write — so the editor draws it, in a banner of its own beside
+   * the one that speaks for writes to the deck.
+   */
+  it("says so when a card menu's collection add is refused", async () => {
+    collectionAdd.mockRejectedValue("The database is busy");
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Add to/);
+    // One finish on this printing, so `Collection` is a plain row rather than a submenu.
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Collection" }));
+
+    expect(await screen.findByText(/Could not add to your collection/)).toBeInTheDocument();
+  });
+
+  /**
+   * **Where the caret goes when the menu closes, in every view.**
+   *
+   * `useContextMenu` takes the element the handler is attached to as the panel's `opener`, and
+   * `ContextMenu` hands the caret back to it on Escape and on every chosen row. **`focus()` on an
+   * element with no `tabindex` is a no-op**, so without `deckCardMenuProps`' `tabIndex: -1` the
+   * hand-back lands nowhere and the next Tab restarts from the top of the document — invisible to
+   * a test that only asserts the menu closed, and worst on the one affordance this menu exists to
+   * restore, since Shift+F10 → `Move to` is the keyboard's only route to a move.
+   *
+   * Swept across all four because three of them hang the handlers on an `<li>` and the table hangs
+   * them on a row `VirtualTable` already made focusable — so the table passes either way, and a
+   * sweep is what stops that masking the other three.
+   */
+  it.each(["Stacks", "Table", "Text", "Grid"])(
+    "gives the caret back to the card when the menu closes in %s",
+    async (view) => {
+      await open();
+      await userEvent.click(screen.getByRole("button", { name: view }));
+
+      const marked = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt")}"]`,
+        );
+        expect(el).not.toBeNull();
+        return el as HTMLElement;
+      });
+      // The slot is stamped on the card's *button* in the three card views and on the row itself
+      // in the table — and the opener is whatever the handlers were spread onto, which is the
+      // `<li>` in the first three. `views.test.tsx`'s drag helper resolves it the same way.
+      const opener = marked.closest("li") ?? marked;
+
+      marked.focus();
+      fireEvent.keyDown(marked, { key: "F10", shiftKey: true });
+      await screen.findByRole("menu");
+
+      await userEvent.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      // The card, not `<body>` — and the *opener* rather than merely something inside the card,
+      // because the opener is what `focus()` is called on and what has to be able to take it.
+      expect(document.activeElement).toBe(opener);
+    },
+  );
+
+  /**
+   * The docked panel's tiles are cards too, and the menu they offer is the plain one — a search
+   * result is in no deck, so none of the four deck rows means anything about it.
+   *
+   * **Both doors in one case, deliberately.** They are two slots on `CardGrid` (a keypress has
+   * no coordinates, so the panel is anchored at the tile's own corner instead) and each is
+   * asserted on its own, but the setup they share is a search panel opened and a page of results
+   * — the slowest thing in this file — and two copies of it made the pair the flakiest tests in
+   * it under load rather than the most informative.
+   */
+  it("offers the panel's tiles the card menu, from the pointer and from the keyboard", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    await open();
+    await openSearchPanel();
+
+    // The tile's art button, whose name is the card and nothing else — the quick add beside it
+    // is called "Add Goblin Guide to …", which is why this one is matched exactly.
+    const tile = await screen.findByRole("button", { name: "Goblin Guide" });
+    tile.focus();
+    fireEvent.keyDown(tile, { key: "F10", shiftKey: true });
+
+    await screen.findByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Move to/ })).not.toBeInTheDocument();
+
+    // Escape closes the menu it opened, so the pointer half below is a fresh open rather than a
+    // panel that was already there — which is the whole of what makes it discriminate.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+
+    fireEvent.contextMenu(tile);
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+  });
+});
+
+/**
+ * **A pile's right-click — the last surface on this branch, and the one with a layer hazard.**
+ *
+ * The handlers hang on the view's own group element and never on `GroupHeader`, because
+ * `CategoriesDialog` draws that same component inside a `DeckDialog` on `LAYER.overlay` (z-45)
+ * and `ContextMenu` draws at `LAYER.popup` (z-30) — so a menu wired onto the shared header would
+ * open **behind that dialog's scrim**, invisible and unreachable, with nothing going red because
+ * jsdom has no opinion about a z-index. The sweep below is over all four views for the reason the
+ * card menu's caret sweep is: four elements, one rule, and a single case would let three of them
+ * quietly lose it.
+ */
+describe("DeckEditor — a category's menu", () => {
+  /** Right-click a pile's heading, by the attribute every view's group element carries. */
+  async function rightClickGroup(categoryId: number) {
+    const el = document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${categoryId}"]`);
+    expect(el).not.toBeNull();
+    fireEvent.contextMenu(el as HTMLElement);
+    return screen.findByRole("menu");
+  }
+
+  it.each(["Stacks", "Table", "Text", "Grid"])("offers a pile its menu in %s", async (view) => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: view }));
+
+    await rightClickGroup(MAIN);
+
+    expect(screen.getByRole("menuitem", { name: "Rename…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Import cards…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export cards…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeInTheDocument();
+  });
+
+  /** The keyboard route, which is a requirement on every menu of this branch. The group element
+   *  is already focusable — `deckGroupProps` gives every pile `tabIndex: -1` so the editor can
+   *  hand it the caret when a card leaves — so the seam was prepared before it had a menu. */
+  it("opens a pile's menu from the keyboard, and hands the caret back on Escape", async () => {
+    await open();
+    const el = document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`) as HTMLElement;
+    el.focus();
+    fireEvent.keyDown(el, { key: "F10", shiftKey: true });
+    await screen.findByRole("menu");
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(el);
+  });
+
+  /**
+   * **Two rows are absent on a predefined zone rather than greyed, and the backend is what
+   * decides which two.** `rename_category` and `delete_category` both refuse a `kind` that is not
+   * `main`; `set_category_active` takes every kind, which is why Deactivate stays.
+   */
+  it("drops rename and delete on a predefined zone, and keeps the switch", async () => {
+    await open();
+    await rightClickGroup(CATEGORIES[1].id); // Sideboard, kind: "side"
+
+    expect(screen.queryByRole("menuitem", { name: "Rename…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Delete…" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
+  });
+
+  it("switches a pile off from its own heading", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Deactivate" }));
+
+    expect(deckCategorySetActive).toHaveBeenCalledWith(MAIN, false);
+  });
+
+  /** The row says what the write does rather than toggling a value read a moment earlier — a
+   *  menu built just before a change would otherwise write the opposite of what it drew. */
+  it("says Activate on a pile that is already off", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt()], [category(1, "Main deck", "main", { isActive: false }), ...CATEGORIES.slice(1)]),
+    );
+    await open();
+    await rightClickGroup(MAIN);
+
+    expect(screen.getByRole("menuitem", { name: "Activate" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Activate" }));
+    expect(deckCategorySetActive).toHaveBeenCalledWith(MAIN, true);
+  });
+
+  it("renames a pile in its own heading, and gives the caret back to it", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+    const field = await screen.findByLabelText("Rename Main deck");
+    await userEvent.clear(field);
+    await userEvent.type(field, "Spells");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(deckCategoryRename).toHaveBeenCalledWith(MAIN, "Spells");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)),
+    );
+  });
+
+  /**
+   * **The one text field on this surface, and the primitive is what keeps it native.**
+   * `menu()`/`menuKey()` test for a field before they build anything, so a right-click inside the
+   * rename field gets WebView2's own cut/copy/paste — even though the field sits *inside* the
+   * element carrying the pile's handler.
+   */
+  it("leaves the browser's own menu alone inside the rename field", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const field = await screen.findByLabelText("Rename Main deck");
+
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    field.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  /** `Delete…` **asks** rather than writing — `CategoryMenuDeps` carries no delete mutation at
+   *  all, so the menu structurally cannot reach the command without the confirmation. */
+  it("asks before deleting a pile, in the words the Categories dialog asks them in", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    expect(await screen.findByRole("dialog", { name: /Delete “Main deck”/ })).toBeInTheDocument();
+    expect(deckCategoryDelete).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }));
+    await waitFor(() => expect(deckCategoryDelete).toHaveBeenCalled());
+  });
+
+  /**
+   * **A refused delete has to be visible, and the editor's own banner is behind the scrim.**
+   *
+   * `meta.deleteCategory` is in the refused-write family, but that banner draws in the editor
+   * body — under this dialog's `LAYER.overlay`. On refusal `onDeleted` never fires, so the dialog
+   * stays open with its button live and, without a sentence inside it, nothing on screen changes.
+   * Asserted **within the dialog**, because "somewhere on the page" is exactly what passes while
+   * the reader sees nothing.
+   */
+  it("says so inside the delete dialog when the delete is refused", async () => {
+    deckCategoryDelete.mockRejectedValue("The database is busy");
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Delete “Main deck”/ });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
+    );
+
+    expect(await within(dialog).findByText(/Could not delete that category/)).toBeInTheDocument();
+  });
+
+  /**
+   * **A refusal belongs to the press that produced it, and the next press has not been made yet.**
+   *
+   * The sentence above is drawn off `meta.deleteCategory.isError`, and that observer is the
+   * **editor's** — unlike `CategoriesDialog`'s, which lives in a body `DeckDialog` unmounts, it
+   * outlives every open of this layer. So a refused delete left the mutation in `isError` and the
+   * next `Delete…` mounted its body already holding the alert: `role="alert"` announces on
+   * insertion, and the reader was told that a delete they never attempted, on a pile it was never
+   * about, had failed. `DecksPage`'s `decks.create.reset()`/`folders.create.reset()` before a
+   * dialog is opened are the precedent this follows.
+   *
+   * **Two opens, on two piles, is what makes this a test of the reset**: one open can only ever
+   * prove the sentence appears, which the case above already does. And the absence is asserted
+   * only after the second dialog has been made to *paint* — a `motion` surface's first frame
+   * carries its `initial`, so "nothing there yet" and "nothing there" look alike, and without the
+   * settle this would pass against the unfixed code.
+   */
+  it("opens a second delete dialog with no refusal from the first still in it", async () => {
+    const removal = category(6, "Removal", "main");
+    deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, removal]));
+    deckCategoryList.mockResolvedValue([...CATEGORIES, removal]);
+    deckCategoryDelete.mockRejectedValue("The database is busy");
+    await open();
+
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const first = await screen.findByRole("dialog", { name: /Delete “Main deck”/ });
+    await userEvent.click(
+      within(first).getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
+    );
+    await within(first).findByText(/Could not delete that category/);
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await rightClickGroup(removal.id);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const second = await screen.findByRole("dialog", { name: /Delete “Removal”/ });
+    await waitFor(() =>
+      expect(
+        within(second).getByRole("button", { name: /Delete “Removal”|Move .* and delete/ }),
+      ).toBeVisible(),
+    );
+
+    expect(within(second).queryByRole("alert")).toBeNull();
+    expect(within(second).queryByText(/Could not delete that category/)).toBeNull();
+  });
+
+  /**
+   * **The caret goes back to the pile, for all three rows that open a full-window surface.**
+   *
+   * A menu row has no control to return to, and `DeckDialog` focuses its own panel and restores
+   * nothing — so a `null` hand-back leaves the caret on an unmounting panel and drops it on
+   * `<body>`, with the next Tab restarting from the top of the app. This is the third surface on
+   * this branch to have been wired that way; here the hand-back is a function, so the rows can
+   * answer with the pile rather than with nothing.
+   */
+  it.each([
+    ["Import cards…", /Import/],
+    ["Export cards…", /Main deck/],
+    ["Delete…", /Delete “Main deck”/],
+  ])("gives the caret back to the pile when %s is dismissed", async (row, dialogName) => {
+    await open();
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    await screen.findByRole("dialog", { name: dialogName });
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(
+      document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`),
+    );
+  });
+
+  /** The two arms that were already built for this menu, wired to the rows that open them. */
+  it("aims the importer at the pile that was right-clicked", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Import cards…" }));
+
+    expect(await screen.findByRole("dialog", { name: /Import/ })).toBeInTheDocument();
+  });
+
+  it("exports the pile that was right-clicked", async () => {
+    await open();
+    await rightClickGroup(MAIN);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Export cards…" }));
+
+    expect(await screen.findByRole("dialog", { name: /Main deck/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **The table's band has to *declare* that it grew, or it paints over the card row below it.**
+   *
+   * Its rows are absolutely positioned at a height the virtualiser was told, so a field that
+   * appears inside one without an `extraHeight` overlaps its neighbour by exactly its own
+   * height — which is the failure `TableView`'s own `Row` comment already warns about for the
+   * reconciler's band, arriving here by a different route. jsdom lays nothing out, so the
+   * overlap itself is invisible to this suite; the **declared** height is not, and it is the
+   * number the browser would use.
+   *
+   * 44 is `TABLE_ROW_HEIGHT`, 92 is that plus `RENAME_HEIGHT` — asserted as the pair, because a
+   * band that was always tall would be as wrong as one that never grew.
+   */
+  it("makes the table's band taller while its pile is being renamed", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+
+    const band = () => screen.getByText("Main deck").closest("[role=row]") as HTMLElement;
+    expect(band().style.height).toBe("44px");
+
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    await screen.findByLabelText("Rename Main deck");
+
+    expect(band().style.height).toBe("92px");
+  });
+
+  /**
+   * A derived heading is not a category: nothing about "Mana value 1" can be renamed, switched
+   * off or deleted, and `deckGroupMenuProps` refuses its `null` id before a builder is reached.
+   *
+   * **This is also the case that would catch the handler being tidied onto `GroupHeader`.** That
+   * component draws every heading, derived ones included — and it is the same component
+   * `CategoriesDialog` renders inside its scrimmed dialog, where a menu would open behind the
+   * scrim. A menu appearing here is the visible half of that mistake.
+   *
+   * No `defaultPrevented` assertion: `ContextMenuProvider` suppresses the native menu on
+   * `document` for everything that is not a text field, so the flag is true either way and
+   * would pin nothing. Whether a menu *opened* is the question.
+   */
+  it("offers no menu on a derived heading", async () => {
+    await open();
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+
+    const heading = await screen.findByText("Mana value 1");
+    fireEvent.contextMenu(heading);
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+describe("exportFileName", () => {
+  it("joins the deck and the pile", () => {
+    expect(exportFileName("Atraxa Superfriends", "Removal")).toBe("Atraxa Superfriends - Removal");
+  });
+
+  /** Taken out rather than replaced — nobody typed an underscore — and `save()` is handed this
+   *  as a `defaultPath`, which Windows refuses outright if it holds one of them. */
+  it("drops the characters a file name may not hold", () => {
+    expect(exportFileName("Atraxa: Superfriends?", "Removal/Burn")).toBe(
+      "Atraxa Superfriends - RemovalBurn",
+    );
+  });
+
+  /** The defect a reading of this function found before anything could run it: an empty half
+   *  used to leave its separator behind, so a pile with no name suggested `Atraxa -`. */
+  it("leaves no dangling separator when a half is empty", () => {
+    expect(exportFileName("Atraxa", "")).toBe("Atraxa");
+    expect(exportFileName("", "Removal")).toBe("Removal");
+  });
+
+  /** And the same thing one step further in: a half that is *made* empty by the strip must not
+   *  leave one either, which is why the parts are cleaned before they are judged. */
+  it("falls back to a word rather than to nothing, or to a bare separator", () => {
+    expect(exportFileName("", "")).toBe("decklist");
+    expect(exportFileName(":", "?")).toBe("decklist");
   });
 });

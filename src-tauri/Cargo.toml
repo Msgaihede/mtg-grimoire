@@ -26,6 +26,10 @@ tauri-plugin-opener = "2"
 # command that already exists. `capabilities/default.json` grants `dialog:allow-open` and
 # nothing else; the other four dialog verbs (save, message, ask, confirm) are not permitted.
 tauri-plugin-dialog = "2"
+# The one write it is here for: putting a decklist export on the clipboard. Grants
+# `clipboard-manager:allow-write-text` and nothing else — not `:default`, which also grants
+# the read, and nothing here reads the clipboard.
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-single-instance = "2"
 # The other half of the Tauri MCP server in `.mcp.json`. That package is only ever a *client*:
 # it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
@@ -85,4 +89,5 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 httpmock = "0.8"
 tokio = { version = "1", features = ["macros", "rt"] }
+tempfile = "3"
 

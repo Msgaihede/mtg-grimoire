@@ -54,12 +54,16 @@ function match(over: Partial<ImportMatch> & { name: string }): ImportMatch {
  * **defaults to nothing** — which is the state of every test written before the taxonomy
  * existed and of every app that has never downloaded it. Passing none files the whole list by
  * type line, which is the floor this feature stands on rather than a special case.
+ *
+ * `forced` is the pile a right-click aimed the import at, and it defaults to nothing for the
+ * same reason: every case written before it passes none and reads exactly as it did.
  */
 function planFor(
   text: string,
   cards: Record<string, ImportMatch>,
   format: FormatSpec | null = null,
   tags: readonly PrintingTags[] = [],
+  forced?: string,
 ): ImportPlan {
   const parsed = parseDecklist(text);
   const rows: ImportResolveRow[] = parsed.lines.map((line, index) => ({
@@ -67,7 +71,7 @@ function planFor(
     matched: cards[line.name] ?? null,
     hintMissed: false,
   }));
-  return buildImportPlan(parsed, rows, format, tags);
+  return buildImportPlan(parsed, rows, format, tags, forced);
 }
 
 /** The piles a preview would draw for this plan and this commander choice — the two calls the
@@ -709,6 +713,94 @@ describe("toImportItems", () => {
 
     expect(toImportItems(plan, [])).toEqual([
       { cardId: FOREST.cardId, quantity: 6, categoryName: "Land" },
+    ]);
+  });
+});
+
+/**
+ * The importer aimed at one pile — a right-click on a category heading, "Import cards…".
+ *
+ * The argument is trailing and optional so that the toolbar's Import, which passes nothing,
+ * behaves exactly as it did: every case above is that caller.
+ */
+describe("buildImportPlan aimed at one pile", () => {
+  it("files every line into the named pile, whatever the card does", () => {
+    const plan = planFor(
+      "1 Sol Ring\n6 Forest\n4 Llanowar Elves",
+      { "Sol Ring": SOL_RING, Forest: FOREST, "Llanowar Elves": ELVES },
+      null,
+      [],
+      "Removal",
+    );
+
+    expect(new Set(plan.cards.map((c) => c.categoryName))).toEqual(new Set(["Removal"]));
+  });
+
+  it("files by what the card does when no pile is named", () => {
+    // The toolbar's Import passes nothing, and must behave exactly as it does today.
+    const plan = planFor("1 Sol Ring\n6 Forest\n4 Llanowar Elves", {
+      "Sol Ring": SOL_RING,
+      Forest: FOREST,
+      "Llanowar Elves": ELVES,
+    });
+
+    expect(new Set(plan.cards.map((c) => c.categoryName)).size).toBeGreaterThan(1);
+  });
+
+  /** A pile the reader pointed at outranks a heading in somebody else's file: they right-clicked
+   *  *this* column, which is a later and more specific act than whatever the export wrote. */
+  it("outranks a section heading in the pasted list", () => {
+    const plan = planFor(
+      `Commander
+1 Captain Sisay
+
+Sideboard
+1 Lightning Bolt
+
+Maybeboard
+6 Forest`,
+      { "Captain Sisay": SISAY, "Lightning Bolt": BOLT, Forest: FOREST },
+      null,
+      [],
+      "Removal",
+    );
+
+    expect(plan.cards.map((c) => c.categoryName)).toEqual(["Removal", "Removal", "Removal"]);
+  });
+
+  /** The tags are still read and still cost their round trip; they simply decide nothing here.
+   *  A forced pile that quietly stopped the caller fetching them would be a second rule. */
+  it("ignores the tag answers rather than skipping them", () => {
+    const plan = planFor(
+      "1 Lightning Bolt",
+      { "Lightning Bolt": BOLT },
+      null,
+      tags([BOLT, ["removal", "burn"]]),
+      "Sideboard",
+    );
+
+    expect(plan.cards[0].categoryName).toBe("Sideboard");
+  });
+
+  /**
+   * **The command zone still outranks the named pile**, and this is the one edge worth pinning
+   * rather than discovering. `toImportItems` is where a confirmed commander is moved, and a
+   * forced pile does not reach it: a Commander deck whose paste holds exactly one eligible card
+   * files that card in the command zone, as it does from the toolbar.
+   */
+  it("still lets the command zone claim a confirmed commander", () => {
+    const plan = planFor(
+      "1 Captain Sisay\n1 Sol Ring",
+      { "Captain Sisay": SISAY, "Sol Ring": SOL_RING },
+      spec("commander"),
+      [],
+      "Removal",
+    );
+
+    expect(plan.cards.map((c) => c.categoryName)).toEqual(["Removal", "Removal"]);
+    expect(toImportItems(plan, [SISAY.cardId]).map((i) => i.categoryName)).toEqual([
+      "Commander",
+      "Removal",
     ]);
   });
 });

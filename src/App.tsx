@@ -3,7 +3,9 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { AnimatePresence, MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
 import { CardZoomIndicator } from "@/components/CardZoomIndicator";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
+import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
@@ -85,12 +87,35 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <QueryClientProvider client={queryClient}>
-        <AppShell update={update}>
-          <div className="flex h-full min-h-0 gap-4">
-            <div className="min-w-0 flex-1">
-              <ActiveView update={update} />
-            </div>
-            {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
+        {/* **The provider wraps the shell; the menu it renders is a sibling of it**, for exactly
+            the reason `CardZoomIndicator` below is one. A menu takes `LAYER.popup`, a z-index
+            competes only inside its own stacking context, and every card surface in this app draws
+            rows that are `position: absolute` and transformed — so a menu mounted where it was
+            opened is capped at that row's `LAYER.raised` and painted under the table header above
+            it. Mounted here, drawn at the pointer. Nothing between here and the root transforms.
+
+            Inside `QueryClientProvider` rather than outside it, because a menu's rows are built
+            from the cache the view beside them reads: a lazy submenu's `Content` runs `useDecks()`
+            when the reader expands it, and a chosen action writes through the same client the
+            surface it was opened over would have. */}
+        {/* **Above `ContextMenuProvider`, and that placement is the whole of what this line is
+            about.** The provider below draws its panel as a **sibling** of `children`, so
+            "inside `AppShell`" and "inside the menu" are two different places: this mounted
+            around the shell would be around every *view* and around none of the menu's *rows*,
+            and `useAddCardToDeck` would throw the moment a reader expanded "Add to → Deck" — on
+            every card surface at once, not on one of them. It shipped that way for one commit.
+            Anything a menu's rows
+            need goes here, outside the menu provider, not inside the shell it renders.
+
+            Inside `QueryClientProvider` because it mounts `useDeck`, which is a query. */}
+        <CardToDeckProvider>
+          <ContextMenuProvider>
+            <AppShell update={update}>
+              <div className="flex h-full min-h-0 gap-4">
+                <div className="min-w-0 flex-1">
+                  <ActiveView update={update} />
+                </div>
+                {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
                 purpose: it used to be `selectedCardId`, which was right when a close was
                 instant and is wrong the moment there is an exit, because every card-to-card
                 move would then be one pane leaving and another arriving — a 440ms cross-fade
@@ -98,14 +123,14 @@ export default function App() {
                 The per-card remount that keying bought is *kept*, one level down and inside
                 the animated element, where React can throw the body away without the box it
                 is in going anywhere. See `CardDetailPane`. */}
-            <AnimatePresence>
-              {selectedCardId && (
-                <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
-              )}
-            </AnimatePresence>
-          </div>
-        </AppShell>
-        {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
+                <AnimatePresence>
+                  {selectedCardId && (
+                    <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
+                  )}
+                </AnimatePresence>
+              </div>
+            </AppShell>
+            {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
             `LAYER.popup`, and a z-index only competes inside its own stacking context — so
             mounting it inside a view would cap it at whatever that view's transformed or
             positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
@@ -120,7 +145,9 @@ export default function App() {
             be three of them describing a gesture nobody just made, and the one that mattered
             would be no easier to find. It is mounted *here* and drawn *there*, which is the
             whole trick — the corner comes from a measurement, not from where this line sits. */}
-        <CardZoomIndicator />
+            <CardZoomIndicator />
+          </ContextMenuProvider>
+        </CardToDeckProvider>
       </QueryClientProvider>
     </MotionConfig>
   );

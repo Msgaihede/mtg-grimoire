@@ -8,6 +8,7 @@ pub mod deck_import;
 pub mod deck_meta;
 pub mod deck_theory;
 pub mod errors;
+pub mod export;
 pub mod filters;
 pub mod images;
 pub mod index;
@@ -208,14 +209,18 @@ pub fn run() {
             focus_existing_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
-        // The system file picker, for one control: choosing a custom deck cover. Only
-        // `dialog:allow-open` is granted in `capabilities/default.json`, so the four other
-        // verbs this plugin can serve — save, message, ask and confirm — are unreachable from
-        // the webview however this is initialised. The app's own questions are drawn in the
-        // page (`DeleteConfirm`, the settings dialog), which is a deliberate choice and not an
-        // oversight: a native message box cannot be styled, tested over CDP, or read by the
-        // story runner.
-        .plugin(tauri_plugin_dialog::init());
+        // The system file picker: choosing a custom deck cover (`dialog:allow-open`) and
+        // naming an export's destination (`dialog:allow-save`, `export_write_file` writes
+        // there). Only those two verbs are granted in `capabilities/default.json` — message,
+        // ask and confirm are unreachable from the webview however this is initialised. The
+        // app's own questions are drawn in the page (`DeleteConfirm`, the settings dialog),
+        // which is a deliberate choice and not an oversight: a native message box cannot be
+        // styled, tested over CDP, or read by the story runner.
+        .plugin(tauri_plugin_dialog::init())
+        // Putting a decklist export on the clipboard, the other way out beside the save
+        // dialog. `clipboard-manager:allow-write-text` only — nothing here reads the
+        // clipboard, so `:default`'s read half is deliberately not granted.
+        .plugin(tauri_plugin_clipboard_manager::init());
 
     // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
     // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
@@ -268,6 +273,7 @@ pub fn run() {
             index::facets::facet_cards,
             card::card_detail,
             card::card_printings,
+            card::card_image_uri,
             card::printing_group_by,
             card::set_printing_group_by,
             images::prefetch_images,
@@ -330,6 +336,7 @@ pub fn run() {
             oracle_tags::oracle_tags_status,
             oracle_tags::oracle_tags_for_cards,
             oracle_tags::oracle_tags_for_printings,
+            export::export_write_file,
             error_log_list,
             error_log_clear,
             update_status,
@@ -700,5 +707,25 @@ mod tests {
             serde_json::Value::Bool(true),
             "the MCP bridge needs window.__TAURI__ exposed"
         );
+    }
+
+    /// The two permissions the export feature needs, and the two families it must never gain
+    /// on the way — same argument as `dialog:allow-open` above: the narrowest permission,
+    /// never a plugin's `:default`.
+    #[test]
+    fn the_capability_grants_two_new_narrow_permissions_and_no_filesystem() {
+        let caps = include_str!("../capabilities/default.json");
+        assert!(caps.contains("\"dialog:allow-save\""));
+        assert!(caps.contains("\"clipboard-manager:allow-write-text\""));
+        // The whole reason `export_write_file` exists. See `export.rs`.
+        assert!(
+            !caps.contains("\"fs:"),
+            "no fs: permission is granted anywhere, deliberately"
+        );
+        // Nothing in this app reads the clipboard.
+        assert!(!caps.contains("allow-read-text"));
+        // Never a :default -- dialog's is five commands, clipboard's includes the read.
+        assert!(!caps.contains("dialog:default"));
+        assert!(!caps.contains("clipboard-manager:default"));
     }
 }

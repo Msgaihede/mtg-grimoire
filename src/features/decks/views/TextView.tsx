@@ -14,10 +14,13 @@ import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
   deckCardBodyProps,
   deckCardName,
+  deckCardMenuProps,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
+  deckGroupMenuProps,
   deckGroupProps,
+  deckGroupRename,
   FOCUS,
   LandedMark,
   REVEALED_ON_CARD,
@@ -231,9 +234,16 @@ function TextGroup({
     <section
       ref={attach}
       aria-labelledby={`text-group-${group.key}`}
+      // **The pile's own menu, on this element rather than on `GroupHeader`** - see
+      // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
+      // scrim. A card inside stops the event, so the innermost surface still wins.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       {...deckGroupProps(group.categoryId)}
       // `AppShell`'s pair, as in the other three views: one vocabulary for a drop target.
-      className={cn("relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
+      // `FOCUS` because this is where the caret comes back to when the pile's menu closes; the
+      // tab index is already here from `deckGroupProps`.
+      className={cn("relative rounded-md", FOCUS, eligible && DROP_RING, over && DROP_OVER)}
     >
       {over && <DropIndicator />}
       <GroupHeader
@@ -242,6 +252,7 @@ function TextGroup({
         id={`text-group-${group.key}`}
         className="border-b border-border px-1 pb-1"
       />
+      {deckGroupRename(group.categoryId, actions)}
       {group.cards.length === 0 ? (
         <p className="px-1 pt-1 text-xs text-dim">Nothing here yet.</p>
       ) : (
@@ -300,11 +311,21 @@ function TextRow({
     // The body mark is on the line rather than on the button inside it, so the control bar
     // drawn over the line's tail counts as part of the card — see `cardControl`'s
     // `CARD_BODY_ATTR`.
+    //
+    // The menu handlers go on the whole line, the controls drawn over its tail included — a
+    // right-click anywhere on it is a question about this card, and the keydown reaches here from
+    // the caret wherever it sits inside the row. Same element as the body mark, and for the same
+    // reason: what the reader is pointing at is the line.
+    // `FOCUS` because this is where the caret lands when the line's menu closes —
+    // `deckCardMenuProps` is what makes the element focusable, and a hand-back the reader cannot
+    // see is half a hand-back. It traces the same box the button inside it fills, so the two
+    // rings are the same ring drawn from either side.
     <li
       ref={dragRef}
       {...deckCardBodyProps()}
+      {...deckCardMenuProps(card, actions)}
       {...deckCardSelectedProps(selected)}
-      className="group relative"
+      className={cn("group relative rounded", FOCUS)}
     >
       <button
         type="button"

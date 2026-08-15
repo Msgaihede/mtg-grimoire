@@ -27,7 +27,15 @@
  * drew before: a labelled button and nothing else. That is what lets a story or a test mount a
  * view without a deck behind it, and it is why adding these changed no existing view test.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import {
   dropTargetForElements,
   monitorForElements,
@@ -366,6 +374,134 @@ export interface DeckCardActions {
    * apart.
    */
   drop?: (write: DeckWrite) => void;
+  /**
+   * What this card offers on a right-click — **the handlers already built**, never a list of
+   * rows.
+   *
+   * It travels in this bag rather than as a fifth prop on each view for the reason the bag
+   * exists at all: it goes three components deep — the view, the group, the card — and a bag
+   * passed on whole cannot be passed on incompletely. And it is the *handlers* rather than the
+   * items because only `DeckEditor` knows what a deck card's menu offers: the deck's
+   * categories, its format spec and its tags are three facts no view has, and four views
+   * assembling them would be four copies of one rule.
+   *
+   * Absent is a view with no menu — a story, a read-only mount — and the reader gets the app's
+   * plain suppression. Read on render rather than registered, so nothing is torn down when it
+   * changes.
+   */
+  menu?: (card: DeckCard) => DeckCardMenuHandlers;
+  /**
+   * What a **pile** offers on a right-click, by category id — the heading's menu, where a card's
+   * is `menu` above.
+   *
+   * It is in this bag beside `drop`, which is also a pile's affordance rather than a card's, and
+   * for the same reason `drop` is: it travels view → group and a bag passed on whole cannot be
+   * passed on incompletely.
+   *
+   * **A derived group has none**, and the view says so by passing `null` — nothing can be
+   * renamed, switched off or deleted about "Mana value 3", and `categoryId` is `null` for
+   * exactly those groups.
+   */
+  categoryMenu?: (categoryId: number) => DeckCardMenuHandlers | undefined;
+  /**
+   * The inline rename field for the pile the reader is renaming, or `null` for every other pile.
+   *
+   * **A node rather than a callback**, because the field is one element with one piece of state
+   * and four views must not each build their own — the editor owns which pile is being renamed
+   * and what a save writes, and hands the whole control down. It is the same shape
+   * `GroupHeader`'s own `actions` prop takes and for the same reason.
+   */
+  renameCategory?: (categoryId: number | null) => ReactNode;
+}
+
+/** The rename field for this pile, or nothing — `null` is a derived heading, which is not a
+ *  category and cannot be renamed. Spelled once so four views do not each guard it. */
+export function deckGroupRename(
+  categoryId: number | null,
+  actions?: DeckCardActions,
+): ReactNode {
+  return categoryId === null ? null : actions?.renameCategory?.(categoryId);
+}
+
+/**
+ * The two handlers a card element spreads to offer a menu, and both are owed.
+ *
+ * `onContextMenu` is the pointer's way in. `onKeyDown` is Shift+F10 and the ContextMenu key,
+ * and it is **not** an optional extra here: the per-card `Move…` select was removed on
+ * 2026-08-14 and there has been no keyboard path to moving a card since ({@link
+ * DeckCardControls} records the cost). This menu is that path, so a menu only a mouse could
+ * open would restore nothing.
+ *
+ * They go on the element carrying {@link deckCardProps} or on its box — a keydown from the
+ * card's own button bubbles either way, and `menuKey` anchors the panel at the element it is
+ * attached to.
+ */
+export interface DeckCardMenuHandlers {
+  onContextMenu: (e: ReactMouseEvent) => void;
+  onKeyDown: (e: ReactKeyboardEvent) => void;
+}
+
+/**
+ * A card's menu handlers **and the tab index that makes the caret's way back land** — spread
+ * onto whichever element a view calls the card. `{}` rather than `undefined`, so a view can
+ * spread it unconditionally and a view with no menu grows no attribute.
+ *
+ * ## `tabIndex: -1` is not tidiness, it is the other half of the menu
+ *
+ * `useContextMenu`'s `menu`/`menuKey` take the **element the handler is attached to** as the
+ * panel's `opener`, and `ContextMenu` hands the caret back to it twice: once when a row is
+ * chosen and once when Escape closes the menu. **`focus()` on an element with no `tabindex` is
+ * a no-op**, so without this the caret would land nowhere at all and the next Tab would restart
+ * from the top of the document — the failure `DecksPage.tsx` already writes down at its own
+ * `menu()` call site, arriving here by a different route.
+ *
+ * It bites hardest on the affordance this menu exists to restore. The per-card `Move…` select
+ * was removed on 2026-08-14 and took the only keyboard path to moving a card with it; Shift+F10
+ * → `Move to` is the replacement, and a route that ends with the reader's place lost is not one.
+ *
+ * **`-1`, so nothing becomes a tab stop.** A deck of a hundred cards must not grow a hundred
+ * presses on the way to anything, and every one of these elements already contains the card's
+ * own button, which is the real stop. It is the same arrangement `deckGroupProps` gives a pile:
+ * a place focus can be *put*, never one Tab travels through.
+ *
+ * The table needs none of this and is not a caller: `VirtualTable` gives its rows `tabIndex: 0`
+ * already, because there the row *is* the control.
+ */
+export function deckCardMenuProps(
+  card: DeckCard,
+  actions?: DeckCardActions,
+): Partial<DeckCardMenuHandlers> & { tabIndex?: -1 } {
+  const handlers = actions?.menu?.(card);
+  return handlers === undefined ? {} : { ...handlers, tabIndex: -1 };
+}
+
+/**
+ * A **pile's** menu handlers, for the element a view calls the group — or nothing, for a derived
+ * heading and for a view that was given no menu.
+ *
+ * **The handlers go on the view's own group element and never on `GroupHeader`, and that is a
+ * layer decision rather than a preference.** `CategoriesDialog` draws that same component in
+ * every one of its rows, *inside* a `DeckDialog` — which is `LAYER.overlay`, 45, over a scrim.
+ * `ContextMenu` draws at `LAYER.popup`, 30. (Named rather than spelled as classes: Tailwind's
+ * scanner reads a comment as eagerly as code, so a bare utility written here is a rule the build
+ * emits — which is why `layers.test.ts` sweeps prose too, and why it went red for this comment.)
+ * So a right-click wired onto the shared
+ * header would open a menu **behind the dialog's own scrim**: invisible, unreachable, and
+ * nothing would go red, because a z-index is not something jsdom has an opinion about.
+ * `layers.ts` names that exact overlap as the one that must not exist ("a right-clickable
+ * surface placed inside a scrimmed dialog would be the real overlap … and there is none
+ * today"), and this is what keeps that sentence true. **Do not tidy these onto `GroupHeader`.**
+ *
+ * No `tabIndex` here, unlike {@link deckCardMenuProps}: every group element already carries one
+ * from {@link deckGroupProps}, because the editor hands the caret to a pile when a card leaves
+ * it. The seam was prepared for a caret before it had a menu.
+ */
+export function deckGroupMenuProps(
+  categoryId: number | null,
+  actions?: DeckCardActions,
+): Partial<DeckCardMenuHandlers> {
+  if (categoryId === null) return {};
+  return actions?.categoryMenu?.(categoryId) ?? {};
 }
 
 /**
@@ -523,22 +659,23 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
  * The controls a card carries: **how many copies, and that is now all of it.**
  *
  * It used to carry a second control beside the stepper — a native `Move…` `<select>` listing
- * every other category of the deck — and that was removed whole on 2026-08-14, with a
- * replacement expected later. Two things it was load-bearing for are worth writing down, so
- * that whatever replaces it is measured against them rather than against a blank page:
+ * every other category of the deck — and that was removed whole on 2026-08-14. Two things it was
+ * load-bearing for were written down here so that whatever replaced it would be measured against
+ * them rather than against a blank page. **Its replacement is the card's right-click `Move to`
+ * (`deckCardMenu.tsx`), landed later the same day, and it closes both:**
  *
- * - **It was the only keyboard path to moving a card.** What is left is a drag, which a caret
- *   cannot perform, so a reader on the keyboard can step a card to zero and add it again
- *   elsewhere but cannot move the slot.
- * - **It was the only way to reach an empty category**, and that hole has since closed from the
- *   other end. It was written when `drawsWhenEmpty` drew no heading for a pile of the reader's
- *   own that held nothing, so the select — built from the deck's `categories` rather than from
- *   the drawn groups — was the one route to one. A pile the reader made draws empty now and is
- *   therefore its own drop target. **The pile with no drag route today is an `origin = 'auto'`
- *   one that has gone empty**: nobody asked for it, so it goes with its last card, and the way
- *   back to it is to add a card that files there or to use the "Add to" select. Whatever
- *   replaces the `Move…` control is still measured against this — it is a smaller hole, not a
- *   closed one.
+ * - **It was the only keyboard path to moving a card.** A drag is not one, so this mattered:
+ *   stepping a card to zero and adding it again elsewhere is a different write and loses the
+ *   slot. **Shift+F10 → `Move to`** is a keyboard path again, which is why
+ *   {@link deckCardMenuProps} carries a `tabIndex` and why `menuKey` is not an optional extra on
+ *   these surfaces.
+ * - **It was the only way to reach an empty category**, and that hole closed from both ends. A
+ *   pile the reader made draws empty now (`drawsWhenEmpty`) and is therefore its own drop target,
+ *   which covers the classes a reader files into deliberately; **the pile with no drag route is
+ *   an `origin = 'auto'` one that has gone empty**, since nobody asked for it and it goes with
+ *   its last card. `Move to` is built from the deck's `categories` rather than from the drawn
+ *   groups — the same choice the old select made — so it lists that pile too. What is left of
+ *   the hole is a *drag* that cannot reach one heading, not a reader who cannot get there.
  *
  * `null` when there is nothing to offer, so a view can render this unconditionally and a view
  * with no actions grows no empty box.

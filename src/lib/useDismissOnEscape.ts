@@ -1,4 +1,9 @@
-import { useEffect, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 /**
  * Which rung of the dismissible stack a layer sits on.
@@ -8,6 +13,35 @@ import { useEffect, type KeyboardEvent as ReactKeyboardEvent } from "react";
  * today, and whatever else ends up docked beside a view.
  */
 export type DismissLayer = "inner" | "outer";
+
+/**
+ * The capture-phase layers currently listening, innermost last.
+ *
+ * **The depth this hook's doc has always owed.** Two `window` capture listeners for one event
+ * run in *registration* order, which was survivable while at most one `"inner"` layer was ever
+ * open and stopped being survivable when a context menu became a thing that opens *over* an
+ * already-open dialog.
+ *
+ * What that did instead of ordering them is worth stating exactly, because this hook's doc got
+ * it wrong until now and the wrong version is the reassuring one. It did **not** close both:
+ * the capture rung checks `defaultPrevented` as well, so the *first-registered* peer consumed
+ * the press and the newer one — the thing the reader had just opened, the thing on top — was
+ * starved. Measured on the pre-fix hook, 2026-08-14, dispatching at `window` and at an element:
+ * `{ first: 1, second: 0 }` either way. So a menu over a dialog would have closed the *dialog*,
+ * out from under the menu still on screen.
+ *
+ * A token per registration rather than the callback itself: two layers may legitimately share
+ * one `onDismiss` identity (a memoised close handed to a pair of popups), and a stack keyed on
+ * the function would then pop the wrong one.
+ *
+ * **Mount order is the only thing that moves a layer on this stack**, which is what the stack
+ * has to mean for the top of it to be the innermost open thing. That is why `onDismiss` is
+ * latched in a ref below rather than depended on — see the hook's own doc.
+ *
+ * Module-level and therefore shared across a test file's renders — `captureStack.length = 0` is
+ * not needed in a teardown, because every entry is removed by its own effect cleanup.
+ */
+const captureStack: symbol[] = [];
 
 /**
  * Escape closes one layer per press — and the protocol is a handshake, not a z-index.
@@ -31,20 +65,29 @@ export type DismissLayer = "inner" | "outer";
  * this encodes is "never act on a press something else has already consumed", and it is
  * true of a second popup as much as of a pane.
  *
- * **This does not generalise to two `"inner"` peers.** The protocol orders exactly two
- * rungs — one capture-phase layer and one bubble-phase layer — so two popups open at once
- * are not ordered by it at all: both would consume the same press and both would close. If
- * a third layer is ever needed, nest it deliberately (the inner one owns the press, the
- * middle one checks `defaultPrevented` before acting) or extend this hook with a depth,
- * rather than adding a second `"inner"` and hoping registration order holds.
+ * **Two `"inner"` peers are ordered now, by a stack rather than by registration order.**
+ * Every capture-phase layer pushes a token on mount and pops it on unmount, and only the
+ * token on top acts. A lone `"inner"` layer is a stack of one and behaves exactly as it did.
+ * This is what lets a context menu open over a dialog opened over the card pane and give one
+ * press to each: menu, dialog, pane.
+ *
+ * The bubble rung is untouched. An `"outer"` layer still consults nothing but
+ * `defaultPrevented`, which is all it needs — every capture listener runs before it.
  *
  * A layer that Escape dismissed hands focus back to whatever opened it — do that from
  * `onDismiss`, *before* React flushes the close, while the element is still mounted. An
  * outside-click deliberately does not, so that belongs to the caller and not here: the
  * reader who clicked elsewhere is already somewhere else.
  *
- * `onDismiss` is a dependency, so pass a stable function (`useCallback`) or the listener
- * re-registers on every render of the layer.
+ * **`onDismiss` is latched in a ref rather than depended on, and that is a correctness fence
+ * rather than a saved re-registration.** While it was an effect dependency, a layer that
+ * re-rendered with a fresh callback popped its token and pushed a new one — landing on **top**
+ * of whatever had been opened over it, so the next press closed the wrong window. Nothing could
+ * see that: not lint, not the suite, and not the call site, because stability is transitive
+ * through props and a layer that memoises correctly is still unstable if its own `onDismiss`
+ * prop is. An inline arrow is therefore safe here, which is what Task 5's per-submenu layers
+ * need. `enabled` and `layer` stay dependencies on purpose — `enabled: false → true` is a layer
+ * *opening*, and re-pushing it to the top is exactly right.
  *
  * Pinned by `App.test.tsx`'s Escape-stack test and by this hook's own phase test. Every
  * new dismissible layer uses this, or it will close something it did not open.
@@ -59,19 +102,39 @@ export function useDismissOnEscape({
   /** Usually the layer's own "am I open" flag. An outer layer is open for as long as it exists. */
   enabled?: boolean;
 }): void {
+  // Latched every render, in a *layout* effect: the ref is current before the browser can paint,
+  // let alone deliver a key, so the listener never calls a callback a render behind.
+  const onDismissRef = useRef(onDismiss);
+  useLayoutEffect(() => {
+    onDismissRef.current = onDismiss;
+  });
+
   useEffect(() => {
     if (!enabled) return;
     const capture = layer === "inner";
+    // Identity for this registration, minted per mount so two layers sharing one `onDismiss`
+    // are still two entries.
+    const token = Symbol("dismissLayer");
+    if (capture) captureStack.push(token);
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Only the innermost capture layer acts. An outer (bubble-phase) layer has no stack to
+      // consult: `defaultPrevented` above is still what holds it off, exactly as before.
+      if (capture && captureStack[captureStack.length - 1] !== token) return;
       e.preventDefault();
-      onDismiss();
+      onDismissRef.current();
     };
+
     // The third argument is the whole contract — passed to both calls, because a listener
     // removed with the wrong phase is not removed at all.
     window.addEventListener("keydown", onKey, capture);
-    return () => window.removeEventListener("keydown", onKey, capture);
-  }, [enabled, layer, onDismiss]);
+    return () => {
+      window.removeEventListener("keydown", onKey, capture);
+      const at = captureStack.lastIndexOf(token);
+      if (at !== -1) captureStack.splice(at, 1);
+    };
+  }, [enabled, layer]);
 }
 
 /**

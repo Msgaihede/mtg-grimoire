@@ -1,10 +1,21 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
-import { useQuery } from "@tanstack/react-query";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
+  type RefObject,
+} from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlipHorizontal2, Gem, Sparkles, X } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { useSwapFromPane } from "@/features/decks/useDeck";
@@ -13,13 +24,16 @@ import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
-import type { Marketplace } from "@/lib/marketplace";
+import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { dialog } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "./cardMenu";
+import { CardMenuRefusal } from "./CardMenuRefusal";
+import { useCardMenuDeps } from "./useCardMenuDeps";
 import {
   buildPrintingGroups,
   faceCount,
@@ -192,10 +206,129 @@ interface SwapOffer {
  * end of the app — the deck editor's two right-hand drawers became centred modals — so this is
  * the only preset a docked surface here has, and the reasoning above is why that costs nothing.
  */
+/**
+ * The one `card_detail` read this pane makes, named once.
+ *
+ * The marketplace is in the key because it is in the answer — `card_detail` prices every finish
+ * with it, so two marketplaces are two different cards as far as the cache is concerned. It is a
+ * function rather than a literal at each site because {@link CardDetailPane} reads this entry
+ * *without* observing it: the box holds no card state (that is {@link Body}'s, keyed on the
+ * card), so its right-click menu asks the cache for whatever the body has already fetched, at the
+ * moment of the press. Two spellings of one key would be a menu that silently found nothing.
+ */
+function cardDetailKey(cardId: string, marketplace: MarketplaceId) {
+  return ["card", cardId, marketplace];
+}
+
+/** The card the pane is open on, as a menu target. Every field is the card's own. */
+function paneTarget(card: CardDetail): CardMenuTarget {
+  return {
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    oracleId: card.oracleId,
+    finishes: card.finishes,
+    typeLine: card.typeLine,
+  };
+}
+
+/**
+ * A printings row, as a menu target — **the one adapter in the app that reads two objects**.
+ *
+ * A `Printing` carries `setCode`, `collectorNumber` and `finishes` and **no name, no oracle id
+ * and no type line**: it is a printing *of the card the pane is open on*, so those three come
+ * from that `CardDetail`. Getting it wrong is invisible — the menu still draws, "Copy card name"
+ * copies `undefined`, and a `null` oracle id greys "View all printings" out with the fence's own
+ * sentence (*this printing has left the card database*) over a card that is perfectly healthy.
+ *
+ * The three fields that *are* the row's are the three that identify the piece of cardboard: the
+ * Scryfall permalink is this printing's, and so is the finish list an "Add to → Collection"
+ * records against. That split is the whole of what this function is for, and it is the same one
+ * the row's own {@link AddToCollectionButton} target already makes.
+ */
+function printingTarget(printing: Printing, card: CardDetail): CardMenuTarget {
+  return {
+    cardId: printing.id,
+    name: card.name,
+    setCode: printing.setCode,
+    collectorNumber: printing.collectorNumber,
+    oracleId: card.oracleId,
+    finishes: printing.finishes,
+    typeLine: card.typeLine,
+  };
+}
+
+/** A surface's two doors into one menu — a right-click, and Shift+F10 or the ContextMenu key. */
+interface MenuHandlers {
+  onContextMenu: MouseEventHandler;
+  onKeyDown: KeyboardEventHandler;
+}
+
 export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const paneRef = useRef<HTMLElement>(null);
   /** False from the render that starts the fade out. */
   const present = useIsPresent();
+
+  const { menu, menuKey } = useContextMenu();
+  /**
+   * **One `useCardMenuDeps` for both of this pane's surfaces** — the open card and every
+   * printings row — because two would be two collection-add observers and two sentences to draw
+   * for one refusal. It is here rather than in {@link Body} so that the pane's own menu and the
+   * rows' share it; the body is keyed on the card and is thrown away on every row the reader
+   * clicks, which is no place to keep a write's answer.
+   */
+  const { deps, error: menuFailure } = useCardMenuDeps();
+  const client = useQueryClient();
+  const openDeckId = useAppStore((s) => s.openDeckId);
+  const viewPrinting = useAppStore((s) => s.viewPrinting);
+
+  /**
+   * Where "View all printings" lands, which is the one dep this pane overrides.
+   *
+   * **Inside the deck editor it must stay in the pane.** `requestAllPrintings` sets
+   * `activeView`, and that write clears `openDeckId` *and* `selectedCardId` — so the default
+   * would close the deck the reader is building and the pane they were reading it from, to show
+   * them a list the pane is already showing under their pointer. `viewPrinting` is what a click
+   * on a printings row already does: it moves the pane and deliberately leaves
+   * `paneDeckContext` alone, so the swap offers survive.
+   *
+   * Outside the editor there is no deck to close, and the search wall is a genuinely bigger
+   * answer than this 384px column — every printing as art, uncapped, with the filters cleared —
+   * so the item keeps the app's default and navigates.
+   *
+   * **`paneCardId` is the second half of that override and travels with it.** Handing over a way
+   * to move the pane is a claim that the row does something, and on this surface it is not always
+   * true: the card the pane is *already* on is exactly the card `viewPrinting` cannot move it to.
+   * The builder greys the row and says so; this is only the fact it needs, which no other surface
+   * can answer for the pane. It is passed unconditionally rather than only inside the editor,
+   * because a fact does not stop being true when the row happens to route elsewhere.
+   */
+  const menuDeps = useMemo<CardMenuDeps>(
+    () => ({
+      ...deps,
+      viewPrintingsInPane: openDeckId === null ? null : viewPrinting,
+      paneCardId: cardId,
+    }),
+    [deps, openDeckId, viewPrinting, cardId],
+  );
+
+  /**
+   * The open card's own rows — **read from the cache on the press, never observed.**
+   *
+   * A thunk, like every other surface's: nothing is built until a reader actually right-clicks.
+   * What is unusual here is where the card comes from. This component is the pane's *box* and
+   * holds no card state by design, so rather than mount a second `card_detail` observer beside
+   * the body's, the thunk asks the query cache for the entry the body has already filled. An
+   * empty list is the honest answer while the card is still loading, and the primitive treats it
+   * as "no menu" — the reader gets the plain suppression instead of an empty box.
+   */
+  const paneMenu = () => {
+    const card = client.getQueryData<CardDetail | null>(
+      cardDetailKey(cardId, menuDeps.marketplace.id),
+    );
+    return card ? buildCardMenu(paneTarget(card), menuDeps) : [];
+  };
 
   return (
     <motion.aside
@@ -203,6 +336,24 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       ref={paneRef}
       tabIndex={-1}
       aria-label="Card details"
+      // **The open card's menu, on the pane rather than on the art** — a right-click anywhere in
+      // this column that is not a printings row is a right-click on the card the column is
+      // about. A row's own handler stops the event, so the innermost surface still wins.
+      //
+      // **Every other control in the column is included, and that is the intent rather than an
+      // oversight** — the close button, the two view toggles, the printings list's `Group by`
+      // select. Only a text field is carved out, by `isTextField` inside the primitive, and a
+      // `<select>` is not one: WebView2's own menu on a select offers nothing this app cannot,
+      // while the whole column consistently answering about the card it is showing is worth
+      // more than a handful of dead spots the reader would have to learn.
+      //
+      // `menuKey` is on the same element and that is the load-bearing half: the pane takes the
+      // caret as it opens (see {@link Body}'s mount effect), so with nothing else focused
+      // Shift+F10 is a press on this element and on no other. There is no focusable box inside
+      // the pane standing for the card, so a wrapper further down would answer the pointer and
+      // never the keyboard.
+      onContextMenu={menu(paneMenu)}
+      onKeyDown={menuKey(paneMenu)}
       // On the way out it is a picture: not clickable, and not a second card sitting in the
       // accessibility tree beside whatever the reader moved on to. `close` handed the caret
       // back before this render, so nothing focused is being hidden.
@@ -224,7 +375,13 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
         FOCUS,
       )}
     >
-      <Body key={cardId} cardId={cardId} onClose={onClose} paneRef={paneRef} />
+      {/* What a refused **collection or wishlist** add from either of this pane's menus left
+          behind, drawn where the deps that made the write live. The menu cannot report its own
+          refusals — the panel closes before a row's handler runs — and this pane is the surface
+          the reader was on. The deck add is not here and needs nothing: it reaches the app's
+          single mount through `CardToDeckProvider`, which draws its own sentence. */}
+      <CardMenuRefusal error={menuFailure} />
+      <Body key={cardId} cardId={cardId} onClose={onClose} paneRef={paneRef} menuDeps={menuDeps} />
     </motion.aside>
   );
 }
@@ -240,12 +397,16 @@ function Body({
   cardId,
   onClose,
   paneRef,
+  menuDeps,
 }: {
   cardId: string;
   onClose: () => void;
   /** The pane's own element, which outlives this body: the scroll reset, the focus on the way
    *  in and the hand-back after a refused swap are all writes to it. */
   paneRef: RefObject<HTMLElement | null>;
+  /** Everything a card menu needs that is not the card — the pane's one object, built by
+   *  {@link CardDetailPane} and passed through to the printings list. */
+  menuDeps: CardMenuDeps;
 }) {
   // Which marketplace this pane quotes. Read here, at the one component that owns a card, and
   // then **sent with both reads** — the numbers come back priced, so the pane cannot say
@@ -367,10 +528,12 @@ function Body({
   // the same press, and the two focus hand-backs fight over where the caret lands. See
   // `useDismissOnEscape`.
   //
-  // **The `"inner"` rung is one at a time, and no z-index or state union enforces it** — the
-  // protocol orders exactly two rungs, so two inner layers open at once would both consume the
-  // same press. What keeps this pane's apart is that each yields to the thing that would open
-  // the other:
+  // **The `"inner"` rung is one at a time here, and no z-index or state union enforces it.** The
+  // hook would cope if it were not — it keeps a stack of capture-phase registrations and only the
+  // token on top acts — but Escape was never the reason these two are exclusive: **two of them
+  // open at once means a card image drawn over the finish chips the reader is choosing from**,
+  // which is a picture problem and no key press fixes it. What keeps this pane's apart is that
+  // each yields to the thing that would open the other:
   //
   // * the **quick-add popup** on a printings row closes when focus leaves its own root, and
   //   opening anything else moves the caret into that instead;
@@ -386,7 +549,8 @@ function Body({
   // The marketplace is in the key because it is in the answer: `card_detail` prices every finish
   // with it, so two marketplaces are two different cards as far as the cache is concerned.
   const card = useQuery({
-    queryKey: ["card", cardId, marketplace.id],
+    // One spelling of this key, shared with the pane's own menu — see {@link cardDetailKey}.
+    queryKey: cardDetailKey(cardId, marketplace.id),
     queryFn: () => ipc.cardDetail(cardId, marketplace.id),
   });
 
@@ -554,6 +718,7 @@ function Body({
             error={printings.isError ? ipcError(printings.error) : null}
             swap={offer}
             marketplace={marketplace}
+            menuDeps={menuDeps}
             mode={printingGroupBy.mode}
             onModeChange={printingGroupBy.setMode}
           />
@@ -917,6 +1082,7 @@ function Printings({
   error,
   swap,
   marketplace,
+  menuDeps,
   mode,
   onModeChange,
 }: {
@@ -928,12 +1094,27 @@ function Printings({
   swap: SwapOffer | null;
   /** Which marketplace each row's per-finish prices are quoted from. */
   marketplace: Marketplace;
+  /** Everything a card menu needs that is not the card — the pane's one object. */
+  menuDeps: CardMenuDeps;
   /** How the list is grouped. Owned one component up, because it outlives this card — see
    *  {@link usePrintingGroupBy}. */
   mode: PrintingGroupBy;
   onModeChange: (mode: PrintingGroupBy) => void;
 }) {
   const headingId = useId();
+  /**
+   * One `useContextMenu` for the whole list, and one pair of handlers built per row.
+   *
+   * The **items** are a thunk inside `menu`, so a four-hundred-row list pays for nothing until a
+   * reader right-clicks one of them; what is built per render is two closures, which is what the
+   * rows already cost. Built here rather than in the row because `card` is what the row adapter
+   * has to read alongside its printing — see {@link printingTarget}.
+   */
+  const { menu, menuKey } = useContextMenu();
+  const rowMenu = (p: Printing): MenuHandlers => {
+    const build = () => buildCardMenu(printingTarget(p, card), menuDeps);
+    return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
+  };
   // One dwell timer for the whole list — see {@link usePrintingDwell} for why it cannot be one
   // per row. Called before the early return below, because a hook is.
   const dwell = usePrintingDwell();
@@ -1059,6 +1240,7 @@ function Printings({
                 current={p.id === card.id}
                 swap={swap}
                 marketplace={marketplace}
+                menu={rowMenu(p)}
                 dwell={dwell.rowProps(p.id)}
               />
             ))}
@@ -1107,6 +1289,7 @@ function PrintingRow({
   current,
   swap,
   marketplace,
+  menu,
   dwell,
 }: {
   printing: Printing;
@@ -1115,6 +1298,9 @@ function PrintingRow({
   swap: SwapOffer | null;
   /** Which marketplace this row's per-finish prices are quoted from. */
   marketplace: Marketplace;
+  /** This row's right-click and its keyboard twin, built by {@link Printings} from the printing
+   *  **and** the card — see {@link printingTarget}. */
+  menu: MenuHandlers;
   /** The row's half of the list's one hover preview — see {@link usePrintingDwell}. */
   dwell: DwellRowProps;
 }) {
@@ -1202,12 +1388,35 @@ function PrintingRow({
   return (
     <li
       ref={rowRef}
+      // **Focusable because it is a menu opener, and for no other reason.**
+      //
+      // `menu()` hands the element the press landed on to the panel, and the panel calls
+      // `opener?.focus()` on Escape and before every row it runs — so an opener that cannot take
+      // focus silently gets none: the caret stays on the panel and drops to `<body>` when it
+      // unmounts, and the next Tab restarts from the top of the app. `focus()` on an `<li>` with
+      // no `tabIndex` is exactly that no-op.
+      //
+      // `-1` and never `0`: this adds no tab stop. The row's keyboard handle is still the
+      // set-code button inside it, and Tab reaches that; this only makes the row a place the
+      // caret can be *put*. It is the same value, for the same reason, that the pane itself
+      // carries.
+      //
+      // The dwell's `onFocus` therefore fires when a dismissed menu hands the caret back, and a
+      // preview opens a quarter second later — which is the behaviour a caret arriving on this
+      // row already had, since the set-code button's own focus bubbles to this same handler.
+      tabIndex={-1}
       {...dwell}
       // The mouse's way into the printing: a click anywhere on the row that is not one of its
       // own controls does whatever this row does — show it, or put it in the deck. The
       // keyboard's way in is the set-code button below. The split is the reason: a
       // `role="button"` on the row would make the controls inside it presentational.
       onClick={press}
+      // …and the right-click is the **whole row**, for the same reason the click is: the reader
+      // is pointing at a printing, not at the four-character set code inside it. It cannot be
+      // the press — a `contextmenu` is not a `click`, so nothing here navigates — and the
+      // handler stops the event, so the pane's own menu (about the card this is a printing of)
+      // does not replace these rows with the card's.
+      onContextMenu={menu.onContextMenu}
       className={cn(
         "group rounded-md px-2 py-1 text-xs",
         // The one printing this pane is about. A gold hairline down its edge rather than a
@@ -1260,6 +1469,18 @@ function PrintingRow({
                 ? `${pending ? "Swapping…" : "Use this printing"} (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${swap.row.categoryName}`
                 : `Show ${printing.setCode.toUpperCase()} · ${printing.collectorNumber}`
             }
+            // **The keyboard's door to this row's menu, on the row's own handle** — the one
+            // focusable element a printings row has, so it is the only element Shift+F10 or the
+            // ContextMenu key can land on. It is `onKeyDown` and nothing else here, so Enter and
+            // Space still press the row: the menu is **composed with** what the handle already
+            // does rather than put in its place, which would buy a menu with the affordance it
+            // was added beside. `menuKey` stops the event when it opens, so the pane's own
+            // handler above does not answer with the card's menu on top of it.
+            //
+            // The row for the printing the pane is **showing** draws a `<span>` rather than this
+            // button, so it has no keyboard route of its own — and needs none: it is the card
+            // the pane's own menu is about, one press of the same keys away.
+            onKeyDown={menu.onKeyDown}
             // Greyed and refused, never removed from the tab order — see {@link inert}.
             aria-disabled={inert}
             title={printing.setName ?? undefined}

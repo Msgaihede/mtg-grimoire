@@ -32,7 +32,9 @@ import {
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
+  deckGroupMenuProps,
   deckGroupProps,
+  deckGroupRename,
   LandedMark,
   useCategoryDrop,
   useDeckCardDrag,
@@ -53,6 +55,25 @@ import { GroupHeader } from "./GroupHeader";
 type Row =
   | { kind: "group"; key: string; group: CardGroup }
   | { kind: "card"; key: string; group: CardGroup; card: DeckCard; ruleBreakText: string | null };
+
+/**
+ * How much taller a band gets while its pile is being renamed — **and this view is the one that
+ * has to be told, because its rows are absolutely positioned.**
+ *
+ * The other three draw a pile as a `<section>` in normal flow, so a field appearing under the
+ * heading pushes what is below it. Here `VirtualTable` gives every row `height: v.size` from
+ * `estimateSize`, and this file's own `Row` comment already warns what happens to a row that
+ * grows without saying so: *"a virtualiser told every row is 44px would overlap the one below it
+ * by exactly that band."* Un-declared, the open field paints over the first card of the pile.
+ *
+ * **48px**, and it is arithmetic rather than a guess: `RenameField`'s form is `mt-2 … pt-2`
+ * (8 + 8) around a row whose tallest children are `META_FIELD` and `META_SUBMIT`, both `h-8`
+ * (32) — 8 + 32 + 8 = 48. It is the one-line case; the form is `flex-wrap`, so a very narrow
+ * table would wrap Save onto a second line and want 48 more. That is not corrected for here
+ * because the band spans every column of a table whose own floor is nine of them: the row is
+ * never narrow enough. If this ever draws two lines, this is the number that is wrong.
+ */
+const RENAME_HEIGHT = 48;
 
 export function TableView({
   groups,
@@ -264,6 +285,29 @@ export function TableView({
   // and both of those are hooks — and a hook cannot be called from inside a `map` or a
   // callback. `DeckTableRow` is where they live; the band gets one too, so letting a card go
   // on a group's heading files it under that group like letting it go on any of its rows.
+  /**
+   * Which rows are taller than a row, for the virtualiser.
+   *
+   * It asks the same question the band's own render asks — is there a rename field for this
+   * pile — by calling the same factory, so the height and the markup cannot disagree about
+   * whether a field is there. Building an element to answer a boolean is a little wasteful and
+   * is the price of one answer instead of two; `estimateSize` runs on a measure rather than per
+   * frame, and a card row short-circuits on its kind before the call.
+   *
+   * **Its identity has to move when the answer does.** `VirtualTable` caches row heights and
+   * re-measures off a `heightKey` derived from `[rows, extraHeight]`, so a stable callback here
+   * would leave every band at 44px until the *list* changed — which a rename does not do. The
+   * `actions` bag is rebuilt when the editor's renaming pile changes, so depending on it is what
+   * makes the re-measure happen.
+   */
+  const extraHeight = useCallback(
+    (row: Row) =>
+      row.kind === "group" && deckGroupRename(row.group.categoryId, actions) != null
+        ? RENAME_HEIGHT
+        : 0,
+    [actions],
+  );
+
   const drop = actions?.drop;
   const renderRow = useCallback(
     (props: RowRenderProps, row: Row) => (
@@ -297,6 +341,8 @@ export function TableView({
         // The toolbar owns the order; see this file's own note.
         sort={[]}
         onSort={() => {}}
+        // A band whose pile is being renamed is taller than a row — see {@link RENAME_HEIGHT}.
+        extraHeight={extraHeight}
         onActivate={onSelect ? (row) => row.kind === "card" && onSelect(row.card) : undefined}
         isSelected={(row) =>
           row.kind === "card" && selectedCardId != null && row.card.cardId === selectedCardId
@@ -366,7 +412,11 @@ function DeckTableRow({
   );
 
   if (row.kind === "group")
-    return bandRow(props, row.group, columns, marketplace, ref, over, eligible);
+    return bandRow(props, row.group, columns, marketplace, ref, over, eligible, actions);
+
+  // A band has no card, so it has no card menu — the *heading's* menu is a different question
+  // and a different builder. Read after the band's early return for that reason.
+  const menu = actions?.menu?.(row.card);
 
   return (
     <div
@@ -376,6 +426,18 @@ function DeckTableRow({
       // focus in this table (`VirtualTable` owns the click, Enter and Space on it).
       {...deckCardProps(row.card)}
       {...deckCardSelectedProps(selected)}
+      // The row is this view's card, so the menu hangs on the row. **Chained rather than
+      // spread**, and that is the one place the other three views differ from this one: the row
+      // already carries `VirtualTable`'s own `onKeyDown`, which is Enter and Space opening the
+      // card, and a spread here would silently replace it — a table whose rows had stopped
+      // answering the keyboard, with a right-click menu as the only sign anything had changed.
+      // Both run: `menuKey` returns early for every key but Shift+F10 and the ContextMenu key,
+      // neither of which `VirtualTable` claims.
+      onContextMenu={menu?.onContextMenu}
+      onKeyDown={(e) => {
+        props.onKeyDown?.(e);
+        menu?.onKeyDown(e);
+      }}
       // The shared pair, as in the other three views. `ring-inset` on top of it because a row
       // here is absolutely positioned inside a scroller and an outset ring is drawn over its
       // neighbours; the colour and the weight are `AppShell`'s.
@@ -423,6 +485,7 @@ function bandRow(
   ref: (element: HTMLDivElement | null) => void,
   over: boolean,
   eligible: boolean,
+  actions?: DeckCardActions,
 ) {
   return (
     <div
@@ -431,13 +494,29 @@ function bandRow(
       tabIndex={undefined}
       onClick={undefined}
       onKeyDown={undefined}
+      // **The pile's own menu, and this band is where it belongs in this view** — the band *is*
+      // the group here, and it is emphatically not `GroupHeader`, which is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog as well; `deckGroupMenuProps` carries the reason.
+      // Spread rather than chained, unlike a card row: the three props above have just been
+      // cleared, because a heading is not something Enter opens.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       // The caret lands here when a card leaves this pile under it, exactly as it lands on a
       // group's section in the other three views — the band *is* the group here.
       {...deckGroupProps(group.categoryId)}
       // One track, not nine. `props.className` already carries `grid`; overriding the
       // template is the whole of what makes this row one cell wide, and adding a second
       // display utility beside it would leave which one wins to the class sorter.
-      style={{ ...props.style, gridTemplateColumns: "minmax(0,1fr)" }}
+      // One track across, and one *down* — the second is the correction that goes with
+      // {@link RENAME_HEIGHT}. `VirtualTable` splits a grown row into a 44px track and the extra
+      // one, because its own tall case (the reconciler's band) is a second thing positioned
+      // under the cells. A band is not that shape: it is a single cell that wraps, so the two
+      // tracks would pin it to the first 44px and the rename field would overflow the row this
+      // fix just made tall enough. Cleared, the cell has the whole height to wrap inside.
+      style={{
+        ...props.style,
+        gridTemplateColumns: "minmax(0,1fr)",
+        gridTemplateRows: undefined,
+      }}
       className={cn(
         props.className,
         "bg-surface",
@@ -446,8 +525,9 @@ function bandRow(
         over && DROP_OVER,
       )}
     >
-      <span role="cell" aria-colspan={columns} className="flex min-w-0 items-center">
+      <span role="cell" aria-colspan={columns} className="flex min-w-0 flex-wrap items-center">
         <GroupHeader group={group} marketplace={marketplace} className="w-full" />
+        {deckGroupRename(group.categoryId, actions)}
       </span>
       {over && <DropIndicator />}
     </div>

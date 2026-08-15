@@ -80,15 +80,27 @@ export const LAYER = {
   dragTray: "z-40",
   /**
    * A full-window layer a view opens over everything it owns: the deck editor's import,
-   * categories, tags, history, theory-difference and settings dialogs.
+   * categories, tags, history, theory-difference, settings and export dialogs.
    *
    * **One rung for all of them, deliberately, where a rung apiece looks more careful.** They are
-   * held in one piece of state (`DeckEditor`'s `Layer` union), because `useDismissOnEscape`
-   * orders exactly two rungs and two `"inner"` peers open at once are not ordered at all. At
-   * most one is ever mounted — so there is no pair for a second number to order, and inventing
-   * one would be a claim about a stack that cannot occur. If a layer ever has to open *over* one
-   * of these, that is the day the rung splits, and the split will have a real overlap to point
-   * at.
+   * held in one piece of state (`DeckEditor`'s `Layer` union), so **at most one is ever
+   * mounted** — there is no pair for a second number to order, and inventing one would be a
+   * claim about an overlap that cannot occur. If a layer ever has to open *over* one of these,
+   * that is the day the rung splits, and the split will have a real overlap to point at.
+   *
+   * This used to argue from Escape as well — "because `useDismissOnEscape` orders exactly two
+   * rungs and two `"inner"` peers open at once are not ordered at all" — and that clause is
+   * gone rather than reworded: it is **no longer true** (the hook keeps a stack of capture-phase
+   * registrations and only the token on top acts, so peers *are* ordered, by mount depth) and it
+   * was never what this number rested on. Which layer eats a key press and which paints over
+   * which are two questions; borrowing one as evidence for the other is how a z-index comes to
+   * be justified by a keyboard protocol.
+   *
+   * **A context menu is not a counter-example**, and it is the one worth naming since the app
+   * grew them: `ContextMenu` draws at {@link LAYER.popup}, below this rung, so a menu is a thing
+   * that opens over a *view* rather than over one of these. A right-clickable surface placed
+   * inside a scrimmed dialog would be the real overlap — the menu would paint behind the scrim —
+   * and there is none today.
    *
    * This read "categories drawer, history drawer" until 2026-08-14, when the editor's right-hand
    * drawers became centred modals on one shell (`DeckDialog`) and the categories one split into

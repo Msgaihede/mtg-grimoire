@@ -94,6 +94,20 @@ export interface ImportDeckDialogProps {
    */
   defaultFormatKey?: string;
   /**
+   * The pile every line of this paste lands in, whatever the filer would have said — a
+   * right-click on a category heading and "Import cards…".
+   *
+   * **The override is applied in the planner and not here**, which is this folder's rule rather
+   * than a preference: `plan.ts` makes every deck decision and this dialog makes none, so all
+   * this prop does is reach `buildImportPlan`'s trailing argument. Absent — which is what the
+   * toolbar's Import passes — the list is filed by what each card *does*, exactly as before.
+   *
+   * Only the editor has a pile to aim at. A `new` target would take one just as well
+   * (`deck_import_commit` finds-or-creates a category by name), but the gallery has no heading
+   * to right-click and passes nothing.
+   */
+  forcedCategoryName?: string;
+  /**
    * **A mount, not a class**, exactly as `CreateDeckDialog`'s and `TheoryDiffDialog`'s are:
    * everything with state — the pasted text, the step, the commander picked, the caret — lives
    * one component down, so closing unmounts all of it and reopening starts a genuinely new
@@ -136,6 +150,11 @@ type Step = "source" | "preview";
  * **Both reads are one press and one mutation**, so the second step is never reached holding
  * half of what files a card — see `useDeckImport`'s `resolve`.
  *
+ * **Opened from a category's right-click it is aimed at that pile**, and even that is not a
+ * decision made here: {@link ImportDeckDialogProps.forcedCategoryName} is handed straight to
+ * `buildImportPlan`, whose trailing argument is where a named pile beats the filer. This file
+ * draws the difference (the header line says which pile) and decides none of it.
+ *
  * **Not portalled, and `fixed` — so where it is mounted matters.** Nothing in this app is
  * portalled (the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects
  * a runtime `<style>`). A `fixed` element is positioned against the viewport *unless* an
@@ -150,6 +169,7 @@ type Step = "source" | "preview";
 export function ImportDeckDialog({
   target,
   defaultFormatKey = DEFAULT_FORMAT,
+  forcedCategoryName,
   open,
   onDismiss,
   onClose,
@@ -167,6 +187,7 @@ export function ImportDeckDialog({
           key="import-deck"
           target={target}
           defaultFormatKey={defaultFormatKey}
+          forcedCategoryName={forcedCategoryName}
           onDismiss={onDismiss}
           onClose={onClose}
           onImported={onImported}
@@ -185,6 +206,7 @@ export function ImportDeckDialog({
 function Panel({
   target,
   defaultFormatKey,
+  forcedCategoryName,
   onDismiss,
   onClose,
   onImported,
@@ -253,8 +275,11 @@ function Panel({
    */
   const resolved = resolve.data ?? null;
   const plan = useMemo(
-    () => (resolved === null ? null : buildImportPlan(parsed, resolved.rows, spec, resolved.tags)),
-    [parsed, resolved, spec],
+    () =>
+      resolved === null
+        ? null
+        : buildImportPlan(parsed, resolved.rows, spec, resolved.tags, forcedCategoryName),
+    [parsed, resolved, spec, forcedCategoryName],
   );
 
   // The caret starts in the box the reader has to fill, which is `CreateDeckDialog`'s rule and
@@ -436,10 +461,19 @@ function Panel({
             <h2 id={`${id}-title`} className="font-heading text-xl leading-none">
               Import a decklist
             </h2>
+            {/* Where the cards are going, said on the step the reader is still pasting into —
+                the tally on step two says it again, but by then they have committed to a
+                preview. A forced pile leads the line because it is the new fact: this is the
+                importer aimed at one column rather than at the deck. */}
             <p className="mt-1 truncate text-xs text-dim">
               {target.kind === "new"
                 ? "Paste a list or choose a file, and it becomes a deck of its own."
-                : `Into ${into.deck?.name ?? "this deck"} · ${variantName(target.variant)}`}
+                : [
+                    forcedCategoryName === undefined
+                      ? `Into ${into.deck?.name ?? "this deck"}`
+                      : `Into ${forcedCategoryName} · ${into.deck?.name ?? "this deck"}`,
+                    variantName(target.variant),
+                  ].join(" · ")}
             </p>
           </div>
           <button

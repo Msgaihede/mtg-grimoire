@@ -24,10 +24,14 @@ import {
   DECK_CARD_VARIANT,
   deckCardBodyProps,
   deckCardName,
+  deckCardMenuProps,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
+  deckGroupMenuProps,
   deckGroupProps,
+  deckGroupRename,
+  FOCUS,
   FOCUS_INSET,
   LandedMark,
   REVEALED_ON_CARD,
@@ -191,10 +195,17 @@ function GridGroup({
     <section
       ref={attach}
       aria-labelledby={`grid-group-${group.key}`}
+      // **The pile's own menu, on this element rather than on `GroupHeader`** - see
+      // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
+      // scrim. A card inside stops the event, so the innermost surface still wins.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       {...deckGroupProps(group.categoryId)}
       // The sidebar's pair, said here — one vocabulary for "this can take the card you are
       // holding" and "and it is this one" across the four views and the two screens.
-      className={cn("relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
+      // `FOCUS` because this is where the caret comes back to when the pile's menu closes; the
+      // tab index is already here from `deckGroupProps`.
+      className={cn("relative rounded-md", FOCUS, eligible && DROP_RING, over && DROP_OVER)}
     >
       {over && <DropIndicator />}
       {/* `tight`, because this section is as wide as the window: counts pushed to the far
@@ -206,6 +217,7 @@ function GridGroup({
         id={`grid-group-${group.key}`}
         className="px-0.5 pb-1.5"
       />
+      {deckGroupRename(group.categoryId, actions)}
       {/* The wall's gutter grows with the tiles and holds at 10px below 1× ({@link atLeast}):
           the same fixed `gap-2.5` around 300px cards reads as a wall with no seams, and a halved
           one around 75px cards reads as one sheet of card backs. Inline, because a scaled number
@@ -292,6 +304,10 @@ function GridCard({
   return (
     <li
       ref={dragRef}
+      // The whole tile, art and foot: a right-click on the rarity gem or the price is a
+      // right-click on the card. The keydown rides here too, so Shift+F10 with the caret on the
+      // stepper drawn over the art still asks about this card.
+      {...deckCardMenuProps(card, actions)}
       // The width is the tile's whole geometry — the picture below is `aspect-[488/680]`, so its
       // height follows without a second number to keep in step. An inline style rather than the
       // fixed width utility this used to carry: Tailwind scans source text for whole class
@@ -304,6 +320,11 @@ function GridCard({
       {...deckCardSelectedProps(selected)}
       className={cn(
         "group relative overflow-hidden rounded-md border bg-surface",
+        // Where the caret lands when this tile's menu closes — `deckCardMenuProps` is what makes
+        // the tile focusable, and a hand-back the reader cannot see is half a hand-back. Outset
+        // where the button inside is inset, because the outline is drawn outside this box rather
+        // than in the region it clips.
+        FOCUS,
         ruleBreakText !== null ? "border-destructive" : "border-border",
         // The search wall's own recipe, outside the tile's border box — so a picked tile that
         // also breaks a rule keeps both marks and neither is drawn over the other.

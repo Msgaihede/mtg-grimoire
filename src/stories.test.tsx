@@ -50,6 +50,61 @@ vi.mock("@tauri-apps/api/core", () => import("../.storybook/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
 
 /**
+ * The three Tauri **plugin** wrappers, re-pointed at the same fake — because **the two mocks
+ * above do not reach inside `node_modules`.**
+ *
+ * `@tauri-apps/plugin-dialog`, `-clipboard-manager` and `-opener` are thin wrappers that each
+ * import `invoke` from `@tauri-apps/api/core` *within their own package*. Vitest externalizes
+ * dependency ESM by default and `vite.config.ts` sets no `server.deps.inline`, so an externalized
+ * package's own imports are never rewritten: `vi.mock` matches the specifier as this file's graph
+ * resolves it, and the copy of `@tauri-apps/api/core` those three see is the **real** one. Its
+ * `invoke` reads `window.__TAURI_INTERNALS__`, which jsdom does not have.
+ *
+ * **Measured 2026-08-14, which is the only reason this paragraph is not a guess.** With the two
+ * mocks above and nothing else, `Decks/Export dialog`'s three save/copy plays failed with
+ * `Could not save that export — Cannot read properties of undefined (reading 'invoke')` — the
+ * app's own refusal banner reporting the workbench's plumbing. The five component tests that
+ * touch a plugin all mock the **plugin package** rather than relying on the core mock
+ * (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`, `ImportDeckDialog`,
+ * `ExportDialog`); a story cannot, because CSF indexes every non-default export and a `vi.mock`
+ * belongs to a test file. So it belongs here, once, for every story.
+ *
+ * **Each stands in for the wrapper and not for the answer**, which is the whole point: the
+ * command name and the argument names below are copied from the packages' own `dist-js` and the
+ * reply comes from `pluginHandlers()` in `.storybook/fake/db.ts`, so a story exercises the same
+ * dispatch the Storybook browser does rather than a second, agreeing stub. That is `main.ts`'s
+ * alias reasoning one layer out.
+ *
+ * `plugin:dialog|open` is deliberately answered by nothing, so it rejects with "No fake handler
+ * registered" — the file *picker* opens a native window CDP cannot drive, and inventing a path
+ * for it would invent the decklist behind it. `save` is the one that answers, and
+ * `.storybook/CLAUDE.md` carries why the two differ.
+ */
+vi.mock("@tauri-apps/plugin-dialog", async () => {
+  const { invoke } = await import("../.storybook/fake/core");
+  return {
+    open: (options: unknown = {}) => invoke("plugin:dialog|open", { options }),
+    save: (options: unknown = {}) => invoke("plugin:dialog|save", { options }),
+  };
+});
+vi.mock("@tauri-apps/plugin-clipboard-manager", async () => {
+  const { invoke } = await import("../.storybook/fake/core");
+  return {
+    writeText: (text: string, opts?: { label?: string }) =>
+      invoke("plugin:clipboard-manager|write_text", { label: opts?.label, text }),
+  };
+});
+vi.mock("@tauri-apps/plugin-opener", async () => {
+  const { invoke } = await import("../.storybook/fake/core");
+  // `with`, not `openWith` — the wire name is a reserved word in the package's own call, and
+  // `invoke` matches by name, so a typo here is a rejection exactly as it is in the app.
+  return {
+    openUrl: (url: string, openWith?: string) =>
+      invoke("plugin:opener|open_url", { url, with: openWith }),
+  };
+});
+
+/**
  * Layout, faked, so that a `play` over a **virtualised** list has rows to look at.
  *
  * jsdom lays nothing out: every element measures 0, so `@tanstack/react-virtual` sizes its

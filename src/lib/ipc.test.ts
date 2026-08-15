@@ -73,6 +73,15 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("search_cards", {
       req: { sets: ["lea"], manaValues: [1, 8], limit: 50, offset: 0 },
     });
+
+    // Same trap for `oracleId`: `#[serde(rename_all = "camelCase")]` makes a mismatch
+    // silent on the Rust side too — a wrapper spelling this `oracle_id` would deserialize
+    // to `None` with no error anywhere, and an unset filter returns the whole corpus rather
+    // than one card's printings.
+    await ipc.searchCards({ oracleId: "o1", limit: 50, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("search_cards", {
+      req: { oracleId: "o1", limit: 50, offset: 0 },
+    });
   });
 
   /**
@@ -827,6 +836,31 @@ describe("ipc argument names match the Rust command signatures", () => {
     const gone = await ipc.errorLogClear();
     expect(invoke).toHaveBeenCalledWith("error_log_clear");
     expect(gone).toBe(3);
+  });
+
+  /**
+   * `card_image_uri(cardId, variant)` — the context menu's one round trip for an image URL.
+   * `variant` is a bare string on the wire, so a wrapper that reached for `imageVariant` or
+   * dropped it silently would be a runtime deserialization error no type here catches.
+   */
+  it("sends a card image request under `cardId` and `variant`", async () => {
+    invoke.mockResolvedValue("https://cards.scryfall.io/display/x.webp?1");
+    const uri = await ipc.cardImageUri("p1", "display");
+    expect(invoke).toHaveBeenCalledWith("card_image_uri", { cardId: "p1", variant: "display" });
+    expect(uri).toBe("https://cards.scryfall.io/display/x.webp?1");
+  });
+
+  /**
+   * `export_write_file(path, contents)` — the save-dialog path Rust writes at, since no `fs:`
+   * permission is granted anywhere for the webview to write it itself.
+   */
+  it("sends an export write under `path` and `contents`", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.exportWriteFile("C:\\decks\\out.txt", "1 Lightning Bolt\n");
+    expect(invoke).toHaveBeenCalledWith("export_write_file", {
+      path: "C:\\decks\\out.txt",
+      contents: "1 Lightning Bolt\n",
+    });
   });
 });
 

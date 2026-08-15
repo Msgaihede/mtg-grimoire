@@ -76,6 +76,19 @@ Every one of these has its measurement and its story in
   _registration_ order. Every new dismissible layer follows this or it will close something it
   did not open. A layer that Escape dismissed hands focus back to whatever opened it; an
   outside-click deliberately does not.
+- **Two `"inner"` peers are ordered, by a stack — this is newer than most of the prose about it,
+  and the old claim is still quoted in places.** `useDismissOnEscape` keeps a module-level stack:
+  every capture-phase layer pushes a token on mount and pops it on cleanup, and **only the token
+  on top acts**, so a context menu over a dialog over the card pane gives one press to each. A
+  lone `"inner"` layer is a stack of one and behaves as it always did. What this replaced was
+  **not** "both close on one press" — the capture rung checks `defaultPrevented` too, so the
+  _first-registered_ peer took the press and the newer one, the thing on top, was **starved**
+  (measured `{ first: 1, second: 0 }`, 2026-08-14). Two consequences worth carrying: `onDismiss`
+  is **latched in a ref and is not a dependency**, because a re-registration used to move a layer
+  to the top of the stack and close the wrong window — so an unstable callback is a re-render and
+  no longer a bug; and **a design that keeps two layers exclusive needs a reason of its own now**
+  (they overlap on screen, they are one piece of state, one would draw over the other), because
+  "Escape cannot order them" has stopped being one.
 - **A surface opened from a view is a centred modal over a scrim, not a docked column — unless
   the reader works _out of_ it while editing beside it.** Width is the scarce thing in this app:
   the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane
@@ -239,10 +252,15 @@ Every one of these has its measurement and its story in
   cards". `useCardSearch.ts`'s `formatParams` is the only place the row → (`format`,
   `playableOnly`) branch is written; the row is counted and cleared by Reset all, and deliberately
   not counted by `unfiltered`. See
-  [frontend-design.md](../docs/reference/frontend-design.md). **Exactly two exemptions**: a grade scale (card
-  condition, Near Mint → Damaged) and an order the reader arranged themselves (deck categories).
-  Both carry a comment at the site; see
-  [frontend-design.md](../docs/reference/frontend-design.md).
+  [frontend-design.md](../docs/reference/frontend-design.md). **The exemptions are a test, not a
+  list — and the list is deliberately not written down here**, because it said "exactly two" for
+  months and was wrong within a day of the context menus landing. A list is exempt when **its
+  order _is_ the information** (a grade scale, Near Mint → Damaged; a printing's finishes, plain
+  before the premium treatments; a two-row ladder like `Open on`'s Scryfall and the marketplace,
+  where sorting would move the row a reader has learnt the position of whenever they changed
+  marketplace) or when **the reader arranged it themselves** (deck categories, the folder tree).
+  Everything else sorts. Every exemption carries a comment at its own site saying which of the two
+  it is — that comment is the record, and grepping `sortOptions` is how you count them.
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.
@@ -265,6 +283,76 @@ Every one of these has its measurement and its story in
   `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
+
+## The context menu
+
+A right-click anywhere in the app is one component's problem. `src/components/menu/` owns the
+primitive; a surface builds a `MenuItem[]` and hands it over through `useContextMenu`, and owns no
+markup of its own. Every rule below has a failure behind it that shipped or nearly did.
+
+- **One menu, mounted at the app root.** `ContextMenuProvider` wraps the app in `App.tsx` and
+  renders the panel as a **sibling of `AppShell`** — the position `CardZoomIndicator` already
+  holds, for the same reason. A menu takes `LAYER.popup`, a z-index competes only inside its own
+  stacking context, and every card surface here draws rows that are positioned or transformed — so
+  a menu mounted where it was opened is capped at that row's `LAYER.raised` and paints under the
+  table header above it. Three properties come free from there being exactly one: one menu at a
+  time, a second right-click **replaces** rather than stacks, and nothing clips it.
+- **Anything a menu's _rows_ need is provided above `ContextMenuProvider`, never inside
+  `AppShell`.** The provider draws its panel as a sibling of `children`, so "inside the shell" and
+  "inside the menu" are two different places. `CardToDeckProvider` shipped inside the shell for one
+  commit, and every deck add made from a menu threw — on every card surface at once — because
+  the picker that consumes it is drawn in the panel and not in a view.
+- **A menu opened from inside a `LAYER.overlay` dialog paints behind that dialog's scrim.** `popup`
+  is `z-30` and `overlay` is `z-45`: the panel is invisible and unreachable, and **nothing goes
+  red**, because jsdom has no opinion about a z-index. That is why the deck editor's category menu
+  is wired onto **the view's own group element and never onto `GroupHeader`** — `CategoriesDialog`
+  draws that same header inside a `DeckDialog`. `layers.ts` names this overlap as the one that must
+  not exist; keeping it non-existent is a placement decision at each call site, not something the
+  primitive can enforce. Do not tidy a menu handler onto a shared row component.
+- **A menu opener has to be able to take focus, and `focus()` on a node with no `tabIndex` is a
+  no-op.** `menu()`/`menuKey()` hand the panel the element their handler is attached to, and the
+  panel focuses it back when Escape closes and before every row it runs — so a bare `<li>` opener
+  leaves the caret on the panel, drops it on `<body>` when the panel unmounts, and the next Tab
+  restarts from the top of the app. It bit the branch that introduced menus more than once — the
+  deck card views and the card pane's printings rows each shipped with it, and the deck tile and
+  the folder row escaped it only because their handlers sit on a `<button>`. Two fixes and both
+  are right: put the handlers on the `<button>` the row already has, or give the row
+  `tabIndex={-1}` — never `0`, which would add a tab stop per card.
+- **The native menu survives in text fields and nowhere else.** One document-level `contextmenu`
+  listener in the provider calls `preventDefault()` unless the target is inside a field: cut, copy,
+  paste, undo and spellcheck are things we cannot rebuild, and a WebView2 menu offering "Reload"
+  and "View source" does not belong in a shipped desktop window. **The carve-out has two ends and
+  needs both** — a surface's own handler stops the event before the document listener ever sees it,
+  so `useContextMenu`'s `menu()` applies the same test at its end. Rows contain fields —
+  `QuantityStepper` sits inside table rows and deck cards, `FolderTree` puts one inside a node —
+  and either end alone loses them the browser's menu.
+- **`isTextField` and `isTextEntry` are two predicates and must stay two.** `isTextField`
+  (`useContextMenu.ts`) governs the carve-out above and matches **every** `<input>`, checkboxes
+  and radios included — whether a right-click on a checkbox gets the browser's menu is its
+  question. `isTextEntry` (`menu/panel.ts`) governs which keys an **open panel** yields to a caret,
+  and is a deny-list of the input types whose value is not typed text, because a checkbox that took
+  the arrow keys would strand the caret on a control they do nothing to. Widening one to serve both
+  decides the other question by accident.
+- **Escape means "back"; Tab means "forward".** Escape closes one level and hands the caret to the
+  opener — one press per rung, through `useDismissOnEscape`'s capture stack. Tab focuses the
+  opener, closes the menu and **lets the press through**, so the browser carries on from the opener
+  to whatever follows it. The menu is deliberately **not** a focus trap: rows are `tabIndex={-1}`,
+  so a panel's only tab stop is a field a lazy body drew, and a trap with one stop cycles it to
+  itself and reads as a stuck key. Left alone Tab was a bug in its own right — focus went to the
+  page behind while the panel stayed up.
+- **`lazy` is a promise about _mounting_, not about _rendering_.** A `lazy` row's `Content` mounts
+  when the row is expanded, so its queries fire once and a menu with six of them reaches the
+  backend **zero** times on open — that is the entire reason the kind exists, and it is the general
+  form of "no work happens before the reader asks for it". But the component re-renders freely for
+  as long as the menu is up (any re-render of the menu reaches it; nothing between is memoised), so
+  a body's work belongs in its **hooks** and never in its body.
+- **Positioning is hand-rolled, and that is the CSP's doing.** No portal and no popper library: the
+  shipped CSP is `style-src 'self'` and every overlay primitive in reach injects a runtime
+  `<style>` that fails **silently**. The panel is `fixed`, at the pointer, flipped against
+  `document.documentElement.clientWidth`/`clientHeight` — the `innerWidth` rule above, which this
+  is the second instance of. A keyboard open (Shift+F10, the `ContextMenu` key) anchors at the
+  opener's **bottom-left**, because a keypress has no coordinates and `0, 0` would put every one of
+  these in the top-left corner of the window.
 
 ## Motion (`motion@13.1.0`)
 
@@ -307,7 +395,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 
 | Path | What lives there |
 | --- | --- |
-| `components/` | Shared UI — `CardImage`, `CardArt`, `table/VirtualTable` |
+| `components/` | Shared UI — `CardImage`, `CardArt`, `table/VirtualTable`, `menu/` (the one context menu) |
 | `features/` | `card`, `collection`, `decks`, `search`, `settings`, `wishlist` |
 | `lib/` | `ipc.ts` (the Rust mirror), `layers.ts`, `activity.ts`, `sort.ts`, `tokens.test.ts` |
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |

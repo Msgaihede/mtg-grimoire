@@ -1,5 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
@@ -7,6 +8,9 @@ import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
 import { parseFinishes, soleFinish } from "@/lib/finish";
@@ -210,6 +214,30 @@ const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
 const tileGameChanger = (card: CardSummary) => card.gameChanger;
 
 /**
+ * The card a right-click on a result is about — the same object for a tile and for a table row,
+ * because the two layouts draw one list of printings.
+ *
+ * **No `finish`.** A search row is a *printing*, not a copy: the reader has not said which
+ * finish they hold, so "Add to → Collection" offers the ones this printing exists in rather
+ * than choosing one for them. That is exactly the field the collection's and the wishlist's
+ * adapters do fill, and the difference between the three surfaces is this one line.
+ *
+ * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
+ * does — the same fact, from the same row, that {@link tileDrag} hands a drop.
+ */
+function cardTarget(card: CardSummary): CardMenuTarget {
+  return {
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    oracleId: card.oracleId,
+    finishes: card.finishes,
+    typeLine: card.typeLine,
+  };
+}
+
+/**
  * Card search: a filter bar, and every match in one scroll.
  *
  * The result list is virtualised because an unfiltered search matches the whole database
@@ -328,6 +356,26 @@ function Results({ search }: { search: CardSearch }) {
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
 
+  /**
+   * The right-click menu, built here rather than in either layout: one object for the page, as
+   * `CardMenuDeps` asks — the two views are the same list, and a menu whose writes differed
+   * between them would be two answers to one question.
+   */
+  const { menu, menuKey } = useContextMenu();
+  const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  /** One row's or one tile's handler. The item list is a **thunk** inside `menu`, so a wall of
+   *  forty pays for nothing until a reader actually right-clicks one of them. */
+  const cardMenu = useCallback(
+    (card: CardSummary) => menu(() => buildCardMenu(cardTarget(card), menuDeps)),
+    [menu, menuDeps],
+  );
+  /** The same menu on Shift+F10 and the ContextMenu key. Wired everywhere `cardMenu` is, because
+   *  a menu only a mouse can open is a menu half this app's readers do not have. */
+  const cardMenuKey = useCallback(
+    (card: CardSummary) => menuKey(() => buildCardMenu(cardTarget(card), menuDeps)),
+    [menuKey, menuDeps],
+  );
+
   // query-core keeps `data` when a fetch fails, so `isError` arrives with every page that
   // did load still in hand. Reading it as "show the error instead" would throw away 400
   // rows because page 9 hit the ingest's database lock, or because a window-focus refetch
@@ -384,6 +432,11 @@ function Results({ search }: { search: CardSearch }) {
         )}
       </AnimatePresence>
 
+      {/* A write the menu started and the backend refused, said where the reader made it —
+          beside the banner above rather than folded into it, because that one is about the
+          *list* and this is about a card in it. */}
+      <CardMenuRefusal error={menuFailure} />
+
       {!empty &&
         (view === "grid" ? (
           <CardGrid
@@ -432,6 +485,9 @@ function Results({ search }: { search: CardSearch }) {
             // The crown, in the same chip as that mark. Held still at module scope like every
             // other callback this wall is handed.
             gameChanger={tileGameChanger}
+            // The whole tile is the target: the art, its two corner marks and the caption.
+            cardMenu={cardMenu}
+            cardMenuKey={cardMenuKey}
             // The tile's one control, built from the row it is about: the popup offers the
             // finishes this printing exists in — a foil-only card must not take a nonfoil
             // entry — and a wish made here can be for the card rather than for this piece of
@@ -476,6 +532,25 @@ function Results({ search }: { search: CardSearch }) {
             // would make it a dead end for anyone not using a mouse.
             onActivate={(card) => selectCard(card.id)}
             isSelected={(card) => card.id === selectedCardId}
+            // The same menu the wall's tiles offer, on the row that stands for the same
+            // printing. A right-click is not an activation: `onActivate` above is a left click
+            // and the two keys, and neither of them fires for this one.
+            //
+            // The row's own `onKeyDown` runs first and is not replaced: it answers Enter and
+            // Space (opening the card), and `menuKey` answers Shift+F10 and the ContextMenu key.
+            // Two handlers for one event, because the row already had one — dropping `props`'
+            // would take the keyboard's route to the *card* away in the act of adding one to
+            // its menu.
+            renderRow={(props, card) => (
+              <div
+                {...props}
+                onContextMenu={cardMenu(card)}
+                onKeyDown={(e) => {
+                  props.onKeyDown?.(e);
+                  cardMenuKey(card)(e);
+                }}
+              />
+            )}
             onNeedNextPage={() => {
               // `isFetchNextPageError` is a stop, not a detail: a failed page leaves
               // `hasNextPage` true with the reader still at the bottom, so without it this

@@ -3,13 +3,20 @@ import { ipc, type FacetResponse, type SearchRequest } from "@/lib/ipc";
 import { facetsOrUndefined } from "./facets";
 
 /**
- * Everything a facet request is allowed to carry: every filter, and nothing about the page.
+ * What a facet request may carry: the filters, and nothing about the page.
  *
  * The omissions are the point. Facets depend on neither the sort nor the offset nor the
  * collapse — that is *why* `facet_cards` is a separate command from `search_cards` — so a
  * type that cannot express them is a facet key that cannot accidentally be recomputed on
  * every header press and every scroll. `limit`/`offset` are filled in below because
  * `SearchRequest` requires them and the backend ignores them here.
+ *
+ * **The fence reaches the page fields and stops there: it does not reach `oracleId`.** That is
+ * a filter, so the `Omit` above keeps it, and the type would happily carry it into a facet key.
+ * What keeps it out is the one place a `FacetRequest` is built — `useCardSearch.ts`'s `facetReq`
+ * lists its fields by hand and leaves that one off — so it is discipline at the call site rather
+ * than something checked here. Read that object's doc before adding a second builder; the reason
+ * is a property of the in-memory index, not of this type.
  */
 export type FacetRequest = Omit<SearchRequest, "sort" | "collapse" | "limit" | "offset">;
 

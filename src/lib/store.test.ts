@@ -193,6 +193,59 @@ describe("the deck row a card was opened from", () => {
 });
 
 /**
+ * The channel between a card's menu and the Search view.
+ *
+ * `useCardSearch` keeps every filter in component-local `useState` inside `SearchPage`, so
+ * nothing outside that component can set one — and "View all printings" is pressed from every
+ * card surface, nearly all of which are not Search. Same shape as `returnToDeckId` above:
+ * written by one view, read and cleared once by another.
+ */
+describe("the card a reader asked to see every printing of", () => {
+  const BOLT = { oracleId: "o-bolt", name: "Lightning Bolt" };
+
+  /**
+   * **One write, and that is the whole design.** `setActiveView` clears the open deck and the
+   * open card, so calling it beside this would either clear the intent or race it — while the
+   * clears themselves are wanted, exactly as they are for every other way of leaving a view.
+   */
+  it("requesting all printings sets the intent and goes to search in one write", () => {
+    useAppStore.setState({ activeView: "decks", openDeckId: 7 });
+    useAppStore.getState().openCardFromDeck({
+      deckId: 7,
+      categoryId: 1,
+      categoryName: "Main deck",
+      cardId: "p1",
+      variant: "live",
+    });
+
+    useAppStore.getState().requestAllPrintings(BOLT);
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("search");
+    expect(s.pendingCardSearch).toEqual(BOLT);
+    // `setActiveView`'s own rule: leaving the view closes the deck and the card.
+    expect(s.openDeckId).toBeNull();
+    expect(s.selectedCardId).toBeNull();
+    expect(s.paneDeckContext).toBeNull();
+    expect(s.returnToDeckId).toBeNull();
+  });
+
+  it("has nothing waiting until something asks", () => {
+    expect(useAppStore.getState().pendingCardSearch).toBeNull();
+    expect(useAppStore.getState().consumePendingCardSearch()).toBeNull();
+  });
+
+  it("consuming the intent clears it", () => {
+    useAppStore.getState().requestAllPrintings(BOLT);
+
+    expect(useAppStore.getState().consumePendingCardSearch()).toEqual(BOLT);
+    // Read once. A second visit to Search must not re-apply a filter the reader has cleared.
+    expect(useAppStore.getState().consumePendingCardSearch()).toBeNull();
+    expect(useAppStore.getState().pendingCardSearch).toBeNull();
+  });
+});
+
+/**
  * Two layouts, two settings. The search is for looking at cards and opens on the art; the
  * collection is usually for counting them and opens on the table. A reader who switches one
  * to compare prices has said nothing about the other, and one shared toggle would make that

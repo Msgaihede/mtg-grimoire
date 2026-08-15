@@ -235,7 +235,18 @@ function categoryFor(
   line: ParsedLine,
   match: ImportMatch,
   slugs: ReadonlyMap<string, readonly string[]>,
+  forcedCategoryName: string | undefined,
 ): string {
+  // **A named pile overrides the filer, which is the rule this app already has**: an add that
+  // names a category is untouched, and only an add that names none is filed by what the card
+  // does. Right-clicking "Removal" and pressing Import names one. Absent, and every existing
+  // caller is byte-for-byte unchanged.
+  //
+  // It outranks a **section heading** as well, which is the one thing worth saying out loud: a
+  // heading is what somebody else's exporter wrote, and the right-click is the reader pointing
+  // at a column of their own a moment ago. Two namings, and the later and more specific one
+  // wins. (The command zone still outranks both — see {@link toImportItems}.)
+  if (forcedCategoryName !== undefined) return forcedCategoryName;
   return line.section === "deck"
     ? autoCategoryFor({ typeLine: match.typeLine, oracleTags: slugs.get(match.cardId) })
     : SECTION_CATEGORY[line.section];
@@ -297,12 +308,20 @@ function tallyOrder(name: string): number {
  *   build whose taxonomy has never been downloaded, plans the identical import filed entirely
  *   by type line. That is the floor this feature stands on, not an error path — an import is a
  *   large deliberate action and must not be lost to a taxonomy fetch.
+ *
+ * `forcedCategoryName` is the pile a right-click aimed the import at — "Import cards…" on a
+ * category heading — and it is **trailing and optional so that absent is today's behaviour
+ * exactly**: the toolbar's Import passes nothing and every one of this file's existing tests
+ * describes that caller. What it does is {@link categoryFor}'s first line and nothing else; the
+ * tags are still read, still handed in and still cost their round trip, because a forced pile
+ * that also changed what the *caller* fetched would be a second rule in a second place.
  */
 export function buildImportPlan(
   parsed: ParsedList,
   rows: ImportResolveRow[],
   spec: FormatSpec | null,
   tags: readonly PrintingTags[] = [],
+  forcedCategoryName?: string,
 ): ImportPlan {
   const cards: PlannedCard[] = [];
   const unmatched: UnmatchedLine[] = [];
@@ -329,7 +348,7 @@ export function buildImportPlan(
       lineNumber: line.lineNumber,
       match: row.matched,
       quantity: line.quantity,
-      categoryName: categoryFor(line, row.matched, slugs),
+      categoryName: categoryFor(line, row.matched, slugs, forcedCategoryName),
     });
   }
 

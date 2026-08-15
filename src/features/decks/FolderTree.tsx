@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   draggable,
   dropTargetForElements,
@@ -312,6 +320,12 @@ export type FolderNaming =
  *  element* by the time the layer is gone, so a ref taken when it opened points at nothing. */
 export const FOLDER_ROW_ATTR = "data-folder-id";
 
+/** A row's two doors into one menu — a right-click, and Shift+F10 or the ContextMenu key. */
+export interface FolderRowMenu {
+  onContextMenu: MouseEventHandler<HTMLButtonElement>;
+  onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
+}
+
 export interface FolderTreeProps {
   nodes: readonly FolderNode[];
   /** Every live deck there is — what the "All decks" row counts. */
@@ -340,6 +354,32 @@ export interface FolderTreeProps {
   /** The folder list itself was refused. The tree says so and the wall goes on working. */
   failure: string | null;
   pending: boolean;
+  /**
+   * One folder row's right-click, built by the page.
+   *
+   * **The menu is data and the page is what has the writes**, so this tree draws rows and never
+   * decides what a row offers — the same split `DeckEditor` uses for a deck card's menu. It is
+   * also what keeps the import graph acyclic: `folderMenu.tsx` reads `folderDescendants` from
+   * *this* file, so a `buildFolderMenu` call in here would be a cycle.
+   *
+   * Not offered for "All decks", which is the tree's root and not a folder — there is nothing to
+   * rename, move or delete.
+   */
+  rowMenu: (folder: DeckFolder) => FolderRowMenu;
+  /**
+   * Where a row writes itself when its menu opens, so a layer that menu raises has an opener to
+   * hand the caret back to.
+   *
+   * **A menu row has no element of its own** — a `MenuAction.onSelect` is a bare callback — so
+   * the deps the page built cannot be told which row was pressed unless the row says so first.
+   * `DecksPage`'s `menuOpenerRef` one floor along carries the same fact for the same reason, and
+   * this is that ref: one menu is open at a time, so one note is enough for both.
+   *
+   * **The row's `<button>`, never its `<li>` or the box around it.** The panel hands the caret
+   * back to the element the menu was opened on, and `focus()` on a non-focusable node is a
+   * no-op that drops the reader on `<body>`.
+   */
+  menuOpenerRef: RefObject<HTMLButtonElement | null>;
 }
 
 /**
@@ -362,6 +402,8 @@ export function FolderTree({
   busy,
   failure,
   pending,
+  rowMenu,
+  menuOpenerRef,
 }: FolderTreeProps) {
   const flat = flattenFolders(nodes);
   /** Where a "new folder" field is open, or `undefined` when the open field is a rename. */
@@ -456,6 +498,8 @@ export function FolderTree({
               onRename={() => onOpenRename(node.folder.id)}
               onNewChild={(opener) => onOpenNew(node.folder.id, opener)}
               addingChild={newAt === node.folder.id}
+              menu={rowMenu(node.folder)}
+              menuOpenerRef={menuOpenerRef}
             >
               {newAt === node.folder.id && (
                 <FolderNameField
@@ -516,6 +560,8 @@ function FolderRow({
   onRename,
   onNewChild,
   addingChild = false,
+  menu,
+  menuOpenerRef,
   children,
 }: {
   /** Absent on "All decks", which is the tree's root and not a folder. */
@@ -534,6 +580,11 @@ function FolderRow({
   /** Absent on "All decks": the header's own control already makes a folder there. */
   onNewChild?: (opener: HTMLButtonElement) => void;
   addingChild?: boolean;
+  /** The row's right-click and its keyboard twin. Absent on "All decks", which is not a
+   *  folder — there is nothing to rename, move or delete. */
+  menu?: FolderRowMenu;
+  /** Where this row writes itself as its menu opens — see {@link FolderTreeProps.menuOpenerRef}. */
+  menuOpenerRef?: RefObject<HTMLButtonElement | null>;
   /** The create form, when it belongs under this row. */
   children?: ReactNode;
 }) {
@@ -561,10 +612,41 @@ function FolderRow({
           aria-label={`${label}, ${plural(count, "deck")}`}
           aria-current={selected ? "true" : undefined}
           onClick={onSelect}
+          // **The row's menu, on the row's own `<button>`** — not on the `<li>` and not on the
+          // box in between, and both exclusions are load-bearing.
+          //
+          // *Focus*: the panel hands the caret back to the element the menu was opened on, and
+          // this is the only focusable one here — which is also why it is the element Shift+F10
+          // can land on at all.
+          //
+          // *The field*: a "New folder in …" field is drawn **inside this row's `<li>`**, as a
+          // sibling of the box above (see the tree's `children`), so a handler on either of
+          // those would answer a right-click inside a text field — and its own
+          // `preventDefault()`/`stopPropagation()` would keep the provider's document-level
+          // carve-out from ever running, taking cut, copy, paste, undo and the spellcheck
+          // suggestions with it. `isTextField` inside the primitive is the fence; this is the
+          // element that does not need it. (The *rename* field is a different case again: it
+          // replaces the row whole, so there is no row here at all while it is up.)
+          //
+          // The stash is this handler's own line and `e.currentTarget` is this button, exactly
+          // as the deck tile writes its own. It is written even for a press the menu then
+          // declines, which is harmless: nothing reads the opener until a menu *row* is chosen,
+          // and that can only follow a menu that opened.
+          onContextMenu={(e) => {
+            if (menuOpenerRef) menuOpenerRef.current = e.currentTarget;
+            menu?.onContextMenu(e);
+          }}
           // F2 renames the row the caret is on — the file manager's key, and the keyboard's
-          // route to a rename whose pointer route is the wall's "Rename folder". A shortcut
-          // rather than the only way in: nothing here is reachable by this key alone.
+          // route to a rename whose pointer route is this row's own menu. A shortcut rather than
+          // the only way in: nothing here is reachable by this key alone.
+          //
+          // **Composed with the menu key, never replaced by it.** The two answer different
+          // presses, so the order is immaterial and the `defaultPrevented` check is the belt:
+          // what matters is that wiring a menu onto this element did not take the rename off it.
           onKeyDown={(e) => {
+            if (menuOpenerRef) menuOpenerRef.current = e.currentTarget;
+            menu?.onKeyDown(e);
+            if (e.defaultPrevented) return;
             if (e.key !== "F2" || onRename === undefined) return;
             e.preventDefault();
             onRename();
@@ -619,8 +701,12 @@ function FolderRow({
  * `metaRows.tsx`'s `RenameField` — the row grammar the deck's two meta dialogs share — decided
  * the two details that matter and they are kept here:
  * the current name arrives **selected**, because the commonest rename replaces the word rather
- * than edits inside it, and Escape's job is left to the page — a second Escape rung inside an
- * `"inner"` layer is the case `useDismissOnEscape` explicitly does not order.
+ * than edits inside it, and Escape's job is left to the page — this field is one of `DecksPage`'s
+ * `Panel` union, so the page's single rung already closes it, and a rung of its own would be a
+ * second registration for one layer. (That reason used to read "the case `useDismissOnEscape`
+ * explicitly does not order", which is no longer true — the hook stacks capture-phase
+ * registrations and only the top one acts — and was never the argument: the field has nothing to
+ * dismiss that the page is not already dismissing.)
  *
  * What is *not* kept is that field's visible Cancel: at 208px less an indent there is no room
  * for two text buttons beside the input, and this screen's other half-made decisions (the new

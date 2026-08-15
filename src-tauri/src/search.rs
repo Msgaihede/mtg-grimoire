@@ -41,6 +41,9 @@ pub struct SearchRequest {
     /// Colour identity filter, e.g. `"WU"`. `"C"` means colourless only.
     pub colors: Option<String>,
     pub set_code: Option<String>,
+    /// Every printing of one oracle card. Absent means unset, like every other filter here;
+    /// it ANDs with the rest. See [`crate::filters::CardFilters::oracle_id`].
+    pub oracle_id: Option<String>,
     /// Set codes to include. ORed with each other, ANDed with every other filter — two
     /// sets means "printed in either", which is what a multi-select means everywhere else.
     pub sets: Option<Vec<String>>,
@@ -111,6 +114,7 @@ impl SearchRequest {
             format: self.format.clone(),
             colors: self.colors.clone(),
             set_code: self.set_code.clone(),
+            oracle_id: self.oracle_id.clone(),
             sets: self.sets.clone(),
             mana_values: self.mana_values.clone(),
             mana_x: self.mana_x,
@@ -494,6 +498,26 @@ const SEARCH_PRICE_SORT_COLLAPSED: &[crate::sorting::PricedSort] = &[crate::sort
 /// narrows the set (measured 2026-08-11).
 const REPRESENTATIVE_SORTS: [&str; 3] = ["set", "rarity", "type"];
 
+/// The denominator statement, for one `FROM` and one `WHERE`.
+///
+/// **A named function rather than two `format!`s inside [`run_search`], so a test can plan
+/// the statement this search really runs.** The query plan is the only thing anyone checks
+/// about the count — it is the half that walks to the cap on every keystroke — and a plan
+/// test that builds its own SQL is a test of SQLite, not of this crate: whatever
+/// `push_card_filters` starts emitting, a hand-written copy keeps planning the old string
+/// and stays green. See `the_oracle_id_filter_uses_its_index`.
+fn count_sql_for(from_sql: &str, where_sql: &str, collapse: bool) -> String {
+    let cap = TOTAL_CAP + 1;
+    if collapse {
+        format!(
+            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} \
+             GROUP BY {COLLAPSE_KEY} LIMIT {cap})"
+        )
+    } else {
+        format!("SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} LIMIT {cap})")
+    }
+}
+
 /// Search `cards`, newest schema assumed. Pure over the connection so it is testable
 /// without a Tauri app; [`search_cards`] is the only caller in production.
 ///
@@ -613,18 +637,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // Collapsed, the denominator is a count of **cards**: the pager divides by it and the
     // caption prints it, so counting printings over a list of cards would be a lie in both
     // places. The cap still bounds it — SQLite stops producing *groups* at 5 001.
-    let count_sql = if collapse {
-        format!(
-            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} \
-             GROUP BY {COLLAPSE_KEY} LIMIT {cap})",
-            cap = TOTAL_CAP + 1
-        )
-    } else {
-        format!(
-            "SELECT count(*) FROM (SELECT 1 FROM {from_sql} WHERE {where_sql} LIMIT {cap})",
-            cap = TOTAL_CAP + 1
-        )
-    };
+    let count_sql = count_sql_for(from_sql, &where_sql, collapse);
     let counted: i64 = conn
         .query_row(
             &count_sql,
@@ -2503,11 +2516,17 @@ mod tests {
     /// from the front end. Also pins the camelCase spelling Task 10 has to mirror.
     #[test]
     fn a_partial_camel_case_payload_deserializes_and_takes_the_default_page_size() {
-        let req: SearchRequest = serde_json::from_str(
-            r#"{"text":"bolt","setCode":"lea","paperOnly":true,"playableOnly":true,"owned":false}"#,
+        let mut req: SearchRequest = serde_json::from_str(
+            r#"{"text":"bolt","setCode":"lea","oracleId":"o1","paperOnly":true,"playableOnly":true,"owned":false}"#,
         )
         .unwrap();
         assert_eq!(req.set_code.as_deref(), Some("lea"));
+        // Pins the wire spelling `oracleId`, not merely that the struct carries a field of
+        // that name: `#[serde(rename_all = "camelCase")]` makes a mismatch silent — the field
+        // reads `None` with no error anywhere, and `oracleId === undefined` on the TypeScript
+        // side is the failure `ipc.ts`'s own module doc warns about, returning the whole
+        // corpus rather than one card's printings.
+        assert_eq!(req.oracle_id.as_deref(), Some("o1"));
         assert_eq!(req.paper_only, Some(true));
         // Two adjacent `…Only` flags whose defaults are opposites, so the spelling is pinned
         // here as well as the value: a typo lands on `None`, which is the *off* state for
@@ -2519,7 +2538,11 @@ mod tests {
         assert_eq!(req.limit, 0, "omitted limit means unset, not a parse error");
         assert_eq!(req.offset, 0);
 
-        // And "unset" has to behave as the default page size, not as "return nothing".
+        // `seeded()`'s rows carry no `oracle_id` (NULL, like most fixtures in this file that
+        // predate this filter), so it is cleared before the search half of this test runs —
+        // this block is pinning "unset behaves as the default page size", not the oracle_id
+        // filter itself, which has its own tests above.
+        req.oracle_id = None;
         let r = run_search(&seeded(), &req).unwrap();
         assert_eq!(r.items.len(), 1);
         assert_eq!(r.items[0].name, "Lightning Bolt");
@@ -3765,5 +3788,133 @@ mod tests {
                 assert!(p.desc.contains(crate::sorting::PRICE_HOLE), "{}", p.desc);
             }
         }
+    }
+
+    /// Cards for the `oracleId` filter's own tests: `(id, oracle_id, name, set_code,
+    /// collector_number)`. A fixture of its own rather than [`seeded`]'s three pinned rows,
+    /// because those three do not repeat an oracle id and this filter's whole point is two
+    /// printings that share one.
+    #[rustfmt::skip]
+    fn fixture_with_cards(rows: &[(&str, &str, &str, &str, &str)]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        for (id, oracle_id, name, set_code, collector_number) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,is_paper,search_text,raw)
+                 VALUES (?1,?2,?3,?4,?5,'en','normal',1,?3,'{}')",
+                rusqlite::params![id, oracle_id, name, set_code, collector_number],
+            ).unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');").unwrap();
+        conn
+    }
+
+    #[test]
+    fn an_oracle_id_filter_answers_only_that_cards_printings() {
+        let conn = fixture_with_cards(&[
+            ("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161"),
+            ("bolt-4ed", "o-bolt", "Lightning Bolt", "4ed", "209"),
+            ("shock-m21", "o-shock", "Shock", "m21", "159"),
+        ]);
+        let req = SearchRequest {
+            oracle_id: Some("o-bolt".into()),
+            limit: 50,
+            ..Default::default()
+        };
+        let page = run_search(&conn, &req).unwrap();
+        assert_eq!(page.total, 2, "both Bolt printings, and no Shock");
+        assert!(page.items.iter().all(|c| c.name == "Lightning Bolt"));
+    }
+
+    #[test]
+    fn no_oracle_id_filter_is_no_filter() {
+        let conn = fixture_with_cards(&[
+            ("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161"),
+            ("shock-m21", "o-shock", "Shock", "m21", "159"),
+        ]);
+        let req = SearchRequest {
+            limit: 50,
+            ..Default::default()
+        };
+        assert_eq!(run_search(&conn, &req).unwrap().total, 2);
+    }
+
+    /// A cleared control sends `Some("")`, not `None` — `useCardSearch`'s `resetAll` does
+    /// exactly this — and it must read as no filter, like every other string filter here
+    /// (`format`, `colors`, `setCode`, `rarity`). Binding it literally as `oracle_id = ''`
+    /// would fail *closed*: an empty result with nothing on screen to explain it, the
+    /// opposite of what a cleared filter means everywhere else in this file.
+    #[test]
+    fn a_blank_oracle_id_is_no_filter() {
+        let conn = fixture_with_cards(&[
+            ("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161"),
+            ("shock-m21", "o-shock", "Shock", "m21", "159"),
+        ]);
+        let req = SearchRequest {
+            oracle_id: Some("".into()),
+            limit: 50,
+            ..Default::default()
+        };
+        assert_eq!(run_search(&conn, &req).unwrap().total, 2);
+    }
+
+    /// The filter has to ride an index on `oracle_id` rather than scan, which is the whole
+    /// reason this filter costs nothing to add — `idx_cards_oracle` has carried one since
+    /// schema v1.
+    ///
+    /// **Planned against the SQL this search really builds.** The predicate comes from
+    /// [`filters::push_card_filters`] over a real [`SearchRequest`] and the statement from
+    /// [`count_sql_for`] — the two pieces `run_search` itself puts together — because the
+    /// version of this test that shipped first planned a *literal string* that appeared
+    /// nowhere else in the crate, and so could not go red for any edit to this repo. It was
+    /// asserting a fact about SQLite. Changing `filters.rs` to
+    /// `lower({alias}.oracle_id) = ?` — a plausible "match the id case-insensitively" — costs
+    /// the index and full-scans ~116 k rows on every "View all printings" press; that mutation
+    /// is what this test now catches.
+    ///
+    /// **Not pinned to `idx_cards_oracle` by name.** `id` is also the fourth column of
+    /// `idx_cards_collapse` ([`crate::schema::CARDS_INDEXES`]), so the planner may prefer that
+    /// one instead — it is *covering* (the row lookup `idx_cards_oracle` alone would still owe
+    /// is already inside the index), which is the cheaper plan, not a worse one. What this
+    /// pins is the fact that would break either way: `cards` is reached by a `SEARCH` keyed on
+    /// `oracle_id=?`, never by a `SCAN`.
+    #[test]
+    fn the_oracle_id_filter_uses_its_index() {
+        let conn = fixture_with_cards(&[("bolt-lea", "o-bolt", "Lightning Bolt", "lea", "161")]);
+        let req = SearchRequest {
+            oracle_id: Some("o-bolt".into()),
+            limit: 50,
+            ..Default::default()
+        };
+        let mut p = filters::Predicates::default();
+        filters::push_card_filters(&mut p, &req.card_filters(), "c", None);
+        // `cards c`, uncollapsed — what `run_search` picks when no text is typed, which is
+        // exactly this filter's case: "View all printings" sends an oracle id and nothing else.
+        let sql = count_sql_for("cards c", &p.where_sql(), false);
+
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            // Bound even though nothing runs: the planner is asked about *this* statement, and
+            // rusqlite refuses a parameter count that does not match.
+            .query_map(
+                rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                |r| r.get::<_, String>(3),
+            )
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        // `oracle_id=?` unparenthesised: the paper filter rides the same covering index, so
+        // the planner prints `(oracle_id=? AND is_paper=?)` — the leading key is the claim.
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH c") && step.contains("oracle_id=?")),
+            "the filter must ride an index keyed on oracle_id: {plan:#?}\n{sql}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN c")),
+            "and `cards` must never be scanned for it: {plan:#?}\n{sql}"
+        );
     }
 }

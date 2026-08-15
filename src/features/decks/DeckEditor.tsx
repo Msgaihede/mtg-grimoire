@@ -12,7 +12,17 @@ import {
   filterChipState,
   ToggleChip,
 } from "@/components/FilterChips";
-import { ipc, ipcError, type DeckCard, type DeckVariant } from "@/lib/ipc";
+import { useContextMenu } from "@/components/menu/useContextMenu";
+import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import {
+  ipc,
+  ipcError,
+  type CardSummary,
+  type DeckCard,
+  type DeckCategory,
+  type DeckVariant,
+} from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
@@ -29,12 +39,16 @@ import {
   LANDED_MS,
   type DeckCardActions,
 } from "./cardControl";
-import { CategoriesDialog } from "./CategoriesDialog";
+import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
+import { buildCategoryMenu } from "./categoryMenu";
+import { buildDeckCardMenu } from "./deckCardMenu";
+import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { AUTO_CATEGORY, DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
+import { ExportDialog } from "./export/ExportDialog";
 import {
   asGroupBy,
   buildGroups,
@@ -43,11 +57,14 @@ import {
   type GroupBy,
 } from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
+import { RenameField } from "./metaRows";
 import { QuickAdd } from "./QuickAdd";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
+import { DEFAULT_TAG_COLOR } from "./tagColors";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
+import { useDeckMeta } from "./useDeckMeta";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateDeck } from "./validation/engine";
@@ -215,6 +232,107 @@ const DECK_HEIGHT_FLOOR = "min-h-96";
 /** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
 const NO_TAGS: readonly number[] = [];
 
+/** The same trick for the closed export dialog, which is mounted at every render and asked for
+ *  a card list whether or not it is drawing one. */
+const NO_EXPORT_CARDS: readonly DeckCard[] = [];
+
+/**
+ * What the export dialog is titled when the pile it was opened on has gone.
+ *
+ * Reachable: another surface — the Categories dialog, a second window on the same database —
+ * can delete a category while this dialog is open over it, and the editor re-reads the deck
+ * without it. The empty card list that follows is honest; `Export ""` as the dialog's accessible
+ * name is not, which is the whole reason this string exists rather than a fallback of `""`.
+ * **Not the deck's name**: that would claim a deck-level export nobody asked for.
+ */
+const DELETED_CATEGORY = "a deleted category";
+
+/**
+ * What the save dialog's file name starts as: the deck and the pile.
+ *
+ * The characters Windows forbids in a file name are taken out rather than replaced — a deck
+ * called `Atraxa: Superfriends` should suggest `Atraxa Superfriends - Removal`, not a name with
+ * an underscore where nobody typed one. The extension is `ExportDialog`'s, which appends the one
+ * belonging to the format chosen there.
+ *
+ * **An empty half contributes nothing, separator included** — and it is cleaned *before* it is
+ * judged empty, which is the order that matters. Joining unconditionally answered `"Atraxa -"`
+ * for a pile with no name (the state {@link DELETED_CATEGORY} covers on the title side), and
+ * filtering before stripping would answer `"-"` for a deck whose whole name is punctuation this
+ * has to remove.
+ *
+ * Exported for its test: it is reached only through a dialog this editor has no control to open
+ * (the opener is a category heading's right-click, which `views/` wires), so there is no rendered
+ * path to assert it through yet.
+ */
+export function exportFileName(deck: string, category: string): string {
+  const name = [deck, category]
+    .map((part) => part.replace(/[\\/:*?"<>|]/g, "").trim())
+    .filter((part) => part !== "")
+    .join(" - ");
+  // A deck with no name, and this dialog rendered closed, both reach here. `save()` is handed a
+  // `defaultPath`, and an empty one is a picker with no name in its box.
+  return name === "" ? "decklist" : name;
+}
+
+/**
+ * The three arguments `ExportDialog` takes, for the pile the `export` layer names.
+ *
+ * **Derived from the deck's live list rather than from what a menu row was holding**, which is
+ * why the layer carries an id and not the cards: a deck is re-read after every write, so a
+ * snapshot taken when the menu opened would describe the pile as it was. A rename under the open
+ * dialog therefore retitles it, and a delete empties it and says so.
+ *
+ * `cards` is the deck's rows and **not** `shown`: the toolbar's filter narrows what is *drawn*,
+ * and exporting "Removal" means the pile rather than the four of it a search box happens to be
+ * showing.
+ *
+ * `categoryId` is `null` for a closed dialog, which is every render but the ones it is up — the
+ * subject is `""` there because nothing draws it, and that is the one case that must **not** read
+ * {@link DELETED_CATEGORY}: a closed dialog is not a statement about a deleted pile.
+ *
+ * Pure, and exported for that reason: see {@link exportFileName}.
+ */
+export function categoryExport(
+  categoryId: number | null,
+  categories: readonly DeckCategory[],
+  cards: readonly DeckCard[],
+  deckName: string,
+): { subject: string; cards: readonly DeckCard[]; fileName: string } {
+  if (categoryId === null) {
+    return { subject: "", cards: NO_EXPORT_CARDS, fileName: exportFileName(deckName, "") };
+  }
+  const name = categories.find((c) => c.id === categoryId)?.name ?? null;
+  return {
+    subject: name ?? DELETED_CATEGORY,
+    cards: cards.filter((c) => c.categoryId === categoryId),
+    // The **name**, never the subject: a file called `Burn - a deleted category` is a sentence
+    // where a name belongs, and the deck's own name is the honest suggestion for a pile that is
+    // not there any more.
+    fileName: exportFileName(deckName, name ?? ""),
+  };
+}
+
+/**
+ * A tile in the docked search panel, as a card menu describes it.
+ *
+ * **No `finish`**, for the search wall's reason: a result is a *printing* and not a copy, so
+ * "Add to → Collection" offers the finishes this printing exists in rather than choosing one.
+ * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
+ * does — the same fact, off the same row, that this panel's drag payload already hands a drop.
+ */
+function searchCardTarget(card: CardSummary): CardMenuTarget {
+  return {
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    oracleId: card.oracleId,
+    finishes: card.finishes,
+    typeLine: card.typeLine,
+  };
+}
+
 /**
  * The narrowest the deck's name field may be squeezed to.
  *
@@ -248,23 +366,40 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
 /**
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
  *
- * `useDismissOnEscape` orders exactly two rungs — one capture-phase `"inner"` layer and one
- * bubble-phase `"outer"` one — so two `"inner"` peers open at once are not ordered at all and
- * would both close on a single press. Every member below registers that same `"inner"` rung
- * from inside its own component, so they are modelled as *one* piece of state: "never two" is
- * then structural rather than remembered, and at most one of the seven registrations is ever
- * enabled. `DecksPage`'s `Panel` is the same arrangement, for the same reason.
+ * **At most one of these is ever meant to be open, and a union is what makes that structural
+ * rather than remembered.** A boolean per member could express "Categories and History both up",
+ * which is
+ * a state nothing here draws and nothing here could draw well: two scrims, two `aria-modal`
+ * panels and two focus traps, with two hand-backs racing for the caret as either closes. One slot
+ * cannot say it, and the failure it forecloses is the invisible kind — every test that opens one
+ * layer at a time passes either way. Every member below registers the same `"inner"` Escape rung
+ * from inside its own component, so at most one of those registrations is ever enabled.
+ * `DecksPage`'s `Panel` is the same arrangement, for the same reason.
  *
- * **A union rather than seven booleans, and the rebuild is what makes that worth saying twice.**
- * Seven flags are seven ways to be in a state the Escape protocol cannot order, and the failure
- * is invisible: two layers close on one press, two focus hand-backs race for the caret, and
- * every test that opens one layer at a time still passes. The union cannot express it.
+ * **The Escape protocol is no longer that argument, and the change landed under this file.** This
+ * paragraph used to read "`useDismissOnEscape` orders exactly two rungs, so two `"inner"` peers
+ * open at once are not ordered at all and would both close on a single press", which is wrong
+ * now and was wrong then. It is wrong now because that hook keeps a **stack** of capture-phase
+ * registrations and only the token on top acts, so two `"inner"` peers *are* ordered — by mount
+ * depth, which is what lets a context menu open over a dialog opened over the card pane and give
+ * one press to each. It was wrong then because the capture rung checks `defaultPrevented` too, so
+ * the old hook did not close both: the *first-registered* peer consumed the press and the newer
+ * one — the thing on top — was **starved**, measured `{ first: 1, second: 0 }` on 2026-08-14. The
+ * reassuring version was the false one; the hook's own doc carries the whole of it. What survives
+ * is the paragraph above, which never depended on any of this.
  *
- * `check` is the format check anchored to its chip; the other six are **full-window overlays**
- * on `LAYER.overlay` — which is one rung and not six for exactly this reason (see `layers.ts`).
- * Categories and tags used to be one of them: a single right-hand drawer with two sections in
- * it. Splitting it into two dialogs adds a member here and takes nothing away from the
- * argument — one slot is one slot however many things can occupy it.
+ * `check` is the format check anchored to its chip; **every other arm is a full-window overlay**
+ * on `LAYER.overlay` — one rung between them, rather than one each, because of that same "at most
+ * one is up": they
+ * never need ordering against each other (see `layers.ts`). Categories and tags used to be one of
+ * them: a single right-hand drawer with two sections in it. Splitting it into two dialogs adds a
+ * member here and takes nothing away from the argument — one slot is one slot however many things
+ * can occupy it, which is also why the export dialog joined without an argument being reopened.
+ *
+ * **Two members carry a field, and both are the same idea**: which pile the layer is about. A
+ * union arm is where such a thing belongs — a second `useState` beside this one could hold a
+ * category id while the layer was closed, or while a *different* layer was open, and neither
+ * state means anything.
  *
  * **Two more `"inner"` peers sit on this screen and neither is in this union**: the set filter
  * inside the docked search panel (`SetCombobox.tsx`, reached through `FilterBar`), and the quick
@@ -282,25 +417,26 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * printings quick-add popup and its hover preview, both `"inner"`. The popup is kept apart the
  * way the set filter is, by focus — it closes when the caret leaves its root, and every layer
  * here focuses itself on the way up. The preview is a *dwell*, so it can coexist with an
- * anchored layer out here; the six overlays make it unreachable, because a pointer cannot get
+ * anchored layer out here; the overlays make it unreachable, because a pointer cannot get
  * to the pane through a scrim.
  *
- * **All six overlays are modal, and that is what makes the sentence above true of a keyboard
+ * **Every overlay here is modal, and that is what makes the sentence above true of a keyboard
  * too**: each paints a full-window scrim, claims `aria-modal="true"` and runs `lib/trapTab.ts`,
  * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
  * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
- * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds all six
- * together, and it is a **behavioural** sweep for a reason worth reading before the next
- * modality edit.
+ * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds **the ones with a
+ * control in this view** together — the export dialog and the delete-category confirmation are
+ * both opened from a category heading's right-click and have no button to point that sweep at —
+ * and it is a **behavioural** sweep for a reason worth reading before the next modality edit.
  *
- * **Four of the six are a `DeckDialog`** — Categories, Tags, History and Deck settings — where
- * the scrim, the centring, `aria-modal`, the trap, the ✕ and the `"inner"` rung are written
- * once. **`TheoryDiffDialog` and `ImportDeckDialog` are not**: each still carries its own copy
- * of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of scope when the
- * shell was written rather than exempt from it, and they are the next two to move onto it.
- * `CreateDeckDialog` is a third such copy outside this editor. So a change to how a modal
- * behaves here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
- * is an edit to **four files, not one**, until those three are converted.
+ * **All but two of the overlays are a `DeckDialog`** — where the scrim, the centring,
+ * `aria-modal`, the trap, the ✕ and the `"inner"` rung are written once. **`TheoryDiffDialog`
+ * and `ImportDeckDialog` are the two that are not**: each still carries
+ * its own copy of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of
+ * scope when the shell was written rather than exempt from it, and they are the next two to
+ * move onto it. `CreateDeckDialog` is a third such copy outside this editor. So a change to how
+ * a modal behaves here — a focus restore, a different `trapTab`, a change to when the rung is
+ * enabled — is an edit to **four files, not one**, until those three are converted.
  */
 type Layer =
   | { kind: "check" }
@@ -309,7 +445,25 @@ type Layer =
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
-  | { kind: "import" }
+  /** The pile every line lands in, for an import opened from a category's right-click — absent
+   *  from the toolbar's own press, which files each card by what it does. */
+  | { kind: "import"; forcedCategoryName?: string }
+  /**
+   * Which pile is being exported. **The id and not the cards**: the deck is re-read after every
+   * write and this editor already holds the answer, so the dialog is fed from the live list
+   * rather than from an array frozen at the moment a menu row was pressed.
+   */
+  | { kind: "export"; categoryId: number }
+  /**
+   * The pile a `Delete…` was pressed on. The **id**, like `export` and for the same reason: the
+   * deck is re-read after every write, so the question is asked about the live row rather than
+   * about a category frozen when a menu row was pressed.
+   *
+   * It exists because the confirmation is not optional — `deck_category_delete` takes the cards
+   * with the pile unless the reader says where they go — and `CategoryMenuDeps` carries no delete
+   * mutation at all, so the menu structurally cannot reach the write without passing through here.
+   */
+  | { kind: "deleteCategory"; categoryId: number }
   | null;
 
 /** A `setTimeout` handle, as this project's DOM-only lib types one. */
@@ -413,7 +567,7 @@ function useRecentAdds(): RecentAdds {
  *
  * **What this component is and is not.** It is a header, a toolbar and a frame: it decides which
  * variant is read, how the rows are grouped, sorted and filtered, which of the four views draws
- * them, and which of seven layers is open. It draws no card and no group heading itself —
+ * them, and which of its layers is open. It draws no card and no group heading itself —
  * `grouping.ts` says what the groups are and `views/` draw them, so four surfaces cannot answer
  * "how many cards are in the Ramp column" four ways.
  *
@@ -434,6 +588,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const { marketplace } = useMarketplace();
   const deck = useDeck(deckId, variant);
   const { specs, formatSpecFor } = useFormatSpecs();
+  /**
+   * The right-click, and everything a card menu needs that is not the card.
+   *
+   * **One `CardMenuDeps` for this whole screen**, from the hook every other card surface uses:
+   * the collection add's four invalidation keys and the wishlist add's two are written down once
+   * there, and this page spelling them out again would be one more place for one rule to
+   * drift. What this editor answers differently is `viewPrintingsInPane`, which is a *per
+   * surface* answer — the deck's cards open as deck rows, the docked panel's tiles do not — so
+   * it is spread over at each of the two builders below rather than fixed here.
+   *
+   * `menu(build)` takes a **thunk**: a deck of a hundred cards builds no menu at all until a
+   * reader right-clicks one of them.
+   */
+  const { menu, menuKey } = useContextMenu();
+  const { deps: cardMenuDeps, error: menuFailure } = useCardMenuDeps();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -467,6 +636,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [filter, setFilter] = useState("");
   const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
   const [layer, setLayer] = useState<Layer>(null);
+  /**
+   * The pile whose heading is showing its rename field, or `null`.
+   *
+   * **Not a `Layer` arm**, and the difference is what a `Layer` means: those are full-window
+   * surfaces of which at most one may be up, and this is an inline field on the desk that the
+   * reader can have open *while* a card's menu is open over it. It is also the one editor state
+   * a view draws rather than the editor — the field is built here and handed down as a node,
+   * because four views must not each own a draft.
+   */
+  const [renamingCategoryId, setRenamingCategoryId] = useState<number | null>(null);
 
   /**
    * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
@@ -573,14 +752,121 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * and is read below as "not measured" rather than as a window of no width.
    */
   const [viewport, setViewport] = useState(0);
-  /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
-  const openerRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * How to give the caret back when the layer that is up closes — **a function, not an
+   * element, and that is the whole point of it.**
+   *
+   * A toolbar button hands back to itself. A **menu row has no control to return to**, and
+   * `null` there is not "no hand-back needed": `DeckDialog` focuses its own panel on mount and
+   * restores nothing, so a `null` opener leaves the caret on a panel that is unmounting and
+   * drops it on `<body>` — the next Tab then restarts from the top of the app. That is the
+   * failure `DecksPage.test.tsx` already documents in those words, and it is the third time on
+   * this branch that a caret was handed to something that could not take it.
+   *
+   * A function is what lets the menu rows answer honestly: they hand back to the **pile** the
+   * menu was opened on, through `focusDeckGroup`, which finds the group by attribute at the
+   * moment it is called rather than holding an element that a rename or a re-pack may have
+   * replaced. An element ref could not have expressed that, and widening this to `HTMLElement`
+   * would only have moved the same lookup earlier and made it stale.
+   */
+  const handBackRef = useRef<(() => void) | null>(null);
   /** The format check's chip, which owns its own trigger ref because `ValidationPanel` draws
    *  the chip itself. */
   const chipRef = useRef<HTMLButtonElement>(null);
   const tookFocus = useRef(false);
 
-  // The three writes the editor's **own banner** speaks for. The *latest* of them owns it, not
+  /**
+   * The deck's piles and labels **as things in themselves** — what the category menu writes
+   * through, and where the menu's "New tag…" now makes its label.
+   *
+   * **Four local-SQLite reads on every deck opened, and they are paid deliberately.** The
+   * categories (a *priced* per-category aggregate), the tags of the list on screen, the tags of
+   * the **other** list, and the global suggestion palette — counted off `useDeckMeta.ts`'s four
+   * `useQuery` calls, every one of them `enabled` on nothing but the deck id. Two things make
+   * that the right trade *here* and made it the wrong one inside a lazy menu body, which is
+   * where this hook was refused a round earlier: a reader **opening a deck** already pays a
+   * `deck_get` of the whole deck, its cards, its categories and its tags, so four more local
+   * reads sit inside an act that is already a read; and what they buy is not one write but every
+   * write the category menu makes — rename, the switch, delete — each from its single
+   * definition. The lazy body paid the same four to draw a text field the reader might never
+   * type in.
+   *
+   * The Categories dialog mounts the same hook against the same `["decks"]`-rooted keys, so
+   * opening it after this is free rather than four reads again.
+   */
+  const meta = useDeckMeta(deckId, variant);
+
+  /**
+   * The menu's "New tag…" — a label made and put on the card, as one act.
+   *
+   * **`useDeckMeta.createTag`, the single definition**, now that the hook is mounted above for
+   * the category menu. It replaced a hand-rolled `useMutation` over `ipc.deckTagCreate` whose
+   * whole justification was avoiding this mount; that justification stopped being true, so it
+   * was deleted rather than corrected.
+   *
+   * **The chain's second half is the editor's, which is the part that must not regress.** A
+   * `useMutation`'s callbacks belong to its *observer*, and TanStack drops them when the observer
+   * unmounts — so a create started from inside the menu and chained there loses its attach to any
+   * dismissal landing during the round trip, leaving the label made and silently never worn. This
+   * observer is **this component's**, and the editor is still on screen when the answer arrives.
+   * `DeckEditor.test.tsx`'s "attaches a label whose create was still in flight when the menu was
+   * dismissed" is the proof, and it holds Escape between the press and the answer.
+   *
+   * **`mutateAsync` rather than a per-call `onSuccess`, and the difference is a second create.**
+   * Those callbacks live on the *observer*, and starting a second mutation on one observer
+   * removes the first's — so two "New tag…" presses inside one round trip would create both
+   * labels and attach only the second's. The promise belongs to the call rather than to the
+   * observer, so each attach survives the next press. Narrow, but it costs a line and it is
+   * strictly the stronger shape; the observer's own state still drives the banner, which is why
+   * the rejection is swallowed here and not reported here.
+   *
+   * The colour is `DEFAULT_TAG_COLOR` and the menu does not ask: recolouring a label is what the
+   * Tags dialog is for.
+   */
+  const startTagCreate = meta.createTag.mutateAsync;
+  const setTagOnSlot = deck.setTag.mutate;
+  // The category menu's two direct writes, taken as `mutate` for the reason every other write
+  // here is: TanStack hands back a fresh result object each render, and these end up in
+  // `useCallback` dependency lists that the four views' group elements are built from.
+  const setCategoryActive = meta.setCategoryActive.mutate;
+  const renameCategory = meta.renameCategory.mutate;
+  const renamePending = meta.renameCategory.isPending;
+  /**
+   * **The delete confirmation's sentence has to be cleared when the confirmation opens**, and
+   * `reset` is what does it — `DecksPage`'s `decks.create.reset()`/`folders.create.reset()`
+   * before each of its dialogs, for exactly this reason.
+   *
+   * This observer is the **editor's**, so it outlives every open of the `deleteCategory` layer —
+   * unlike the meta dialogs', which live in a body `DeckDialog` unmounts and start clean by
+   * construction. Without this a refused delete left the mutation in `isError`, and the next
+   * `Delete…` drew its `role="alert"` on mount: a sentence *announced on insertion*, about a
+   * press the reader had not made, naming a pile it was never about.
+   *
+   * **It clears the editor's own banner too, and that is right rather than incidental.** The
+   * banner speaks for the newest of {@link writes}, this is one of them, and a reader opening the
+   * question again is starting the write over — a stale refusal outliving the attempt that
+   * produced it is the same bug one rung out.
+   *
+   * Stable for the component's life, like every `mutate` above it: TanStack binds `reset` on the
+   * observer, so putting it in a dependency list costs the menu memo nothing.
+   */
+  const resetCategoryDelete = meta.deleteCategory.reset;
+  const createTagFor = useCallback(
+    (card: DeckCard, name: string) => {
+      void startTagCreate({ name, color: DEFAULT_TAG_COLOR.token })
+        .then((tag) =>
+          setTagOnSlot({ cardId: card.cardId, categoryId: card.categoryId, tagId: tag.id }),
+        )
+        // The refusal is already on the observer, and the observer is in the banner family above.
+        // Swallowed here so a refused create is a sentence rather than an unhandled rejection.
+        .catch(() => {});
+    },
+    [startTagCreate, setTagOnSlot],
+  );
+
+  // Every write the editor's **own banner** speaks for — the array is the list, deliberately not
+  // a number in this sentence, because it has been recounted twice in one day. The *latest* of
+  // them owns it, not
   // whichever is still holding an error: a refused move used to leave its sentence up while the
   // reader went on to rename the deck successfully (the collection table's lesson). That rule
   // is `lib/writes.ts` now, shared with the gallery, the settings dialog and the categories
@@ -588,7 +874,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // had it backwards. The docked panel's add is deliberately not here — it says so in the
   // panel, beside the button that was pressed, and two banners for one refusal would be worse
   // than one in the wrong place.
-  const writes = [deck.setQuantity, deck.moveCard, deck.update] as const;
+  //
+  // **The two right-click menus of 2026-08-14 are what the tail of this list is.** `setTag` sat
+  // outside the family for as long as nothing in the app could reach it, and the four
+  // `useDeckMeta` writes below it had no control in this view at all — they were the Categories
+  // dialog's, which draws its own sentence for its own observer. A write a reader can now make
+  // from a card's menu or a pile's heading is a write whose refusal has to be said somewhere,
+  // and the menu that started it has closed by the time an answer arrives.
+  //
+  // **`useDeckMeta`'s four are a *different observer* from the dialog's** — TanStack shares a
+  // query's cache between observers and a mutation's state with nobody — so this banner speaks
+  // only for presses made out here, and the dialog goes on speaking for its own.
+  const writes = [
+    deck.setQuantity,
+    deck.moveCard,
+    deck.update,
+    deck.setTag,
+    meta.createTag,
+    meta.renameCategory,
+    meta.setCategoryActive,
+    meta.deleteCategory,
+  ] as const;
   const bannerFailure = writeFailure(writes);
 
   /**
@@ -621,6 +927,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const cardsInVariant = useMemo(
     () => deck.cards.reduce((copies, card) => copies + card.quantity, 0),
     [deck.cards],
+  );
+
+  /** What the export dialog draws, for the pile the layer names — {@link categoryExport}, which
+   *  is pure and carries the whole of the reasoning. */
+  /** The pile the delete confirmation is about, read from the **live** list — a rename made
+   *  under the open question retitles it, and a delete from another surface empties it. */
+  const deletedCategory =
+    layer?.kind === "deleteCategory"
+      ? (categories.find((c) => c.id === layer.categoryId) ?? null)
+      : null;
+
+  const exportedId = layer?.kind === "export" ? layer.categoryId : null;
+  const exported = useMemo(
+    () => categoryExport(exportedId, categories, deck.cards, row?.name ?? ""),
+    [exportedId, categories, deck.cards, row?.name],
   );
 
   // The add target has to be a category this deck still has — a category deleted or renamed
@@ -876,7 +1197,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
   //
-  // **All six writes, banner or no banner.** `add_card` calls `touch_deck` like the rest and
+  // **Every write above plus three, banner or no banner.** `add_card` calls `touch_deck` like the rest and
   // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
   // panel or on the stats block reaches the same sentence — and without them here that surface
   // would report a deck that is gone while the view beside it went on painting it, with every
@@ -891,10 +1212,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // day one exists, and reading it as live GONE coverage would be reading it as something it
   // cannot do today.
   //
-  // **`moveCard` is fired by a drag and by nothing else** (2026-08-14), the card's own `Move…`
-  // select having been removed. A drop is still a press for this purpose — it reaches
-  // `applyDrop` and the same mutation — so this entry is live coverage rather than a placeholder
-  // like the one above it. What it is *not* any more is reachable from the keyboard.
+  // **`moveCard` has two callers again, and one of them is a keypress.** The card's own `Move…`
+  // select was removed on 2026-08-14 and left a drop as the only route — which a caret cannot
+  // perform — and the card's right-click restored both halves later the same day: `Move to`
+  // lists every category the deck has, and Shift+F10 opens the menu. So this entry is live
+  // coverage from a pointer *and* from the keyboard, rather than the placeholder the line above
+  // it describes.
+  //
+  // **`setTag` rides in through `writes`** and is live coverage for the same reason: nothing in
+  // the app could reach it until that menu, and every one of the four views can now.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,
@@ -911,18 +1237,37 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **keyboard** way out; the click-away way out is `close` and hands nothing back, because the
   // reader who clicked elsewhere is already somewhere else.
   const dismiss = useCallback(() => {
-    openerRef.current?.focus();
+    handBackRef.current?.();
     setLayer(null);
   }, []);
   const close = useCallback(() => setLayer(null), []);
 
-  /** Open one of the seven, from the control that was pressed — and never a second one, because
-   *  there is one slot. */
-  const openLayer = useCallback((next: NonNullable<Layer>, trigger: HTMLButtonElement | null) => {
-    openerRef.current = trigger;
+  /**
+   * Open one of them, and never a second one, because there is one slot.
+   *
+   * The second argument is **where the caret goes when it closes**, and every caller owes one:
+   * a button hands back to itself, a menu row hands back to the pile it was opened on. `null`
+   * is only for a caller that genuinely has nowhere — and there is none today, because `null`
+   * means the caret lands on `<body>` (see {@link handBackRef}).
+   *
+   * **A press on the layer that is already up closes it**, which is what a toolbar toggle should
+   * do and is why the kind is compared. The note that used to sit here asked the agent wiring
+   * the category heading's menu to check whether that toggle could re-aim a payload arm at a
+   * *different* pile rather than closing it. **It is wired now, and the answer is that it still
+   * cannot**: `export` and `deleteCategory` are modal, so the heading behind the scrim cannot be
+   * right-clicked, and `import` is reached from that same heading. Every payload arm is opened
+   * from a menu that only exists while no overlay is up. It becomes reachable the day anything
+   * can ask for one of these without going through a scrim, and the right answer then is one
+   * line — close only when the payload matches too — still left unwritten rather than guessed.
+   */
+  const openLayer = useCallback((next: NonNullable<Layer>, handBack: (() => void) | null) => {
+    handBackRef.current = handBack;
     setLayer((open) => (open?.kind === next.kind ? null : next));
   }, []);
-  const openCheck = useCallback(() => openLayer({ kind: "check" }, chipRef.current), [openLayer]);
+  const openCheck = useCallback(
+    () => openLayer({ kind: "check" }, () => chipRef.current?.focus()),
+    [openLayer],
+  );
 
   // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
   // that is all a *drop* carries, and a drag and a control press must not be two ways of
@@ -939,6 +1284,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writeQuantity = deck.setQuantity.mutate;
   const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
+  const writeTag = deck.setTag.mutate;
 
   /**
    * One copy into a category — the quick add's write, and a drop's.
@@ -1043,21 +1389,242 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [addTo, moveTo, setQuantityAt],
   );
 
-  /**
-   * What every view is handed, and the whole of what a card can be made to do.
-   *
-   * One object rather than four props, because it travels three components deep — the view, the
-   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
-   * views spend it differently (a table gets columns, the other three get a bar over the card),
-   * and every control inside it is `cardControl.tsx`'s.
-   */
+  /** The stepper's write, addressed by the card's own slot. */
   const setQuantity = useCallback(
     (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.categoryId, quantity),
     [setQuantityAt],
   );
+
+  /**
+   * Open a card **as a deck row** — the only write of `paneDeckContext` in the app, and the
+   * reason every view hands its whole `DeckCard` back rather than an id.
+   *
+   * What it buys is on the other side of the app: the pane's printings list gains "Use this
+   * printing", which rewrites *this* slot. Everything else that opens a card — the docked
+   * panel's tiles, the validation panel's names — goes through `setSelectedCardId`, which
+   * clears the context in the same write (see the store), so a card that is not a row of this
+   * deck can never be shown as one.
+   *
+   * The context carries the category's **name** as well as its id, because the pane is a
+   * sibling of this editor and has no category list to translate one with; and the **variant**,
+   * because a deck is two lists and a swap addressed to the wrong one either misses or rewrites
+   * a row the reader is not looking at.
+   */
+  const openCard = useCallback(
+    (card: DeckCard) =>
+      openCardFromDeck({
+        deckId,
+        categoryId: card.categoryId,
+        categoryName: card.categoryName,
+        cardId: card.cardId,
+        variant,
+      }),
+    [deckId, openCardFromDeck, variant],
+  );
+
+  /** The two deck writes the menu adds, each addressed by the **row** — a menu is opened on one
+   *  card, which is more than a drop carries and is why these are not `applyDrop`'s pair. */
+  const moveCardTo = useCallback(
+    (card: DeckCard, categoryId: number) => moveTo(card.cardId, card.categoryId, categoryId),
+    [moveTo],
+  );
+  const setCardTag = useCallback(
+    (card: DeckCard, tagId: number | null) =>
+      writeTag({ cardId: card.cardId, categoryId: card.categoryId, tagId }),
+    [writeTag],
+  );
+
+  /**
+   * One deck card's right-click, **built here and handed to the four views as one function**.
+   *
+   * A view that assembled its own would be four copies of one rule, and the rule reads three
+   * facts no view has: every category the deck holds (`categories`, in the reader's own order
+   * and deliberately not the drawn groups), the deck's format spec, and the deck's tags.
+   *
+   * The item list is a thunk inside `menu`, so a hundred-card deck pays for nothing until a
+   * reader right-clicks a card. The `viewPrintingsInPane` override is per **card** rather than
+   * per surface, and that is free for the same reason — this whole object is built on the press:
+   * inside the editor "View all printings" opens the pane, and it opens it *as a deck row*, so
+   * the pane's printings list can offer "Use this printing" on the slot that was right-clicked.
+   *
+   * **Both doors, from one thunk.** `menuKey` is Shift+F10 and the ContextMenu key, and it is
+   * not an extra here: the per-card `Move…` select was removed on 2026-08-14 and took the only
+   * keyboard path to moving a card with it (a caret cannot drag). This menu is that path, so a
+   * menu only a mouse could open would restore nothing.
+   */
+  const deckCardMenu = useCallback(
+    (card: DeckCard) => {
+      const build = () =>
+        buildDeckCardMenu(card, {
+          // **No `paneCardId`, deliberately.** That field greys "View all printings" on the
+          // card the pane is already showing, because there the row would do nothing. Here it
+          // would not: this hand-off is `openCardFromDeck` — the app's only write of
+          // `paneDeckContext` — so pressing it on the card already open **re-anchors the pane
+          // onto this deck row**, which is what puts "Use this printing" on its printings list.
+          // Greying it would take a working affordance away. It is optional for this reason.
+          card: { ...cardMenuDeps, viewPrintingsInPane: () => openCard(card) },
+          categories,
+          cards: deck.cards,
+          spec,
+          moveTo: moveCardTo,
+          setTag: setCardTag,
+          tags: deck.tags,
+          createTag: createTagFor,
+        });
+      return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
+    },
+    [
+      menu,
+      menuKey,
+      cardMenuDeps,
+      openCard,
+      categories,
+      deck.cards,
+      deck.tags,
+      spec,
+      moveCardTo,
+      setCardTag,
+      createTagFor,
+    ],
+  );
+
+  /**
+   * One **pile's** right-click, built here and handed to the four views as one function.
+   *
+   * `buildCategoryMenu` is `categoryMenu.tsx`'s, and every one of its six dependencies is a
+   * decision this editor already owns: the deck's unfiltered rows, the two `Layer` arms that
+   * were built for exactly this (`import` aimed at one pile, `export` of one pile), the rename
+   * field's flag, `useDeckMeta`'s switch, and the confirmation a delete owes. **That last one is
+   * why `CategoryMenuDeps` carries no delete mutation** — a menu opens by accident, and deleting
+   * a pile takes its cards with it.
+   *
+   * `undefined` for a category this deck does not have, which a derived heading never reaches
+   * (`deckGroupMenuProps` refuses a `null` id first) but a pile deleted under an open menu could.
+   */
+  const categoryMenu = useCallback(
+    (categoryId: number) => {
+      const category = categories.find((c) => c.id === categoryId);
+      if (category === undefined) return undefined;
+      const build = () =>
+        buildCategoryMenu(category, {
+          // The deck's own rows, never `shown`: exporting "Removal" means the pile rather than
+          // the four of it the toolbar's filter happens to be showing.
+          cards: deck.cards,
+          startRename: (pile) => setRenamingCategoryId(pile.id),
+          // Each hands the caret back to the **pile**, not to nothing: these three are opened
+          // from a menu row, which has unmounted by the time the dialog closes.
+          openImport: ({ forcedCategoryName }) =>
+            openLayer({ kind: "import", forcedCategoryName }, () => focusDeckGroup(category.id)),
+          openExport: ({ categoryId: id }) =>
+            openLayer({ kind: "export", categoryId: id }, () => focusDeckGroup(id)),
+          setActive: (pile, isActive) => setCategoryActive({ id: pile.id, isActive }),
+          // **The refusal from the last time is cleared on the way in**, because the confirmation
+          // draws its own sentence off an observer this file holds and the layer opens with that
+          // sentence already in it otherwise. See {@link resetCategoryDelete} — and note the
+          // reset belongs *here* rather than in `openLayer`, which is the union's switch and has
+          // no business knowing which arm carries a mutation.
+          askDelete: (pile) => {
+            resetCategoryDelete();
+            openLayer({ kind: "deleteCategory", categoryId: pile.id }, () =>
+              focusDeckGroup(pile.id),
+            );
+          },
+        });
+      return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
+    },
+    [menu, menuKey, categories, deck.cards, openLayer, setCategoryActive, resetCategoryDelete],
+  );
+
+  /**
+   * The rename field for the pile that is being renamed, drawn in its own heading.
+   *
+   * Built here rather than in the views because the draft, the write and the caret's way home
+   * are one decision — `metaRows.tsx`'s `RenameField` is the same control both meta dialogs use,
+   * so a pile renamed from its heading and a pile renamed from the Categories dialog are the
+   * same field with the same rules.
+   *
+   * The caret goes back to the pile on both exits, which is where it came from: `focusDeckGroup`
+   * is the editor's existing hand-off and finds the group by attribute, so it works after the
+   * field has unmounted and after a rename has moved the pile in a packed column.
+   */
+  const renameCategoryField = useCallback(
+    (categoryId: number) => {
+      if (renamingCategoryId !== categoryId) return null;
+      const category = categories.find((c) => c.id === categoryId);
+      if (category === undefined) return null;
+      const done = () => {
+        setRenamingCategoryId(null);
+        focusDeckGroup(categoryId);
+      };
+      return (
+        <RenameField
+          label={`Rename ${category.name}`}
+          initial={category.name}
+          pending={renamePending}
+          onSave={(name) => renameCategory({ id: categoryId, name }, { onSuccess: done })}
+          onCancel={done}
+        />
+      );
+    },
+    [renamingCategoryId, categories, renameCategory, renamePending],
+  );
+
+  /**
+   * What every view is handed, and the whole of what a card **and a pile** can be made to do.
+   *
+   * One object rather than six props, because it travels three components deep — the view, the
+   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
+   * views spend it differently (a table gets columns, the other three get a bar over the card),
+   * and every control inside it is `cardControl.tsx`'s.
+   *
+   * It carries two pile-level members beside the card's three, which is what `drop` always was:
+   * the heading's own menu, and the rename field for the pile being renamed.
+   */
   const actions = useMemo<DeckCardActions>(
-    () => ({ setQuantity, drop: applyDrop }),
-    [setQuantity, applyDrop],
+    () => ({
+      setQuantity,
+      drop: applyDrop,
+      menu: deckCardMenu,
+      categoryMenu,
+      renameCategory: (categoryId) =>
+        categoryId === null ? null : renameCategoryField(categoryId),
+    }),
+    [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField],
+  );
+
+  /**
+   * The docked panel's tiles, which are **not** deck cards: a search result is a printing the
+   * reader has not filed anywhere, so none of the four deck rows means anything about it and it
+   * gets the plain card menu every other wall in the app draws.
+   *
+   * Built here rather than in the panel so that one `useCardMenuDeps` serves both surfaces of
+   * this screen — two would be two collection-add observers and two sentences to draw for one
+   * refusal. `viewPrintingsInPane` is `setSelectedCardId` here and not `openCard`: the tile is
+   * not a row of this deck, and the store clears `paneDeckContext` in that same write precisely
+   * so it cannot be shown as one.
+   */
+  const panelCardBuild = useCallback(
+    (card: CardSummary) => () =>
+      buildCardMenu(searchCardTarget(card), {
+        ...cardMenuDeps,
+        // No `paneCardId` here either, and for the other half of the same reason: a tile is
+        // not a row of this deck, so `setSelectedCardId` clears `paneDeckContext` in the same
+        // write. Pressing it on the card the pane is showing therefore *un*-anchors a pane that
+        // was opened from a deck row, which is a state change rather than a no-op.
+        viewPrintingsInPane: setSelectedCardId,
+      }),
+    [cardMenuDeps, setSelectedCardId],
+  );
+  const panelCardMenu = useCallback(
+    (card: CardSummary) => menu(panelCardBuild(card)),
+    [menu, panelCardBuild],
+  );
+  /** The keyboard's own door to the same rows. `CardGrid` takes it in a slot of its own because
+   *  a keypress has no coordinates — the panel is anchored at the tile's corner rather than at a
+   *  pointer that was never there. */
+  const panelCardMenuKey = useCallback(
+    (card: CardSummary) => menuKey(panelCardBuild(card)),
+    [menuKey, panelCardBuild],
   );
 
   /**
@@ -1147,33 +1714,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (!element) return;
     return autoScrollForElements({ element });
   }, [hasRow]);
-
-  /**
-   * Open a card **as a deck row** — the only write of `paneDeckContext` in the app, and the
-   * reason every view hands its whole `DeckCard` back rather than an id.
-   *
-   * What it buys is on the other side of the app: the pane's printings list gains "Use this
-   * printing", which rewrites *this* slot. Everything else that opens a card — the docked
-   * panel's tiles, the validation panel's names — goes through `setSelectedCardId`, which
-   * clears the context in the same write (see the store), so a card that is not a row of this
-   * deck can never be shown as one.
-   *
-   * The context carries the category's **name** as well as its id, because the pane is a
-   * sibling of this editor and has no category list to translate one with; and the **variant**,
-   * because a deck is two lists and a swap addressed to the wrong one either misses or rewrites
-   * a row the reader is not looking at.
-   */
-  const openCard = useCallback(
-    (card: DeckCard) =>
-      openCardFromDeck({
-        deckId,
-        categoryId: card.categoryId,
-        categoryName: card.categoryName,
-        cardId: card.cardId,
-        variant,
-      }),
-    [deckId, openCardFromDeck, variant],
-  );
 
   /** Whatever is half-typed, the field goes back to standing for the deck's name. A blank is
    *  not a rename: the backend refuses it in words, and a name is not something a deck can lose
@@ -1564,7 +2104,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       about*, which is what a reader means by "cards". */}
                   <button
                     type="button"
-                    onClick={(e) => openLayer({ kind: "theoryDiff" }, e.currentTarget)}
+                    onClick={(e) => {
+                      const trigger = e.currentTarget;
+                      openLayer({ kind: "theoryDiff" }, () => trigger.focus());
+                    }}
                     aria-expanded={layer?.kind === "theoryDiff"}
                     aria-haspopup="dialog"
                     className={cn(
@@ -1667,7 +2210,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 <button
                   key={kind}
                   type="button"
-                  onClick={(e) => openLayer({ kind }, e.currentTarget)}
+                  onClick={(e) => {
+                    const trigger = e.currentTarget;
+                    openLayer({ kind }, () => trigger.focus());
+                  }}
                   aria-expanded={layer?.kind === kind}
                   aria-haspopup="dialog"
                   className={cn(CONTROL, FILTER_FOCUS, "hover:text-text")}
@@ -1856,6 +2402,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         )}
       </AnimatePresence>
 
+      {/* A collection or wishlist add the reader made from a card's right-click, refused.
+          Separate from the banner above because that one speaks for writes to **this deck** and
+          this one is about the binder — and it has to be drawn *somewhere*, because the menu
+          cannot draw it: `ctx.run` closes the panel before a row's handler runs, so by the time
+          an answer arrives there is no menu left to put a sentence in. The deck add is not here
+          and needs nothing from this file — it reaches the app's single `useCardToDeck` through
+          `CardToDeckProvider`, and that one mount draws its own sentence. Grown into place like
+          its neighbour: the animated element is the wrapper and carries only `overflow-hidden`,
+          because `statusLine` takes `height` to 0 and a box with its own padding can never be
+          shorter than that padding. */}
+      <AnimatePresence initial={false}>
+        {menuFailure && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              {menuFailure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">
           Opening your deck…
@@ -1942,6 +2511,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               targetCategoryId={targetCategoryId}
               onTargetCategoryChange={setTargetCategoryId}
               defaultFormat={searchFormatDefault}
+              cardMenu={panelCardMenu}
+              cardMenuKey={panelCardMenuKey}
               roomy={roomForPanel}
               maxWidth={maxPanelWidth}
             />
@@ -2064,7 +2635,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </section>
       )}
 
-      {/* The six overlays, mounted **at the editor's top level and as siblings of the layout
+      {/* The seven overlays, mounted **at the editor's top level and as siblings of the layout
           above**, which is not a tidiness preference. Each is `fixed inset-0` and none is
           portalled, so a transformed ancestor would become its containing block and pin it to
           whatever box that ancestor happens to occupy — and this editor has transformed
@@ -2072,10 +2643,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           is a stacking context and a containing block both). Mounted inside the view area, a
           dialog would centre itself over a column instead of over the window.
 
-          Each is closed by `open`, and each of the six unmounts everything behind that flag —
-          so a closed one costs no query, no window listener and no state. That is what makes it
-          safe to mount all six unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than six booleans. For four of them `DeckDialog` guarantees it:
+          Each is closed by `open`, and each unmounts everything behind that flag — so a closed
+          one costs no query, no window listener and no state. That is what makes it safe to
+          mount every one of them unconditionally, and it is why the editor can hold them in one
+          `Layer` union rather than a boolean apiece. For all but two `DeckDialog` guarantees it:
           `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
           The theory diff and the import dialog are not on that shell (see the `Layer` union's
           doc) and each guarantees the same thing with an `AnimatePresence` of its own — which
@@ -2116,10 +2687,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The last of the six, and the one whose target has to be **the list on screen**: an
-          import lands in one variant and a `replace` clears at most one, so a paste made while
-          Theory is up must never touch what is sleeved. `cardsInVariant` is what a `replace`
-          would clear, said in words before it is chosen.
+      {/* The one whose target has to be **the list on screen**: an import lands in one variant
+          and a `replace` clears at most one, so a paste made while Theory is up must never touch
+          what is sleeved. `cardsInVariant` is what a `replace` would clear, said in words before
+          it is chosen.
+
+          `forcedCategoryName` is set only when the dialog was opened from a category heading's
+          right-click, and it is the whole of the difference between "import into this deck" and
+          "import into this pile" — applied in `buildImportPlan`, not here, because `plan.ts`
+          makes every deck decision. The toolbar's own press carries none and is unchanged.
 
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
           away in the toolbar and the deck it wrote into is already on screen — the editor
@@ -2127,10 +2703,77 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           it. */}
       <ImportDeckDialog
         target={{ kind: "deck", deckId, variant, cardsInVariant }}
+        forcedCategoryName={layer?.kind === "import" ? layer.forcedCategoryName : undefined}
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}
         onImported={dismiss}
+      />
+      {/* The confirmation a `Delete…` owes, and it is **`CategoriesDialog`'s own component**
+          rather than a second one written here. That dialog asks a careful question — the cards
+          go with the pile unless the reader names somewhere to move them, and the sentence
+          changes with the answer — and two confirmations for one command would be two chances to
+          word "this cannot be undone" differently. It takes `meta` and draws itself, so the only
+          thing this file decides is which pile and what "the others" are.
+
+          `others` is every category **but** this one, in the reader's own `sortOrder`: the list
+          the move picker offers, which must not include the pile being deleted. */}
+      <DeckDialog
+        open={layer?.kind === "deleteCategory"}
+        title={deletedCategory === null ? "Delete category" : `Delete “${deletedCategory.name}”`}
+        // Named for what it closes, like every other dialog here — two controls called "Close"
+        // on one screen are two a screen reader cannot tell apart.
+        closeLabel="Close delete category"
+        // Narrow, because the body is one question, one picker and two buttons — the width class
+        // is written out whole, since Tailwind emits no rule for a class built at runtime.
+        width="w-[28rem]"
+        onDismiss={dismiss}
+        onClose={close}
+      >
+        {deletedCategory && (
+          <div className="px-4 pb-4">
+            {/* **A refused delete has to be said _inside_ this dialog**, and that is not a
+                duplicate of the editor's banner — it is the only place the sentence can be seen.
+                That banner draws in the editor body, which is behind this dialog's own
+                `LAYER.overlay` scrim, and a refusal leaves the dialog open with its button still
+                live: `onDeleted` never fires, so nothing on screen changes and a sighted reader
+                sees a press that did nothing. `role="alert"` announces it either way, which is
+                exactly the shape of bug that passes a suite. `CategoriesDialog` never had this
+                because its banner is inside its own panel. */}
+            {meta.deleteCategory.isError && (
+              <p
+                role="alert"
+                className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+              >
+                Could not delete that category — {ipcError(meta.deleteCategory.error)}
+              </p>
+            )}
+            <DeleteCategory
+              category={deletedCategory}
+              others={categories.filter((c) => c.id !== deletedCategory.id)}
+              meta={meta}
+              onCancel={dismiss}
+              onDeleted={dismiss}
+            />
+          </div>
+        )}
+      </DeckDialog>
+
+      {/* **One of the two overlays with no control in this view** — the delete confirmation
+          above is the other, and both are opened from a category heading's right-click. It used
+          to say "the last of the seven, and the only one", which the delete arm made false twice
+          over; the union is the count, and this sentence has stopped carrying one.
+
+          `cards` is an argument the dialog never fetches — which is exactly what lets one pile be
+          handed to a component a deck-level export will reuse whole — and it is derived from the
+          deck's live list rather than from whatever the menu was holding. See {@link exported}. */}
+      <ExportDialog
+        open={layer?.kind === "export"}
+        subject={exported.subject}
+        cards={exported.cards}
+        suggestedFileName={exported.fileName}
+        onDismiss={dismiss}
+        onClose={close}
       />
     </section>
   );

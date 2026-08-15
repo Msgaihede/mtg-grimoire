@@ -20,9 +20,11 @@ import {
   DECK_CARD_VARIANT,
   deckCardBodyProps,
   deckCardName,
+  deckCardMenuProps,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
+  FOCUS,
   FOCUS_INSET,
   LandedMark,
   revealedWhenOpen,
@@ -745,6 +747,11 @@ function StackedCard({
       // stepping from the card into its own stepper would otherwise close the card under it.
       onFocus={() => onOpenNow(index)}
       onBlur={onRelease}
+      // The whole card, face and foot together: a right-click on the price or the set code is a
+      // right-click on the card. The keydown half is here rather than on the button because the
+      // controls drawn over the card are siblings of that button — Shift+F10 with the caret on
+      // the stepper is still a question about this card.
+      {...deckCardMenuProps(card, actions)}
       {...(open ? { [STACK_OPEN_ATTR]: "" } : {})}
       // The card's whole body, so a click on its data line — which is outside the button on
       // purpose — is a click on the card and not on the desk. See `CARD_BODY_ATTR`.
@@ -781,6 +788,14 @@ function StackedCard({
         open
           ? "shadow-[0_25px_50px_-12px_rgb(0_0_0/0.55)]"
           : "shadow-[0_10px_15px_-3px_rgb(0_0_0/0.45),0_4px_6px_-4px_rgb(0_0_0/0.45)]",
+        // The caret lands here when the menu this card opened is closed — see
+        // `deckCardMenuProps`, which is what makes the element focusable at all. An outline
+        // rather than nothing, because a hand-back the reader cannot see is half a hand-back;
+        // `focus-visible`, so a menu dismissed by clicking away draws none. It is outset where
+        // the button inside is inset, and that is right here: the button is the card *face* and
+        // this is the whole card, so the ring traces the object rather than the picture — and
+        // focusing this opens the card (`onFocus` above), which lifts it clear of its neighbour.
+        FOCUS,
         // A card that breaks a rule is outlined in the destructive colour — the loudest of the
         // three signals it can carry, and the only one that changes the card's own edge.
         //

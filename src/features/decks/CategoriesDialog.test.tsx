@@ -321,13 +321,34 @@ describe("CategoriesDialog", () => {
  * registers its Escape rung on the **flag** rather than on the panel's mount.
  *
  * The editor renders its dialogs unconditionally and holds "which one is up" in a single `Layer`
- * union, which is what guarantees that two `"inner"` rungs are never live at once — and
- * `useDismissOnEscape` orders exactly two rungs, one capture-phase and one bubble-phase, so two
- * `"inner"` peers are not ordered by it at all. That guarantee used to come free from synchronous
- * unmounting: the flag went false and the listener came down in the same commit. With an exit
- * animation the *element* outlives the flag, so a rung registered on the mount would still be
- * consuming Escape while the next dialog was opening — and the press would close a dialog the
- * reader had already dismissed, or both.
+ * union, which is what guarantees that two `"inner"` rungs are never live at once. That guarantee
+ * used to come free from synchronous unmounting: the flag went false and the listener came down
+ * in the same commit. With an exit animation the *element* outlives the flag, so a rung
+ * registered on the mount would go on consuming Escape for the length of the fade — spending the
+ * press on a dialog the reader had already dismissed, and starving the layer behind it, since a
+ * capture rung `preventDefault()`s and the card pane's bubble rung returns early on
+ * `defaultPrevented`.
+ *
+ * **It takes two switches to catch, and that is the hook's stack's doing.** `useDismissOnEscape`
+ * orders capture-phase registrations by mount depth now — only the token on top acts — so one
+ * switch does not discriminate: with the rung on the panel's **mount**, the fading Categories
+ * panel would still hold the token pushed at its original mount, the opening Tags panel would
+ * push *above* it, and Tags would answer exactly as it does here. Correct code and the defect
+ * agree on that press.
+ *
+ * They part on the way **back**. Registered on the flag, the fade takes the layer off the stack,
+ * so reopening Categories over a fading Tags pushes Categories on top and the press is
+ * Categories'. Registered on the mount, neither panel ever left: the stack is still
+ * `[categories, tags]` in original mount order, Tags is still on top, and the press goes to the
+ * dialog the reader has just **left** while the one they have just reopened is starved — a
+ * capture rung `preventDefault()`s, so nothing behind it hears the press either. That is the
+ * regression in its own words, and the second half of this test is what turns it red. Verified
+ * by mutation, 2026-08-15: with `useDismissOnEscape` moved out of `DeckDialog` and into its
+ * `Panel`, the first press stayed green and the second failed on `categoriesDismiss` — called 0
+ * times, with `tagsDismiss` called twice.
+ *
+ * The reader changing their mind one press later is also the realest version of this: Categories
+ * and Tags are one press apart in the same toolbar.
  *
  * **The rung it proves is `DeckDialog`'s**, and this is deliberately not a second copy of that
  * file's own tests: the case needs *two peers*, and these two are the realest pair the editor
@@ -338,7 +359,7 @@ describe("CategoriesDialog", () => {
  * and proves nothing.
  */
 describe("Escape during a dialog's exit", () => {
-  it("leaves exactly one layer listening while the previous one fades out", async () => {
+  it("gives the press to the open layer, never to the one still fading", async () => {
     const categoriesDismiss = vi.fn();
     const tagsDismiss = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -363,6 +384,17 @@ describe("Escape during a dialog's exit", () => {
       </QueryClientProvider>
     );
 
+    /** One press at `window`, handed back so the caller can read whether it was consumed. */
+    const escape = () => {
+      const press = new KeyboardEvent("keydown", {
+        key: "Escape",
+        cancelable: true,
+        bubbles: true,
+      });
+      window.dispatchEvent(press);
+      return press;
+    };
+
     const { rerender } = render(overlays("categories"));
     await screen.findByText("Ramp");
 
@@ -376,12 +408,26 @@ describe("Escape during a dialog's exit", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "Tags" })).toBeInTheDocument();
 
-    const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
-    window.dispatchEvent(press);
-
+    const first = escape();
     expect(tagsDismiss).toHaveBeenCalledTimes(1);
     expect(categoriesDismiss).not.toHaveBeenCalled();
-    expect(press.defaultPrevented).toBe(true);
+    expect(first.defaultPrevented).toBe(true);
+
+    // **Back again, inside both fades — the half that discriminates.** No `await` above this
+    // line on purpose: the exit is what the assertions three lines up prove is still running,
+    // and anything that yielded would let it finish and take the case with it.
+    act(() => rerender(overlays("categories")));
+
+    expect(screen.getByText("Tags")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Categories" })).toBeInTheDocument();
+
+    const second = escape();
+    // The reopened dialog answers, and the one fading out of view has stopped listening — it
+    // took no second press and did not consume this one on the way past.
+    expect(categoriesDismiss).toHaveBeenCalledTimes(1);
+    expect(tagsDismiss).toHaveBeenCalledTimes(1);
+    expect(second.defaultPrevented).toBe(true);
   });
 });
 
@@ -802,5 +848,38 @@ describe("categories", () => {
     // And the count sentence claims nothing — "Filed 12 cards" beside that alert would be two
     // answers to one press.
     expect(screen.queryByText(/^Filed /)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **No row in this dialog offers a context menu, and that is a layer rule rather than a gap.**
+ *
+ * A category heading on the *desk* does offer one — Rename, Import, Export, the switch, Delete —
+ * and it is wired onto the **view's own group element**, never onto `GroupHeader`, which is the
+ * component this dialog draws in every one of its rows. Wired one level up it would open here
+ * too: inside a `DeckDialog` on `LAYER.overlay` (`z-45`) while `ContextMenu` draws at
+ * `LAYER.popup` (`z-30`) — **behind this dialog's own scrim**. Invisible, unreachable, and
+ * silent, because jsdom has no opinion about a z-index and every assertion about that menu would
+ * go on passing. `layers.ts` names the overlap as the one that must not exist.
+ *
+ * **This is the check from the side that would actually break.** The wiring site carries a
+ * comment saying not to move the handler, and a comment cannot fail; the editor's own "no menu on
+ * a derived heading" case keeps passing under exactly this mistake, because the `null`-id guard
+ * survives it. A right-click on a row *here* is the thing that changes.
+ */
+describe("the category rows and the app's context menu", () => {
+  it("attaches no menu handler to a row, because a menu here would paint behind the scrim", async () => {
+    mount();
+    await screen.findByText("Ramp");
+
+    // No `ContextMenuProvider` is mounted in this file, so this asserts the absence of a
+    // **handler** rather than of a panel — which is the honest question: `useContextMenu`
+    // degrades to a no-op without a provider, so a menu wired onto `GroupHeader` would draw
+    // nothing here either way. What it *would* do is call `preventDefault()`, which is
+    // `useContextMenu`'s first act on any surface that offers rows.
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    screen.getByText("Ramp").dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
   });
 });

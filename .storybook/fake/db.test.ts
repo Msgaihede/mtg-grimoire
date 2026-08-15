@@ -13,6 +13,7 @@ import {
   makeDb,
   neverCheckedUpdate,
   oracleTagCards,
+  pluginHandlers,
   readHandlers,
   writeHandlers,
 } from "./db";
@@ -305,6 +306,43 @@ describe("the paper filter", () => {
 });
 
 /**
+ * The card filter, which is what "View all printings" hands over: every printing of one oracle
+ * card, and never the *other* cards a prefix-matched name would answer.
+ *
+ * Bolt is the fixture for it because it is the only name in the corpus with four printings and
+ * two rarities, so a filter that quietly collapsed or widened would be visible in the count.
+ */
+describe("the oracle-card filter", () => {
+  it("narrows to one card's printings and ANDs with the filters beside it", () => {
+    const reads = readHandlers(makeDb());
+    const bolts = reads.search_cards({
+      req: { oracleId: BOLT.oracleId, collapse: false, limit: 200, offset: 0 },
+    });
+    expect(bolts.items).toHaveLength(4);
+    expect(bolts.items.every((i) => i.name === "Lightning Bolt")).toBe(true);
+
+    // ANDed, not ORed: the same request with a set filter answers that one printing.
+    const one = reads.search_cards({
+      req: { oracleId: BOLT.oracleId, sets: ["2x2"], collapse: false, limit: 200, offset: 0 },
+    });
+    expect(one.items.map((i) => i.setCode)).toEqual(["2x2"]);
+  });
+
+  it("treats a blank id as no filter, the way a cleared control sends one", () => {
+    const reads = readHandlers(makeDb());
+    const unfiltered = reads.search_cards({ req: { collapse: false, limit: 200, offset: 0 } });
+    // `resetAll` clears this to exactly `""`. Bound literally it would match nothing and draw
+    // an empty wall with no chip to explain it — the direction `filters.rs` names as failing
+    // closed.
+    const blank = reads.search_cards({
+      req: { oracleId: "  ", collapse: false, limit: 200, offset: 0 },
+    });
+    expect(blank.items).toHaveLength(unfiltered.items.length);
+    expect(unfiltered.items.length).toBeGreaterThan(4);
+  });
+});
+
+/**
  * `search.rs`'s `c.game_changer` — the crown the wall and the table draw beside the finish
  * marks.
  *
@@ -356,9 +394,11 @@ describe("the playable filter", () => {
   it("is off unless asked for, and then hides the printings no format allows", () => {
     const db = makeDb();
     const seen = (req: Record<string, unknown>) =>
-      (readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
-        items: { name: string }[];
-      }).items.map((i) => i.name);
+      (
+        readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
+          items: { name: string }[];
+        }
+      ).items.map((i) => i.name);
 
     // The three really are in the corpus and really are unplayable, so the assertion below is
     // about the filter rather than about a fixture that never had them.
@@ -633,6 +673,17 @@ describe("a row whose card is gone", () => {
     expect(page.items[0].unitPrice).toBeNull();
     expect(page.items[0].setCode).toBe("lea");
     expect(page.items[0].lang).toBe("en");
+    // **`oracleId` null means exactly one thing here: this entry is orphaned.** It is read off
+    // `cards.oracle_id` and never denormalised onto the entry, and no live row is null (0 of
+    // 116 590) — so it is the fact the card menu's "View all printings" reads to tell "this
+    // printing has left the card database" from "the reader's copy is fine".
+    expect(page.items[0].oracleId).toBeNull();
+  });
+
+  it("answers the oracle card behind a healthy row, which is what greys nothing", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
+    const page = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } });
+    expect(page.items[0].oracleId).toBe(BOLT.oracleId);
   });
 
   it("survives a colour filter and fails a rarity one — SQL's NULLs, not a rule of thumb", () => {
@@ -1148,6 +1199,128 @@ describe("the printings list", () => {
       items: [],
       total: 0,
     });
+  });
+});
+
+/**
+ * `card_image_uri`'s four answers: a URL, and the three ways to `null` that `card.rs` names —
+ * every one of which the card menu's "Copy card image" has to treat as "copy nothing" rather
+ * than as a failure.
+ */
+describe("one printing's image URL", () => {
+  /** The corpus's one row with no picture on either side — `imageStatus: "missing"`, null in
+   *  both URL columns, which is what `image_uris IS NULL` looks like from here. */
+  const ARTLESS = CARDS.find((c) => c.artCropUrl === null && c.normalUrl === null)!;
+
+  it("answers the display URL off the row, and the art crop for the art variant", () => {
+    const reads = readHandlers(makeDb());
+    expect(reads.card_image_uri({ cardId: BOLT.id, variant: "display" })).toBe(BOLT.normalUrl);
+    expect(reads.card_image_uri({ cardId: BOLT.id, variant: "art" })).toBe(BOLT.artCropUrl);
+    // Real Scryfall URLs off the generated corpus, never a path minted by rewriting one.
+    expect(BOLT.normalUrl).toMatch(/^https:\/\/cards\.scryfall\.io\//);
+  });
+
+  it("answers null three ways, and every one of them is an answer", () => {
+    const reads = readHandlers(makeDb());
+    // 1. A printing this corpus does not have.
+    expect(reads.card_image_uri({ cardId: "no-such-card", variant: "display" })).toBeNull();
+    // 2. A row whose `image_uris` column is empty.
+    expect(reads.card_image_uri({ cardId: ARTLESS.id, variant: "display" })).toBeNull();
+    // 3. A variant the source lacked — `thumb` and `grid` on every row here, because the
+    //    generator keeps `art_crop` and `normal` and nothing else.
+    expect(reads.card_image_uri({ cardId: BOLT.id, variant: "thumb" })).toBeNull();
+    expect(reads.card_image_uri({ cardId: BOLT.id, variant: "grid" })).toBeNull();
+  });
+
+  it("refuses a variant that is not one of the four, rather than answering null for it", () => {
+    // The distinction the app depends on: `png` is a caller mistake and gets a rejection,
+    // where a missing picture is an answer. In the crate the same check is what keeps an
+    // unchecked string out of a `json_extract` path.
+    expect(() =>
+      readHandlers(makeDb()).card_image_uri({ cardId: BOLT.id, variant: "png" }),
+    ).toThrow(/unknown image variant: png/);
+  });
+
+  it("answers null for every card under the imageUrisMissing fault", () => {
+    const reads = readHandlers(makeDb({ fault: "imageUrisMissing" }));
+    expect(reads.card_image_uri({ cardId: BOLT.id, variant: "display" })).toBeNull();
+    expect(reads.card_image_uri({ cardId: BOLT.id, variant: "art" })).toBeNull();
+    // The fault is the column being empty, not the corpus being gone: the card is still there.
+    const detail = readHandlers(makeDb({ fault: "imageUrisMissing" })).card_detail({ id: BOLT.id });
+    expect(detail?.name).toBe(BOLT.name);
+  });
+});
+
+/**
+ * The export's one command. It writes a file and touches no database, so there is nothing to
+ * read back — what a story can observe is that it was accepted, or the sentence it was refused
+ * with, which is exactly what `ExportDialog` can observe too.
+ */
+describe("writing an export", () => {
+  it("accepts a path and contents, and is not refusable by a running sync", () => {
+    // `busy` deliberately: this command takes no `AppState`, so a sync holding the write lock
+    // cannot reach it. See the `unlocked` list in the busy-fault sweep.
+    const w = writeHandlers(makeDb({ fault: "busy" }));
+    expect(() =>
+      w.export_write_file({ path: "C:\\decks\\removal.txt", contents: "1 Lightning Bolt\n" }),
+    ).not.toThrow();
+  });
+
+  it("names the path it could not write, because that is the half the reader chose", () => {
+    const w = writeHandlers(makeDb({ fault: "exportWriteError" }));
+    expect(() => w.export_write_file({ path: "E:\\removal.txt", contents: "1 Shock\n" })).toThrow(
+      /could not write E:\\removal\.txt/,
+    );
+  });
+});
+
+/**
+ * The three Tauri **plugin** commands, which mirror no module in the crate and belong to neither
+ * table above.
+ *
+ * They exist because the fake `invoke` is the whole IPC layer in Storybook, so a Copy, an Open on
+ * or a Save as… reaches one of them or is answered `No fake handler registered` — a rejection
+ * about the workbench, drawn in a `role="alert"` the app wrote about the reader's disk. The path
+ * `save` builds is asserted here rather than only through the export dialog's story, because a
+ * story that goes green on the wrong file name is a story about nothing.
+ */
+describe("the plugin commands", () => {
+  it("builds the save path from the dialog's own defaultPath", () => {
+    // The name really does travel: `ExportDialog` seeds `defaultPath` with
+    // `${suggestedFileName}.${extension}`, so switching format changes the file this answers with,
+    // exactly as it does in the window.
+    const p = pluginHandlers();
+    expect(p["plugin:dialog|save"]({ options: { defaultPath: "Ramp.txt" } })).toBe(
+      "D:\\Storybook\\Ramp.txt",
+    );
+    expect(p["plugin:dialog|save"]({ options: { defaultPath: "Ramp.csv" } })).toBe(
+      "D:\\Storybook\\Ramp.csv",
+    );
+  });
+
+  it("still answers a path when the caller named no default", () => {
+    // `save()` takes `options = {}`, so `defaultPath` really is optional on the wire. Answering
+    // `undefined` here would put the literal string "undefined" through `export_write_file`.
+    expect(pluginHandlers()["plugin:dialog|save"]({})).toBe("D:\\Storybook\\export.txt");
+  });
+
+  it("accepts a clipboard write and an opened URL, and stores neither", () => {
+    const p = pluginHandlers();
+    // `write_text` only — this app grants `clipboard-manager:allow-write-text` and never the
+    // read, so there is no command a story could get the string back with and keeping it would
+    // offer a check the app itself cannot make.
+    expect(p["plugin:clipboard-manager|write_text"]()).toBeUndefined();
+    expect(p["plugin:opener|open_url"]()).toBeUndefined();
+  });
+
+  it("is reachable through the dispatch table a story registers", async () => {
+    // Through `invoke`, by the name and the argument name the plugin wrapper really sends —
+    // `{ options }`, which is the half only a dispatcher can check.
+    resetCommands();
+    registerCommands(allHandlers(makeDb()));
+    await expect(
+      invoke<string>("plugin:dialog|save", { options: { defaultPath: "Sideboard.txt" } }),
+    ).resolves.toBe("D:\\Storybook\\Sideboard.txt");
   });
 });
 
@@ -2271,9 +2444,9 @@ describe("the deck row itself", () => {
   it("refuses an unknown deck, an unknown variant and a blank mode, and stores the rest", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const w = writeHandlers(db);
-    expect(() =>
-      w.deck_set_view_state({ deckId: 99, viewState: { variant: "theory" } }),
-    ).toThrow(/not there any more/);
+    expect(() => w.deck_set_view_state({ deckId: 99, viewState: { variant: "theory" } })).toThrow(
+      /not there any more/,
+    );
     expect(() =>
       w.deck_set_view_state({
         deckId: 1,
@@ -2570,6 +2743,11 @@ describe("the busy fault", () => {
       // with a read and a network call, and only its ingest reaches for `db::lock_for`. So a
       // running sync delays a tag refresh rather than refusing it at the door.
       "oracle_tags_refresh",
+      // The seventh, and the only one here that touches **no database at all**:
+      // `export::export_write_file` takes no `AppState`, so there is no connection for a sync
+      // to be holding and no `BUSY` it could ever answer. It writes a file at a path the OS
+      // save dialog produced and nothing else.
+      "export_write_file",
     ];
     const args: Record<string, unknown> = {
       id: 1,
@@ -2627,6 +2805,12 @@ describe("the busy fault", () => {
     // moves no `updated_at` and records no history, and refusable all the same because it takes
     // the same write lock as every other. That it changes so little is exactly why it belongs in
     // this sweep: a handler that forgot `refuseIfBusy` would look identical from outside.
+    //
+    // The context-menu branch then added `export_write_file` and the number did **not** move,
+    // which is the case worth naming beside the three that moved it: that command holds no
+    // connection, so it joined `unlocked` rather than the count. A new write that forgot
+    // `refuseIfBusy` would fail this loop; a new write correctly outside the lock has to be
+    // argued for on the list above.
     //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.

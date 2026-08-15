@@ -10,7 +10,14 @@ import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { CardStack, STACK_CARD_BORDER, stackCardWidth } from "../CardStack";
-import { deckGroupProps, useCategoryDrop, type DeckCardActions } from "../cardControl";
+import {
+  deckGroupMenuProps,
+  deckGroupProps,
+  deckGroupRename,
+  FOCUS,
+  useCategoryDrop,
+  type DeckCardActions,
+} from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
@@ -347,6 +354,11 @@ function StackGroup({
       // `auto` lets the content decide and the width above is then decoration.
       style={flowWidth === undefined ? undefined : { width: flowWidth, flex: `0 0 ${flowWidth}px` }}
       {...(flowWidth === undefined ? {} : { [STACK_ATTR]: "" })}
+      // **The pile's own menu, on the section rather than on `GroupHeader`** — see
+      // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
+      // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
+      // scrim. A card inside this section stops the event, so the innermost surface still wins.
+      {...deckGroupMenuProps(group.categoryId, actions)}
       // The caret lands here when a card leaves the pile under it — a stepper reaching zero, or
       // a move landing somewhere else — so the reader is left looking at the pile that changed
       // and hears its name. `tabIndex: -1`, so it is a place focus can be *put* and never a
@@ -363,6 +375,9 @@ function StackGroup({
         // the whole of what was wanted here: a pile of cards on the desk, not a pile of cards in
         // a box. See {@link SECTION_PADDING}.
         "relative rounded-lg border border-transparent p-1.5",
+        // Where the caret comes back to when this pile's menu closes. The tab index is already
+        // here (`deckGroupProps`); this is the half that makes the landing visible.
+        FOCUS,
         // A switched-off pile is a wash and nothing else now. It used to be a *dashed* outline
         // over a fainter one (`bg-surface/40`), and the dash was the signal — which only worked
         // while every other pile carried a solid outline for it to differ from. With no outline
@@ -392,6 +407,7 @@ function StackGroup({
         id={`group-${group.key}`}
         className="px-1 pb-1.5"
       />
+      {deckGroupRename(group.categoryId, actions)}
       {group.cards.length === 0 ? (
         // An empty category is a place as well as a heading — this is where the next card
         // goes, and saying so is what makes the empty column worth drawing.

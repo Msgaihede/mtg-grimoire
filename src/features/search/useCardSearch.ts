@@ -3,6 +3,7 @@ import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { ipc, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
+import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
 
@@ -156,6 +157,9 @@ export interface FilterState {
   /** `false` is a filter too — "the cards I do *not* have" — so this is compared against
    *  `undefined` rather than tested for truthiness. */
   owned: boolean | undefined;
+  /** One card, by its oracle id — "View all printings", handed over from another view. Empty
+   *  is no filter, exactly as `format`'s empty string is. */
+  oracleId: string;
 }
 
 /**
@@ -181,6 +185,10 @@ export function activeFilterCount(f: FilterState): number {
     // zero, hide Reset all, and leave a reader who filtered into nothing with no way out.
     f.manaValues.length > 0 || f.manaX,
     f.owned !== undefined,
+    // The narrowest filter this view has, and the one the reader did not set here — so it is
+    // the one Reset all most has to admit to. A badge reading `0` over a wall holding one
+    // card's printings would be the button lying about what pressing it does.
+    f.oracleId.length > 0,
   ].filter(Boolean).length;
 }
 
@@ -291,6 +299,20 @@ export function useCardSearch(
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
   const { marketplace } = useMarketplace();
+  /**
+   * "View all printings", waiting on the store — **read here, above the state it seeds, and
+   * consumed further down.**
+   *
+   * Subscribed (`useAppStore(selector)`) rather than read through `getState()`, because one of
+   * the surfaces that offers this is the search results themselves: a right-click there
+   * changes no view and unmounts nothing, so a bare read would sit on an intent that nothing
+   * ever re-rendered to notice. Every other one navigates, which mounts this panel fresh.
+   *
+   * The deck editor's docked panel calls this hook too and would be a second consumer, but
+   * `requestAllPrintings` moves `activeView` in the same write — and that switch renders in an
+   * ancestor of the editor, deleting it in the same pass.
+   */
+  const pendingCardSearch = useAppStore((s) => s.pendingCardSearch);
   const [text, setText] = useState("");
   // The format select's whole value, which is three kinds of thing in one string: `""` is
   // `Any format` and the default, {@link ANY_CARD} is `Any card`, anything else is a
@@ -300,7 +322,17 @@ export function useCardSearch(
   // makes is already the filtered one — an empty seed corrected afterwards would send the
   // unfiltered search first and answer it, which is a wall of illegal cards and a second round
   // trip to replace it.
-  const [format, setFormat] = useState(defaultFormatValue);
+  //
+  // A card the reader arrived here to look at beats that default, and beats it **in the seed**
+  // rather than a render later: "show me every printing of this" cannot be answered through a
+  // named format, or even through `Any format` — either would hide the printings from the sets
+  // this deck's format has never been legal in, or the art series and promos a "View all
+  // printings" press is usually asking about, so the seed reaches for {@link ANY_CARD} rather
+  // than `""`. `appliedDefaultFormat` below still seeds to the default itself, so the guard
+  // sees nothing changed and never puts it back — the same way `resetAll` sticks.
+  const [format, setFormat] = useState(
+    pendingCardSearch !== null ? ANY_CARD : defaultFormatValue,
+  );
   /**
    * The default this filter is currently *sitting on*, so a changed default can be told from a
    * reader who happens to have picked the same key.
@@ -333,6 +365,38 @@ export function useCardSearch(
   // sentinel inside `manaValues`, because it is not a mana value.
   const [manaX, setManaX] = useState(false);
   const [owned, setOwned] = useState<boolean | undefined>(undefined);
+  /**
+   * One card, by its oracle id — every printing of it and nothing else.
+   *
+   * **The one filter on this row the reader did not set on this row.** It arrives from a card's
+   * own menu, pressed on any card surface (see `pendingCardSearch` on the store), so the chip
+   * that draws it is the only account the reader gets of why the wall is one card wide. A filter
+   * like every other for the two things that matter: `activeFilterCount` counts it and
+   * `resetAll` clears it.
+   *
+   * The **oracle** id rather than a printing id, because the question is "what is this card",
+   * which is exactly the identity `cards.oracle_id` carries across every set it was printed in.
+   *
+   * **Seeded from the waiting intent, exactly as `format` is seeded from its default, and for a
+   * reason the render-phase guard below cannot cover.** Every card surface but one navigates
+   * here, so this panel *mounts* holding the intent — and a state adjusted during render does not
+   * reach the mount request: React Query builds its observer inside a `useState` initialiser
+   * from the first pass's options and subscribes with those, so the second pass corrects the
+   * hook and not the fetch already on its way. Measured here: with the seed removed and only
+   * the guard below in place, request zero goes out with no card on it at all — the unfiltered
+   * 116 k-row browse, answered and then replaced, which is the whole thing this is meant to
+   * avoid. The guard is what catches the exception — a right-click in the search results
+   * themselves, which changes no view, so nothing mounts.
+   */
+  const [oracleId, setOracleId] = useState(pendingCardSearch?.oracleId ?? "");
+  /**
+   * The card's name, carried alongside the id purely so the chip can caption itself.
+   *
+   * Handed over by the surface that pressed the menu item — which had the card in hand — rather
+   * than fetched: a filter that had to round-trip to `card_detail` to learn what to call itself
+   * would draw blank, or wrong, for the length of that fetch.
+   */
+  const [oracleName, setOracleName] = useState(pendingCardSearch?.name ?? "");
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
   // should not also throw away the order you chose to read it in.
   const [sort, setSort] = useState<SortSpec<SearchSortKey>>([]);
@@ -342,7 +406,11 @@ export function useCardSearch(
   // Off is one row per card — 37 553 cards rather than 107 337 printings — because "which
   // cards exist" is the question a search box is asked, and "which printings exist" is the
   // question the card detail pane answers.
-  const [allPrintings, setAllPrintings] = useState(false);
+  //
+  // On when a card was handed over, and seeded rather than switched on afterwards for the
+  // reason `oracleId` is: "View all printings" is a request for exactly the other question, and
+  // a mount that collapsed first would answer it with the single row the reader is opening up.
+  const [allPrintings, setAllPrintings] = useState(pendingCardSearch !== null);
   // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
   // to off-and-hidden. It is the format select's `Any card` row now — one control, because the
   // chip and the select were narrowing and widening the same axis and `Modern plus the art
@@ -353,7 +421,55 @@ export function useCardSearch(
   // means: a card legal in no format at all is an art card, a token, an emblem or a piece of
   // memorabilia, and a search for `lightning bolt` that answers with three of them above the
   // card is a search answering the wrong question.
+  //
+  // **A card in hand still wants the widest row, though — the art series and the promos are
+  // printings of the card too, and they are most of what a reader opens "View all printings"
+  // to look at.** `unplayable=true` used to say so on its own; that statement now has to be
+  // made through `format`, so the seed two lines up and the already-mounted branch below both
+  // reach for {@link ANY_CARD} rather than `""` when a card is waiting.
   const [debouncedText, setDebouncedText] = useState("");
+
+  /**
+   * Take the waiting card, whether this panel mounted holding it or was handed it just now.
+   *
+   * **Applied during render and deliberately not in a `useEffect`** — React's
+   * adjust-state-during-render pattern, the same one `appliedDefaultFormat` above uses and for
+   * the same reason. An effect runs after the paint, so this panel would draw one frame of the
+   * reader's previous filters and fire a whole request for them, which against a 116 k-row
+   * corpus is a visible wall of the wrong cards followed by a second round trip to replace it.
+   * Setting state during render re-runs this component before anything is committed, so the old
+   * filters never reach the DOM.
+   *
+   * This is the **already-mounted** half — a right-click in the search results themselves,
+   * where no view changes and nothing remounts. The mount half is the seeds above, which the
+   * `useState` calls have already spent by the time this runs, so every setter here is a no-op
+   * on that path and the branch costs one comparison.
+   *
+   * Clearing the filters is the whole of what "show me this card" means: a Modern filter would
+   * hide the Vintage-only printings, playable-only would hide the art series, and collapsing
+   * would answer with the one row the reader is trying to open up. `debouncedText` is cleared
+   * beside `text` because it is 300 ms behind it — clearing only the box would leave the old
+   * word ANDed with the card for a third of a second, which is a wall of nothing.
+   *
+   * **Consumed here rather than left for an effect**, so that a filter the reader has since
+   * cleared cannot be re-applied by the next thing that re-renders this hook.
+   */
+  if (pendingCardSearch !== null) {
+    useAppStore.getState().consumePendingCardSearch();
+    setOracleId(pendingCardSearch.oracleId);
+    setOracleName(pendingCardSearch.name);
+    setText("");
+    setDebouncedText("");
+    // {@link ANY_CARD}, not `""` — see the seed above for why "View all printings" needs the
+    // widest row of the select rather than `Any format`.
+    setFormat(ANY_CARD);
+    setColors([]);
+    setSets([]);
+    setManaValues([]);
+    setManaX(false);
+    setOwned(undefined);
+    setAllPrintings(true);
+  }
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedText(text), DEBOUNCE_MS);
@@ -387,6 +503,14 @@ export function useCardSearch(
     // also X" out of the cached pages of plain "3" — instantly, from local SQLite, with no
     // spinner and nothing to notice. Spelled rather than stringified, like its neighbours.
     manaX ? "x" : "",
+    // **A segment of its own**, like the X chip above and for the same kind of reason: this is
+    // one card's printings against the whole corpus, and the two are different *rows*. A key
+    // that carried only the visible filters would answer "every printing of Lightning Bolt" out
+    // of the cached pages of the unfiltered browse the reader was looking at a moment ago —
+    // instantly, from local SQLite, with no spinner and nothing to notice. The id is already a
+    // string, so it is its own spelling; empty is the same "no filter" the payload sends as
+    // `undefined`.
+    oracleId,
     // Three states in one segment, spelled rather than stringified: `String(undefined)` and
     // `String(false)` are both truthy strings, and a key that cannot tell "off" from "the
     // ones I do not own" answers one with the other's cached pages.
@@ -426,6 +550,9 @@ export function useCardSearch(
         // Sent only when it is set, so an untouched filter row produces exactly the payload
         // it always did. `false` is meaningful here and `undefined` is not sent at all.
         owned,
+        // Dropped when empty, like `text` and `format` above: a blank id is not a filter, and
+        // sending one would make the payload lie about intent.
+        oracleId: oracleId || undefined,
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
@@ -459,8 +586,21 @@ export function useCardSearch(
    *
    * Written out rather than derived from the query's own payload, because the two differ in
    * exactly the way that matters: the page carries a sort, an offset and a collapse, and a
-   * facet answer depends on none of the three. {@link FacetRequest} is the fence — it cannot
-   * hold them — and this object is what has to stay in step with the payload above it.
+   * facet answer depends on none of the three. {@link FacetRequest} is the fence around those
+   * three — it cannot hold them — and this object is what has to stay in step with the payload
+   * above it.
+   *
+   * **`oracleId` is the one filter deliberately left out, and the fence does not cover it.**
+   * `FacetRequest` omits the *page* fields, not the filters, so the type carries `oracleId`
+   * perfectly well; **this literal is the whole of what keeps it out of a facet key**, because
+   * the fields are written out here by hand. A second builder anywhere would be a second place
+   * to remember it. It is not a drift, either: the counts
+   * come from the in-memory index (`index/facets.rs`), which has no oracle axis to filter on —
+   * sending it would mint a second facet key for an answer identical to the one without it. So
+   * while the wall is narrowed to one card the counts describe the corpus that card was picked
+   * out of, which **over**-counts, and over-counting only ever leaves a control live:
+   * "not greyed" is this row's word for "we don't know" (`facets.ts`). Under-counting is the
+   * direction that would grey a chip the reader could have used, and nothing here can produce it.
    */
   const facetReq: FacetRequest = {
     text: debouncedText || undefined,
@@ -574,6 +714,29 @@ export function useCardSearch(
     /** Off → owned → missing → off. The search asks "what have I already got" first. */
     toggleOwned: () => setOwned((current) => cycleTriState(current, true)),
     /**
+     * The card this wall is narrowed to, or `""` — see the state above. A filter: counted by
+     * {@link activeFilterCount} and cleared by `resetAll`.
+     */
+    oracleId,
+    /**
+     * The card's name, for the chip that draws the filter. Empty whenever {@link oracleId} is,
+     * because the two are written together and cleared together — a name with no id is a
+     * caption for a filter that is not on.
+     */
+    oracleName,
+    /**
+     * Set or clear the card filter. The only caller is the chip's own press, which clears it;
+     * the only writer of a card is the intent above, which sets the name in the same render.
+     *
+     * Clearing takes the name with it rather than leaving it behind for the next card to
+     * inherit — a wrapper rather than the bare setter, so "the name describes the id" is true
+     * by construction instead of by every call site remembering to say so.
+     */
+    setOracleId: (id: string) => {
+      setOracleId(id);
+      if (id === "") setOracleName("");
+    },
+    /**
      * Show every printing rather than one row per card.
      *
      * `false` — one row per card — is the default. A view mode and not a filter, so it is
@@ -593,7 +756,16 @@ export function useCardSearch(
      * format`, which is the honest escape hatch rather than a badge lying about what the
      * button does.
      */
-    activeCount: activeFilterCount({ text, format, colors, sets, manaValues, manaX, owned }),
+    activeCount: activeFilterCount({
+      text,
+      format,
+      colors,
+      sets,
+      manaValues,
+      manaX,
+      owned,
+      oracleId,
+    }),
     /**
      * The columns this list is ordered by, first one deciding. Empty is the view's own
      * default: relevance when there is a query, name order when there is not.
@@ -630,6 +802,11 @@ export function useCardSearch(
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
+      // The card goes with the rest, and the name goes with the card: it is a filter, however
+      // it arrived, and the reader who presses this is asking for their search back. The
+      // intent was consumed on arrival, so there is nothing left to re-apply it a render later.
+      setOracleId("");
+      setOracleName("");
     },
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
@@ -680,6 +857,9 @@ export function useCardSearch(
     unfiltered:
       !debouncedText &&
       !formatIsReaderSet &&
+      // A card the reader picked out of a menu is the reader asking, as plainly as a typed
+      // word: an empty answer to it means this card is not in the database, not that nothing is.
+      !oracleId &&
       !colorsParam &&
       !setsParam &&
       !manaParam &&

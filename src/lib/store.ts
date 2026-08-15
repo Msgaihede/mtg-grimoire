@@ -186,6 +186,22 @@ interface AppState {
    */
   returnToDeckId: number | null;
   clearReturnToDeck: () => void;
+  /**
+   * A card the reader asked to see every printing of, waiting for Search to pick it up.
+   *
+   * `useCardSearch` keeps every filter in component-local `useState` inside `SearchPage`, so
+   * nothing outside that component can set one — and "View all printings" is pressed from every
+   * card surface, nearly all of which are not Search. This is the channel, and it is the same
+   * shape as {@link returnToDeckId}: written by one view, read and cleared once by another.
+   *
+   * The name travels with the id because the chip that draws the filter says the card's name,
+   * and Search would otherwise have to fetch a card to caption a filter it was handed.
+   */
+  pendingCardSearch: { oracleId: string; name: string } | null;
+  /** Go to Search and show every printing of one card. Sets `activeView` too. */
+  requestAllPrintings: (target: { oracleId: string; name: string }) => void;
+  /** Read it once and clear it. Returns null when there is nothing waiting. */
+  consumePendingCardSearch: () => { oracleId: string; name: string } | null;
 }
 
 /**
@@ -196,7 +212,7 @@ interface AppState {
  * Server-ish state (cards, sync status) does not belong here — that is TanStack Query's
  * job and `useSync`'s.
  */
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   activeView: "search",
   // Leaving the view closes the card: the detail pane belongs to the list that opened it,
   // and a card sitting beside the Decks placeholder is a pane with nothing to be next to.
@@ -270,4 +286,24 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   returnToDeckId: null,
   clearReturnToDeck: () => set({ returnToDeckId: null }),
+  pendingCardSearch: null,
+  // The intent and the navigation in **one** `set`, because `setActiveView` clears the open
+  // deck and the open card — calling it separately would either clear the intent or race it.
+  // The clears themselves are wanted: leaving the view closes the deck, as it always has.
+  requestAllPrintings: (pendingCardSearch) =>
+    set({
+      pendingCardSearch,
+      activeView: "search",
+      selectedCardId: null,
+      paneDeckContext: null,
+      openDeckId: null,
+      returnToDeckId: null,
+    }),
+  // Read once. A reader who clears the filter and comes back to Search must not find it
+  // re-applied — the same reason `clearReturnToDeck` exists.
+  consumePendingCardSearch: () => {
+    const pending = get().pendingCardSearch;
+    if (pending !== null) set({ pendingCardSearch: null });
+    return pending;
+  },
 }));

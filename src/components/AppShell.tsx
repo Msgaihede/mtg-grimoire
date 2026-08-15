@@ -18,6 +18,7 @@ import {
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import { readDragData } from "@/features/decks/dnd";
 import {
   ACTIVITY_DELAY_MS,
@@ -105,6 +106,17 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // it the place a card can be dropped from any view — the Search wall and the deck editor
   // never coexist, so without this a card found in Search has nowhere to go.
   const drops = useSidebarDrops();
+  /**
+   * What a refused deck add from a card menu left to say, drawn in the sidebar below.
+   *
+   * **Read through the context rather than by mounting `useCardToDeck` here**, and the reason is
+   * not tidiness: the write has to be provided *above* `ContextMenuProvider`, because that
+   * provider draws its panel as a **sibling** of the shell rather than inside it — a hook
+   * mounted here would be below the menu, out of reach of the rows that call it, and a second
+   * one would be a second piece of state reporting on adds nobody made through it. `App.tsx`
+   * owns the mount; this is the one place the sentence is drawn.
+   */
+  const cardToDeckRefusal = useCardToDeckRefusal();
   // Here rather than in a view, because it is about the whole cache and this is the one
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
@@ -132,8 +144,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // observer's `useMutation`. A mutation's state is shared with nobody; a keyed one can be read
   // from anywhere, which is what lets a sibling component describe a job this one never started.
   const { refreshing: refreshingFeed, feeds, progress: feedProgress } = useMarketplace();
-  const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace
-    .label;
+  const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace.label;
   useRegisterActivity(syncActivity(progress, busy));
   useRegisterActivity(marketplaceFeedActivity(refreshingLabel ?? null, feedProgress));
   // **Started somewhere else again, and usually by nobody**: `oracle_tags::refresh_if_due`
@@ -176,6 +187,39 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             drop={id === "decks" || id === "wishlist" ? drops[id] : null}
           />
         ))}
+        {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
+            entry's report line above.**
+
+            That line's subject is narrower than it looks: `SidebarDrop.report` is documented as
+            "what just happened **here**", and `useSidebarDrops` says "a drop reports where the
+            reader dropped it" — it is about a card let go *on this entry*, which is where the
+            reader's cursor was. A menu add happened at the card, several hundred pixels away,
+            and never touched this entry.
+
+            The mechanical objection is the decisive one. That report clears itself after
+            `REPORT_MS` and on the next drag; this one stands until the reader arms another add.
+            Two lifetimes in one slot — `drops.decks.report ?? cardToDeckRefusal` — would hide a
+            live refusal behind a drop's sentence and then **bring it back** four seconds later,
+            when the drop's timer expired. A sentence returning from the dead under a nav item is
+            worse than either message alone, and no ordering of the `??` fixes it: the other way
+            round, one refusal suppresses every drop report until the next menu add.
+
+            So: its own region, its own subject, and `role="alert"` rather than `status` because
+            this only ever holds a refusal.
+
+            **Mounted only when there is something to say, unlike the report line above it.**
+            That line is a `status` — polite, and a polite region that first appears with its
+            sentence already inside it announces nothing, which is why it is always there and
+            `sr-only` while empty. An `alert` is the other case: announcing on insertion is what
+            the role is for, and it is what the sync banner further down already relies on. It
+            also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
+            makes every such query in this app ambiguous whether or not it has any text in it.
+            The geometry is the report line's, which was measured for exactly this push. */}
+        {cardToDeckRefusal !== null && (
+          <p role="alert" className="px-3 pt-1 text-xs leading-tight text-destructive">
+            {cardToDeckRefusal}
+          </p>
+        )}
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">

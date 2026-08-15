@@ -86,4 +86,113 @@ describe("useDismissOnEscape", () => {
     expect(pressEscape()).toBe(false);
     expect(onDismiss).not.toHaveBeenCalled();
   });
+
+  /**
+   * The one test here that fails against the hook as it was. Measured on the pre-fix hook:
+   * `first` was called and `second` was not — two `"inner"` peers were ordered by registration
+   * alone, and because the capture rung checks `defaultPrevented` too, the *older* layer ate
+   * the press and the newest one — the thing the reader had just opened — was starved. A menu
+   * over a dialog would have closed the dialog.
+   */
+  it("gives the press to the most recently mounted capture layer, not the first", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: first }));
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: second }));
+
+    expect(pressEscape()).toBe(true);
+
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  /** One press each, in order, is the whole point — the layer below has to still be listening. */
+  it("hands the press back down when the top layer unmounts", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: first }));
+    const top = renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: second }));
+
+    top.unmount();
+
+    expect(pressEscape()).toBe(true);
+    expect(first).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A guard, not a driver: this passes against the pre-fix hook too, because capture already
+   * beats bubble whoever registered first. What it pins is that the *stack* did not break it —
+   * an `"outer"` layer must stay off the capture stack entirely. Push every layer instead of
+   * only the capture ones and this flips: the outer layer, mounted second, would be on top, the
+   * inner one would stand down, and the pane would close under the open popup.
+   */
+  it("still lets an inner layer beat an outer one whatever the mount order", () => {
+    const outer = vi.fn();
+    const inner = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: inner }));
+    renderHook(() => useDismissOnEscape({ layer: "outer", onDismiss: outer }));
+
+    expect(pressEscape()).toBe(true);
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+  });
+
+  /** Also a guard. A closed layer that still held the top of the stack would swallow every
+   *  press for the layer below it — the `enabled` early return has to come before the push. */
+  it("a disabled layer is not on the stack", () => {
+    const enabled = vi.fn();
+    const disabled = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: enabled }));
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: disabled, enabled: false }));
+
+    expect(pressEscape()).toBe(true);
+
+    expect(enabled).toHaveBeenCalledTimes(1);
+    expect(disabled).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `onDismiss` is latched in a ref, so a re-render cannot re-seat a layer on the stack.
+   *
+   * This is the failure the ref exists to prevent, and it is one no call site can be trusted to
+   * avoid: stability is transitive through props, so a layer that memoises its own closer
+   * correctly is still unstable if the `onDismiss` it was handed is. While the callback was an
+   * effect dependency, the re-render below popped the lower layer's token and pushed a fresh one
+   * on top of the layer above it, and this press closed the wrong window.
+   */
+  it("keeps its place on the stack when its callback identity changes", () => {
+    const below = vi.fn();
+    const top = vi.fn();
+    const lower = renderHook(
+      ({ onDismiss }: { onDismiss: () => void }) =>
+        useDismissOnEscape({ layer: "inner", onDismiss }),
+      { initialProps: { onDismiss: () => below() } },
+    );
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: top }));
+
+    lower.rerender({ onDismiss: () => below() });
+
+    expect(pressEscape()).toBe(true);
+    expect(top).toHaveBeenCalledTimes(1);
+    expect(below).not.toHaveBeenCalled();
+  });
+
+  /** The other half of the latch: dropping the dependency must not pin the callback the layer
+   *  mounted with, or a close handler would act on the state it was born in. */
+  it("calls the callback it was last rendered with, not the one it mounted with", () => {
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const layer = renderHook(
+      ({ onDismiss }: { onDismiss: () => void }) =>
+        useDismissOnEscape({ layer: "inner", onDismiss }),
+      { initialProps: { onDismiss: stale as () => void } },
+    );
+
+    layer.rerender({ onDismiss: fresh as () => void });
+
+    expect(pressEscape()).toBe(true);
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(stale).not.toHaveBeenCalled();
+  });
 });

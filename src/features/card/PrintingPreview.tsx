@@ -109,9 +109,12 @@ export interface PrintingDwell {
  * therefore *restarts* the same dwell — the leave clears it and takes any picture down, the
  * enter arms it again from zero — so there is never a second preview and never one to close.
  *
- * **It is never the pane's second open layer, and that has two halves** — because
- * `useDismissOnEscape` orders exactly two rungs, so two `"inner"` peers open at once are not
- * ordered at all, and one of them would draw a card over the other.
+ * **It is never the pane's second open layer, and that has two halves** — because one of them
+ * would draw a card over the other. That is the whole reason, and it is a *drawing* one:
+ * `useDismissOnEscape` orders `"inner"` peers now, by a stack in which only the top token acts,
+ * so Escape would cope with the pair perfectly well and the reader would still be looking at a
+ * card image over the finish chips they were choosing from. (This used to lead with the Escape
+ * clause, which was both the weaker argument and, since the stack, a false one.)
  *
  * * *This one first.* It goes down on the pointer leaving the row, the caret leaving it, a drag
  *   starting on it, unmounting — and on a **press** inside it, pointer or Enter/Space. The

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
@@ -157,6 +165,8 @@ export function CardGrid<T extends GridCard>({
   finish,
   gameChanger,
   action,
+  cardMenu,
+  cardMenuKey,
   tileRef,
   dragPayload,
   baseTileWidth = TILE_BASE_WIDTH,
@@ -239,6 +249,43 @@ export function CardGrid<T extends GridCard>({
   gameChanger?: (card: T) => boolean;
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
+  /**
+   * What a tile offers on a right-click — **a ready-made `onContextMenu` handler**, not a list
+   * of rows.
+   *
+   * The wall draws three surfaces: the search's results, the collection, and the deck editor's
+   * docked panel. The first two offer the card menu and the third offers that menu plus the
+   * editor's own rows, so the *items* cannot be decided here — and neither can the writes
+   * behind them, which are each page's own. Taking the handler already built (`menu(() =>
+   * buildCardMenu(target, deps))`, from `useContextMenu`) keeps every one of those decisions at
+   * the surface and leaves this file with no knowledge of menus at all beyond where a
+   * right-click lands.
+   *
+   * It lands on the **tile**, which is the whole card: the art, its two corner marks and the
+   * caption under it. A field inside a tile keeps the browser's own menu — the primitive tests
+   * for one before it builds anything — so the quick-add's popup is unaffected.
+   *
+   * Absent means a tile has no menu of its own, and the reader gets the app's plain
+   * suppression. Unlike the two slots below this one needs no stable identity: it is read on
+   * render rather than registered, so nothing is torn down when it changes.
+   */
+  cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
+  /**
+   * The same menu, from the keyboard — `menuKey`'s handler, for Shift+F10 and the ContextMenu
+   * key.
+   *
+   * **Its own slot rather than something derived from {@link cardMenu}**, because it is a
+   * different event and a different anchor: a keypress has no coordinates, so the panel opens
+   * at the tile's own bottom-left instead of at a pointer that was never there. Passing one and
+   * not the other is a menu half the readers in this app cannot reach — mouse-only was the
+   * option that was explicitly turned down.
+   *
+   * It rides the tile rather than the art button so that its `currentTarget` is the whole card,
+   * which is the box the panel is anchored to; keydown bubbles up from whichever control inside
+   * the tile holds the caret. The primitive decides which presses count and leaves a text field
+   * alone.
+   */
+  cardMenuKey?: (card: T) => (e: ReactKeyboardEvent) => void;
   /**
    * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
    * draggable, since a drag library is handed elements and this wall builds its own.
@@ -464,6 +511,8 @@ export function CardGrid<T extends GridCard>({
                 finish={finish}
                 gameChanger={gameChanger}
                 action={action}
+                cardMenu={cardMenu}
+                cardMenuKey={cardMenuKey}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
               />
@@ -492,6 +541,8 @@ function Tile<T extends GridCard>({
   finish,
   gameChanger,
   action,
+  cardMenu,
+  cardMenuKey,
   tileRef,
   dragPayload,
 }: {
@@ -504,6 +555,8 @@ function Tile<T extends GridCard>({
   finish?: (card: T) => Finish | null;
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
+  cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
+  cardMenuKey?: (card: T) => (e: ReactKeyboardEvent) => void;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload;
 }) {
@@ -542,7 +595,37 @@ function Tile<T extends GridCard>({
     // A wrapper rather than one big button: the caption now carries a control of its own,
     // and a button inside a button is invalid HTML that React warns about and browsers
     // render as they please. The art is the button; the quick-add is its neighbour.
-    <div ref={attach} style={{ width }} className="group flex shrink-0 flex-col gap-1">
+    <div
+      ref={attach}
+      // The whole tile, rather than the art button inside it: a right-click on the caption, on
+      // the printing count or on the owned badge is a right-click on the card. The handler is
+      // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that
+      // was given none attaches nothing at all.
+      onContextMenu={cardMenu?.(card)}
+      // Shift+F10 and the ContextMenu key, on the same box and about the same card. The press
+      // arrives here by bubbling from whatever inside the tile holds the caret, which is the
+      // art button.
+      onKeyDown={cardMenuKey?.(card)}
+      // **The other half of the menu, and it is not the same thing as a tab stop.**
+      //
+      // `menu()`/`menuKey()` hand the panel *the element their handler is attached to* as the
+      // `opener`, and `ContextMenu` focuses it back twice: when Escape closes, and before every
+      // row it runs. **`focus()` on a node with no `tabindex` is a no-op**, so this box being
+      // reachable through the button inside it is not enough — without this the hand-back lands
+      // nowhere, the panel unmounts with the caret still in it, focus drops to `<body>` and the
+      // next Tab restarts from the top of the app. It is the same failure `deckCardMenuProps`
+      // writes down for a deck card's `<li>`, reached here by a different route.
+      //
+      // **`-1` and never `0`**: a wall of forty cards must not grow forty presses on the way to
+      // anything, and the art button is already the stop. `-1` is a place the caret can be
+      // *put*, never one Tab travels through — the arrangement every other menu opener in this
+      // app carries. Unconditional, because a tile that offers no menu is not a tile a caret is
+      // ever handed back to, and a `tabIndex` that came and went with a prop would be the kind
+      // of difference between two walls that nothing on screen explains.
+      tabIndex={-1}
+      style={{ width }}
+      className="group flex shrink-0 flex-col gap-1"
+    >
       {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
           join the button's accessible name, and a wall of forty cards would be forty
           buttons called "Lightning Bolt 3 in your collection". */}

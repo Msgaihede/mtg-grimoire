@@ -1,4 +1,10 @@
-import { useEffect, useRef, type ComponentProps } from "react";
+import {
+  useEffect,
+  useRef,
+  type ComponentProps,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { Trash2 } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
@@ -297,6 +303,8 @@ export function CollectionTable({
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  rowMenu,
+  rowMenuKey,
   marketplace,
 }: {
   rows: CollectionRow[];
@@ -311,6 +319,21 @@ export function CollectionTable({
   onNeedNextPage: () => void;
   onSetQuantity: (row: CollectionRow, quantity: number) => void;
   onRemove: (row: CollectionRow) => void;
+  /**
+   * What a row offers on a right-click — a ready-made `onContextMenu` handler, one per row.
+   *
+   * A prop rather than a hook here, for the reason the two callbacks above it are props: a
+   * menu's rows are *writes*, and the writes belong to the page that owns this list's cache.
+   * Absent leaves the rows without one, which is what every story and every other consumer of
+   * this table gets.
+   */
+  rowMenu?: (row: CollectionRow) => (e: ReactMouseEvent) => void;
+  /**
+   * The same menu from the keyboard — Shift+F10 and the ContextMenu key. Its own slot for the
+   * reason `CardGrid`'s twin is: a keypress has no coordinates, so the panel anchors to the row
+   * rather than to a pointer that was never there.
+   */
+  rowMenuKey?: (row: CollectionRow) => (e: ReactKeyboardEvent) => void;
   /** Which marketplace the Value column quotes. Passed rather than read here so the table and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
@@ -342,8 +365,28 @@ export function CollectionTable({
       // disappearing (see the stepper's contract).
       rowClassName={(row) => (row.quantity === 0 ? "text-dim" : undefined)}
       onNeedNextPage={onNeedNextPage}
+      // A right-click is not an activation: `onActivate` above is a left click and the two
+      // keys, and neither of them fires for this one — so the menu asks about the row without
+      // also opening the card in the pane.
+      //
+      // The row's own `onKeyDown` runs first and is not replaced: it answers Enter and Space
+      // (opening the card), and `menuKey` answers Shift+F10 and the ContextMenu key. Two
+      // handlers for one event, because the row already had one — dropping `props`' would take
+      // the keyboard's route to the *card* away in the act of adding one to its menu. A press
+      // inside the quantity stepper is left alone by the primitive, which tests for a field
+      // before it builds anything.
       renderRow={(props, row) => (
-        <DraggableRow cardId={row.cardId} name={row.name} typeLine={row.typeLine} {...props} />
+        <DraggableRow
+          cardId={row.cardId}
+          name={row.name}
+          typeLine={row.typeLine}
+          {...props}
+          onContextMenu={rowMenu?.(row)}
+          onKeyDown={(e) => {
+            props.onKeyDown?.(e);
+            rowMenuKey?.(row)(e);
+          }}
+        />
       )}
     />
   );

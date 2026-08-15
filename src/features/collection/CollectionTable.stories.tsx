@@ -43,6 +43,7 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     id: nextId++,
     cardId: card.id,
     name: card.name,
+    oracleId: card.oracleId,
     setCode: card.setCode,
     setName: card.setName,
     collectorNumber: card.collectorNumber,

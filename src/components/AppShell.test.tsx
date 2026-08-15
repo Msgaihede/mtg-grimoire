@@ -70,6 +70,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
 import { REPORT_MS } from "./useSidebarDrops";
+import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
@@ -106,7 +107,16 @@ const noUpdate: Update = {
  * `invalidate` below is the spy it fires.
  */
 const render = (ui: ReactElement) =>
-  renderBare(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  renderBare(
+    <QueryClientProvider client={queryClient}>
+      {/* The shell draws the sentence a refused card-menu deck add leaves and reads it through
+          this context, so it is as much a part of the shell's surroundings as the query client.
+          `App.tsx` mounts it **above `ContextMenuProvider`** rather than here, because that
+          provider draws its panel as a sibling of the shell — a menu's rows are not inside the
+          shell, which is a trap that cost one commit. */}
+      <CardToDeckProvider>{ui}</CardToDeckProvider>
+    </QueryClientProvider>,
+  );
 
 const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   cardCount: 116_568,
@@ -698,5 +708,90 @@ describe("the sidebar's drop targets", () => {
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
     expect(wishlistAdd).toHaveBeenNthCalledWith(2, { cardId: "c-bolt", quantity: 1 });
+  });
+});
+
+/**
+ * The shell is the app's **one** mount of `useCardToDeck`, and this is what that buys.
+ *
+ * A card menu is opened on every card surface and its deck add has to outlive the menu — `ctx.run`
+ * closes the panel before it calls a row's handler — so the write is mounted here, where
+ * `useSidebarDrops` is and for the same reason. Mounting it *once* rather than per surface is
+ * the second reason: the sentence a refusal leaves then has one place to be drawn, and a surface
+ * never holds it at all.
+ */
+describe("the card menu's deck write", () => {
+  /** A view, standing in for any card surface. It asks the shell for the write and nothing else,
+   *  which is the whole claim: there is no `error` in its hands to forget to draw. */
+  function AddProbe() {
+    const addToDeck = useAddCardToDeck();
+    return (
+      <button
+        onClick={() =>
+          addToDeck(
+            {
+              cardId: "c-bolt",
+              name: "Lightning Bolt",
+              setCode: "lea",
+              collectorNumber: "161",
+              oracleId: "o-bolt",
+              finishes: '["nonfoil"]',
+              typeLine: "Instant",
+            },
+            4,
+            "live",
+          )
+        }
+      >
+        add to Burn
+      </button>
+    );
+  }
+
+  /** The Decks entry's own live region, which this sentence deliberately does not use. */
+  const decksReport = () =>
+    within(screen.getByRole("button", { name: "Decks" }).parentElement as HTMLElement).getByRole(
+      "status",
+    );
+
+  beforeEach(() => {
+    deckGet.mockResolvedValue({ deck: { id: 4, name: "Burn" }, cards: [], categories: [] });
+  });
+
+  it("is reachable from any view below the shell", async () => {
+    const user = userEvent.setup();
+    deckAddCard.mockResolvedValue(undefined);
+    render(
+      <AppShell update={noUpdate}>
+        <AddProbe />
+      </AppShell>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "add to Burn" }));
+
+    // No category id and a type line: `useDeck.addCard`'s `autoCategoryFor` arm, the same rule a
+    // drag with no column under it takes. Reaching this at all is half the assertion — without
+    // the provider on this shell `useAddCardToDeck` throws and the view never renders.
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(4, "c-bolt", null, "Instant", "live", 1),
+    );
+  });
+
+  it("says in the sidebar when the add is refused", async () => {
+    const user = userEvent.setup();
+    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
+    render(
+      <AppShell update={noUpdate}>
+        <AddProbe />
+      </AppShell>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "add to Burn" }));
+
+    // Its own region, and deliberately not the Decks entry's report line: that line is about a
+    // card let go *on* the entry, it clears itself after `REPORT_MS`, and one slot holding two
+    // lifetimes would hide this sentence and then bring it back when the other's timer expired.
+    expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
+    expect(decksReport()).toBeEmptyDOMElement();
   });
 });

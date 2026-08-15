@@ -557,6 +557,13 @@ function CategoryRow({
  *
  * An empty category asks nothing — there is nothing to move and nothing to lose.
  *
+ * **Exported, and the deck editor is the second host** (2026-08-14). A category heading's
+ * right-click offers `Delete…`, and that row must ask the same question in the same words as
+ * this dialog does — a second confirmation would be a second chance to get "the cards go with
+ * it" wrong. The editor renders it inside a `DeckDialog` of its own; nothing here assumes the
+ * row it was written in, because it draws a self-contained `role="group"` and takes every
+ * mutation it needs through `meta`.
+ *
  * **Every number in here is `cardCountAllVariants`, never `cardCount`.** A category is not
  * per-variant: `deck_cards.category_id` is `ON DELETE CASCADE`, so the delete reaches the live
  * list and the theory list alike, and the move arm moves both. The row above this dialog shows
@@ -566,7 +573,7 @@ function CategoryRow({
  * move 2 cards and moved 7. When copies exist in the list that is *not* on screen, the sentence
  * says so in words: the reader can see one list and cannot be asked to infer the other.
  */
-function DeleteCategory({
+export function DeleteCategory({
   category,
   others,
   meta,

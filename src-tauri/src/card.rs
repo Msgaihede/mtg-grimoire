@@ -385,6 +385,81 @@ pub async fn card_printings(
     .map_err(|e| format!("printings could not be read: {e}"))?
 }
 
+/// The Scryfall CDN URL for one printing at one size, or `None`.
+///
+/// **A command rather than a field on five list DTOs.** These URLs are ~100 bytes each and
+/// are wanted on a deliberate user act — one menu press — so putting them on `CardSummary`,
+/// `DeckCard`, `CollectionRow`, `WishRow` and `Printing` would pay for them on every row of
+/// every list to serve a press that mostly never happens.
+///
+/// **Face 0's image, with the top-level blob as the fallback — spec §5's rule, exactly as
+/// [`crate::images::resolve`] applies it.** A menu points at a *printing*, and a printing's
+/// picture is its front face. This is not a refinement: **3.7% of printings carry no
+/// top-level `image_uris` at all** — `transform`, `modal_dfc`, `double_faced_token`,
+/// `art_series` and `reversible_card` put them on the faces instead (`images.rs`'s header) —
+/// so a lookup that reads only the column answers `None` for ~4 300 live printings.
+///
+/// Three ways to `None`, and all three are answers rather than faults: the card is unknown,
+/// it carries no images anywhere (neither column holds the variant), or the variant is JSON
+/// `null` — which `card_row::webp_uris` writes for a variant the source lacked, so a present
+/// key is not a present URL.
+///
+/// **A face-only printing was a fourth way, and it *was* a fault** — the version of this list
+/// that ended at "all three are answers" is what kept it invisible for a release, because it
+/// argued the absence was always benign and there was nothing left to check. Right-clicking
+/// any Innistrad transform card copied nothing, silently, since `copyCardImage` treats a
+/// missing URI as "nothing to do". If a fifth `None` ever appears here, say which kind it is.
+///
+/// The variant is checked against [`crate::schema::IMAGE_VARIANTS`] and **never
+/// interpolated**: it reaches SQL as a `json_extract` path, so an unchecked one is an
+/// injection point. There are four; `png` is not among them, because the ingest keeps four
+/// of Scryfall's eleven image keys and drops the legacy JPG/PNG family its own docs mark as
+/// replaced.
+///
+/// Read-only connection, blocking pool — as [`card_detail`] is, and for the same reason.
+#[tauri::command]
+pub async fn card_image_uri(
+    state: tauri::State<'_, Arc<AppState>>,
+    card_id: String,
+    variant: String,
+) -> Result<Option<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        card_image_uri_inner(&lock_db_read(&state), &card_id, &variant)
+    })
+    .await
+    .map_err(|e| format!("the image URL could not be read: {e}"))?
+}
+
+fn card_image_uri_inner(
+    conn: &Connection,
+    card_id: &str,
+    variant: &str,
+) -> Result<Option<String>, String> {
+    if !crate::schema::IMAGE_VARIANTS.contains(&variant) {
+        return Err(format!("unknown image variant: {variant}"));
+    }
+    // Both columns, in one row, because either may be the one that holds the picture — the
+    // same two `json_extract`s [`crate::images::resolve`] runs. The face index is the literal
+    // `0` rather than a bound parameter: this command takes no face, and face 0 is the whole
+    // of what a printing's picture means here.
+    let row: Option<(Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT json_extract(image_uris, '$.' || ?2),
+                    json_extract(face_image_uris, '$[0].' || ?2)
+             FROM cards WHERE id = ?1",
+            params![card_id, variant],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    // Face first, top-level second — `resolve`'s
+    // `face.or_else(|| (key.face == 0).then_some(top).flatten())` with the face pinned to 0,
+    // so the two cannot answer differently about the front of a card. A `meld` printing
+    // carries both, and its top-level image is its front and nothing else.
+    Ok(row.and_then(|(top, face)| face.or(top)))
+}
+
 // ---------------------------------------------------------------------------------------
 // How the pane groups that list — one `app_meta` row
 // ---------------------------------------------------------------------------------------
@@ -1218,5 +1293,175 @@ mod tests {
 
         assert_eq!(stored_group_by(&conn), "set");
         assert_eq!(crate::marketplace::stored(&conn), "cardmarket");
+    }
+
+    /// One card row with a real `image_uris` blob, for [`card_image_uri_inner`]'s tests.
+    fn fixture_with_image_uris(id: &str, image_uris_json: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
+             VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', ?2, '{}')",
+            rusqlite::params![id, image_uris_json],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// A card whose `image_uris` column is `NULL` — it carried none at all, as opposed to a
+    /// present key holding JSON `null`.
+    fn fixture_with_no_image_uris(id: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', '{}')",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn the_image_uri_command_answers_the_variant_asked_for() {
+        let conn = fixture_with_image_uris(
+            "bolt-lea",
+            r#"{"thumb":"https://cards.scryfall.io/thumb/x.webp?1",
+                "grid":"https://cards.scryfall.io/grid/x.webp?1",
+                "display":"https://cards.scryfall.io/display/x.webp?1",
+                "art":"https://cards.scryfall.io/art/x.webp?1"}"#,
+        );
+        let got = card_image_uri_inner(&conn, "bolt-lea", "display").unwrap();
+        assert_eq!(
+            got.as_deref(),
+            Some("https://cards.scryfall.io/display/x.webp?1")
+        );
+    }
+
+    #[test]
+    fn a_json_null_variant_is_none_rather_than_the_string_null() {
+        let conn = fixture_with_image_uris(
+            "odd",
+            r#"{"thumb":null,"grid":null,"display":null,"art":null}"#,
+        );
+        assert_eq!(card_image_uri_inner(&conn, "odd", "display").unwrap(), None);
+    }
+
+    #[test]
+    fn a_card_with_no_image_uris_column_is_none() {
+        let conn = fixture_with_no_image_uris("artless");
+        assert_eq!(
+            card_image_uri_inner(&conn, "artless", "display").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_card_is_none_rather_than_an_error() {
+        let conn = fixture_with_no_image_uris("artless");
+        assert_eq!(
+            card_image_uri_inner(&conn, "nobody", "display").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_variant_is_refused_rather_than_interpolated() {
+        let conn = fixture_with_image_uris("bolt-lea", r#"{"display":"u"}"#);
+        assert!(card_image_uri_inner(&conn, "bolt-lea", "png").is_err());
+    }
+
+    /// One card row with images on its **faces** — optionally with a top-level blob too, which
+    /// is how a `meld` printing is shaped. `face_image_uris` is a JSON array, one entry per
+    /// face in `card_faces` order, and a face the source gave no images for is a `null` in
+    /// place (`card_row::webp_uris`).
+    fn fixture_with_faces(id: &str, top: Option<&str>, face_json: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout,
+                                image_uris, face_image_uris, raw)
+             VALUES (?1, 'Test Card', 'tst', '1', 'en', 'transform', ?2, ?3, '{}')",
+            rusqlite::params![id, top, face_json],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// 3.7% of printings carry **no top-level `image_uris` at all** — `transform`,
+    /// `modal_dfc`, `double_faced_token`, `art_series` and `reversible_card` put them on the
+    /// faces (`images.rs`'s header). Reading only the column answered `None` for every one of
+    /// them, silently: the menu's `copyCardImage` does `if (!uri) return;`, so ~4 300 live
+    /// printings copied nothing with no error and no toast.
+    #[test]
+    fn a_face_only_printing_answers_its_front_faces_image() {
+        let conn = fixture_with_faces(
+            "delver-isd",
+            None,
+            r#"[{"thumb":"https://cards.scryfall.io/thumb/front.webp?1",
+                 "grid":"https://cards.scryfall.io/grid/front.webp?1",
+                 "display":"https://cards.scryfall.io/display/front.webp?1",
+                 "art":"https://cards.scryfall.io/art/front.webp?1"},
+                {"display":"https://cards.scryfall.io/display/back.webp?1"}]"#,
+        );
+        assert_eq!(
+            card_image_uri_inner(&conn, "delver-isd", "display")
+                .unwrap()
+                .as_deref(),
+            Some("https://cards.scryfall.io/display/front.webp?1"),
+            "a printing whose art lives on its faces has a picture, and it is the front one"
+        );
+    }
+
+    /// The same precedence [`crate::images::resolve`] applies: **face first**, top-level only
+    /// as the fallback. A `meld` printing carries both, and its top-level image is its front
+    /// and nothing else — so the two must never disagree about which URL face 0 has.
+    #[test]
+    fn the_front_face_wins_over_the_top_level_image() {
+        let conn = fixture_with_faces(
+            "meld-eld",
+            Some(r#"{"display":"https://cards.scryfall.io/display/top.webp?1"}"#),
+            r#"[{"display":"https://cards.scryfall.io/display/face0.webp?1"}]"#,
+        );
+        assert_eq!(
+            card_image_uri_inner(&conn, "meld-eld", "display")
+                .unwrap()
+                .as_deref(),
+            Some("https://cards.scryfall.io/display/face0.webp?1")
+        );
+        // Matched rather than compared: `Resolution` carries no `PartialEq`, and the point of
+        // asserting it here is that the two code paths agree — a future edit to either that
+        // changed the precedence would have to change this test to land.
+        let via_cache = crate::images::resolve(
+            &conn,
+            &crate::images::ImageKey {
+                card_id: "meld-eld".to_owned(),
+                face: 0,
+                variant: crate::images::Variant::Display,
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(&via_cache, crate::images::Resolution::Uri(u)
+                     if u == "https://cards.scryfall.io/display/face0.webp?1"),
+            "and the two answers are the same answer: {via_cache:?}"
+        );
+    }
+
+    /// The fallback half of the rule: a face array that holds nothing for the variant asked
+    /// for leaves the top-level blob answering, as it did before faces were consulted at all.
+    #[test]
+    fn a_front_face_without_the_variant_falls_back_to_the_top_level_image() {
+        let conn = fixture_with_faces(
+            "partial",
+            Some(r#"{"display":"https://cards.scryfall.io/display/top.webp?1"}"#),
+            r#"[{"art":"https://cards.scryfall.io/art/face0.webp?1"}]"#,
+        );
+        assert_eq!(
+            card_image_uri_inner(&conn, "partial", "display")
+                .unwrap()
+                .as_deref(),
+            Some("https://cards.scryfall.io/display/top.webp?1")
+        );
     }
 }

@@ -54,6 +54,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { SearchPage } from "./SearchPage";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { useAppStore } from "@/lib/store";
 import { needsNextPage, nextOffset } from "./useCardSearch";
@@ -119,9 +120,39 @@ const page = (
 const cards = (n: number, from = 0): CardSummary[] =>
   Array.from({ length: n }, (_, i) => ({ ...BOLT, id: `c${from + i}`, name: `Card ${from + i}` }));
 
+/**
+ * The page, under the two providers `App` mounts above it.
+ *
+ * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
+ * is above it (so that every surface offering a right-click stays renderable on its own), which
+ * means a page
+ * rendered bare would suppress nothing, open nothing, and pass every menu assertion below by
+ * never being asked.
+ *
+ * **No `CardToDeckProvider`, and a test that expands "Add to → Deck" will need one** — the deck
+ * picker throws without it, deliberately, rather than swallowing the add. It goes **above**
+ * `ContextMenuProvider` and not inside it: the menu panel is drawn as a *sibling* of that
+ * provider's children, so a provider around this page is around none of the menu's rows.
+ * `CollectionPage.test.tsx` has the wiring, and `App.tsx` uses the same nesting.
+ */
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={qc}>
+      <ContextMenuProvider>{ui}</ContextMenuProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * A right-click, and nothing awaited.
+ *
+ * A real `MouseEvent` rather than `fireEvent.contextMenu`, because the handler reads
+ * `clientX`/`clientY` to place the panel — and `bubbles`, because the surface's handler is on
+ * the row or the tile, never on the cell the pointer happened to be over.
+ */
+function rightClick(element: HTMLElement): void {
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
 /**
@@ -1049,9 +1080,7 @@ describe("the result layout toggle", () => {
 
     await screen.findByAltText("Lightning Bolt");
 
-    expect(
-      screen.getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true })).toBeInTheDocument();
     expect(screen.getByText(`, ${GAME_CHANGER_LABEL}`)).toHaveClass("sr-only");
     expect(screen.getByRole("button", { name: "Lightning Bolt" })).toHaveAccessibleName(
       "Lightning Bolt",
@@ -1246,6 +1275,169 @@ describe("page image prefetch", () => {
     wrap(<SearchPage />);
 
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The card menu, over both of this view's layouts.
+ *
+ * The two are one surface as far as the menu is concerned — one adapter from a `CardSummary`,
+ * one `CardMenuDeps` for the page — so what is asserted on the table is asserted through the
+ * *writes* rather than through the panel's markup, which is `ContextMenu.test.tsx`'s subject.
+ */
+describe("the card menu", () => {
+  it("opens on a right-click of a result row, without opening the card", async () => {
+    wrap(<SearchPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    rightClick(row);
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    // The pane belongs to a left click; a right-click asks a question about the row. `App`
+    // owns the pane, so the store is the whole of what opening the card means from here —
+    // asserting on a `complementary` this page never renders would be an assertion that
+    // cannot fail.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  it("wishes for the printing that was right-clicked", async () => {
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
+
+    // This exact printing, one copy, and no finish preference — the row named none.
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith({
+        cardId: "1",
+        quantity: 1,
+        preferredFinish: undefined,
+      }),
+    );
+  });
+
+  /**
+   * The other half of the finish rule, and the counterpart to the collection's row: a search
+   * row is a *printing* rather than a copy, so it names no finish and the menu has to ask.
+   */
+  it("asks which finish, because a search row is a printing and names none", async () => {
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    expect(collection).toHaveAttribute("aria-haspopup", "menu");
+
+    await user.click(collection);
+    await user.click(await screen.findByRole("menuitem", { name: "Foil" }));
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "1",
+        finish: "foil",
+        condition: "NM",
+        quantity: 1,
+      }),
+    );
+  });
+
+  /**
+   * The keyboard's route to the same menu, which is a feature rather than a nicety: the reader
+   * was asked and chose a menu that opens by keyboard over a mouse-only one.
+   *
+   * Shift+F10 on the row itself. The other press the primitive answers is the dedicated
+   * ContextMenu key, and which presses count is its rule rather than this surface's.
+   */
+  it("opens from the keyboard on a result row, without opening the card", async () => {
+    wrap(<SearchPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * And the row's own keys still work, which is the half a single `onKeyDown` would have eaten:
+   * the menu's handler is added to the row's, never in place of it.
+   */
+  it("still opens the card on Enter, which the menu's handler sits beside", async () => {
+    wrap(<SearchPage />);
+    const row = await screen.findByRole("row", { name: /Lightning Bolt/ });
+
+    fireEvent.keyDown(row, { key: "Enter" });
+
+    expect(useAppStore.getState().selectedCardId).toBe("1");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens from the keyboard on a tile of the art wall", async () => {
+    useAppStore.setState({ searchView: "grid" });
+    wrap(<SearchPage />);
+    // The press lands on the art button and bubbles to the tile, which is what carries the
+    // handler — the tile is the card, and the button inside it is what holds the caret.
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Lightning Bolt" }), {
+      key: "F10",
+      shiftKey: true,
+    });
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * **Where the caret goes when a tile's menu closes** — the half "a menu opened" cannot see.
+   *
+   * `menu()`/`menuKey()` hand the panel the element their handler is attached to, which here is
+   * the tile's wrapper rather than the art button inside it, and the panel focuses that element
+   * back when Escape closes and before every row it runs. **`focus()` on a node with no
+   * `tabIndex` is a no-op**, so a wrapper without one leaves the caret on a panel that is
+   * unmounting, drops it on `<body>`, and the next Tab restarts from the top of the app.
+   *
+   * The assertion is on the **opener** and not merely on "something inside the tile": the opener
+   * is what `focus()` is called on, so a caret that landed on the art button would be a
+   * different bug wearing this one's clothes. One wall here, three in the app — the collection's
+   * and the deck editor's docked panel are the same component with the same two props.
+   */
+  it("gives the caret back to the tile when the menu closes", async () => {
+    useAppStore.setState({ searchView: "grid" });
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+    // The tile is two boxes out from the art: the button sits in the `relative` box that holds
+    // the corner marks, and the wrapper around that is what carries the menu handlers.
+    const tile = art.parentElement?.parentElement as HTMLElement;
+
+    art.focus();
+    fireEvent.keyDown(art, { key: "F10", shiftKey: true });
+    await screen.findByRole("menu");
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(tile);
+  });
+
+  it("opens on a tile of the art wall, about that tile's card", async () => {
+    useAppStore.setState({ searchView: "grid" });
+    const user = userEvent.setup();
+    wrap(<SearchPage />);
+    rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
+
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith(expect.objectContaining({ cardId: "1" })),
+    );
+    expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 });
 
