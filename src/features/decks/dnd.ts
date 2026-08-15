@@ -36,8 +36,16 @@ import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
  * files it is `autoCategoryFor`, which reads a type line and nothing else. Carrying the line in
  * the payload is what lets that rule run without a round trip: every one of the five sources
  * has it in hand at registration (`CardSummary`, a collection row, a wish, the pane's
- * printings, the panel's tile). A move or a removal names a category by construction, so
- * `"deck-card"` has nothing to compute and is left alone.
+ * printings, the panel's tile).
+ *
+ * **`"deck-card"` still does not carry one, and the reason changed on 2026-08-15.** It used to
+ * be that a move or a removal names its category by construction, so there was nothing to
+ * compute — and then the quick zones' `Auto` gave a deck card a drop that *is* computed, which
+ * looked like the argument for widening the payload. It is not: the four sources above are
+ * outside the editor and have only what they carry, while a `"deck-card"` drag is a row of the
+ * deck the editor is drawing, so the editor is already holding the type line, the tags query and
+ * the card's current pile. Sending a copy along would be a second spelling of a fact one
+ * component away, and the one that goes stale is the copy.
  *
  * `null` is a real value here and means the app does not know — an orphaned row whose printing
  * has left `cards`. `autoCategoryFor` answers `Uncategorised` for it, which is the honest pile.
@@ -79,6 +87,16 @@ export type DeckWrite =
    * {@link DragPayload} — and `null` is a real answer that files under `Uncategorised`.
    */
   | { write: "auto-add"; cardId: string; typeLine: string | null }
+  /**
+   * Re-file a card the deck already holds by what it *does* — the quick zones' `Auto` for a
+   * `"deck-card"` drag.
+   *
+   * **An address and not a destination**, which is what makes it a separate arm from `"move"`:
+   * the pile is not known here and cannot be, because the rule that names it reads the card's
+   * Oracle tags over IPC. `from` travels because a move needs the slot it is leaving, and the
+   * type line does not, because the caller is holding the row this addresses.
+   */
+  | { write: "auto-refile"; cardId: string; from: number }
   | { write: "move"; cardId: string; from: number; to: number }
   | { write: "remove"; cardId: string; categoryId: number };
 
@@ -267,12 +285,16 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
     return { write: "remove", cardId: payload.cardId, categoryId: payload.fromCategoryId };
   }
   if (target.kind === "auto") {
-    // **A card already in the deck cannot be dropped here, and the refusal is structural rather
-    // than a policy.** `"deck-card"` carries no `typeLine` — it names a slot, and a move names
-    // its destination by construction — so there is nothing for `autoCategoryFor` to read. The
-    // zone greys for such a drag instead of guessing, and re-filing a card the app already holds
-    // is what the Categories dialog's "File cards by what they do" is for.
-    if (payload.kind === "deck-card") return null;
+    // **A card already in the deck is re-filed rather than refused** (changed 2026-08-15). This
+    // used to return `null` on the argument that `"deck-card"` carries no `typeLine`, so there
+    // was nothing for `autoCategoryFor` to read — true about the *payload* and the wrong place
+    // to conclude anything from it. The editor is holding the row, type line and all; the fact
+    // was never missing, only absent from the one channel this function can see. So the answer
+    // here is the **address** of the card to re-file, and the caller supplies the fact, exactly
+    // as it already does for the pile a `"move"` lands in.
+    if (payload.kind === "deck-card") {
+      return { write: "auto-refile", cardId: payload.cardId, from: payload.fromCategoryId };
+    }
     return { write: "auto-add", cardId: payload.cardId, typeLine: payload.typeLine };
   }
   if (payload.kind === "search-card" || payload.kind === "card") {

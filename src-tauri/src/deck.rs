@@ -1936,22 +1936,67 @@ pub fn clear_category(
 ///
 /// `tag_id` travels with it too, where the printing does — a label is the user's word about
 /// *this card in this deck*, and re-filing it is not a reason to lose it.
+///
+/// **Either `to_category_id` or `to_category_name`**, and at least one ([`NO_CATEGORY`]) —
+/// [`add_card`]'s two-arm target, copied deliberately rather than approximated, because the two
+/// commands are answering the same question about the same table. An explicit id is a drop onto
+/// a column the reader pointed at; a name is the quick zones' `Auto`, found-or-created through
+/// [`crate::deck_meta::category_for_name`], with the word itself computed in TypeScript
+/// (`autoCategoryFor`) because which pile a Sol Ring belongs in is domain logic and this module
+/// is plumbing. When both arrive the id wins, for `add_card`'s reason: it is the more specific
+/// instruction.
+///
+/// **The name arm is why this resolves inside the transaction and why `from == to` is checked
+/// after it and not before.** A refile whose target does not exist yet *writes* — the category
+/// is made here — and a card whose rule names the pile it is already in has to be answered
+/// `Ok`, not moved; neither is knowable until the name has been resolved.
+///
+/// Answers the id of the category the copies are now in, which for the name arm is the only way
+/// a caller learns what was found or made. The caret follows a moved card to its new pile, so
+/// that id is not a convenience.
 pub fn move_card(
     conn: &Connection,
     deck_id: i64,
     card_id: &str,
     from_category_id: i64,
-    to_category_id: i64,
+    to_category_id: Option<i64>,
+    to_category_name: Option<&str>,
     variant: &str,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
-    if from_category_id == to_category_id {
-        return Ok(());
+    if to_category_id.is_none() && to_category_name.is_none() {
+        return Err(NO_CATEGORY.to_owned());
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
     let from = category_of_deck(&tx, deck_id, from_category_id)?;
-    let to = category_of_deck(&tx, deck_id, to_category_id)?;
+    let (to_category_id, to) = match to_category_id {
+        Some(id) => (id, category_of_deck(&tx, deck_id, id)?),
+        // Unreachable past the guard above, and written as a second refusal rather than an
+        // `expect` for `add_card`'s reason: an edit that ever drops that guard answers the
+        // sentence instead of panicking in a reader's face.
+        None => {
+            let Some(name) = to_category_name else {
+                return Err(NO_CATEGORY.to_owned());
+            };
+            (
+                crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+                name.trim().to_owned(),
+            )
+        }
+    };
+    // **After the resolution, because the name arm cannot answer before it.** A card the rule
+    // files where it already is is not an error and is not a move: the caller is told which
+    // pile that was, and this returns **without committing**, so the `touch_deck` above is
+    // rolled back with the transaction. Bumping `updated_at` to leave the list exactly as it
+    // was is the thing the id arm's caller-side guard exists to prevent, and a second entrance
+    // must not reintroduce it.
+    //
+    // Nothing can have been created on this path: `category_for_name` answers a **new** id when
+    // it makes a pile, and a new id is never a pile the card is already in.
+    if from_category_id == to_category_id {
+        return Ok(to_category_id);
+    }
     // The moved row's own denormalized name, read before the move folds it into whatever the
     // target already held — and it is the row's name rather than a fresh `cards` lookup for
     // the reason the identity below travels from the row: an orphan is exactly the card most
@@ -2015,7 +2060,7 @@ pub fn move_card(
     // made.
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(to_category_id)
 }
 
 /// What a swap answers: where the copies ended up, and whether they had company.
@@ -3243,15 +3288,20 @@ pub async fn deck_category_clear(
     .map_err(unfinished)?
 }
 
+/// A drag onto a column, and the quick zones' `Auto` — one command, two ways of naming the
+/// target, which is [`add_card`]'s arrangement and is documented on [`move_card`]. Answers the
+/// category the copies are now in, because the name arm's caller has no other way to learn what
+/// was found or made.
 #[tauri::command]
 pub async fn deck_move_card(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     card_id: String,
     from_category_id: i64,
-    to_category_id: i64,
+    to_category_id: Option<i64>,
+    to_category_name: Option<String>,
     variant: String,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
@@ -3261,6 +3311,7 @@ pub async fn deck_move_card(
                 &card_id,
                 from_category_id,
                 to_category_id,
+                to_category_name.as_deref(),
                 &variant,
             )
         })
@@ -3683,7 +3734,7 @@ mod tests {
         let err = set_card_quantity(&conn, deck.id, "bolt-lea", main, "draft", 1).unwrap_err();
         assert!(err.contains("draft"), "{err}");
         assert_eq!(
-            move_card(&conn, deck.id, "bolt-lea", main, theirs, LIVE).unwrap_err(),
+            move_card(&conn, deck.id, "bolt-lea", main, Some(theirs), None, LIVE).unwrap_err(),
             crate::deck_meta::CATEGORY_WRONG_DECK,
             "the destination is fenced as well as the source"
         );
@@ -3908,7 +3959,7 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-lea", side, 1);
 
-        move_card(&conn, deck.id, "bolt-lea", main, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
 
         assert_eq!(count(&conn, "deck_cards"), 1, "one row, not two");
         let (category, quantity): (i64, i64) = conn
@@ -3925,7 +3976,7 @@ mod tests {
         // move that needed the id to resolve would refuse it.
         conn.execute("DELETE FROM cards", []).unwrap();
 
-        move_card(&conn, deck.id, "bolt-lea", side, scratch, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", side, Some(scratch), None, LIVE).unwrap();
 
         assert_eq!(count(&conn, "deck_cards"), 1);
         let (category, quantity, name, set): (i64, i64, String, String) = conn
@@ -3942,6 +3993,147 @@ mod tests {
         );
     }
 
+    /// The name arm's whole point: the quick zones' `Auto` names a pile the deck has not got,
+    /// and one command makes it and files the card into it. `origin` is **`auto`**, because
+    /// `category_for_name` is what made it — a pile nobody asked for, which is exactly what
+    /// `grouping.ts`'s `drawsWhenEmpty` reads to keep it off the desk once its last card
+    /// leaves. Answering the new id is what lets the caret follow the card there.
+    #[test]
+    fn a_move_by_name_makes_the_pile_it_names_and_marks_it_auto() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        let to = move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            None,
+            Some("Removal"),
+            LIVE,
+        )
+        .unwrap();
+
+        let (name, origin, kind, active): (String, String, String, i64) = conn
+            .query_row(
+                "SELECT name, origin, kind, is_active FROM deck_categories WHERE id = ?1",
+                params![to],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), origin.as_str(), kind.as_str(), active),
+            ("Removal", "auto", "main", 1),
+            "the pile the rule named, recorded as the app's own"
+        );
+        let (category, quantity): (i64, i64) = conn
+            .query_row(
+                "SELECT category_id, quantity FROM deck_cards WHERE variant = ?1",
+                params![LIVE],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((category, quantity), (to, 4), "every copy went with it");
+    }
+
+    /// A pile the reader already made is **found**, not made again — `category_for_name`'s
+    /// rule, reached through this arm. So a refile into their own "Removal" keeps that pile's
+    /// `user` origin, and the deck grows no second column by the same name.
+    #[test]
+    fn a_move_by_name_files_into_the_readers_own_pile_and_leaves_its_origin_alone() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let theirs = crate::deck_meta::create_category(&conn, deck.id, "Removal").unwrap();
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        let to = move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            None,
+            Some("Removal"),
+            LIVE,
+        )
+        .unwrap();
+
+        assert_eq!(to, theirs.id, "found, not made");
+        let origin: String = conn
+            .query_row(
+                "SELECT origin FROM deck_categories WHERE id = ?1",
+                params![to],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(origin, "user", "a pile they made stays theirs");
+        assert_eq!(
+            count(&conn, "deck_categories"),
+            6,
+            "four seeded zones, `main_of`'s own Main deck, and their one Removal — \
+             no second column by that name"
+        );
+    }
+
+    /// **A card the rule files where it already is writes nothing at all**, and the check that
+    /// says so runs after the name has been resolved because there is no other moment it could.
+    /// `updated_at` must not move: a refile that changed nothing is not an edit to the deck, and
+    /// the transaction is dropped rather than committed precisely so the `touch_deck` above it
+    /// is rolled back with it.
+    #[test]
+    fn a_move_by_name_onto_the_cards_own_pile_touches_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        conn.execute(
+            "UPDATE decks SET updated_at = 1 WHERE id = ?1",
+            params![deck.id],
+        )
+        .unwrap();
+        let audits = count(&conn, "deck_audit");
+
+        let to = move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            None,
+            Some("Main deck"),
+            LIVE,
+        )
+        .unwrap();
+
+        assert_eq!(to, main, "it names the pile the card is in");
+        let touched: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(touched, 1, "a no-op move does not bump the deck");
+        assert_eq!(count(&conn, "deck_audit"), audits, "and writes no history");
+    }
+
+    /// Neither half of the target given is the one refusal this arm adds, and it is
+    /// [`add_card`]'s `NO_CATEGORY` verbatim — two commands answering the same question answer
+    /// it with the same sentence.
+    #[test]
+    fn a_move_with_no_target_at_all_is_refused() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        assert_eq!(
+            move_card(&conn, deck.id, "bolt-lea", main, None, None, LIVE).unwrap_err(),
+            NO_CATEGORY,
+        );
+    }
+
     /// A move re-files a card; it never promotes a plan into the deck. The two variants hold
     /// the same printing in the same category, and moving one leaves the other exactly where
     /// it was.
@@ -3954,7 +4146,7 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 2).unwrap();
 
-        move_card(&conn, deck.id, "bolt-lea", main, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
 
         let rows: Vec<(String, i64, i64)> = conn
             .prepare("SELECT variant, category_id, quantity FROM deck_cards ORDER BY variant, id")
@@ -5412,7 +5604,7 @@ mod tests {
         assert!(updated_at(&conn) > 0, "so does the stepper");
 
         backdate(&conn);
-        move_card(&conn, deck.id, "bolt-lea", main, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
         assert!(updated_at(&conn) > 0, "and so does the move");
 
         // The same statement is the existence check: a stale deck id from a gallery that
@@ -6849,14 +7041,14 @@ mod tests {
             "the stepper hands three copies back"
         );
 
-        move_card(&conn, deck.id, "bolt-lea", main, scratch, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(scratch), None, LIVE).unwrap();
         assert_eq!(
             claims(&conn, deck.id),
             vec![],
             "an inactive category is a scratchpad, and a scratchpad reserves nothing"
         );
 
-        move_card(&conn, deck.id, "bolt-lea", scratch, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", scratch, Some(side), None, LIVE).unwrap();
         assert_eq!(claims(&conn, deck.id), vec![(entry, 1)], "a sideboard does");
 
         set_card_quantity(&conn, deck.id, "bolt-lea", side, LIVE, 0).unwrap();
