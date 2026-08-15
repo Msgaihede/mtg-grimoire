@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { parseDecklist } from "./parse";
-import { ARENA_LIST, MOXFIELD_LIST, MTGO_LIST, REFERENCE_LIST } from "./fixtures";
+import {
+  ARCHIDEKT_FLAT,
+  ARCHIDEKT_SECTIONED,
+  ARENA_LIST,
+  EMPTY_HINT_LIST,
+  MOXFIELD_LIST,
+  MTGO_LIST,
+  REFERENCE_LIST,
+} from "./fixtures";
 
 describe("parseDecklist", () => {
   it("reads the reference list whole", () => {
@@ -155,5 +163,50 @@ describe("parseDecklist", () => {
       totalCards: 0,
       suggestedName: null,
     });
+  });
+});
+
+describe("the format fixtures", () => {
+  const rowsOf = (text: string) => text.split("\n");
+  const cardish = (text: string) => rowsOf(text).filter((r) => /^\d{1,4}x?\s/.test(r.trim()));
+  const copies = (text: string) =>
+    cardish(text).reduce((n, r) => n + Number(/^(\d{1,4})/.exec(r.trim())![1]), 0);
+
+  it("holds three exports of one deck, counted", () => {
+    expect(rowsOf(ARCHIDEKT_SECTIONED).length).toBe(132);
+    expect(cardish(ARCHIDEKT_SECTIONED).length).toBe(105);
+    expect(copies(ARCHIDEKT_SECTIONED)).toBe(117);
+
+    expect(cardish(ARCHIDEKT_FLAT).length).toBe(88);
+    expect(copies(ARCHIDEKT_FLAT)).toBe(100);
+
+    expect(cardish(EMPTY_HINT_LIST).length).toBe(88);
+    expect(copies(EMPTY_HINT_LIST)).toBe(100);
+  });
+
+  it("is the reference list's deck, so the two fixtures check each other", () => {
+    // 105 lines and 117 copies in both, which is what makes a mistyped fixture visible.
+    expect(cardish(REFERENCE_LIST).length).toBe(cardish(ARCHIDEKT_SECTIONED).length);
+    expect(copies(REFERENCE_LIST)).toBe(copies(ARCHIDEKT_SECTIONED));
+  });
+
+  it("is the sectioned list less its 17 {noDeck} cards", () => {
+    const noDeckFirst = cardish(ARCHIDEKT_SECTIONED).filter((r) => {
+      const bracket = /\[([^\]]+)\]/.exec(r);
+      return bracket !== null && bracket[1].split(",")[0].includes("{noDeck}");
+    });
+    expect(noDeckFirst.length).toBe(17);
+    expect(cardish(ARCHIDEKT_SECTIONED).length - noDeckFirst.length).toBe(88);
+    expect(copies(ARCHIDEKT_SECTIONED) - noDeckFirst.length).toBe(100);
+  });
+
+  it("counts the decorations each fixture exists to exercise", () => {
+    const count = (text: string, re: RegExp) => cardish(text).filter((r) => re.test(r)).length;
+    expect(count(ARCHIDEKT_SECTIONED, /\^[^^]*\^\s*$/)).toBe(44);
+    expect(count(ARCHIDEKT_SECTIONED, /\s\*[A-Z]\*[\s]/)).toBe(3);
+    expect(count(ARCHIDEKT_SECTIONED, / \/\/ /)).toBe(7);
+    expect(count(ARCHIDEKT_FLAT, /\^[^^]*\^\s*$/)).toBe(43);
+    expect(count(EMPTY_HINT_LIST, /\(\)\s/)).toBe(33);
+    expect(count(EMPTY_HINT_LIST, / \/\/ /)).toBe(0);
   });
 });
