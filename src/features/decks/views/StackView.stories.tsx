@@ -353,6 +353,125 @@ export const WrappedPiles: Story = {
 };
 
 /**
+ * Six piles, one of them eight cards deep and the rest one card each — the deck shape the flow
+ * stopped being a row of flex lines for.
+ *
+ * **Local, and built to be lopsided.** {@link wideGroups} is a reasonable deck and every pile in
+ * it is within a card or two of its neighbours, which is exactly the deck a layout bug of this kind
+ * hides in. A real one is not like that: the creature pile is the deck and the rest are two or
+ * three cards apiece.
+ *
+ * No Sideboard and no Maybeboard, so there is no rail and the whole desk is flow — the piles are
+ * the only thing in the picture.
+ */
+function unevenGroups() {
+  const commander = deckCategory("commander");
+  const named = (id: number, name: string, sortOrder: number): DeckCategory => ({
+    ...deckCategory("main"),
+    id,
+    name,
+    sortOrder,
+  });
+  const creatures = named(20, "Creatures", 1);
+  const ramp = named(21, "Ramp", 2);
+  const removal = named(22, "Removal", 3);
+  const draw = named(23, "Card draw", 4);
+  const lands = named(24, "Lands", 5);
+
+  const pile = (category: DeckCategory): Partial<DeckCard> => ({
+    categoryId: category.id,
+    categoryName: category.name,
+    categoryKind: category.kind,
+    categoryActive: category.isActive,
+  });
+
+  // Eight printings none of this file's other fixtures draw, so no two stories here are the same
+  // deck with a different decorator.
+  const creatureArt = [
+    ["2x2", "117"],
+    ["sld", "1638"],
+    ["sta", "105"],
+    ["vma", "4"],
+    ["lea", "47"],
+    ["2ed", "48"],
+    ["eld", "115"],
+    ["znr", "90"],
+  ] as const;
+
+  const cards = [
+    deckCard(printing("eld", "303"), pile(commander)),
+    ...creatureArt.map(([set, number]) => deckCard(printing(set, number), pile(creatures))),
+    deckCard(printing("c21", "263"), pile(ramp)),
+    deckCard(printing("gtc", "148"), pile(removal)),
+    deckCard(printing("pcy", "45"), pile(draw)),
+    deckCard(printing("mh2", "259"), pile(lands)),
+  ].map((card) => ({ ...card, ownedQuantity: card.quantity }));
+
+  return buildGroups(
+    cards,
+    [commander, creatures, ramp, removal, draw, lands],
+    "category",
+    "alphabetical",
+  );
+}
+
+/**
+ * **The story the masonry exists for**: one pile far taller than the rest, and the piles that wrap
+ * under it starting at the foot of the pile *above* them rather than under the tall one.
+ *
+ * Three columns, six piles. Commander, Creatures and Ramp take the first line; the Creatures pile
+ * is eight cards deep and the two beside it are one card each. Removal then starts directly under
+ * the Commander, Card draw under Ramp, and Lands under Removal — all of it while the Creatures
+ * stack is still running down the middle of the desk.
+ *
+ * **What this replaced, and what the reader saw.** The flow was a wrapping flex box until
+ * 2026-08-15, and a flex line is as tall as the tallest item in it: Removal, Card draw and Lands
+ * all began *below* the eight-card stack, so the desk carried a band of blank space under every
+ * short pile the height of the long one — three cards' worth here, and far worse in a deck with a
+ * forty-card creature pile in it, which is the ordinary case. Wrapping had already fixed the same
+ * bug on the other axis (see {@link WrappedPiles}); this is the half it left standing.
+ *
+ * **What has not changed is the order.** The piles are the reader's own `sortOrder` in the DOM and
+ * grid placement never walks back up the page, so reading order, tab order and what a screen reader
+ * hears are exactly what they were — which is the reason this is a grid of one-pixel rows and not
+ * six hand-assigned columns. A column-per-box layout would draw the same picture and read it out
+ * in the wrong order.
+ */
+export const UnevenPiles: Story = {
+  args: { groups: unevenGroups() },
+  decorators: [
+    // 736px, which is three boxes and their two gutters (3 × 224 + 2 × 16 = 704) **plus room for
+    // a scrollbar**, and the 32 is not slack. There is no rail to leave room for here, so 704
+    // would be the exact fit — and it draws two columns, because the meta's decorator hands this
+    // view a fixed 42rem of height, the deck is taller than that, and the 15px vertical scrollbar
+    // the root then draws comes out of the flow's width before `auto-fill` counts anything. The
+    // editor gives this view no height at all and never has that scrollbar; a story that declares
+    // one has to pay for it. Width only and `shrink-0`, for {@link WrappedPiles}' reasons.
+    (Story) => (
+      <div className="flex w-[46rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
+    // The whole deck flows — no `side` and no `maybe` pile, so no rail — and the order is the
+    // reader's. **Where** each one is drawn is not a question jsdom can be asked: it lays nothing
+    // out, so every pile here measures 0 and every span is the gutter alone. The picture is the
+    // thing to look at, and the arithmetic behind it is `flowRowSpan`'s own test.
+    expect(canvasElement.querySelectorAll(`[${RAIL_ATTR}]`)).toHaveLength(0);
+    expect(stacks.map((stack) => stack.querySelector('[id^="group-"]')?.textContent)).toEqual([
+      "Commander",
+      "Creatures",
+      "Ramp",
+      "Removal",
+      "Card draw",
+      "Lands",
+    ]);
+  },
+};
+
+/**
  * The rail: the two piles played *beside* the deck, in one column pinned to the right of the
  * flowing ones. It was the Sideboard alone, and it is the Sideboard and the Maybeboard now.
  *
