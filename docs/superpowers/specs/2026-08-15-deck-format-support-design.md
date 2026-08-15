@@ -173,10 +173,18 @@ inserted:
 
 ```
 forcedCategoryName          the right-click aimed the import at a pile
-  > line.categoryName       the file named one
-  > SECTION_CATEGORY[kind]  the file named a section
+  > SECTION_CATEGORY[kind]  the line is in one of the four zones
+  > line.categoryName       the file named a pile of its own
   > autoCategoryFor(…)      nobody named one; file it by what the card does
 ```
+
+**The zone is above the name, not below it** — which is not the order the two arrive in, and this
+paragraph corrects an earlier draft of this spec that had them the other way round. A section is a
+*rules fact* (the command zone, a sideboard); a category name is *filing*. The two orderings are
+behaviourally identical today, because §1.6's invariant keeps `categoryName` `null` whenever
+`section` is not `"deck"` — no reachable `ParsedLine` carries both — so the choice is about which
+rule survives if that invariant is ever relaxed, and a card in the command zone must not be filed
+out of it by a bracket.
 
 `autoCategoryFor` is untouched and stays the app's one filing rule. The four seeded names are
 still spelled exactly, so `Sideboard` lands on the seeded `side` row through
