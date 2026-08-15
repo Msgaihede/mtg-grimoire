@@ -68,6 +68,11 @@ export const SECTION_CATEGORY = {
  * switches off a pile of their own gets exactly this behaviour from the same flag. What the
  * tally is saying is "these cards will land in a pile that counts toward nothing", which is
  * worth saying *before* an import rather than after it.
+ *
+ * **It is one of two ways a tally row reads inactive, not the only one**, since a file can say so
+ * itself: Archidekt's `{noDeck}` arrives as {@link ImportItem.inactive} and {@link tallyOf} ORs
+ * the two. This one is a fact about a row the deck already has; that one is a fact about a pile
+ * the import is about to make.
  */
 const SEEDED_INACTIVE: string = SECTION_CATEGORY.maybeboard;
 
@@ -96,6 +101,9 @@ export interface PlannedCard {
   /** A **name**, never an id — the piles an imported list names may not exist yet, and
    *  `deck_import_commit` finds-or-creates each one. */
   categoryName: string;
+  /** The file said this pile counts toward nothing — Archidekt's `{noDeck}`. It rides to
+   *  `ImportItem.inactive`, where it switches off **only a pile the import creates**. */
+  excluded: boolean;
 }
 
 /** A line no printing answered. Quoted back, never an error: the import proceeds without it. */
@@ -213,14 +221,37 @@ function identityOf(m: ImportMatch): CardIdentity {
 }
 
 /**
- * The pile one line lands in.
+ * The pile one line lands in — one chain, in the order the reader's own intent narrows.
  *
- * A section heading is the reader saying so, and is taken as said. Everything else is
- * {@link autoCategoryFor}, which is the app's **one** rule for this and must never be copied:
- * a plain add, a drag with no column under it and an imported line all have to agree about
- * where a Sol Ring goes, or the same deck files the same card two ways. That rule reads a
- * **land's type line first, then the card's Oracle tags, then its type line** — so this hands
- * it both facts and decides nothing itself.
+ * ```
+ * forcedCategoryName        the right-click aimed this import at a pile
+ *   > SECTION_CATEGORY[…]   the line is in one of the four zones
+ *   > line.categoryName     the file named a pile of its own
+ *   > autoCategoryFor(…)    nobody named one: file it by what the card does
+ * ```
+ *
+ * **The zone is above the name and not below it**, which is not the order the two *arrived* in:
+ * a section is a rules fact — the command zone, a sideboard — and a category name is filing.
+ * {@link ParsedLine.categoryName} is `null` whenever `section` is not `"deck"` — the parser
+ * guarantees it, a bracket or a heading naming one of the four seeded zones setting the *section*
+ * instead — so the two can never both answer, and that invariant is the whole of what makes this
+ * three rungs rather than four.
+ *
+ * **A file naming a pile is the reader naming one.** The app's rule has always been that an add
+ * naming a category is untouched and only an add naming none is filed by what the card does; an
+ * Archidekt export naming `Flash Enabler` is that statement, made by the reader weeks ago in
+ * somebody else's deck builder. {@link autoCategoryFor} is untouched and is still the app's
+ * **one** filing rule for everything that names nothing — it must never be copied, because a
+ * plain add, a drag with no column under it and an imported line all have to agree about where a
+ * Sol Ring goes, or the same deck files the same card two ways. That rule reads a **land's type
+ * line first, then the card's Oracle tags, then its type line** — so this hands it both facts and
+ * decides nothing itself.
+ *
+ * `forcedCategoryName` still outranks all of it: right-clicking "Removal" and pressing Import
+ * names a pile, and it is the later and more specific naming — a heading and a bracket are what
+ * somebody else's exporter wrote, and the right-click is the reader pointing at a column of their
+ * own a moment ago. Absent, and every existing caller is byte-for-byte unchanged. **The command
+ * zone outranks even that**, applied in {@link toImportItems} after the pile is chosen.
  *
  * **The slugs are looked up by `cardId`, never taken by position** — see {@link buildImportPlan}
  * for why a decklist is exactly the shape that breaks positional matching. A card the tag read
@@ -237,19 +268,12 @@ function categoryFor(
   slugs: ReadonlyMap<string, readonly string[]>,
   forcedCategoryName: string | undefined,
 ): string {
-  // **A named pile overrides the filer, which is the rule this app already has**: an add that
-  // names a category is untouched, and only an add that names none is filed by what the card
-  // does. Right-clicking "Removal" and pressing Import names one. Absent, and every existing
-  // caller is byte-for-byte unchanged.
-  //
-  // It outranks a **section heading** as well, which is the one thing worth saying out loud: a
-  // heading is what somebody else's exporter wrote, and the right-click is the reader pointing
-  // at a column of their own a moment ago. Two namings, and the later and more specific one
-  // wins. (The command zone still outranks both — see {@link toImportItems}.)
   if (forcedCategoryName !== undefined) return forcedCategoryName;
-  return line.section === "deck"
-    ? autoCategoryFor({ typeLine: match.typeLine, oracleTags: slugs.get(match.cardId) })
-    : SECTION_CATEGORY[line.section];
+  if (line.section !== "deck") return SECTION_CATEGORY[line.section];
+  return (
+    line.categoryName ??
+    autoCategoryFor({ typeLine: match.typeLine, oracleTags: slugs.get(match.cardId) })
+  );
 }
 
 /**
@@ -349,6 +373,7 @@ export function buildImportPlan(
       match: row.matched,
       quantity: line.quantity,
       categoryName: categoryFor(line, row.matched, slugs, forcedCategoryName),
+      excluded: line.excluded,
     });
   }
 
@@ -386,11 +411,20 @@ export function buildImportPlan(
  */
 export function tallyOf(items: readonly ImportItem[]): CategoryTally[] {
   const copies = new Map<string, number>();
+  const inactive = new Set<string>();
   for (const item of items) {
     copies.set(item.categoryName, (copies.get(item.categoryName) ?? 0) + item.quantity);
+    // The seeded Maybeboard arrives switched off; a `{noDeck}` pile the import is about to make
+    // will be. Either way the sentence the preview owes the reader is the same one, so the two
+    // are **OR**ed rather than branched between — and it is OR'd across the *items*, because one
+    // pile can be named by several lines and a single `{noDeck}` among them is what the file
+    // said about that pile.
+    if (item.inactive === true || item.categoryName === SEEDED_INACTIVE) {
+      inactive.add(item.categoryName);
+    }
   }
   return [...copies]
-    .map(([name, count]) => ({ name, cards: count, inactive: name === SEEDED_INACTIVE }))
+    .map(([name, count]) => ({ name, cards: count, inactive: inactive.has(name) }))
     .sort((a, b) => tallyOrder(a.name) - tallyOrder(b.name));
 }
 
@@ -446,12 +480,23 @@ function commanderChoice(cards: readonly PlannedCard[], spec: FormatSpec | null)
  * **Which is exactly why the tally is {@link tallyOf} over this function's answer** rather than
  * a field on the plan: this is the one place the commander choice is applied, so it is the only
  * place a preview of it can be counted.
+ *
+ * `inactive` rides across here for the same reason and is decided in the same expression: the
+ * command zone outranks the pile the file named, so the `{noDeck}` that came with that pile has
+ * to go with it. A commander filed into a switched-off category is a deck with no commander —
+ * `is_active = 0` counts toward nothing, the command zone included.
  */
 export function toImportItems(plan: ImportPlan, commanderIds: readonly string[]): ImportItem[] {
   const chosen = new Set(commanderIds);
-  return plan.cards.map((card) => ({
-    cardId: card.match.cardId,
-    quantity: card.quantity,
-    categoryName: chosen.has(card.match.cardId) ? SECTION_CATEGORY.commander : card.categoryName,
-  }));
+  return plan.cards.map((card) => {
+    const isCommander = chosen.has(card.match.cardId);
+    return {
+      cardId: card.match.cardId,
+      quantity: card.quantity,
+      categoryName: isCommander ? SECTION_CATEGORY.commander : card.categoryName,
+      // The command zone outranks the pile, so the flag that came with the pile goes with it —
+      // a commander in a switched-off category is a deck with no commander.
+      inactive: isCommander ? false : card.excluded,
+    };
+  });
 }

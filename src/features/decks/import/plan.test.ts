@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { FormatSpec, ImportMatch, ImportResolveRow, PrintingTags } from "@/lib/ipc";
+import type {
+  FormatSpec,
+  ImportItem,
+  ImportMatch,
+  ImportResolveRow,
+  PrintingTags,
+} from "@/lib/ipc";
 import { PREDEFINED_CATEGORY_NAMES } from "../autoCategory";
 import { spec } from "../validation/fixtures";
+import { ARCHIDEKT_SECTIONED } from "./fixtures";
 import { parseDecklist } from "./parse";
 import {
   SECTION_CATEGORY,
@@ -506,6 +513,157 @@ describe("filing an imported line by what the card does", () => {
 });
 
 /**
+ * The piles a decklist wrote down for itself.
+ *
+ * An Archidekt export names a pile on every line — in the line's own `[bracket]`, and again in
+ * the heading above it — and those names are the reader's filing, made weeks ago in somebody
+ * else's deck builder. The app's rule has always been that an add naming a category is untouched,
+ * so they sit one rung above {@link autoCategoryFor}, which answers for every line that named
+ * nothing.
+ *
+ * Which text produces which `categoryName` is `parse.test.ts`'s job; what is asserted here is the
+ * **chain** — that the name reaches the pile, that a zone and a right-click each outrank it, and
+ * that `{noDeck}` rides all the way to the item.
+ */
+describe("filing an imported line by the pile its file named", () => {
+  it("takes the pile the file named over the auto rule, and the auto rule when it named none", () => {
+    const plan = planFor("1x Sol Ring (fic) 358 [Flash Enabler]\n1 Lightning Bolt", {
+      "Sol Ring": SOL_RING,
+      "Lightning Bolt": BOLT,
+    });
+
+    expect(plan.cards.map((c) => [c.match.name, c.categoryName])).toEqual([
+      ["Sol Ring", "Flash Enabler"],
+      ["Lightning Bolt", "Instant"],
+    ]);
+  });
+
+  /** The other route to the same rung: Archidekt's sectioned export writes the pile as a heading
+   *  as well as in each line's bracket, and a heading the section vocabulary has never heard of
+   *  is a pile rather than a card. Llanowar Elves is the contrast — `Creature` by type line. */
+  it("files a line by the heading it was printed under", () => {
+    const plan = planFor("Deck\n1 Sol Ring\n\nRamp\n1 Llanowar Elves", {
+      "Sol Ring": SOL_RING,
+      "Llanowar Elves": ELVES,
+    });
+
+    expect(plan.cards.map((c) => [c.match.name, c.categoryName])).toEqual([
+      ["Sol Ring", "Artifact"],
+      ["Llanowar Elves", "Ramp"],
+    ]);
+  });
+
+  it("lets a zone outrank a name, and a forced pile outrank both", () => {
+    // A bracket naming one of the four zones is the **section**, and the parser keeps
+    // `categoryName` null there — so `[Commander{top}]` reaches the command zone through the one
+    // mechanism the seeded piles already use, rather than making a pile spelled the same way.
+    const zoned = planFor("1x Captain Sisay (mmq) 231 [Commander{top}]", {
+      "Captain Sisay": SISAY,
+    });
+    expect(zoned.cards[0].categoryName).toBe("Commander");
+
+    // A pile the reader right-clicked a moment ago is the later and more specific naming.
+    const forced = planFor(
+      "1x Sol Ring (fic) 358 [Flash Enabler]",
+      { "Sol Ring": SOL_RING },
+      null,
+      [],
+      "Removal",
+    );
+    expect(forced.cards[0].categoryName).toBe("Removal");
+  });
+
+  it("carries the excluded flag onto the item it sends", () => {
+    const plan = planFor("1x Sol Ring (fic) 358 [(New) Maybeboard{noDeck}{noPrice},Artifact]", {
+      "Sol Ring": SOL_RING,
+    });
+
+    expect(plan.cards[0].excluded).toBe(true);
+    expect(toImportItems(plan, [])).toEqual([
+      { cardId: SOL_RING.cardId, quantity: 1, categoryName: "(New) Maybeboard", inactive: true },
+    ]);
+  });
+
+  /** The command zone outranks the pile, so the flag that came with the pile goes with it: a
+   *  commander in a switched-off category is a deck with no commander. */
+  it("never sends an excluded commander", () => {
+    const plan = planFor(
+      "1x Captain Sisay (mmq) 231 [(New) Maybeboard{noDeck}{noPrice},Creature]",
+      { "Captain Sisay": SISAY },
+      spec("commander"),
+    );
+
+    expect(plan.commander).toEqual({ kind: "automatic", cardIds: [SISAY.cardId] });
+    expect(toImportItems(plan, [SISAY.cardId])).toEqual([
+      { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander", inactive: false },
+    ]);
+  });
+
+  /** Two sources, one sentence: the seeded Maybeboard arrives switched off, and a `{noDeck}` pile
+   *  the import is about to make will be. The preview owes the reader the same words for both. */
+  it("counts a pile the file switched off as inactive, beside the seeded one", () => {
+    const items: ImportItem[] = [
+      { cardId: "a", quantity: 3, categoryName: "(New) Maybeboard", inactive: true },
+      { cardId: "b", quantity: 2, categoryName: "Ramp" },
+      { cardId: "c", quantity: 1, categoryName: "Maybeboard" },
+    ];
+
+    expect(tallyOf(items)).toEqual([
+      { name: "Maybeboard", cards: 1, inactive: true },
+      { name: "Ramp", cards: 2, inactive: false },
+      { name: "(New) Maybeboard", cards: 3, inactive: true },
+    ]);
+  });
+
+  /** **OR**ed across the items rather than read off the first one. Archidekt writes the same
+   *  bracket on every card of a category, so agreement is the ordinary case — but a list that
+   *  disagreed with itself still said `{noDeck}` about that pile, and a row quietly counted as
+   *  ordinary is the one sentence the reader needed before pressing Import. */
+  it("ORs the flag across the items of one pile", () => {
+    expect(
+      tallyOf([
+        { cardId: "a", quantity: 1, categoryName: "Cuts" },
+        { cardId: "b", quantity: 1, categoryName: "Cuts", inactive: true },
+      ]),
+    ).toEqual([{ name: "Cuts", cards: 2, inactive: true }]);
+  });
+
+  /**
+   * The whole sectioned Archidekt export through the chain — 14 headings, a bracket on every
+   * line and 17 `{noDeck}` cards, planned in one call.
+   *
+   * The resolver is stubbed by name, which is the same stand-in {@link planFor} makes and says
+   * only "a printing answered this line". Nothing here asserts *which* printing: that is
+   * `resolve_lines`' question and no TypeScript test can answer it.
+   */
+  it("plans the sectioned Archidekt export into the piles it names", () => {
+    const parsed = parseDecklist(ARCHIDEKT_SECTIONED);
+    const rows: ImportResolveRow[] = parsed.lines.map((line, index) => ({
+      index,
+      matched: match({ name: line.name }),
+      hintMissed: false,
+    }));
+
+    const plan = buildImportPlan(parsed, rows, null);
+    const items = toImportItems(plan, []);
+
+    expect(plan.cards).toHaveLength(105);
+    expect(plan.totalCards).toBe(117);
+    // The 10 cards under the `Maybeboard` heading reach the seeded pile through the section; the
+    // 7 under `(New) Maybeboard` are a pile the import will have to make, switched off.
+    expect(items.filter((i) => i.inactive === true)).toHaveLength(17);
+    expect(tallyOf(items).filter((t) => t.inactive)).toEqual([
+      { name: "Maybeboard", cards: 10, inactive: true },
+      { name: "(New) Maybeboard", cards: 7, inactive: true },
+    ]);
+    expect(items.filter((i) => i.categoryName === "Commander")).toHaveLength(1);
+    // Every other line named a pile of the file's own, so nothing fell through to the type-line
+    // fallback these stubbed printings would otherwise all land in.
+    expect(items.filter((i) => i.categoryName === "Uncategorised")).toHaveLength(0);
+  });
+});
+
+/**
  * The bug the live pass found: the preview counted the piles **before** the commander was
  * chosen and never again, so its two headline numbers described an import nobody asked for.
  * Measured against the reference list (**debug** build, 2026-08-12): the step read
@@ -640,6 +798,7 @@ Deck
       cardId: SELVALA.cardId,
       quantity: 1,
       categoryName: "Commander",
+      inactive: false,
     });
     expect(tallyFor(plan, [SELVALA.cardId])).toEqual([
       { name: "Commander", cards: 1, inactive: false },
@@ -692,10 +851,13 @@ describe("toImportItems", () => {
       spec("commander"),
     );
 
+    // `inactive` is on every item and is `false` for a list that said nothing about it — the
+    // field is optional on the wire so an older caller still deserialises, not so this one may
+    // leave it out.
     expect(toImportItems(plan, [SISAY.cardId])).toEqual([
-      { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander" },
-      { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact" },
-      { cardId: FOREST.cardId, quantity: 6, categoryName: "Land" },
+      { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander", inactive: false },
+      { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
+      { cardId: FOREST.cardId, quantity: 6, categoryName: "Land", inactive: false },
     ]);
   });
 
@@ -712,7 +874,7 @@ describe("toImportItems", () => {
     const plan = planFor("6 Forest", { Forest: FOREST });
 
     expect(toImportItems(plan, [])).toEqual([
-      { cardId: FOREST.cardId, quantity: 6, categoryName: "Land" },
+      { cardId: FOREST.cardId, quantity: 6, categoryName: "Land", inactive: false },
     ]);
   });
 });
