@@ -102,11 +102,25 @@ export function QuantityStepper({
    * `xs` is the deck's row scale: a stepper inside a 150px grid tile or a 22px text row, where
    * `sm`'s 28px does not fit.
    *
-   * `card` is the 24px column drawn over a card face in the deck stack — between `xs` and `sm`
-   * because it is neither: at 20px a control laid on an illustration is a smudge, and at 28px
-   * three of them stacked are a seventh of the card. It carries a larger corner radius with it,
-   * which is not decoration either — a 20px box reads as a chip at `rounded-md` and as a button
-   * at `rounded-lg`, and this is the one place the reader has to tell those apart on top of art.
+   * `card` is the **48px** column drawn over a card face in the deck stack, and it is the one
+   * size larger than the default rather than smaller than `sm` — which is the reverse of what it
+   * was until 2026-08-15, when it was 24px. Everything else in this file sits in a *row* of
+   * controls and is sized by the row; this one stands alone in a 210px card's right margin, over
+   * an illustration, and is the whole of what a reader presses to change how many copies a deck
+   * holds. At 24px it was the smallest control in the app in the place with the most room for
+   * one. Doubled it is 23% of the card's width and half its height — deliberate, and the number
+   * to check first if the column ever overflows the face.
+   *
+   * **The buttons are square at every size and the field is square in a column**, and at this
+   * one the pairing is load-bearing rather than incidental: `vertical` squares the field to the
+   * buttons' own width (see {@link orientation}), so the column is one width from top to bottom.
+   * A `wide` field in a card's margin would either be wider than the card can spare or drag the
+   * buttons out to meet it.
+   *
+   * It carries a larger corner radius with it, which is not decoration either — a small box
+   * reads as a chip at `rounded-md` and as a button at `rounded-lg`, and this is the one place
+   * the reader has to tell those apart on top of art. `rounded-lg` did not double with the box:
+   * 8px on 48px still reads as a button, and 16px would read as a pill.
    */
   size?: "xs" | "card" | "sm" | "md";
   /** Which side of the control's own edge the focus outline is drawn on. `inset` for a stepper
@@ -132,7 +146,7 @@ export function QuantityStepper({
     size === "xs"
       ? "size-5"
       : size === "card"
-        ? "size-6 rounded-lg"
+        ? "size-12 rounded-lg"
         : size === "sm"
           ? "size-7"
           : "size-9";
@@ -140,13 +154,15 @@ export function QuantityStepper({
     size === "xs"
       ? "text-[0.625rem]"
       : size === "card"
-        ? "text-[0.6875rem]"
+        ? "text-[1.375rem]"
         : size === "sm"
           ? "text-xs"
           : "text-sm";
   const wide = size === "xs" ? "h-5 w-8" : size === "sm" ? "h-7 w-12" : "h-9 w-14";
   const field = cn(vertical ? box : wide, text);
-  const icon = size === "xs" ? "size-3" : "size-3.5";
+  // The glyph is a fixed fraction of its button — 14/24 at `card`, doubled with the box, so a
+  // 48px button is not a 14px sign in the middle of an empty square.
+  const icon = size === "xs" ? "size-3" : size === "card" ? "size-7" : "size-3.5";
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);
   const clamp = (n: number) => Math.min(max, Math.max(min, n));

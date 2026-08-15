@@ -365,31 +365,35 @@ export const CommanderDeck: Story = {
 /**
  * One deck, four ways of looking at it — and the same headings in every one.
  *
- * The switch is the toolbar's, the groups are `grouping.ts`'s, and each view decides only how a
- * card is drawn: a stack of card faces, a `VirtualTable` row, a 22px line, a 150px tile. That is
- * what makes this a switch rather than four screens — the Sort and Group by beside it keep
- * meaning the same thing whichever is pressed, and the table's own headers deliberately do not
- * sort, because one list with two orders is a list nobody can read.
+ * The switch is the toolbar's **View** select, the groups are `grouping.ts`'s, and each view
+ * decides only how a card is drawn: a stack of card faces, a `VirtualTable` row, a 22px line, a
+ * 150px tile. That is what makes this a switch rather than four screens — the Sort and Group by
+ * beside it keep meaning the same thing whichever is picked, and the table's own headers
+ * deliberately do not sort, because one list with two orders is a list nobody can read.
+ *
+ * All three of those controls are the same `<select>`, which is what this play walks: three
+ * questions about one list, asked one way.
  */
 export const FourViews: Story = {
   args: { deckId: 3 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const press = (label: string) => userEvent.click(canvas.getByRole("button", { name: label }));
+    const pick = (id: string) => userEvent.selectOptions(canvas.getByLabelText("View"), id);
     await canvas.findByRole("region", { name: "Main deck" });
 
-    await press("Table");
+    await pick("table");
     await expect(await canvas.findByRole("table", { name: "This deck" })).toBeInTheDocument();
 
-    await press("Text");
+    await pick("text");
     await waitFor(async () => await expect(canvas.queryByRole("table")).toBeNull());
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeVisible();
 
-    await press("Grid");
+    await pick("grid");
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeVisible();
 
-    await press("Stacks");
+    await pick("stacks");
     await expect(canvas.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
+    await expect(canvas.getByLabelText("View")).toHaveValue("stacks");
   },
 };
 
