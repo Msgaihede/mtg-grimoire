@@ -1032,6 +1032,55 @@ describe("ContextMenu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  /**
+   * The dismissal that was handing the caret to nobody — and it is not the outside-press carve-out.
+   *
+   * Every other close in this file moves the caret first: Escape's rung, Tab, `run` and `close` all
+   * focus the opener while the panel is still on screen. A scroll or a resize called `onClose()`
+   * bare, so the panel went away under a caret that was inside it — the `[openId]` effect focuses
+   * the panel on open, so on a menu the reader has not touched with the keyboard the caret is
+   * *always* inside it — and focus was left on a panel that is `inert` and on its way out, which
+   * the browser blurs to `<body>`: outside the React root, so the next Tab restarts from the top of
+   * the app. The carve-out does not cover this. It is justified on "the reader who clicked
+   * elsewhere is already somewhere else", and a wheel spin puts the reader nowhere new.
+   *
+   * **What this cannot pin is the other half of the fix**: `HTMLElement.focus()` scrolls the element
+   * into view by default, so a bare hand-back would fight the very scroll that triggered it and the
+   * page would jump back under the reader. `focus({ preventScroll: true })` is what stops that, and
+   * jsdom has no layout and no scrolling to express it in — the option is accepted and inert here,
+   * so the assertion below covers the caret and only a live pass can confirm the scroll.
+   */
+  it("hands the caret back when a scroll or a resize closes the menu", async () => {
+    open([{ kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() }]);
+    const target = screen.getByRole("button", { name: "target" });
+
+    rightClick(target);
+    // The caret starts on the panel, which is what makes the drop reachable without a keystroke.
+    expect(await screen.findByRole("menu")).toHaveFocus();
+
+    // A scroller inside a view rather than the window: `scroll` does not bubble, so the capture
+    // listener on `window` is the only thing that hears this, and that is the registration the
+    // wall's scroller actually exercises.
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    act(() => void scroller.dispatchEvent(new Event("scroll")));
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    // Neither `<body>` nor the fading panel: jsdom leaves the caret on an element that is `inert`
+    // and out of the focus order, which is the same dead end reached by a different road.
+    expect(document.body).not.toHaveFocus();
+    expect(target).toHaveFocus();
+
+    // The same for the other listener registered beside it, which closes for the same reason.
+    target.blur();
+    rightClick(target);
+    expect(await screen.findByRole("menu")).toHaveFocus();
+    act(() => void window.dispatchEvent(new Event("resize")));
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(target).toHaveFocus();
+  });
+
   it("runs a foreign row's action and closes the whole menu", async () => {
     const user = userEvent.setup();
     const pick = vi.fn();

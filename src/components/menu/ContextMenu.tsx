@@ -524,7 +524,31 @@ export function ContextMenu({
     // A `fixed` panel positioned from a point that has scrolled away is worse than no panel, and
     // `scroll` does not bubble — so the listener is on `window` in the capture phase, which is
     // what reaches a scroller five levels down inside a view.
-    const onAway = () => onClose();
+    //
+    // **It hands the caret back, and it is not the outside press above.** That carve-out rests on
+    // "the reader who clicked elsewhere is already somewhere else"; a wheel spin puts the reader
+    // nowhere new, so this is the ordinary rule every other close in this file keeps — Escape's
+    // rung, `Tab`, `run` and `close` all focus the opener while the panel is still on screen. The
+    // caret is *always* inside the panel on a menu nobody has touched with the keyboard, because
+    // the `[openId]` effect focuses it there on open; left alone, the fading panel goes `inert`
+    // under it and the caret ends up on `<body>`, outside the React root, so the next Tab restarts
+    // from the top of the app.
+    //
+    // **`preventScroll`, which is the reason this is not a one-liner.** `focus()` scrolls its
+    // element into view by default, so a bare hand-back would fight the very scroll that closed
+    // the menu and jump the page back under the reader.
+    //
+    // Guarded on the caret being ours to move, which the deliberate closes need no equivalent of:
+    // they are a key or a press *in the panel*, while this fires for any scroll anywhere —
+    // including one no reader caused, an image settling or a `scrollIntoView` from a background
+    // query — and such a scroll must close the menu without also seizing focus from wherever it
+    // legitimately is.
+    const onAway = () => {
+      if (panelRef.current?.contains(document.activeElement)) {
+        opener?.focus({ preventScroll: true });
+      }
+      onClose();
+    };
     document.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("scroll", onAway, true);
     window.addEventListener("resize", onAway);
@@ -533,7 +557,10 @@ export function ContextMenu({
       window.removeEventListener("scroll", onAway, true);
       window.removeEventListener("resize", onAway);
     };
-  }, [onClose, present]);
+    // `opener` joins the deps with the hand-back above. It is one field of the provider's open-menu
+    // state and changes only when a fresh right-click replaces the whole of it, so the three
+    // listeners are still registered once per open rather than once per render.
+  }, [onClose, opener, present]);
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
     const root = panelRef.current;
