@@ -48,6 +48,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// What an apply says when the id it was handed is not the deck's cursor.
 ///
@@ -978,6 +979,203 @@ pub fn read_step(conn: &Connection, audit_id: i64) -> Result<Option<(Step, bool)
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------------------
+
+/// What the toolbar's two buttons draw: the change each would reverse, or `None`.
+///
+/// The whole `DeckAuditEntry` rather than a sentence, because a sentence is domain logic —
+/// `auditText.ts` words it, and the button reads "Undo — Removed 2 × Lightning Bolt" by asking
+/// that module. The same split every row of the history drawer already goes through.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckUndoState {
+    pub undo: Option<crate::deck_audit::DeckAuditEntry>,
+    pub redo: Option<crate::deck_audit::DeckAuditEntry>,
+}
+
+/// The `deck` payload an undo or a redo records, and the whole of what makes the pair legible.
+///
+/// `of` is the history row being reversed, which is what lets `auditText.ts` render the undone
+/// change's own sentence inside the verb rather than "Changed the deck".
+fn reversal_payload(field: &str, of: i64) -> Value {
+    json!({ "field": field, "of": of })
+}
+
+/// One history row for the reversal itself.
+///
+/// **`delta` is negated on an undo and carried straight on a redo**, so the day header's
+/// `+7 / −6` roll-up still adds up: undoing an add of two copies takes two copies out of the
+/// day's arithmetic, which is what happened.
+fn record_reversal(
+    tx: &Connection,
+    deck_id: i64,
+    field: &str,
+    of: i64,
+    delta: i64,
+) -> Result<(), String> {
+    crate::deck_audit::record(
+        tx,
+        deck_id,
+        crate::deck_audit::DECK_LEVEL,
+        crate::deck_audit::DECK,
+        None,
+        &reversal_payload(field, of),
+        delta,
+    )?;
+    Ok(())
+}
+
+/// One history row by id, for the state command and for the delta a reversal negates.
+fn audit_entry(
+    conn: &Connection,
+    audit_id: i64,
+) -> Result<Option<crate::deck_audit::DeckAuditEntry>, String> {
+    conn.query_row(
+        "SELECT id, deck_id, at, variant, kind, card_id, card_name, payload, delta
+           FROM deck_audit WHERE id = ?1",
+        params![audit_id],
+        |r| {
+            Ok(crate::deck_audit::DeckAuditEntry {
+                id: r.get(0)?,
+                deck_id: r.get(1)?,
+                at: r.get(2)?,
+                variant: r.get(3)?,
+                kind: r.get(4)?,
+                card_id: r.get(5)?,
+                card_name: r.get(6)?,
+                payload: r.get(7)?,
+                delta: r.get(8)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// Apply one step, in one transaction, and record the history row for having done it.
+///
+/// `undoing` picks the direction. The id is checked against the cursor rather than trusted:
+/// the webview's toolbar can be a moment behind the deck, and undoing "the most recent change"
+/// when the most recent change is not the one on the button is exactly the surprise this
+/// feature must not produce.
+fn apply_reversal(
+    conn: &Connection,
+    deck_id: i64,
+    audit_id: i64,
+    undoing: bool,
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if undoing {
+        match next_undo(&tx, deck_id)? {
+            None => return Err(NOTHING_TO_UNDO.to_owned()),
+            Some(cursor) if cursor != audit_id => return Err(MOVED_ON.to_owned()),
+            Some(_) => {}
+        }
+    }
+    let (step, undone) = read_step(&tx, audit_id)?.ok_or(NOTHING_TO_UNDO)?;
+    if !undoing && !undone {
+        return Err(NOTHING_TO_REDO.to_owned());
+    }
+    let entry = audit_entry(&tx, audit_id)?.ok_or(NOTHING_TO_UNDO)?;
+    if entry.deck_id != deck_id {
+        return Err(MOVED_ON.to_owned());
+    }
+
+    apply(&tx, deck_id, if undoing { &step.undo } else { &step.redo })?;
+    tx.execute(
+        match undoing {
+            true => "UPDATE deck_undo SET undone_at = unixepoch() WHERE audit_id = ?1",
+            false => "UPDATE deck_undo SET undone_at = NULL WHERE audit_id = ?1",
+        },
+        params![audit_id],
+    )
+    .map_err(|e| e.to_string())?;
+    crate::deck::touch_deck(&tx, deck_id)?;
+    record_reversal(
+        &tx,
+        deck_id,
+        if undoing { "undo" } else { "redo" },
+        audit_id,
+        if undoing { -entry.delta } else { entry.delta },
+    )?;
+    // **Once, for the whole step**, and unconditionally: almost every reversal changes what the
+    // deck claims — a restored card wants copies again, a re-activated pile allocates for its
+    // cards — and working out which ones do not would be a second copy of the allocator's own
+    // rule for no saving worth having.
+    crate::deck::allocate_deck(&tx, deck_id)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// What the deck's Undo and Redo buttons would do, or `None` for each.
+///
+/// **`redo` takes the id from the caller**, because the redo stack lives in the webview and
+/// dies with the window — the reader's position in a session is not a fact about the deck. This
+/// answers what that id names so the button can be labelled, and refuses nothing: a `redo` that
+/// has stopped being redoable simply comes back `None`.
+#[tauri::command]
+pub async fn deck_undo_state(
+    state: tauri::State<'_, Arc<crate::sync::AppState>>,
+    deck_id: i64,
+    redo_id: Option<i64>,
+) -> Result<DeckUndoState, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&state);
+        let undo = match next_undo(&conn, deck_id)? {
+            Some(id) => audit_entry(&conn, id)?,
+            None => None,
+        };
+        let redo = match redo_id {
+            Some(id) => match read_step(&conn, id)? {
+                Some((_, true)) => audit_entry(&conn, id)?.filter(|e| e.deck_id == deck_id),
+                _ => None,
+            },
+            None => None,
+        };
+        Ok(DeckUndoState { undo, redo })
+    })
+    .await
+    .map_err(|e| format!("the deck's undo state could not be read: {e}"))?
+}
+
+/// Undo the named change. The id is the cursor's or the call is refused in words.
+#[tauri::command]
+pub async fn deck_undo_apply(
+    state: tauri::State<'_, Arc<crate::sync::AppState>>,
+    deck_id: i64,
+    audit_id: i64,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+            Some(conn) => apply_reversal(&conn, deck_id, audit_id, true),
+            None => Err(crate::collection::BUSY.to_owned()),
+        }
+    })
+    .await
+    .map_err(|e| format!("the change could not be undone: {e}"))?
+}
+
+/// Put back a change that was undone.
+#[tauri::command]
+pub async fn deck_redo_apply(
+    state: tauri::State<'_, Arc<crate::sync::AppState>>,
+    deck_id: i64,
+    audit_id: i64,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+            Some(conn) => apply_reversal(&conn, deck_id, audit_id, false),
+            None => Err(crate::collection::BUSY.to_owned()),
+        }
+    })
+    .await
+    .map_err(|e| format!("the change could not be redone: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1110,29 +1308,16 @@ mod tests {
         out
     }
 
-    /// Undo the deck's newest step, the way the command will.
+    /// Undo the deck's newest step — [`apply_reversal`] itself, so the sweeps exercise the
+    /// command's own path rather than a second implementation of it that could drift.
     fn undo(conn: &Connection, deck_id: i64) -> Result<(), String> {
-        let audit_id = next_undo(conn, deck_id)?.ok_or("nothing to undo")?;
-        let (step, _) = read_step(conn, audit_id)?.ok_or("no step")?;
-        apply(conn, deck_id, &step.undo)?;
-        conn.execute(
-            "UPDATE deck_undo SET undone_at = unixepoch() WHERE audit_id = ?1",
-            params![audit_id],
-        )
-        .map_err(|e| e.to_string())?;
-        crate::deck::allocate_deck(conn, deck_id)
+        let audit_id = next_undo(conn, deck_id)?.ok_or(NOTHING_TO_UNDO)?;
+        apply_reversal(conn, deck_id, audit_id, true)
     }
 
     /// Redo it again.
     fn redo(conn: &Connection, deck_id: i64, audit_id: i64) -> Result<(), String> {
-        let (step, _) = read_step(conn, audit_id)?.ok_or("no step")?;
-        apply(conn, deck_id, &step.redo)?;
-        conn.execute(
-            "UPDATE deck_undo SET undone_at = NULL WHERE audit_id = ?1",
-            params![audit_id],
-        )
-        .map_err(|e| e.to_string())?;
-        crate::deck::allocate_deck(conn, deck_id)
+        apply_reversal(conn, deck_id, audit_id, false)
     }
 
     /// One command under test: what to call it in a failure, the state it needs, and the one
@@ -1799,6 +1984,181 @@ mod tests {
             Some(first),
             "an undone step is stepped over, not undone twice"
         );
+    }
+
+    /// **The stack stays linear**, which is the property that makes Ctrl+Z twice go back two
+    /// changes rather than toggling one.
+    ///
+    /// An undo is a deck write and records its own history row — the drawer would otherwise
+    /// have a hole in it exactly where the reader was working — but that row gets **no step**,
+    /// so the cursor walks straight past it to the change below.
+    #[test]
+    fn an_undo_records_history_but_is_not_itself_a_step() {
+        let (conn, id) = fresh();
+        let first = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "serra-lea",
+            Some(ramp(&conn, id)),
+            None,
+            "live",
+            1,
+        )
+        .unwrap();
+        let second = next_undo(&conn, id).unwrap().unwrap();
+        assert_ne!(first, second);
+
+        undo(&conn, id).unwrap();
+
+        let entry = audit_entry(&conn, conn.last_insert_rowid())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            entry.kind,
+            crate::deck_audit::DECK,
+            "the undo is in the history"
+        );
+        let payload: Value = serde_json::from_str(&entry.payload).unwrap();
+        assert_eq!(payload, json!({ "field": "undo", "of": second }));
+        assert_eq!(
+            read_step(&conn, entry.id).unwrap(),
+            None,
+            "and is not itself undoable, or Ctrl+Z twice would toggle one change"
+        );
+        assert_eq!(
+            next_undo(&conn, id).unwrap(),
+            Some(first),
+            "the cursor moved down to the change before it"
+        );
+    }
+
+    /// The day header's `+7 / −6` still adds up: undoing an add of two copies takes two copies
+    /// out of the day's arithmetic, because that is what happened.
+    #[test]
+    fn an_undo_negates_the_delta_and_a_redo_carries_it_straight() {
+        let (conn, id) = fresh();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "serra-lea",
+            Some(ramp(&conn, id)),
+            None,
+            "live",
+            2,
+        )
+        .unwrap();
+        let added = next_undo(&conn, id).unwrap().unwrap();
+        assert_eq!(audit_entry(&conn, added).unwrap().unwrap().delta, 2);
+
+        undo(&conn, id).unwrap();
+        let undone = audit_entry(&conn, conn.last_insert_rowid())
+            .unwrap()
+            .unwrap();
+        assert_eq!(undone.delta, -2);
+
+        redo(&conn, id, added).unwrap();
+        let redone = audit_entry(&conn, conn.last_insert_rowid())
+            .unwrap()
+            .unwrap();
+        assert_eq!(redone.delta, 2);
+    }
+
+    /// The toolbar can be a moment behind the deck. Undoing "the most recent change" when the
+    /// most recent change is not the one on the button is the surprise this feature must not
+    /// produce, so the id is checked against the cursor rather than trusted.
+    #[test]
+    fn undoing_a_change_that_is_no_longer_the_newest_is_refused_by_name() {
+        let (conn, id) = fresh();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "serra-lea",
+            Some(ramp(&conn, id)),
+            None,
+            "live",
+            1,
+        )
+        .unwrap();
+        let stale = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "bolt-m10",
+            Some(ramp(&conn, id)),
+            None,
+            "live",
+            1,
+        )
+        .unwrap();
+        let before = snapshot(&conn, id);
+
+        let refused = apply_reversal(&conn, id, stale, true).unwrap_err();
+
+        assert!(refused.contains("edited since"), "{refused}");
+        assert_eq!(snapshot(&conn, id), before, "and it changed nothing");
+    }
+
+    /// Redo is the webview's list, so the id it hands back can be one this deck has not undone
+    /// — a second window, or a step already redone. Refused rather than applied twice.
+    #[test]
+    fn redoing_a_change_that_was_never_undone_is_refused_by_name() {
+        let (conn, id) = fresh();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "serra-lea",
+            Some(ramp(&conn, id)),
+            None,
+            "live",
+            1,
+        )
+        .unwrap();
+        let applied = next_undo(&conn, id).unwrap().unwrap();
+
+        let refused = apply_reversal(&conn, id, applied, false).unwrap_err();
+
+        assert!(refused.contains("not been undone"), "{refused}");
+    }
+
+    /// A step filed under another deck is not this deck's to undo, however the id arrived.
+    #[test]
+    fn a_step_belonging_to_another_deck_is_refused() {
+        let (conn, burn) = fresh();
+        let angels = deck(&conn, "Angels");
+        let pile = category(&conn, angels, "Ramp");
+        crate::deck::add_card(&conn, angels, "serra-lea", Some(pile), None, "live", 1).unwrap();
+        let theirs = next_undo(&conn, angels).unwrap().unwrap();
+
+        let refused = apply_reversal(&conn, burn, theirs, true).unwrap_err();
+
+        assert!(refused.contains("edited since"), "{refused}");
+    }
+
+    /// The state command answers what the two buttons would do, and **the redo half is the
+    /// caller's id** — the redo stack lives in the webview and dies with the window.
+    #[test]
+    fn the_state_command_answers_both_buttons() {
+        let (conn, id) = fresh();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "serra-lea",
+            Some(ramp(&conn, id)),
+            None,
+            "live",
+            1,
+        )
+        .unwrap();
+        let added = next_undo(&conn, id).unwrap().unwrap();
+
+        // Before any undo, the id names a step that is still applied, so there is no redo.
+        assert!(matches!(read_step(&conn, added).unwrap(), Some((_, false))));
+
+        undo(&conn, id).unwrap();
+        let (step, undone) = read_step(&conn, added).unwrap().unwrap();
+        assert!(undone, "the stamp persists, so undo survives a restart");
+        assert!(!step.redo.is_empty(), "and the forward half is still there");
     }
 
     /// The transaction rule, proven by breaking it — `deck_audit`'s own test one table over.
