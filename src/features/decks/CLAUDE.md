@@ -122,7 +122,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   `record_deck_edit` at the moment it is true, `null` for Auto. `record_filed`'s rule for a folder
   path, applied to the only other column pointing at a row with a name of its own.
 - **Driven in the shipped window 2026-08-15** (`npm run tauri dev`, a **debug** build, 1280×800,
-  against the real 116 703-card corpus), and it found nothing the suite had not — which is worth
+  against a real synced corpus), and it found nothing the suite had not — which is worth
   writing down for the two halves it confirms rather than for a defect. **The absences**: the
   "New deck" dialog draws Name, Format, Description, Notes, the theory switch and Folder and **no
   `Add cards to` row**, and the docked panel's only `<select>` is the filter row's `Format`. **The
