@@ -1056,6 +1056,68 @@ and what driving it found.
   full for the first fifth, then linear to nothing: a fade that starts the instant the card lands
   is at 80 % before the eye has arrived.
 
+## The context menu, driven in the shipped window
+
+**2026-08-15, `npm run tauri dev` (a debug build), 1280×800, against the real corpus — 116 710
+cards, data from 2026-08-14.** Every figure below is a reading from that window, not from a test.
+
+- **The two viewport widths differ by the scrollbar, and here is the pair.** The **Search** view
+  reads `documentElement.clientWidth` **1280** and `window.innerWidth` **1280** — no page
+  scrollbar, so nothing separates them and a surface measured only here would ship the bug. The
+  **deck editor** reads `clientWidth` **1265** against `innerWidth` **1280**: the editor's page
+  scroller takes 15px, and a `fixed` panel is laid out against the initial containing block, which
+  excludes it. That is the whole of why `placeMenu` reads `clientWidth`. Both were read in the same
+  `eval`, on the same window, seconds apart — **the only difference is which view was open.**
+- **Nothing clips the panel, at either edge.** Search wall, pointer at (1101, 616) on the lowest
+  fully visible tile: the panel drew `top 428 left 877 bottom 616 right 1101` — flipped on **both**
+  axes, its bottom-right corner exactly on the pointer — `z-index: 30`, `position: fixed`, inside
+  the viewport on both axes. Deck editor, pointer at (1163, 457) near the right edge: `837 → 1265`,
+  its right edge flush with `clientWidth` and nothing beyond it.
+- **A three-panel cascade at the right edge alternates sides, and that is the measured-width flip
+  doing its job.** Root `x 837-1265`, "Add to" `x 618-842` (**left**, because the root already ends
+  at the viewport edge), "Deck" `x 837-1061` (**right** again). All three inside the viewport;
+  `documentElement.scrollWidth` stayed **1265** against a `clientWidth` of 1265 — **no horizontal
+  scrollbar**, which is the one thing the 1024px floor forbids and a cascade is a new way to reach.
+- **Escape closes exactly one layer per press, through the deepest stack driven.** With the card
+  detail pane open and a submenu expanded: press 1 → `panels 2 → 1`, pane still open; press 2 →
+  `panels 1 → 0`, pane still open, **caret on the deck card `<li>`**; press 3 → pane closed. Three
+  presses, three layers, in order. A cascade on its own gave `3 → 2 → 1 → 0` and then handed the
+  caret back to the `<li>`.
+- **The caret hand-back is real in the window, not just in jsdom.** After every close measured
+  above, `document.activeElement` was the opener — `LI` with `tabindex="-1"` — and never `<body>`.
+  The `CardGrid` tiles carry `tabindex="-1"` on all 25, and the deck editor's 14 card `<li>`s carry
+  it too.
+- **A scroll closes the menu, hands the caret back, and does not undo the scroll.** Scroller set
+  from `scrollTop 0` to **300**: `panels 0`, `activeElement` the `<li>` (`isBody=false`), and
+  `scrollTop` still **300** afterwards. That second half is `focus({ preventScroll: true })` and
+  **jsdom cannot express it at all** — jsdom 30.0.1's generated `focus()` takes no arguments and
+  forwards none, so the option is dropped at runtime there and TS is the only thing that sees it.
+  This is the measurement that closes it.
+- **Both plugin grants work at runtime, which only a shipped window can answer.** `Copy card name`
+  overwrote a sentinel with **`Abaddon the Despoiler`** (`clipboard-manager:allow-write-text`), and
+  `Open on → Scryfall` raised **no** `role="alert"` (`opener`). A missing ACL entry fails here and
+  nowhere else — not in a test, not in Storybook.
+- **`Copy card image` answers a double-faced printing, which is the whole point of the fix.**
+  Right-clicking SLD 2367 (Delver of Secrets, a `transform` card) copied
+  `https://cards.scryfall.io/display/front/a/8/a808459c-…webp?1783904222`. The `/front/` segment is
+  `face_image_uris[0]`; before the fix the command read only the top-level `image_uris` column, and
+  **the sentinel would have survived untouched** — no error, no toast, ~4 300 printings affected.
+- **Reduced motion is honoured, and the first reading was a false failure.** Emulated
+  `prefers-reduced-motion: reduce`: `matchMedia(...).matches` **true**, panel `transform` **`none`**.
+  Unemulated, same sampling point: `matches` **false**, `transform`
+  **`matrix(0.961869, 0, 0, 0.961869, 0, 0)`**. The pair is the evidence; either alone is not.
+  **The trap, which cost a reading:** an earlier attempt dispatched the right-click without first
+  reading `matchMedia` in the same evaluation, and measured a scale matrix under emulation — motion
+  had already begun the animation before the emulated query reached it. **Read the media query
+  inside the same `eval` that opens the surface**, and report the emulated and unemulated numbers
+  together.
+
+**Two things this pass could not answer, stated rather than implied.** The submenu's
+`ResizeObserver` re-placement was never forced: it needs a lazy body that grows enough to push a
+downward-opening panel off the bottom, and this database has **five** decks, so the loaded panel is
+170px and fits either way. And a browser process count is not proof that `openUrl` opened a tab —
+Edge was already running; the honest signal is that the call raised no refusal.
+
 ## Vendored components and tokens
 
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).

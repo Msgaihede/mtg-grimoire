@@ -74,6 +74,26 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   that reads the duration reports `0.15s` on a control that is correctly still — a false
   failure that reads exactly like a real one (measured 2026-08-09 on a sort header:
   `matches: true`, duration `0.15s`, property `none`).
+  **For a `motion`-driven surface, read `matchMedia` inside the same expression that opens it.**
+  The emulation is a fact about the session, but `motion` reads the query when an animation
+  *starts* — so an expression that dispatches the gesture and samples immediately can measure a
+  surface whose animation began before the emulated query reached it. Measured 2026-08-15 on the
+  context menu: a first attempt read `transform: matrix(0.962694, …)` **under emulation** and
+  looked exactly like a menu ignoring reduced motion; the same expression, reading
+  `matchMedia(...).matches` before dispatching, read `matches: true` and `transform: none`, against
+  an unemulated `matches: false` and `matrix(0.961869, …)`. **Report the emulated and unemulated
+  numbers as a pair** — either alone is unfalsifiable, and the emulated one alone is how you file
+  a defect that does not exist.
+- **Do not drive a `tauri dev` window while anything is editing the frontend — Vite HMR is
+  rewriting your subject mid-pass.** A subagent (or you, in another tab) saving a file the window
+  renders hot-reloads it into the running app, so a measurement taken afterwards belongs to a tree
+  state with no name, and **nothing on screen says so**. `git status` does not protect you: an
+  uncommitted save has already reached the window. Measured 2026-08-15 — a pass was started with a
+  fix agent holding `ContextMenu.tsx`, and the dev log's `[vite] (client) hmr update` lines were
+  the only evidence of when the subject changed. **Take the pass against a quiesced tree**, or grep
+  the dev log for `hmr update` covering the module under test before trusting a reading, and record
+  the commit each figure was taken at. Rust is not exposed the same way: a compiled command only
+  changes when cargo rebuilds, so a backend measurement survives what a frontend one does not.
 - **`drag <source> <target>`** is a real Chromium drag (`Input.setInterceptDrags` +
   `Input.dragIntercepted` + `Input.dispatchDragEvent`), with `--press <css>`, `--from x,y`,
   `--cancel` and `--probe <expr>` for reading the page mid-flight. **Interception bypasses
