@@ -10,9 +10,11 @@
  * and the menu is where they stop being a round trip through a panel listing every pile in the
  * deck to change one. The other three are new or newly aimed:
  *
- * * **Export cards…** is this app's first export of any kind, over one pile. `ExportDialog`
- *   takes its cards as an argument and fetches nothing, which is precisely what lets a category
- *   hand it a subset of the deck.
+ * * **Export cards…** was this app's first export of any kind, and it is the **pile-scoped** one:
+ *   `ExportDialog` takes its cards as an argument and fetches nothing, which is precisely what
+ *   lets a category hand it a subset of the deck. The editor header's `Export deck` is the same
+ *   dialog over every row of the variant, so this row's name says its scope rather than repeating
+ *   the verb — see `DeckEditor`'s `ACTIONS`.
  * * **Import cards…** opens the importer *aimed at this pile*: `buildImportPlan`'s trailing
  *   `forcedCategoryName`, so every line of the paste lands here whatever the filer would have
  *   said. The override is in the planner and not in the dialog — `plan.ts` makes every deck

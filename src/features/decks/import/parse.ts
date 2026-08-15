@@ -48,8 +48,9 @@ export interface ParsedLine {
    *
    * A bracket's first entry, else the name of an unknown section heading. It is `null` whenever
    * `section` is not `"deck"`, and that invariant is the whole of what keeps `plan.ts`'s
-   * precedence chain three rungs rather than four: a bracket naming one of the four seeded zones
-   * sets the *section*, and only a name the section vocabulary has never heard of lands here.
+   * precedence chain three rungs rather than four: a heading or a bracket naming one of the four
+   * seeded zones sets the *section*, and only a name the section vocabulary has never heard of
+   * lands here.
    */
   categoryName: string | null;
   /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's

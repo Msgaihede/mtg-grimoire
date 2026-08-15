@@ -108,10 +108,12 @@ const DECK_CARDS: ExportCard[] = [
 /**
  * A pile of cards as text: a format, a live preview, Copy, and Save as….
  *
- * **This app had no export of any kind before this dialog.** It is opened from a deck category's
- * right-click, so `cards` arrives as a **prop** rather than as something this dialog fetches —
- * which is deliberately what lets a later deck-level export reuse it whole, over the deck's full
- * list instead of one pile's. Nothing on this page reaches the deck at all.
+ * **Two controls open it and only the `cards` prop tells them apart.** A deck category's
+ * right-click opens it over one pile, which is every story on this page bar one; the editor
+ * header's `Export deck` opens it over the whole variant on screen, which is
+ * {@link SwitchedOffPile} — a deck holds piles the reader has switched off and one pile does not.
+ * Taking the cards as a **prop** is what made the second control a caller rather than a rewrite.
+ * Nothing on this page reaches the deck at all.
  *
  * **Built on `DeckDialog`**, the deck surface's shared modal shell, rather than carrying its own
  * copy of the chrome; the body lives one floor down, so `open={false}` mounts nothing at all —

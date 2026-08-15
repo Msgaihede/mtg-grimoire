@@ -2649,11 +2649,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       {row && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border pb-3">
           {/* **Icons rather than words, and on this row rather than in the header.** The
-              header's actions block measures 825px against the ~729 a 1280px window can spare,
-              so it already wraps — and a wrapped header costs 44px of deck height at the app's
-              own default size (see {@link CONTROL}). Two more text buttons there would make
-              that worse at every width; two 36px icons here cost 76px on the row that is
-              already about editing the deck's contents.
+              header's actions block measured 825px against the ~729 a 1280px window can spare
+              (2026-08-14, a debug build, **five** buttons — `Export deck` is a sixth and nothing
+              has been re-measured since), so it already wraps — and a wrapped header costs 44px
+              of deck height at the app's own default size (see {@link CONTROL}). Two more text
+              buttons there would make that worse at every width; two 36px icons here cost 76px
+              on the row that is already about editing the deck's contents.
 
               The name is the whole sentence — "Undo — Removed 2 × Lightning Bolt" — which is
               what a caret and a pointer both get, since the glyph says nothing. It comes from
@@ -3125,8 +3126,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </section>
       )}
 
-      {/* The seven overlays, mounted **at the editor's top level and as siblings of the layout
-          above**, which is not a tidiness preference. Each is `fixed inset-0` and none is
+      {/* The overlays, mounted **at the editor's top level and as siblings of the layout
+          above**, which is not a tidiness preference. (Count them off the `Layer` union rather
+          than from a number here — this comment said "seven" through three separate additions,
+          and a prose-only edit routes to neither CI job.) Each is `fixed inset-0` and none is
           portalled, so a transformed ancestor would become its containing block and pin it to
           whatever box that ancestor happens to occupy — and this editor has transformed
           elements in it (a virtualised table's rows are `absolute` *and* `transform`ed, which

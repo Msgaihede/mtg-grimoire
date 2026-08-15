@@ -2,10 +2,12 @@
  * A dialog that turns a pile of cards into decklist text: a format, a live preview, Copy, and
  * Save as….
  *
- * **This app has had no export feature of any kind before this one.** It is opened from a deck
- * category's right-click menu (Task 12 wires that), so `cards` arrives as a prop rather than
- * something this dialog fetches — that is deliberately what lets a later *deck-level* export
- * reuse it whole, over the deck's full card list instead of one category's.
+ * **Two controls open it, and the difference between them is the `cards` prop and nothing else.**
+ * A deck category's right-click opens it over one pile; the editor header's `Export deck` opens
+ * it over every row of the variant on screen. That was the point of taking the cards as a prop
+ * rather than fetching them: a whole-deck export turned out to be a *caller* rather than a
+ * rewrite, and this file did not change for it. `DeckEditor`'s `exportSubject` is where the two
+ * scopes are resolved, and `layerMatches` is why one layer can carry both.
  *
  * **Built on `DeckDialog`**, the deck surface's shared modal shell (`src/CLAUDE.md`), rather
  * than carrying its own copy of the chrome — `ImportDeckDialog`, `TheoryDiffDialog` and

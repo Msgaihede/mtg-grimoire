@@ -376,9 +376,12 @@ reader to configure the deck they had just made; it now asks all of them.
   turns on, never a second spelling. Both redo spellings are live because both are what a reader's
   hands know.
 - **The buttons are icons on the toolbar row, not words in the header.** The header's actions
-  block measures 825px against the ~729 a 1280px window can spare, so it already wraps, and a
+  block measured 825px against the ~729 a 1280px window can spare, so it already wraps, and a
   wrapped header costs 44px of deck height at the app's own default size. Two more text buttons
-  there would make that worse at every width. The **name is the whole sentence** — "Undo — Removed
+  there would make that worse at every width. **That 825 is the 2026-08-14 figure with _five_
+  buttons on the row** — `Export deck` is a sixth since, and nothing has been re-measured — so read
+  it as the argument for keeping words off this row rather than as today's width.
+  The **name is the whole sentence** — "Undo — Removed
   2 × Lightning Bolt" — out of `auditText`, because the glyph says nothing and two spellings of one
   line is what that module exists to prevent. `aria-disabled`, never the attribute.
 - **An undo is a `deck` audit row with `field: "undo"`, not a tenth kind**, and `auditText` words
@@ -431,6 +434,75 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   would have to choose a reader before it had read anything, and would be wrong about exactly the
   lists somebody has edited by hand. So an unfamiliar mixture is read line by line rather than
   refused whole.
+- **Four decorations and one heading rule, and the heading rule is the _only_ lookahead in the
+  file.** The four are per-line and cost nothing: an **empty `()`** printing hint, an Archidekt
+  `^Tag,#colour^`, the `[Category]` bracket, and the `*F*`/`*E*` finish markers it always had (a
+  trailing `#tag` rides with those). `namesASection` is the fifth rule and it reads one line past
+  the one in front of it, because `Anthem`, `Creature` and `Land` are indistinguishable from card
+  lines to a per-line reader and a category name can be a real card (`Fog`, `Wrath`, `Duress`).
+  **Its four clauses each protect a hand-written list `parse.test.ts` carries as its own test**: a
+  candidate has **no quantity, no printing hint and no bracket** (a heading is a bare word, and
+  every card line in an export that writes headings carries at least one of the three); **the next
+  line that makes a claim carries a count**, which is what leaves `Sol Ring` / `Arcane Signet` /
+  `Path to Exile` alone _and_ what makes a heading over an empty section impossible, so "nothing is
+  ever silently dropped" stays true — a line consumed as a heading always opened at least one card;
+  **it is preceded by a blank line**, without which `Sol Ring` / `4 Shock` loses its first card;
+  **or it is the first line of the file and that next line carries a bracket**, because an
+  Archidekt deck with no commander opens on a heading with nothing above it while a hand-written
+  list writes no brackets at all. **The failure it keeps, named rather than hidden**: a
+  hand-written list with a blank line, then a bare card name, then a counted line, loses that name.
+  No exporter in scope emits that shape.
+- **The first bracket entry is the pile, and `{flag}`s come off.**
+  `[Land,Maybe (New){noDeck}{noPrice}]` is `Land`. **Verified 105/105 against a real Archidekt
+  export** (re-counted 2026-08-16): in every one of its 105 lines the first entry is the heading
+  that line is printed under — 14 headings against 14 distinct first-bracket names, identical sets,
+  0 disagreements — which is what makes it safe for the bracket to override the open heading rather
+  than merely agree with it.
+  `{top}`/`{noDeck}`/`{noPrice}` are Archidekt's and anything in braces is a flag rather than part
+  of a name. **`{noDeck}` on the _first_ entry is `is_active = 0`** — the file saying this pile
+  counts toward nothing — and on a **later** entry it means nothing here: the card is also filed in
+  some maybeboard and is still in the deck. **17 of that export's 105 lines** carry it first, and
+  the flat export's four `[Land,Maybe (New){noDeck}{noPrice}]` lines are the later shape;
+  `parse.test.ts` counts the 17 and pins the flat list at **0** excluded lines, which is the whole
+  of the difference.
+- **A heading _or_ a bracket naming a section word sets the _section_, not a category** — one
+  mechanism for the four seeded piles, not two. `[Commander{top}]` reaches the command zone through
+  the same `SECTIONS` map a `Commander` heading goes through, so nothing downstream has to know
+  which of the two a line arrived by, and only a name the section vocabulary has never heard of
+  becomes a `categoryName`.
+- **`ParsedLine.categoryName` is `null` whenever the section is not `deck`**, enforced on the way
+  out of the loop rather than left to whoever reads it. That invariant is the whole of what makes
+  `categoryFor` **three** rungs rather than four: no reachable line carries a zone and a free-form
+  pile at once, so the two can never both answer.
+- **The chain, in the order the reader's own intent narrows:**
+  `forcedCategoryName > SECTION_CATEGORY[kind] > line.categoryName > autoCategoryFor(…)`. **The
+  zone is above the name and not below it**, which is not the order the two arrived in: a section
+  is a _rules fact_ (the command zone, a sideboard) and a category name is _filing_, so if that
+  invariant were ever relaxed a card in the command zone must not be filed out of it by a bracket.
+  **A file naming a pile is the reader naming one** — the app's rule has always been that an add
+  naming a category is untouched, and an Archidekt export naming `Flash Enabler` is that same
+  statement, made weeks ago in somebody else's deck builder. `autoCategoryFor` is untouched and is
+  still the app's one filing rule for everything that names nothing, and the command zone still
+  outranks all four, applied in `toImportItems` after the pile is chosen. The reasoning for the
+  order is
+  [the spec's §2](../../../docs/superpowers/specs/2026-08-15-deck-format-support-design.md).
+- **An empty `()` is a real hint shape, and it costs `hintMissed` rows.** `1 Aerith, Last Ancient
+  () 76` is **33 of one reference export's 88 lines** — the exporter had a collector number and no
+  set and wrote the parentheses anyway — so `LINE`'s set group is `\w{0,10}` and an empty match is
+  `setCode: null` with the number kept. Widening the count to zero cannot cost `Erase (Not the
+  Urza's Legacy One)` its parentheses: the hint is still anchored to the end and a set code still
+  holds no spaces, so a parenthesised _phrase_ can never satisfy it. **What it costs, stated rather
+  than discovered**: `resolve_lines` sets `hint_missed` for a collector number with **no** set
+  beside it without trying it at all — a number is not unique across sets, so it can only ever
+  narrow one — so that list previews **33 hint misses** where it used to preview 33 unresolved
+  cards. Both halves are re-derived rather than remembered: `parse.test.ts` counts the 33
+  `setCode: null` lines out of 88, and the branch that sets the flag is `deck_import.rs`'s. **Not
+  yet driven in the shipped window.**
+- **`[Foil]` is decoration and never a pile.** `FINISH_WORDS` matches `foil`/`etched`/`non-foil`
+  whole and case-insensitively, because a deck names a printing rather than a finish and reading
+  one as a category would put a pile called "Foil" in somebody's deck. **Anything else in a bracket
+  is a category** — guessing which words are "really" categories is the format detector this file
+  exists without.
 - **`//` is a comment only at the _start_ of a line.** `1 Branchloft Pathway // Boulderloft
 Pathway` is one card and there are seven such names in the reference list alone, so a `//` found
   anywhere else is part of the name and must never be cut.
@@ -517,19 +589,70 @@ Pathway` is one card and there are seven such names in the reference list alone,
 
 `export/` is the mirror of `import/`, and the split is the repo's boundary: `format.ts` is pure
 (`(cards, format) => string` — no React, no hook, no IPC), `ExportDialog.tsx` is the surface (a
-format picker, a live preview, Copy and Save as…), and Rust supplies only the file write. It is
-category-level in this branch; the same `format.ts` is what a later deck-level export uses.
+format picker, a live preview, Copy and Save as…), and Rust supplies only the file write. **Two
+controls open that dialog** — the editor header's `Export deck` and a category heading's
+`Export cards…` — and the only thing that differs between them is which cards the caller passes.
 
-- **The cards are an argument the dialog never fetches**, and that is the whole of what makes a
-  category export reusable as a deck export later — the set of cards is the caller's decision.
-  `DeckEditor` derives them from the deck's own rows and **never from `shown`**: exporting "Removal"
-  means the pile, not the four of it the toolbar's filter happens to be drawing.
+- **The cards are an argument the dialog never fetches**, and that is what made a whole-deck export
+  a _caller_ rather than a rewrite: nothing in `export/` changed shape for it. `DeckEditor` derives
+  them from the deck's own rows and **never from `shown`**: exporting "Removal" means the pile, not
+  the four of it the toolbar's filter happens to be drawing.
+- **Import is permissive; export is canonical.** `parse.ts` reads every variation a site emits —
+  that is what the whole `## Import` section above is about — and each writer here emits **one**
+  spelling. It is the same rule that makes the output LF with a trailing newline whatever the
+  parser would tolerate: a file this app wrote should have one answer.
+- **Six formats, and three of the decisions inside them are worth carrying.** `EXPORT_FORMATS` is
+  `plain · mtgo · arena · moxfield · archidekt · csv`, and the dialog's radio row **maps that
+  array** rather than listing them, so the count is the array's and never a number written down
+  twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
+  was no whole-deck export and therefore no sideboard to prefix; it writes `SB: ` on a side or
+  companion card now, which is a one-line override rather than a heading — exactly how `parse.ts`
+  reads it back. **(2) `arena` and `mtgo` write only switched-on piles**, because neither format
+  has a maybeboard and writing one into an Arena deck produces an illegal import at the other end.
+  The test is `categoryActive` and never the kind, and **the dialog says how many copies that left
+  out** — `omittedCount`, in _copies_ rather than rows, because six basic lands on one row are six
+  cards missing from the file — so the omission is never silent. **(3) `archidekt` writes
+  `{noDeck}` and a lowercase set code.** The flag is the only thing any of these formats can say
+  about a pile that counts toward nothing, which makes Archidekt the one format that writes an
+  inactive pile _and_ leaves nothing out; it is the round trip that makes the flag worth writing,
+  not fidelity to the site for its own sake. The lowercase set code is what Archidekt itself emits
+  and what its own importer round-trips, and our parser uppercases on read, so it costs the round
+  trip nothing.
+- **`KIND_SECTION` maps `maybe` to `Deck` and `sectionOf` asks `categoryActive`. That is "nothing
+  may branch on `maybe`" held, and it is the entry most likely to be tidied into a bug.** A pile
+  whose kind is `maybe` but which the reader has switched **on** counts toward the deck like any
+  other, so it writes under `Deck`; a pile switched **off** is a maybeboard whatever its kind,
+  because `is_active = 0` is the whole of what the word ever meant. Rewriting that entry to
+  `Maybeboard` "because that is what it is called" files a switched-on Maybeboard out of the deck
+  it counts toward **and** leaves a reader's own switched-off `Ramp` under `Deck` beside it — one
+  edit, both errors, and nothing about it reads as wrong.
+- **CSV is write-only and stays so**, and `decklists.test.ts` excludes it **by name** rather than by
+  omission (`expect(READABLE).toEqual([…])`), so a format dropped out of that table by accident is a
+  failure rather than a quietly smaller matrix. Nothing in `parse.ts` reads a comma-separated
+  decklist, and teaching it one would be a second grammar rather than a rule inside the one there
+  is.
+- **`decklists.test.ts` is where a writer drifting from the parser shows up.** Three real decklists
+  crossed with all six formats, driven text → planner → writer → parser, and **every readable
+  format is a fixed point**: export → import → export is byte-identical. One cycle cannot see a
+  writer that is not idempotent, because there is nothing to compare the first answer against.
+  Every count this branch turns on is re-derived there or in `parse.test.ts` rather than restated
+  here.
+- **`Export deck` in the header, `Export cards…` on a heading — one `Layer` arm with two scopes.**
+  `{ kind: "export"; categoryId: number | null }`, where `null` is the whole deck; `exportSubject`
+  turns that into a subject, a card list and a file name, and the deck scope passes **every** row of
+  the variant on screen, switched-off piles included, because what a format does with a maybeboard
+  is the _format's_ decision and `omittedCount` is what says so. It is the one layer kind two
+  controls reach, which is the whole reason `layerMatches` exists: a header button reading
+  `aria-expanded` off the kind alone would claim to be open while a pile's dialog was up. The names
+  are the argument that produced `Import cards` run again — the category menu's row is already
+  `Export cards…`, so the header's row names its **scope** instead of repeating the verb.
 - **`format.ts` is `parse.ts`'s rules read backwards.** `//` is part of a card name, so nothing
   here may cut one, and what this writes has to be something that parser reads — which is what the
   round-trip test pins. LF and a trailing newline always: the parser takes CRLF, a lone LF and a
   lone CR, but a file this app wrote should have one answer. **An empty list is an empty string in
   every format, CSV included** — a header row over no rows is a file claiming to be a decklist and
-  is not one.
+  is not one — and **that now covers a list a format empties for itself**: an Arena export of a
+  deck that is entirely maybeboard is `""`, not a `Deck` heading over nothing.
 - **Rust writes the file, and that is a permission decision rather than a division of labour.**
   `save()` answers a *path*; writing bytes at it from the page would need an `fs:` permission this
   app grants nowhere, so `export_write_file` takes the path and the text — the same shape
@@ -577,6 +700,9 @@ category-level in this branch; the same `format.ts` is what a later deck-level e
   old sizes) against the **729** a 1002px ribbon can spare once `NAME_FLOOR` is honoured — so the
   wrap is not what this pass introduced, and the deck this was driven on carries both a
   `9 issues` chip and a `1 game changer` label, which the 692 figure above does not.
+  **Every width on this page was measured with _five_ buttons in that block**; `Export deck` made
+  it six and none of them has been re-taken, so the standing claim is "it already wrapped", not a
+  number for what it costs now.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long
@@ -1286,30 +1412,34 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
   sets `selectedCardId` _without_ clearing `paneDeckContext`, so the swap offers survive browsing.
   `setSelectedCardId` there instead silently kills the affordance at its one moment of use.
-- The editor's full-window surfaces — Import, Categories, Tags, History, Theory diff, Deck
-  settings, Export and the delete-category confirmation — are held in **one** piece of state, and
-  the anchored format check rides in the same union, so at most one registration is ever enabled.
-  **Count them off `Layer` in `DeckEditor.tsx` rather than from a number written here**; the list
-  grew twice in one day when the menus landed, and a number in this bullet was wrong both times.
-  The original reason for one slot was that `useDismissOnEscape` ordered exactly two rungs, so two
-  `"inner"` peers open at once were not ordered at all; **that hook keeps a capture stack now**
-  and would order them, and
-  the one slot is still right — two of these open together is not a state anything here draws, and
-  a union is what makes "never two" structural rather than remembered. **Three members carry a
-  payload** — `export` and `deleteCategory` a category id, `import` an optional forced category
-  name — which is the other thing a union buys: a second `useState` could hold a category id while
-  a *different* layer was open. Each payload is an **id and never the cards**, because the deck is
-  re-read after every write and a frozen array would answer about the deck as it was at the moment
-  a menu row was pressed.
+- The editor's full-window surfaces are held in **one** piece of state, and the anchored format
+  check rides in the same union, so at most one registration is ever enabled. **Read them off
+  `Layer` in `DeckEditor.tsx` and never off a list or a number written here**: this bullet has
+  carried both, and both were wrong within a day — of the menus landing, and again of the
+  whole-deck export. The original reason for one slot was that `useDismissOnEscape` ordered exactly
+  two rungs, so two `"inner"` peers open at once were not ordered at all; **that hook keeps a
+  capture stack now** and would order them, and the one slot is still right — two of these open
+  together is not a state anything here draws, and a union is what makes "never two" structural
+  rather than remembered. **The members that carry a payload are the other thing a union buys**, a
+  second `useState` being free to hold a category id while a _different_ layer was open. Each
+  payload is an **id and never the cards**, because the deck is re-read after every write and a
+  frozen array would answer about the deck as it was when a menu row was pressed — the one
+  exception is `quickCategory`, which carries a `DragPayload` because it names a gesture that is
+  over rather than a row to look up. **`export`'s id is nullable and that is a scope**: `null` is
+  the whole deck (the header's `Export deck`), a number is one pile (a heading's `Export cards…`),
+  which makes `export` the one kind whose *kind* does not say which control is open — see
+  `layerMatches`.
 - **The two that were drawers are centred modals, and the search column deliberately is not**
   (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
   them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
   sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
   one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
-  the two of them draw with. Those three and `DeckSettingsDialog` — **four** surfaces — are built
-  on one shell, `DeckDialog.tsx`; the editor's other two full-window overlays (Import cards, the
-  theory difference) were never drawers, still carry their own copy of that chrome and are the
-  next two to move onto the shell. **Five** is only the count of _toolbar buttons_. The
+  the two of them draw with. Those three and `DeckSettingsDialog` are built on one shell,
+  `DeckDialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
+  zones' New category, both destructive confirmations. **The list worth carrying is the
+  exceptions**: Import cards and the theory difference were never drawers, still carry their own
+  copy of that chrome, and are the two to move onto the shell. Anything else here is a count off
+  `Layer` or off the toolbar's `ACTIONS`, not off this page. The
   reason for all of it is the desk row: every one of these is **consulted** — read, or
   edited and shut — and a right-hand drawer took the width it needed out of the deck for as long
   as it was up while giving the deck nothing. The card search column stayed a docked sidebar
@@ -1396,15 +1526,17 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
   as the docked panel's set filter. **Most of the editor's full-window surfaces are opened by
-  pressing a button** — five of them in the toolbar (`Import cards · Categories · Tags · History
-  · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
-  — and pressing a button takes the focus out of this field, so the root's `onBlur` closes the list
-  on the way.
+  pressing a button** — the header's `ACTIONS` row (read the array, not a number: `Export deck`
+  made it six on this branch) and the theory diff from the "N cards differ" control beside the
+  variant tabs — and pressing a button takes the focus out of this field, so the root's `onBlur`
+  closes the list on the way.
 - **Some of them arrive another way, and the rung this used to say was missing has since been
-  built.** The export dialog, the delete-category confirmation and the clear-stack confirmation
-  are opened from a category heading's right-click and have no _button_ in the view at all — the
-  first editor surfaces with none, the affordance being the heading itself. Read the list rather
-  than a count: it said "two" until `Clear stack…` landed on 2026-08-15. (A pile can still be
+  built.** The **pile-scoped** export, the delete-category confirmation and the clear-stack
+  confirmation are opened from a category heading's right-click and have no _button_ in the view at
+  all — the first editor surfaces with none, the affordance being the heading itself. Read the list
+  rather than a count: it said "two" until `Clear stack…` landed on 2026-08-15, and the export is
+  on it by **scope** rather than whole since `Export deck` — the header's press opens the same
+  layer, so the deck scope has a button and the category scope still does not. (A pile can still be
   deleted from the Categories dialog, which draws `DeleteCategory` for itself; that layer is the
   _heading's_ route to the same component. The clear has no second host — `ClearCategory.tsx` is
   the heading's alone, because there is no bulk surface that empties a pile.) This entry used to
