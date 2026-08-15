@@ -4,7 +4,7 @@ import {
   dropTargetForElements,
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, Trash2 } from "lucide-react";
+import { ChevronLeft, Redo2, Trash2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
@@ -12,7 +12,7 @@ import {
   filterChipState,
   ToggleChip,
 } from "@/components/FilterChips";
-import { useContextMenu } from "@/components/menu/useContextMenu";
+import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import {
@@ -49,6 +49,7 @@ import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
+import { useDeckUndo } from "./useDeckUndo";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "./export/ExportDialog";
 import {
@@ -926,6 +927,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **`useDeckMeta`'s four are a *different observer* from the dialog's** — TanStack shares a
   // query's cache between observers and a mutation's state with nobody — so this banner speaks
   // only for presses made out here, and the dialog goes on speaking for its own.
+  /**
+   * Undo and redo for this deck — the cursor comes from the backend, the redo stack lives in
+   * the hook for the length of the session.
+   *
+   * Mounted here rather than beside its buttons because the banner below reads its refusal, and
+   * that line is computed at the top of this component.
+   */
+  const undo = useDeckUndo(deckId);
+
   const writes = [
     deck.setQuantity,
     deck.clearCategory,
@@ -937,7 +947,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     meta.setCategoryActive,
     meta.deleteCategory,
   ] as const;
-  const bannerFailure = writeFailure(writes);
+  // **The undo hook's own refusal joins this banner rather than drawing a second one.** Its
+  // two mutations are writes to what is in the deck like any other, and its commonest refusal
+  // — "the deck has been edited since" — is exactly the kind this line exists to say. It is not
+  // in `writes` because it is not a `useMutation` the array's type accepts: `useDeckUndo`
+  // reports through a string of its own so that it can also drop a redo that can never work.
+  const bannerFailure = writeFailure(writes) ?? undo.error;
 
   /**
    * The columns and the move targets: **every category the deck has, in `sortOrder`.**
@@ -1263,6 +1278,54 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useEffect(() => {
     if (failedAt) void refetch();
   }, [failedAt, refetch]);
+
+  /**
+   * **Any other write to the deck throws the redo stack away**, which is the ordinary undo
+   * contract: once the reader has edited past a branch, the branch is gone.
+   *
+   * Keyed on the newest *successful* write across the whole refused-write family plus the two
+   * mutations that sit outside it, rather than on a call inside each mutation's `onSuccess` —
+   * there are a dozen of those, they live in two hooks, and two of them are borrowed whole by
+   * surfaces outside this editor. One effect over `newestWrite` is the same list the banner
+   * already reads, so a write added to that array is covered here for free.
+   */
+  const succeededAt = lastOfAny.isSuccess ? lastOfAny.submittedAt : 0;
+  const clearRedo = undo.clearRedo;
+  useEffect(() => {
+    if (succeededAt) clearRedo();
+  }, [succeededAt, clearRedo]);
+
+  /**
+   * `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, on `window` for the length of this editor.
+   *
+   * **It yields inside a text field**, which is the whole of what keeps the quick-add box, the
+   * deck name and the notes usable: those get the browser's own undo, which this cannot
+   * replace and must not swallow. `isTextField` is `useContextMenu`'s — the same predicate the
+   * native-context-menu carve-out already turns on, rather than a second spelling of "is the
+   * caret in something typed".
+   *
+   * `Ctrl+Y` and `Ctrl+Shift+Z` both redo because both are what a reader's hands know: the
+   * first is Windows' and the second is everywhere else's, and this app ships on Windows to
+   * people who use both.
+   */
+  const runUndo = undo.runUndo;
+  const runRedo = undo.runRedo;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (isTextField(e.target)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        runUndo();
+      } else if (key === "y" || (key === "z" && e.shiftKey)) {
+        e.preventDefault();
+        runRedo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [runUndo, runRedo]);
 
   // Focus first, then close: the trigger is still mounted at this point. This is the
   // **keyboard** way out; the click-away way out is `close` and hands nothing back, because the
@@ -2373,6 +2436,47 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
       {row && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border pb-3">
+          {/* **Icons rather than words, and on this row rather than in the header.** The
+              header's actions block measures 825px against the ~729 a 1280px window can spare,
+              so it already wraps — and a wrapped header costs 44px of deck height at the app's
+              own default size (see {@link CONTROL}). Two more text buttons there would make
+              that worse at every width; two 36px icons here cost 76px on the row that is
+              already about editing the deck's contents.
+
+              The name is the whole sentence — "Undo — Removed 2 × Lightning Bolt" — which is
+              what a caret and a pointer both get, since the glyph says nothing. It comes from
+              `auditText`, the same module the history drawer words its lines with. */}
+          <div role="group" aria-label="Undo and redo" className="flex items-center gap-1">
+            {(
+              [
+                { key: "undo", Icon: Undo2, label: undo.undoLabel, on: undo.undo, run: undo.runUndo },
+                { key: "redo", Icon: Redo2, label: undo.redoLabel, on: undo.redo, run: undo.runRedo },
+              ] as const
+            ).map(({ key, Icon, label, on, run }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={run}
+                // **`aria-disabled`, never the attribute** — this greys and un-greys as the
+                // reader edits, and a `disabled` button drops out of the tab order under a
+                // caret that is sitting on it.
+                aria-disabled={on === null || undo.busy}
+                aria-label={label}
+                title={label}
+                className={cn(
+                  CONTROL,
+                  FILTER_FOCUS,
+                  "grid w-9 place-items-center px-0",
+                  on === null || undo.busy
+                    ? "cursor-default opacity-40"
+                    : "hover:text-text",
+                )}
+              >
+                <Icon aria-hidden className="size-4" />
+              </button>
+            ))}
+          </div>
+
           {/* The fastest way to put a card in a deck you already know the name of. Where it
               lands is the deck's own `defaultCategoryId`, chosen in deck settings — one place
               for one decision, rather than a select of the same categories on this row and

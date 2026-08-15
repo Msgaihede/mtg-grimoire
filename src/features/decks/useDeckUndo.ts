@@ -11,7 +11,7 @@
  * The queue is a stack and **any other write to the deck clears it**, which is the ordinary
  * undo contract: once you have edited past a branch, the branch is gone.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckAuditEntry } from "@/lib/ipc";
 import { auditSentence } from "./auditText";
@@ -51,22 +51,25 @@ const VERBS = { undo: "Undo", redo: "Redo" } as const;
 export function useDeckUndo(deckId: number | null): DeckUndo {
   const queryClient = useQueryClient();
   /**
-   * The ids this session has undone, newest last. A **ref rather than state** for the same
-   * reason the editor's other imperative bookkeeping is: pushing to it must not re-render on
-   * its own — the query below is what redraws the buttons — and a stale closure over an array
-   * would drop a press made inside the same tick.
+   * The ids this session has undone, newest last.
+   *
+   * **State, not a ref** — and the distinction is enforced rather than stylistic: reading
+   * `ref.current` during render is what `react-hooks`' "Cannot access refs during render" rule
+   * refuses, because under concurrent rendering the value a render reads is not guaranteed to
+   * be the one it commits with. The top of this stack is read on every render (it is the query
+   * key below), so it has to be state. The staleness a ref was reaching for is handled by the
+   * functional updaters instead.
    */
-  const undone = useRef<number[]>([]);
-  /** Bumped to re-read the state query when the stack changes, since the ref cannot. */
-  const [stackVersion, setStackVersion] = useState(0);
+  const [undoneIds, setUndoneIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const redoId = undone.current.at(-1) ?? null;
+  // Not `.at(-1)`: the app's `lib` target does not carry it, and that absence is the fence —
+  // see the root CLAUDE.md on why `@types/node` is never installed.
+  const redoId = undoneIds.length > 0 ? undoneIds[undoneIds.length - 1] : null;
 
   const state = useQuery({
-    // `stackVersion` is in the key so that pushing or popping the session stack re-asks —
-    // the `redoId` below is read off a ref, which TanStack cannot see changing.
-    queryKey: ["decks", "undo", deckId, redoId, stackVersion],
+    // `redoId` is in the key, so pushing or popping the session stack re-asks by itself.
+    queryKey: ["decks", "undo", deckId, redoId],
     queryFn: () => ipc.deckUndoState(deckId as number, redoId),
     enabled: deckId !== null,
   });
@@ -78,8 +81,7 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
   const undoWrite = useMutation({
     mutationFn: (auditId: number) => ipc.deckUndoApply(deckId as number, auditId),
     onSuccess: (_, auditId) => {
-      undone.current = [...undone.current, auditId];
-      setStackVersion((v) => v + 1);
+      setUndoneIds((ids) => [...ids, auditId]);
       setError(null);
       invalidate();
     },
@@ -94,8 +96,7 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
   const redoWrite = useMutation({
     mutationFn: (auditId: number) => ipc.deckRedoApply(deckId as number, auditId),
     onSuccess: () => {
-      undone.current = undone.current.slice(0, -1);
-      setStackVersion((v) => v + 1);
+      setUndoneIds((ids) => ids.slice(0, -1));
       setError(null);
       invalidate();
     },
@@ -103,8 +104,7 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
       // A redo that is refused is a redo that can never work — the change is not undone any
       // more, or the window is looking at a deck somebody else edited. Drop it rather than
       // leave a button that fails every time it is pressed.
-      undone.current = undone.current.slice(0, -1);
-      setStackVersion((v) => v + 1);
+      setUndoneIds((ids) => ids.slice(0, -1));
       setError(String(e));
       invalidate();
     },
@@ -122,10 +122,10 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
     if (redo !== null && !busy) redoWrite.mutate(redo.id);
   }, [redo, busy, redoWrite]);
 
+  // The same array back when it is already empty, so the commonest call — every successful
+  // deck write in the editor — is not a re-render.
   const clearRedo = useCallback(() => {
-    if (undone.current.length === 0) return;
-    undone.current = [];
-    setStackVersion((v) => v + 1);
+    setUndoneIds((ids) => (ids.length === 0 ? ids : []));
   }, []);
 
   const undoLabel = useMemo(() => label(VERBS.undo, undo), [undo]);

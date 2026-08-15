@@ -66,7 +66,7 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v16** — see
+  never reuse one. Schema is at **v17** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
 - **`deck_categories.origin` says who made the pile** (schema v15) — `'auto'` the app, filing a
   card it had to invent a column for; `'user'` the reader pressing "New category", and the four
@@ -257,9 +257,29 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   a deck reads new copies only after its next allocator run.
 - **Writing history is not a command.** `deck_audit::record(tx, …)` is called _inside the
   caller's already-open transaction_, which is what makes a rolled-back write leave no history.
-  The only IPC is the read, `deck_audit_list`, whose limit is `clamp(1, 500)` — **the low end is
+  Its only IPC is the read, `deck_audit_list`, whose limit is `clamp(1, 500)` — **the low end is
   load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.** The table holds
-  facts; `src/features/decks/auditText.ts` is the only thing that words them.
+  facts; `src/features/decks/auditText.ts` is the only thing that words them. It answers the id
+  of the row it wrote, which is what `deck_undo` keys on.
+- **Undo is `deck_undo`, a journal beside the history and never a column on it** (schema v17,
+  `deck_undo.rs`). `record_step(tx, …)` is called inside the caller's transaction beside
+  `deck_audit::record`, for the same reason and a sharper one: a step that outlived its change
+  would be applied into a deck that never had it done. **The audit log cannot be replayed
+  backwards** — a swap keeps no from-printing id, a category delete keeps a *count* of the cards
+  the CASCADE took, a reorder keeps no order — so a step carries the rows themselves. Four
+  primitives (`cards` over an explicit scope of `deck_cards` cells, `categories`, `tags`,
+  `deck`); `restore` and `patch` are two lists because a pile that took a freed rowid belongs to
+  the same deck and an upsert would rename the reader's newest pile into the deleted one.
+  **`AUDIT_KINDS` stays at nine** — an undo is a `deck` row with
+  `{"field":"undo","of":<id>}`, because a CHECK cannot be altered and a tenth word would rebuild
+  every reader's history. **The reversal's own row records no step**, so the stack stays linear.
+  `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
+  Every deck write records one — `undoing_any_card_write_restores_the_deck_exactly` and its two
+  siblings drive the list and compare the deck row for row. **Four deliberate absences**, each
+  argued at its own site: `deck_create`/`duplicate`/`delete`, `deck_folder_delete` (per-deck
+  cursor against an N-deck press, over a real foreign key), rows predating v17, and the cover
+  *file* behind `deck_set_cover_image`. Full detail:
+  [decks-storage.md](../docs/reference/decks-storage.md).
 - **Two fences every deck write opens with, neither enforced by the DDL**: the variant must be
   one the schema knows, and the category must belong to _this_ deck — `deck_cards.category_id`'s
   FK only asks that the category exist, not whose it is.

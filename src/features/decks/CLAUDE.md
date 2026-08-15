@@ -334,6 +334,32 @@ reader to configure the deck they had just made; it now asks all of them.
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
+- **Undo and redo are `useDeckUndo`, and the two halves live in different places on purpose.**
+  Undo's cursor is a fact about the deck — Rust stamps `deck_undo.undone_at`, so one press after a
+  restart carries on below where the reader stopped — while the **redo stack is a `useRef` in this
+  hook**, the reader's position in a session, thrown away with the window and cleared by any other
+  deck write. That last part is the ordinary undo contract: once you have edited past a branch,
+  the branch is gone. It is cleared off `newestWrite`'s newest **successful** write rather than
+  from a dozen `onSuccess` callbacks in two hooks, so a write added to that array is covered for
+  free — which is also why `Write` grew an `isSuccess`.
+- **`Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, and the handler yields inside a text field.** That
+  carve-out is the whole of what keeps the quick-add box, the deck name and the notes usable:
+  those get the browser's own undo, which this cannot replace and must not swallow. The predicate
+  is **`isTextField` from `useContextMenu.ts`** — the same one the native-context-menu carve-out
+  turns on, never a second spelling. Both redo spellings are live because both are what a reader's
+  hands know.
+- **The buttons are icons on the toolbar row, not words in the header.** The header's actions
+  block measures 825px against the ~729 a 1280px window can spare, so it already wraps, and a
+  wrapped header costs 44px of deck height at the app's own default size. Two more text buttons
+  there would make that worse at every width. The **name is the whole sentence** — "Undo — Removed
+  2 × Lightning Bolt" — out of `auditText`, because the glyph says nothing and two spellings of one
+  line is what that module exists to prevent. `aria-disabled`, never the attribute.
+- **An undo is a `deck` audit row with `field: "undo"`, not a tenth kind**, and `auditText` words
+  it around the change it reversed by resolving `of` against the day's other entries — "Undid:
+  Removed 2 × Lightning Bolt". The fallback for a row out of reach is `Undid a change`, which is
+  true; the `default` arm's "Changed the deck" is true of *every* deck edit and would say nothing.
+  The reasons the kind list did not grow, and everything the backend does:
+  [decks-storage.md](../../../docs/reference/decks-storage.md).
 - **The audit field for the X split is `"xGroup"`, the one multi-word field name in that switch,
   and the drift is silent.** Every other arm is a single lowercase word, so this is the first place
   `deck.rs`'s spelling and `auditText.ts`'s can part company with nothing going red: the `default`

@@ -396,6 +396,43 @@ export interface FakeDeckAudit {
 }
 
 /**
+ * One row of `deck_undo`: how to put one deck write back, and whether it has been.
+ *
+ * **The crate stores a JSON step of four restore primitives; this stores the deck itself,
+ * twice.** That is a deliberate simplification and not a shortcut around a rule: a step's whole
+ * job is "make the deck look like this again", the crate expresses it as ops because SQL has no
+ * other way to, and here the rows are JavaScript objects that can simply be copied. A second
+ * transcription of `Op::Cards`/`Categories`/`Tags`/`Deck` would be a second implementation of
+ * the reversal to keep in step with the first, which is exactly the drift the fake exists under
+ * `ipc.ts` to avoid rather than to add.
+ *
+ * What it therefore does **not** model: the id remap (a restored pile keeps its id here because
+ * nothing reassigns one), and the scope narrowing (the crate touches only the cells the write
+ * was about, this replaces the deck). Neither is visible from a story — both are about not
+ * disturbing rows the press never touched, and here nothing else is touching them.
+ */
+export interface FakeDeckUndo {
+  /** The history row this reverses — **the last one the press wrote**, so a `deck_update` that
+   *  changed two fields is two rows and one Ctrl+Z. */
+  auditId: number;
+  deckId: number;
+  /** The deck before the write, and after it. */
+  before: FakeDeckState;
+  after: FakeDeckState;
+  /** `null` while the change is still applied. **Persisted**, like the column — so undo carries
+   *  on where it stopped. The *redo* stack is the webview's and dies with the window. */
+  undoneAt: number | null;
+}
+
+/** Everything about one deck a step puts back. */
+export interface FakeDeckState {
+  deck: FakeDeck;
+  cards: FakeDeckCard[];
+  categories: FakeDeckCategory[];
+  tags: FakeDeckTag[];
+}
+
+/**
  * One row of `deck_categories`: a named pile the user owns, and what schema v8 replaced the
  * fixed five-word zone with.
  *
@@ -595,6 +632,8 @@ export interface FakeDb {
   deckTags: FakeDeckTag[];
   deckCards: FakeDeckCard[];
   deckAudit: FakeDeckAudit[];
+  /** `deck_undo` — one step per deck write, keyed to the history row it reverses. */
+  deckUndo: FakeDeckUndo[];
   update: FakeUpdate;
   /**
    * `error_log`, which is empty in every world but the `errorLog` fault's.
@@ -805,6 +844,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     deckTags: [],
     deckCards: [],
     deckAudit: [],
+    // Never seeded, always earned: a step exists only where a *write* made one, so a story's
+    // Undo button is about the edit that story made rather than about a fixture.
+    deckUndo: [],
     update: defaultUpdate(),
     // Empty here, and filled by the `errorLog` **fault** rather than by any seed: "what has
     // failed" is a state of the world, not a shape of collection, so every seed can be in
@@ -6676,5 +6718,227 @@ export function pluginHandlers() {
  * in the crate, none of which can see the reader's rows or change them.
  */
 export function allHandlers(db: FakeDb) {
-  return { ...readHandlers(db), ...writeHandlers(db), ...pluginHandlers() };
+  return {
+    ...readHandlers(db),
+    ...journalled(db, writeHandlers(db)),
+    ...undoHandlers(db),
+    ...pluginHandlers(),
+  };
+}
+
+/**
+ * The writes that record **no** undo step, and why each is on the list.
+ *
+ * `deck_create`, `deck_duplicate` and `deck_delete` are the crate's own carve-out: they are
+ * gallery writes with no editor open, and undoing "this deck was born" means deleting the deck
+ * the reader is standing in. The three folder writes record no history at all (a folder belongs
+ * to no deck, and `deck_audit.deck_id` is NOT NULL), so there is nothing for a step to key on;
+ * `deck_folder_delete` **does** record history and still gets no step — the crate argues that
+ * one at its own definition, and the short form is that it changes N decks at once while a
+ * cursor is per deck.
+ *
+ * `deck_set_view_state` is not here because it writes no history row either: looking at a deck
+ * is not editing it, so the wrapper below files nothing for it without being told.
+ */
+const NO_UNDO_STEP: ReadonlySet<string> = new Set([
+  "deck_create",
+  "deck_duplicate",
+  "deck_delete",
+  "deck_folder_create",
+  "deck_folder_rename",
+  "deck_folder_move",
+  "deck_folder_delete",
+]);
+
+/**
+ * Every deck write, wrapped so it records an undo step exactly where its Rust twin does.
+ *
+ * **One wrapper rather than a line in fifteen handlers**, and the reason is the same one the
+ * crate's `every_deck_write_leaves_exactly_one_audit_row` exists for: a write that silently
+ * records nothing is the bug this feature is most likely to grow, and here a *new* deck write
+ * is covered by construction rather than by somebody remembering.
+ *
+ * **The step is keyed to the last history row the call wrote**, which is what makes one press
+ * one Ctrl+Z: `deck_update` with two changed fields writes two rows, and a cursor that could
+ * land between them would put half a settings form back. A call that wrote no history row at
+ * all — an untouched patch, a stepper landing on an already-empty slot — files nothing, because
+ * a step for a change that did not happen is a press that appears to do nothing.
+ *
+ * **Known gap, and it is this fake's rather than this feature's**: the five card writes
+ * (`deck_add_card`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
+ * `deck_category_clear`) record no history row here, though their Rust twins do and
+ * `deck_audit.rs`'s `every_deck_write_leaves_exactly_one_audit_row` pins it. So Storybook's
+ * history drawer has never listed a card add, and — consistently — its Undo button does not
+ * offer to take one back. The app is unaffected; closing it means giving those five handlers a
+ * `record(…)` call, which is a change to what the *history* stories draw and belongs with them.
+ */
+function journalled<T extends Record<string, (args: never) => unknown>>(db: FakeDb, writes: T): T {
+  const wrapped: Record<string, (args: never) => unknown> = {};
+  for (const [name, handler] of Object.entries(writes)) {
+    if (NO_UNDO_STEP.has(name)) {
+      wrapped[name] = handler;
+      continue;
+    }
+    wrapped[name] = ((args: Record<string, unknown>) => {
+      const deckId = deckOf(db, name, args);
+      if (typeof deckId !== "number") return handler(args as never);
+      const before = deckState(db, deckId);
+      const written = db.deckAudit.length;
+      const result = handler(args as never);
+      const rows = db.deckAudit.slice(written);
+      if (before !== null && rows.length > 0) {
+        db.deckUndo.push({
+          auditId: rows[rows.length - 1].id,
+          deckId,
+          before,
+          after: deckState(db, deckId) as FakeDeckState,
+          undoneAt: null,
+        });
+      }
+      return result;
+    }) as (args: never) => unknown;
+  }
+  return wrapped as T;
+}
+
+/**
+ * Which deck a write is about, **before it runs**.
+ *
+ * Most deck commands carry a `deckId` and this is one property read. The rest are keyed by the
+ * *row* they change — a category rename knows an id in `deck_categories`, a tag delete one in
+ * `deck_tags` — and the crate resolves the owner from that row, which is the same lookup the
+ * ownership fence in each of those handlers makes anyway. It has to happen **first**: after a
+ * delete there is no row left to ask.
+ *
+ * `deck_update` is the odd one and is neither: its deck id is spelled `id`, because it is the
+ * deck's own row it patches.
+ */
+function deckOf(db: FakeDb, name: string, args: Record<string, unknown>): number | undefined {
+  if (typeof args?.deckId === "number") return args.deckId;
+  const id = typeof args?.id === "number" ? args.id : undefined;
+  if (id === undefined) return undefined;
+  switch (name) {
+    case "deck_update":
+      return id;
+    case "deck_category_rename":
+    case "deck_category_set_active":
+    case "deck_category_delete":
+      return db.deckCategories.find((c) => c.id === id)?.deckId;
+    case "deck_tag_update":
+    case "deck_tag_delete":
+      return db.deckTags.find((t) => t.id === id)?.deckId;
+    default:
+      return undefined;
+  }
+}
+
+/** One deck, copied out whole — or `null` for a deck that is not there. */
+function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
+  const deck = db.decks.find((d) => d.id === deckId);
+  if (!deck) return null;
+  return {
+    deck: { ...deck },
+    cards: db.deckCards.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
+    categories: db.deckCategories.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
+    tags: db.deckTags.filter((t) => t.deckId === deckId).map((t) => ({ ...t })),
+  };
+}
+
+/** Put one deck back to a recorded state. */
+function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
+  const at = db.decks.findIndex((d) => d.id === deckId);
+  if (at >= 0) db.decks[at] = { ...state.deck };
+  db.deckCards = [
+    ...db.deckCards.filter((c) => c.deckId !== deckId),
+    ...state.cards.map((c) => ({ ...c })),
+  ];
+  db.deckCategories = [
+    ...db.deckCategories.filter((c) => c.deckId !== deckId),
+    ...state.categories.map((c) => ({ ...c })),
+  ];
+  db.deckTags = [
+    ...db.deckTags.filter((t) => t.deckId !== deckId),
+    ...state.tags.map((t) => ({ ...t })),
+  ];
+}
+
+/**
+ * `deck_undo` — the cursor, and the two reversals.
+ *
+ * Outside {@link writeHandlers} because {@link journalled} wraps everything in there, and these
+ * two must **not** record a step of their own: an undo is a deck write and belongs in the
+ * history, but a reversal that were itself reversible would make Ctrl+Z twice toggle one change
+ * instead of going back two. They are still refused by a running sync, like every other write.
+ */
+function undoHandlers(db: FakeDb) {
+  return {
+    /** The newest step of this deck still applied, and — for the id the caller hands in — the
+     *  one it could put back. */
+    deck_undo_state: (args: { deckId: number; redoId: number | null }) => {
+      const undo = nextUndo(db, args.deckId);
+      const redoStep =
+        typeof args.redoId === "number"
+          ? db.deckUndo.find(
+              (s) => s.auditId === args.redoId && s.deckId === args.deckId && s.undoneAt !== null,
+            )
+          : undefined;
+      return {
+        undo: undo ? (auditById(db, undo.auditId) ?? null) : null,
+        redo: redoStep ? (auditById(db, redoStep.auditId) ?? null) : null,
+      };
+    },
+
+    deck_undo_apply: (args: { deckId: number; auditId: number }): void => {
+      refuseIfBusy(db);
+      const cursor = nextUndo(db, args.deckId);
+      if (!cursor) throw refuse("There is nothing left to undo in this deck.");
+      if (cursor.auditId !== args.auditId) {
+        throw refuse(
+          "That is not the most recent change any more — the deck has been edited since. " +
+            "Open the history to see what happened.",
+        );
+      }
+      restoreDeck(db, args.deckId, cursor.before);
+      cursor.undoneAt = stamp(db);
+      recordReversal(db, args.deckId, "undo", cursor.auditId);
+    },
+
+    deck_redo_apply: (args: { deckId: number; auditId: number }): void => {
+      refuseIfBusy(db);
+      const step = db.deckUndo.find(
+        (s) => s.auditId === args.auditId && s.deckId === args.deckId,
+      );
+      if (!step || step.undoneAt === null) {
+        throw refuse("That change has not been undone, so there is nothing to redo.");
+      }
+      restoreDeck(db, args.deckId, step.after);
+      step.undoneAt = null;
+      recordReversal(db, args.deckId, "redo", step.auditId);
+    },
+  };
+}
+
+/** The newest step of one deck that is still applied — `audit_id DESC`, `undone_at IS NULL`. */
+function nextUndo(db: FakeDb, deckId: number): FakeDeckUndo | undefined {
+  return [...db.deckUndo]
+    .filter((s) => s.deckId === deckId && s.undoneAt === null)
+    .sort((a, b) => b.auditId - a.auditId)[0];
+}
+
+function auditById(db: FakeDb, id: number): DeckAuditEntry | undefined {
+  const row = db.deckAudit.find((a) => a.id === id);
+  return row ? toDeckAudit(row) : undefined;
+}
+
+/**
+ * The history row a reversal writes.
+ *
+ * **`kind: "deck"` and not a tenth audit kind** — `deck_audit.kind` carries a CHECK, SQLite
+ * cannot alter one, and a tenth word would rebuild every reader's whole deck history for a
+ * spelling. `delta` is negated on the way back so the day header's roll-up still adds up.
+ */
+function recordReversal(db: FakeDb, deckId: number, field: "undo" | "redo", of: number): void {
+  const original = db.deckAudit.find((a) => a.id === of);
+  const delta = original?.delta ?? 0;
+  record(db, deckId, DECK_LEVEL, "deck", null, { field, of }, field === "undo" ? -delta : delta);
 }

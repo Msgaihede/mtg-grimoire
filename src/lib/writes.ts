@@ -13,12 +13,17 @@
  */
 import { ipcError } from "./ipc";
 
-/** What this needs of a TanStack mutation: when it was last fired, and whether it refused. */
+/** What this needs of a TanStack mutation: when it was last fired, and how it went. */
 export interface Write {
   /** `MutationObserverResult.submittedAt` — 0 until the mutation has ever run. */
   submittedAt: number;
   isError: boolean;
   error: unknown;
+  /** Settled, and settled well. Read by the deck editor to throw its redo stack away: once the
+   *  reader has edited past a branch the branch is gone, and a *refused* write has not edited
+   *  past anything — which is why this is not `!isError`, a value that is also true while a
+   *  write is still in flight. */
+  isSuccess: boolean;
 }
 
 /**
