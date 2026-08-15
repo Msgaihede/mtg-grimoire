@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
@@ -459,24 +458,37 @@ function Results({ search }: { search: CardSearch }) {
             // How many printings this tile stands for, opposite the owned badge. Past one
             // only: on a wall where every tile said "1" the mark would be chrome.
             //
-            // **The same object the deck editor counts copies with** — `CountTag`, the filled
-            // banner cut off at a slant, in its neutral grey because a printing count is only a
-            // count and has no tag to take a colour from. It used to be a `×N` in the wall's own
-            // grey chip; a number laid on a card is drawn one way in this app, and the `×` was
-            // a second glyph in a 22px box saying what the banner's shape already says.
+            // **It says the word, in the wall's own chip** (2026-08-15). Two shapes came before
+            // it and each dropped something: `×132` was an abbreviation whose meaning lived in a
+            // tooltip, and `CountTag` — the deck editor's slanted banner — was a bare `132` whose
+            // meaning lived in one *shape*, shared with "copies in this pile" and told apart only
+            // by which surface you were looking at. A count on a search tile is the one statement
+            // in this app that has room to name itself, so it does: `12 printings` reads without
+            // a hover, without a legend, and without knowing what the other surface draws.
             //
-            // The `title` is the number in plain words, which the corner can surface now that it
-            // takes its own pointer events (`CardGrid`'s `Tile`) — and it is the whole of what a
-            // pointer user gets, since the mark is `aria-hidden`. It says *matched* rather than
-            // "exist", because that is what the number counts: a collapsed row groups the
-            // printings that got past the filters, so a search narrowed to one set reports the
-            // printings in that set and not the card's whole print run.
+            // Always plural, and that is the `> 1` guard's doing rather than an oversight.
+            //
+            // The word is the whole statement now, so it is plain visible text — no `aria-hidden`
+            // and no `sr-only` twin, which is the difference between a mark you can read and a
+            // mark you can only be told about. The `title` survives for the one thing the corner
+            // has no room to say: the number counts the printings that got past the *filters*, so
+            // a search narrowed to one set reports the printings in that set and not the card's
+            // whole print run.
+            //
+            // 10px rather than the caption's 12: "428 printings" at 12px is over half a 170px
+            // tile, and this box sits on the card's own name. It is as high as `CardGrid`'s
+            // corner goes (4px in, clear of the art's rounded corner) — at the default zoom that
+            // is 4–18px against a printed nameplate at roughly 8–22px, so the box clears the
+            // card's top border and overlaps the name; the mark does not scale with the zoom, so
+            // by ~2× it sits in the border strip above the name outright.
             topLeft={(card) =>
               card.printings > 1 ? (
-                <CountTag
-                  count={card.printings}
+                <span
                   title={`${card.printings} printings matched these filters`}
-                />
+                  className="block whitespace-nowrap text-[10px] leading-none tabular-nums text-text"
+                >
+                  {card.printings} printings
+                </span>
               ) : null
             }
             // The 12 366 foil-only and 892 etched-only printings, which Scryfall's art has

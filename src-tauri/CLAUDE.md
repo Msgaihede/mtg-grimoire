@@ -153,8 +153,15 @@ both plus the frontend.
   `price_expr`. **`cards.prices` is not on either DTO** — the card pane is where a reader
   compares what each finish costs, and a blob carrying two of the four marketplaces could only
   ever have answered em dashes for the other two.
-- **Every price in the crate is built by `sorting::price_expr` / `printing_price_expr`**, never
-  by hand. Blob-backed marketplaces keep the `json_extract` text verbatim — **including the
+- **Every price in the crate is built by `sorting::price_expr` / `printing_price_expr` /
+  `printing_price_by_finish_expr`**, never by hand. The third is the **deck's**, and it is the
+  first two composed rather than a fourth rule: `price_expr` once per `FINISH_LITERALS` entry,
+  coalesced, so a printing sold only in foil is quoted at its foil rate instead of reading as
+  unpriced — which is what the flat `'nonfoil'` literal a deck row used to pass did to **13 515
+  foil-only and 892 etched-only printings**. It answers what `printing_price_expr` answers; a
+  deck reads it because a deck total is a `sum()` and `cards.price_usd` is the column that must
+  not be summed, while the search reads the column because it is the one an index covers.
+  Blob-backed marketplaces keep the `json_extract` text verbatim — **including the
   etched hole**, `CASE finish WHEN 'etched' THEN NULL` — and feed-backed ones emit a correlated
   scalar subquery on `(marketplace, card_id, finish)` rather than a `LEFT JOIN`, so a per-finish
   query cannot multiply its own rows by the finishes a printing is listed in.

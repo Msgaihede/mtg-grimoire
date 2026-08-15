@@ -1024,9 +1024,10 @@ export interface TheoryDiffRow {
   /** How many more copies theory wants than live has. **Always positive**: a card live has as
    *  many of is not on this list, and one it has more of is a cut rather than a purchase. */
   quantity: number;
-  /** Nonfoil unit price for this printing at the marketplace the read named —
-   *  {@link DeckCard.unitPrice}'s rule. Never `cards.price_usd`, which is a display fallback
-   *  chain and must not be summed. */
+  /** What one copy of this printing costs at the marketplace the read named —
+   *  {@link DeckCard.unitPrice}'s rule, so a foil-only printing is quoted at its foil rate
+   *  rather than reading as unpriced. Never `cards.price_usd`, the same chain precomputed for
+   *  the search's sort, which nothing here sums. */
   unitPrice: number | null;
   setCode: string;
   collectorNumber: string;
@@ -1618,12 +1619,22 @@ export interface DeckCard {
    *  about a card that is not there. */
   everUncommon: boolean;
   /**
-   * Nonfoil unit price for this printing at the marketplace the read named, per copy —
-   * {@link WishRow.unitPrice}'s rule. Never `cards.price_usd`, which is a display fallback
-   * chain and must not be summed.
+   * What one copy of this printing costs at the marketplace the read named.
    *
-   * **A deck names a printing, not a finish**, which is why this is the nonfoil figure rather
-   * than a chain across finishes: `deck_cards` stores no finish and there is none to price by.
+   * **A deck names a printing, not a finish** — `deck_cards` stores none — so there is no finish
+   * to price by, and the figure is the printing's own: the first finish that marketplace quotes
+   * it in, `nonfoil → foil → etched` (`sorting::printing_price_by_finish_expr`).
+   *
+   * **It was the flat nonfoil rate until 2026-08-15, and that was a bug with a reader-visible
+   * shape.** 13 515 foil-only and 892 etched-only printings have no nonfoil price at *any*
+   * marketplace, so an Invocation, a Secret Lair or a set promo drew an em dash on its card
+   * foot, was skipped by its pile's heading total and by the deck's, and did all of that beside
+   * a search panel quoting the same printing.
+   *
+   * Still never `cards.price_usd`: that is this chain precomputed for the search's `ORDER BY`,
+   * the numbers agree, and the column is the one nothing here may sum. A `null` is still the
+   * answer and never a reason to reach for another marketplace's figure — an etched-only
+   * printing has no euro price at all, because Scryfall has no `eur_etched` key.
    */
   unitPrice: number | null;
   /**
@@ -2130,11 +2141,7 @@ export interface UpdateProgressEvent {
  * arm on the Rust side is a type error here rather than a blank badge.
  */
 export type ErrorSource =
-  | "scryfall_api"
-  | "scryfall_image"
-  | "github_update"
-  | "database"
-  | "image_store";
+  "scryfall_api" | "scryfall_image" | "github_update" | "database" | "image_store";
 
 /** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
 export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";
@@ -2721,16 +2728,39 @@ export const ipc = {
    */
   deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
     invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
-  /** Move every copy from one category to another **within one variant**, folding into
-   *  whatever the target already holds. The identity travels from the moved row, so an orphan
-   *  can be tidied out of the scratchpad like anything else. */
+  /**
+   * Move every copy from one category to another **within one variant**, folding into whatever
+   * the target already holds. The identity travels from the moved row, so an orphan can be
+   * tidied out of the scratchpad like anything else.
+   *
+   * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deckAddCard`'s two-arm
+   * target, and the id wins when both arrive. An id is a drop onto a column the reader pointed
+   * at; a **name** is the quick zones' `Auto`, found-or-created in the same transaction by
+   * `category_for_name`, which is what makes a pile the app invents come out `origin: 'auto'`
+   * and therefore stop being drawn once its last card leaves. The word is `autoCategoryFor`'s
+   * and is computed here, never in Rust.
+   *
+   * Answers **the category the copies are now in**, which is the only way the name arm's caller
+   * learns what was found or made — the caret follows a moved card to its new pile, so that id
+   * is load-bearing rather than a convenience. A name that resolves to the pile the card is
+   * already in writes nothing at all, answers that pile, and does not bump `updated_at`.
+   */
   deckMoveCard: (
     deckId: number,
     cardId: string,
     fromCategoryId: number,
-    toCategoryId: number,
+    toCategoryId: number | null,
+    toCategoryName: string | null,
     variant: DeckVariant,
-  ) => invoke<void>("deck_move_card", { deckId, cardId, fromCategoryId, toCategoryId, variant }),
+  ) =>
+    invoke<number>("deck_move_card", {
+      deckId,
+      cardId,
+      fromCategoryId,
+      toCategoryId,
+      toCategoryName,
+      variant,
+    }),
   /**
    * Swap a deck card to **another printing of the same card**: same category, same variant,
    * same copies, folding into whatever that category already holds of the printing swapped

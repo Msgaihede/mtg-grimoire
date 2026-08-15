@@ -168,11 +168,13 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
  * the deck story files are built on: a component's verdict is only worth rendering if the facts it
  * read are the ones the database holds.
  *
- * The unit price goes through the app's own `finishPrice`, asked for **nonfoil** — which is the
- * `usd` key of this printing's `prices` blob and never the `cards.price_usd` column, since that
- * one is a nonfoil→foil→etched fallback chain built for sorting. A deck names a printing rather
- * than a finish, and nonfoil is the cheapest way to satisfy it. Anything that *sums* these
- * (`DeckStats` does) would otherwise quote a deck at foil rates nobody was offered.
+ * The unit price goes through the app's own `finishPrice`, asked for each finish in turn — the
+ * `usd`, `usd_foil` and `usd_etched` keys of this printing's `prices` blob, first one that
+ * answers, and never the `cards.price_usd` column, which is that same chain precomputed for
+ * sorting and is the one nothing may sum. A deck names a printing rather than a finish, so it is
+ * priced in whichever finish it is *sold* in: **a foil-only printing has no `usd` key at all**,
+ * and asking flatly for nonfoil here is what left every Invocation and Secret Lair in a deck
+ * reading as unpriced.
  *
  * **One price, and it is TCGplayer's**, because that is what a query naming no marketplace is
  * answered with. A story about another marketplace goes through a seeded world, where
@@ -227,7 +229,10 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     gameChanger: card.gameChanger,
     finishes: card.finishes,
     everUncommon: card.everUncommon,
-    unitPrice: finishPrice(card.prices, "nonfoil", "usd"),
+    unitPrice:
+      finishPrice(card.prices, "nonfoil", "usd") ??
+      finishPrice(card.prices, "foil", "usd") ??
+      finishPrice(card.prices, "etched", "usd"),
     // An **allocation**, never a decrement — how many copies this deck has reserved out of the
     // collection. Zero until a story says otherwise, which is also what an unbuilt deck with an
     // empty collection reads.

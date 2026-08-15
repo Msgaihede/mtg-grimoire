@@ -39,7 +39,7 @@ import {
   LANDED_MS,
   type DeckCardActions,
 } from "./cardControl";
-import { AUTO_CATEGORY } from "./autoCategory";
+import { AUTO_CATEGORY, UNCATEGORISED } from "./autoCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
@@ -514,6 +514,16 @@ type Layer =
   | { kind: "quickCategory"; payload: DragPayload }
   | null;
 
+/**
+ * How long the quick zones' "nothing to do" sentence stays up.
+ *
+ * Long enough to be read after a gesture the reader's eye was following elsewhere, short enough
+ * that it is gone before it could be mistaken for a statement about the *next* card. It is a
+ * hint about one press rather than a state of the deck, which is the whole difference between
+ * this and the refusal banner above it — that one stays until another write replaces it.
+ */
+const REFILE_NOTE_MS = 6000;
+
 /** A `setTimeout` handle, as this project's DOM-only lib types one. */
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -930,6 +940,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     deck.setQuantity,
     deck.clearCategory,
     deck.moveCard,
+    deck.refileCard,
     deck.update,
     deck.setTag,
     meta.createTag,
@@ -938,6 +949,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     meta.deleteCategory,
   ] as const;
   const bannerFailure = writeFailure(writes);
+
+  /**
+   * What to say when a re-file moved nothing — and **nothing at all when it moved something**,
+   * because a card that travelled announces its new pile by taking the caret there.
+   *
+   * The two silences this fills are the ones that read as a broken control: a reader drags a card
+   * onto `Auto`, lets go, and the deck looks exactly as it did. Both answers are true and neither
+   * is a failure, so this is a `role="status"` rather than the `role="alert"` banner above it —
+   * a refused re-file is a refusal like any other and belongs in that one.
+   *
+   * **The card is named by looking it up rather than by being carried back**, which is free here
+   * and only here: nothing moved, so the row is still in the slot the mutation was addressed to.
+   * A moved card would need the answer to carry its name, and a moved card needs no sentence.
+   */
+  const refileAnswer = deck.refileCard.data;
+  const refileSlot = deck.refileCard.variables;
+  // `deck.cards` rather than the `cards` binding, which is declared further down this component
+  // and would be a temporal-dead-zone throw from up here.
+  const refileNote = useMemo(() => {
+    if (!refileAnswer || refileAnswer.moved || !refileSlot) return null;
+    const card = deck.cards.find(
+      (c) => c.cardId === refileSlot.cardId && c.categoryId === refileSlot.from,
+    );
+    const named = card ? `“${card.name}”` : "That card";
+    return refileAnswer.category === UNCATEGORISED
+      ? `${named} has no pile of its own to go in — it stays where it is.`
+      : `${named} is already filed under ${refileAnswer.category}.`;
+  }, [refileAnswer, refileSlot, deck.cards]);
+
+  /**
+   * The sentence is a hint about one press, so it goes of its own accord — `reset()` clears the
+   * mutation's answer, which is what this is derived from, so there is no second piece of state
+   * to keep in step.
+   *
+   * Keyed on {@link refileAnswer}, whose identity is fresh per call (the `mutationFn` returns a
+   * literal), so pressing again restarts the clock rather than inheriting the first press's
+   * remaining time.
+   */
+  const resetRefile = deck.refileCard.reset;
+  useEffect(() => {
+    if (refileNote === null) return;
+    const timer = setTimeout(resetRefile, REFILE_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [refileAnswer, refileNote, resetRefile]);
 
   /**
    * The columns and the move targets: **every category the deck has, in `sortOrder`.**
@@ -1404,6 +1459,40 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * The quick zones' `Auto`, for a card the deck already holds: file it again by what it *does*.
+   *
+   * **The row is looked up here rather than carried in the drag**, which is `dnd.ts`'s decision
+   * and is written out there: a `deck-card` payload is an address into a list this component is
+   * already drawing, so the type line and the pile's name are one `find` away and a copy in the
+   * payload would be the thing that goes stale. Addressed by the slot — `cardId` and the category
+   * it is in — like every other write in this feature.
+   *
+   * A row that is not there is not an error and not a write: a drag can outlive the list it
+   * started in (a filter, a refetch, another surface's delete), and nothing about failing to
+   * re-file a card that is gone is worth a sentence.
+   */
+  const refileWrite = deck.refileCard.mutate;
+  const refile = useCallback(
+    (cardId: string, from: number) => {
+      const card = cards.find((c) => c.cardId === cardId && c.categoryId === from);
+      if (!card) return;
+      refileWrite(
+        { cardId, from, typeLine: card.typeLine, categoryName: card.categoryName },
+        {
+          // The caret follows the card to the pile that now has it, which announces that pile's
+          // name — the same hand-off a drag onto a heading makes, and the only feedback a move
+          // needs. When nothing moved there is nowhere to send it, and the sentence below is
+          // what says so instead.
+          onSuccess: ({ moved, categoryId }) => {
+            if (moved && categoryId !== null) handOffTo(categoryId);
+          },
+        },
+      );
+    },
+    [cards, refileWrite, handOffTo],
+  );
+
+  /**
    * What a drop writes — the one place a drag becomes a command.
    *
    * `dnd.ts` decided *what* the drop means and refused the ones that mean nothing; this decides
@@ -1418,10 +1507,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // does)` makes: the type line goes and the pile does not, because `useDeck.addCard` names
       // it. The one drop in this editor that points at no column — see {@link QuickZones}.
       else if (write.write === "auto-add") addTo(write.cardId, AUTO_CATEGORY, write.typeLine);
+      // The same zone for a card the deck already holds, and the same rule — see {@link refile}.
+      else if (write.write === "auto-refile") refile(write.cardId, write.from);
       else if (write.write === "move") moveTo(write.cardId, write.from, write.to);
       else setQuantityAt(write.cardId, write.categoryId, 0);
     },
-    [addTo, moveTo, setQuantityAt],
+    [addTo, moveTo, refile, setQuantityAt],
   );
 
   /**
@@ -2084,7 +2175,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // sticks to the foot of the window for the length of a drag (the price strip). The
       // virtualised table is the one view still given a height, because a virtualiser is a
       // scrollport by construction.
-      className={cn("flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
+      //
+      // **`relative` is not decoration and it is the whole of a two-scrollbar bug** (2026-08-15).
+      // `overflow` clips a descendant only when this box is between that descendant and its
+      // *containing block* — and Tailwind's `.sr-only` is `position: absolute`, so every
+      // screen-reader label in here whose nearest positioned ancestor was missing resolved to the
+      // **initial** containing block instead. Laid out at its static position, deep inside the
+      // scrolled column, and clipped by nothing: the label stretched the **document**, which is a
+      // window scrollbar beside this one and an app that slides up off its own window when you use
+      // it. Measured live at 1280×800 on a 24-card deck (`tauri dev`, debug):
+      // `documentElement.scrollHeight` **1704** against a `clientHeight` of 800 — a 904px scroll
+      // the window had no content for — with `window.innerWidth - documentElement.clientWidth`
+      // reading **15**, while `body.scrollHeight` and the `h-screen` shell root both read 800 and
+      // the shell's own `overflow-hidden` said nothing was overflowing. The deepest escapee was
+      // `DeckStats`' curve label "0 cards at mana value 8 or more" at y **1703**, which is the
+      // 1704 exactly. One `relative` here took it to **800 / 0**.
+      //
+      // **It belongs on the box that scrolls, and putting it one level up is not the same fix.**
+      // With `relative` on `AppShell`'s `main` instead, the document came right (800) and
+      // `main.scrollHeight` went **742 → 1646**: the label was contained by main but its static
+      // position is still inside *this* column's scrolled content, so the phantom bar moved rather
+      // than went. The rule that generalises is "a scroll container is the containing block for
+      // its own absolutely positioned content", and the scroller here is this element.
+      className={cn("relative flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it
@@ -2538,6 +2651,30 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
             >
               Could not change this deck — {bannerFailure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* The quick zones' `Auto`, when the rule had nothing to do — the card is already in the
+          pile it names, or there is no pile for it. Neither is a refusal, so this is a
+          `role="status"` and it is drawn in the dim voice rather than the destructive one; a
+          re-file that was actually *refused* is the banner above, like every other write.
+
+          It clears itself after {@link REFILE_NOTE_MS} — see the effect that owns that — which
+          is the other half of the difference: the banner speaks for the state of the deck until
+          something replaces it, and this speaks for one press. Grown into place like its two
+          neighbours, for their reason: the animated element is the wrapper and carries only
+          `overflow-hidden`, because `statusLine` takes `height` to 0 and a box with its own
+          padding can never be shorter than that padding. */}
+      <AnimatePresence initial={false}>
+        {refileNote && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <p
+              role="status"
+              className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-dim"
+            >
+              {refileNote}
             </p>
           </motion.div>
         )}

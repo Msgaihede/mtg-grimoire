@@ -88,7 +88,7 @@ are all things no suite could have seen.
   `position: relative`, banner `position: static` — on that rule. Measured 2026-08-13 with
   `document.elementFromPoint` inside the overlap: the answer was **the banner**, with the tag
   computing `position: relative` and the banner `position: static`. Flex items paint as inline
-  blocks in *order-modified document order*, so a later sibling wins whatever its position. The
+  blocks in _order-modified document order_, so a later sibling wins whatever its position. The
   fix is `LAYER.overlappingMark`, which works for the same reason the trick did not: on a flex
   item a z-index other than `auto` creates a stacking context whatever its position. Re-probed
   at three depths — 5px and 8px into the overlap answer the tag, and 3px answers the banner,
@@ -205,7 +205,7 @@ below is a measurement of that window, not of the suite.
   every test in the suite passed over it.
 - **Enter in the Name field creates the deck**, and this is the one behaviour the shared form
   took away and had to be given back. `DeckSettingsForm`'s name field spends Enter on
-  `preventDefault()` + blur — right in the settings dialog, where blur *is* the write — so
+  `preventDefault()` + blur — right in the settings dialog, where blur _is_ the write — so
   adopting it silently cost the create dialog its fast path. With `onSubmit` wired, one `press
 Enter` created the deck and opened the editor. The two textareas keep their newline and the
   cover search box refuses Enter outright, so exactly one field in the panel submits.
@@ -223,8 +223,8 @@ Enter` created the deck and opened the editor. The two textareas keep their newl
   WebView2 `intervention` about lazily-loaded images — which is the cover grid's `loading="lazy"`
   doing its job on a plain scroller, where the repo's rule says it belongs.
 - **The file picker half is still undriven**, for the reason recorded above: `dialog:allow-open`
-  opens a native window CDP cannot reach. So at create, *path → shown filename → upload after the
-  INSERT* is covered by tests and the **click → path** step is not — and neither is the refused
+  opens a native window CDP cannot reach. So at create, _path → shown filename → upload after the
+  INSERT_ is covered by tests and the **click → path** step is not — and neither is the refused
   upload's "Open deck" state, which needs that same picker to reach.
 
 ## The stats band, driven 2026-08-14
@@ -243,20 +243,20 @@ jsdom measures every element at zero.**
   **384px** — 6px of column padding, a 43px group heading, the 319px card, `stackHeight`'s 8px
   tail and 6px more padding — so the floor is one whole card, `min-h-96`, and it is a
   measurement rather than a taste.
-- **Two arrangements were measured before the third was kept.** A band that *shrinks* (`min-h-0`
-  + `overflow-y-auto`) held the deck at 384 and took **92px** for **229px** of charts — a
-  scrollbar over a chart nobody can read. A band that is `shrink-0` inside an `overflow-y-auto`
-  editor draws whole: the column wants **847px** in the **710px** a 1280×800 window leaves, so
-  the deck holds 384, the band its full 230, and the last **138px** is one scroll away. At
-  1920×1080 the editor overflows by **0** and the deck takes the surplus (**612px**). All four
-  views agree to the pixel (Stacks, Table, Text, Grid: desk 384, band 230, band top 688,
-  `body.scrollWidth` 1265 — no horizontal scroll at any of them).
-  **Every "the window leaves" figure in this bullet was taken against a 48px ribbon and is 8px
-  large for the current build**: the shell was enlarged on 2026-08-14 and the ribbon is 56px, so
-  the 1280×800 editor is **702px**, the 1920×1080 surplus **604px** and the band top **680**.
-  The numbers that measure the column's own contents — 847, 384, 230, 92/229 — did not move,
-  and neither did anything horizontal: the sidebar stayed 208px precisely so the `DECK_FLOOR`
-  bullet below would keep holding.
+- **Two arrangements were measured before the third was kept.** A band that _shrinks_ (`min-h-0`
+  - `overflow-y-auto`) held the deck at 384 and took **92px** for **229px** of charts — a
+    scrollbar over a chart nobody can read. A band that is `shrink-0` inside an `overflow-y-auto`
+    editor draws whole: the column wants **847px** in the **710px** a 1280×800 window leaves, so
+    the deck holds 384, the band its full 230, and the last **138px** is one scroll away. At
+    1920×1080 the editor overflows by **0** and the deck takes the surplus (**612px**). All four
+    views agree to the pixel (Stacks, Table, Text, Grid: desk 384, band 230, band top 688,
+    `body.scrollWidth` 1265 — no horizontal scroll at any of them).
+    **Every "the window leaves" figure in this bullet was taken against a 48px ribbon and is 8px
+    large for the current build**: the shell was enlarged on 2026-08-14 and the ribbon is 56px, so
+    the 1280×800 editor is **702px**, the 1920×1080 surplus **604px** and the band top **680**.
+    The numbers that measure the column's own contents — 847, 384, 230, 92/229 — did not move,
+    and neither did anything horizontal: the sidebar stayed 208px precisely so the `DECK_FLOOR`
+    bullet below would keep holding.
 - **`DECK_FLOOR` had to drop 208 → 192, and the pass is the only thing that could have found
   it.** A page scroller is a second scrollbar, and the row pays for it: at 1280 with a card pane
   docked the desk measured **602** against the **617** in `DECK_FLOOR`'s own table, leaving the
@@ -281,7 +281,7 @@ against a real deck of 14 cards. Every claim its doc comment makes about layout 
 jsdom has no layout engine and every one of them is a claim about a box.
 
 - **It costs no layout, and that is the whole of the `h-0 -mb-3` arrangement.** With a card in the
-  air the editor's header row was at **78** and the first card at **341.5** — *exactly* the
+  air the editor's header row was at **78** and the first card at **341.5** — _exactly_ the
   coordinates they held with nothing being dragged. The sticky wrapper measured `height` **0**,
   `margin-bottom` **−12px**, `position: sticky`, `z-index` **40**.
 - **It is pinned to the scrollport, not to the content.** With the editor scrolled to **500** the
@@ -307,8 +307,8 @@ jsdom has no layout engine and every one of them is a claim about a box.
   fallback. A tile dropped on `New category` opened the dialog with the caret **in the field**,
   its scrim at `z-index` **45** and `Create` `aria-disabled="true"` on the empty name; naming the
   pile made it and filed the card into it (15 → 16). Re-running it with the name `Sideboard` left
-  the dialog open, the name in the field, the card unfiled at 16, and the alert reading *"Could
-  not make that category — This deck already has a category with that name."*
+  the dialog open, the name in the field, the card unfiled at 16, and the alert reading _"Could
+  not make that category — This deck already has a category with that name."_
 
 ### One thing this pass found that is not the quick zones'
 
@@ -325,3 +325,49 @@ Its one consequence for the bar was fixed: a scroller that scrolls on two axes n
 element pinned on two, or the bar rides the content sideways. Measured before the fix at 1024,
 with the drag's own auto-scroller having run right — bar left **162** against the editor's
 **228**; after `left-0`, with `scrollLeft` still **66**, bar left **228**.
+
+> **Closed 2026-08-16, by somebody else's branch.** Re-measured on `main` at d5fed47 (the merge
+> of #89, "stop the editor's `sr-only` labels opening a window scrollbar"): the editor's
+> `scrollWidth` and `clientWidth` are both **1017**, so the overhang is **0**, and the document
+> agrees on both axes (`scrollWidth` 1280 = `clientWidth`, `scrollHeight` 800 = `clientHeight`).
+> **The `left-0` on the quick zones stays** — it is a fence around a property of the scroller
+> (`overflow-y-auto` computes `overflow-x` to `auto`, so the box can scroll on two axes whenever
+> anything overflows it), not around the one control that happened to be overflowing it.
+
+## `Auto` re-filing a card the deck already holds — 2026-08-16, `npm run tauri dev` (debug), 1280×800
+
+Driven on `main` at d5fed47, against the same 14-card deck. The write path is new on both sides —
+`move_card`'s name arm in Rust, `useDeck.refileCard` in TypeScript — and the two halves that no
+suite can reach are the gesture and the provenance.
+
+- **The zone is live for a deck card, which is the whole change.** Holding a card off the desk,
+  `Auto` carried **no** `opacity-40` and lit up on hover; it greyed for exactly this drag before.
+  The other three drew `lucide-move-right`, so the bar knew it was a move.
+- **A re-file files by what the card does, and creates the pile.** _Accumulate Wisdom_ — type line
+  `Instant`, sitting in a pile called `Instant` — left it for a **new `Draw` pile**: `Instant`
+  went 4 cards → 3, `Draw` arrived holding 1, and the deck stayed **14 cards**, so it was a move
+  and not an add. The tags were read live, against a real taxonomy; the type line would have
+  answered `Instant` and left it where it was.
+- **The caret follows it**, which is what the command's new return value is for:
+  `document.activeElement` was the group element of the pile that had just been made
+  (`data-deck-group="33"`). Nothing in TypeScript knew that id until Rust answered with it.
+- **Pressing again is answered, not written.** The same card dragged onto `Auto` a second time
+  produced the sentence _“Accumulate Wisdom” is already filed under Draw._ in a `role="status"`,
+  with the card count (**14**) and the group count (**8**) unchanged.
+- **The invented pile is `origin: 'auto'`, and this is the observation the Rust route was chosen
+  for.** Dragging that one card out of `Draw` and onto `Sideboard` took the `Draw` heading off the
+  desk with it — `[data-deck-group="33"]` gone, seven groups again. Resolving the name in
+  TypeScript would have made the pile through `deck_category_create`, which writes `'user'`, and
+  `drawsWhenEmpty` would have kept drawing an empty column nobody asked for.
+- **The bar's layout claims still hold under all of it** (re-measured on this build, from an
+  unscrolled baseline): the wrapper computes `position: sticky`, `z-index: 40`, `height: 0`,
+  `margin-bottom: -12px`, `left: 0px`; with a card in the air the header row, the desk row and the
+  first card sat at **78**, **243** and **293.5** — the same three coordinates they held with
+  nothing being dragged. The bar spans **78–136** and the desk row begins at **243**, so **107px**
+  of clearance.
+
+**What this pass did not reach**: the _unplaceable_ answer, where `autoCategoryFor` returns
+`Uncategorised` and the card stays put with a sentence of its own. It needs an orphaned row or a
+layout the rule has no word for, and this deck has neither. `useDeck.test.ts` covers it, and the
+sibling branch — "already filed" — was driven here, so what is unproven is the second arm of one
+`if` rather than the path to it.

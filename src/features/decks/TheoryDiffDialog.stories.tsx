@@ -7,7 +7,8 @@ import { TheoryDiffDialog } from "./TheoryDiffDialog";
  *
  * `deck_theory_diff` and `deck_theory_missing_to_wishlist` are the fake's now, so every row
  * below is *computed* from two lists of a seeded deck rather than written out: the quantity is
- * a subtraction the fake did, the price is the nonfoil `usd` key of that printing's own blob,
+ * a subtraction the fake did, the price is that printing's own blob read in the finish it is
+ * sold in,
  * and the spare count comes off the collection minus what the one built deck has claimed. A
  * fixture that stated those numbers would agree with itself and with nothing else.
  *

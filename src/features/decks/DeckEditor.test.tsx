@@ -715,6 +715,40 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The page scroller is `relative`, and that one word is a whole second scrollbar.**
+   *
+   * `overflow` clips a descendant only when the scroller sits between it and that descendant's
+   * *containing block*. Tailwind's `.sr-only` is `position: absolute`, so every screen-reader
+   * label in this editor with no positioned ancestor resolved to the **initial** containing block:
+   * laid out at its static position deep inside the scrolled column, and clipped by nothing. The
+   * label stretched the *document*, which is a window scrollbar beside this editor's own and an
+   * `h-screen` app that slides up off its own window when you use it.
+   *
+   * Measured in the shipped window 2026-08-15 (`tauri dev`, a debug build, 1280×800, a 24-card
+   * deck): `documentElement.scrollHeight` **1704** against a `clientHeight` of 800, with
+   * `window.innerWidth - documentElement.clientWidth` reading **15** — while `body.scrollHeight`
+   * and the `h-screen` shell root both read 800 and the shell's `overflow-hidden` reported nothing
+   * overflowing, which is why no box in the tree named the culprit. The deepest escapee was
+   * `DeckStats`' curve label `"0 cards at mana value 8 or more"` at y **1703**. This class took it
+   * to **800 / 0**, and the editor to one scrollbar in Stacks, Grid and Text.
+   *
+   * **jsdom has no layout engine, so none of that is checkable here** — and the same is true of
+   * the wrong fix, which is the reason this test exists rather than a comment. `relative` on
+   * `AppShell`'s `main` looks identical in every DOM assertion and is *not* the same repair: the
+   * label is then contained by main but its static position is still inside this column's scrolled
+   * content, so the phantom scroll moved rather than went (`main.scrollHeight` **742 → 1646**,
+   * same pass). The rule is that a scroll container is the containing block for its own absolutely
+   * positioned content, so the class belongs on whichever box carries the `overflow`.
+   */
+  it("makes the page scroller the containing block for its own absolute content", async () => {
+    await open();
+
+    const page = screen.getByRole("region", { name: /^Deck editor:/ });
+    expect(page.className).toContain("overflow-y-auto");
+    expect(page.className).toContain("relative");
+  });
+
+  /**
    * **The docked panel is pinned, not stretched** — the other half of the deck growing.
    *
    * A sibling of a 7 000px desk row is drawn 7 000px tall unless it opts out, which takes its
@@ -1697,7 +1731,11 @@ describe("DeckEditor", () => {
     // The same deck, one category short — and it is the one the row still points at, which is
     // exactly the half-commit the read-side fallback is for.
     deckGet.mockResolvedValue(
-      detail({ defaultCategoryId: SIDE }, [], CATEGORIES.filter((c) => c.id !== SIDE)),
+      detail(
+        { defaultCategoryId: SIDE },
+        [],
+        CATEGORIES.filter((c) => c.id !== SIDE),
+      ),
     );
     await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
 
@@ -2803,7 +2841,7 @@ describe("DeckEditor drag and drop", () => {
     await dragOnto(card_("Lightning Bolt"), group("Sideboard"));
 
     await waitFor(() =>
-      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
+      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live"),
     );
     await waitFor(() => expect(group("Sideboard")).toHaveFocus());
   });
@@ -2927,8 +2965,69 @@ describe("DeckEditor drag and drop", () => {
       await held.drop();
 
       await waitFor(() =>
-        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
+        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live"),
       );
+    });
+
+    /**
+     * **`Auto` re-files a card the deck already holds** (2026-08-15), where it used to grey and
+     * refuse. End to end this is the add rule run backwards: the card's Oracle tags, then
+     * `autoCategoryFor`, then the move's **name arm** — `toCategoryId` null — so the pile is
+     * found or created inside the move's own transaction and comes out `origin: 'auto'`.
+     *
+     * The type line reaching the rule is the half only this test can see: it is read off the
+     * deck's own row rather than carried in the drag, which is `dnd.ts`'s decision and the reason
+     * the payload did not have to grow a field.
+     */
+    it("re-files a deck card dropped on Auto by what it does", async () => {
+      oracleTagsForPrintings.mockResolvedValue([
+        { cardId: "c-Lightning Bolt", slugs: ["removal"] },
+      ]);
+      await open();
+
+      const held = await startDrag(card_("Lightning Bolt"));
+      await held.over(zone("Auto"));
+      await held.drop();
+
+      await waitFor(() =>
+        expect(deckMoveCard).toHaveBeenCalledWith(
+          4,
+          "c-Lightning Bolt",
+          MAIN,
+          null,
+          "Removal",
+          "live",
+        ),
+      );
+    });
+
+    /**
+     * The two answers that move nothing say so, because a deliberate gesture that changes the
+     * screen not at all is the shape of thing that reads as a broken control. `Lightning Bolt`
+     * is in `Main deck` and the rule with no tags files an `Instant` under `Instant`, so this
+     * is the *unplaceable* half's sibling: a pile the card is not in, reached with no IPC.
+     */
+    it("says when a re-file had nothing to do, and writes nothing", async () => {
+      oracleTagsForPrintings.mockResolvedValue([]);
+      deckGet.mockResolvedValue(
+        detail(
+          {},
+          [bolt({ categoryName: "Instant" })],
+          [category(1, "Instant", "main"), ...CATEGORIES.slice(1)],
+        ),
+      );
+      await open();
+
+      const held = await startDrag(card_("Lightning Bolt"));
+      await held.over(zone("Auto"));
+      await held.drop();
+
+      // By its text, not by its role: the quick-add field keeps a `role="status"` mounted for
+      // the life of the toolbar (a live region that first appears with its sentence already
+      // inside announces nothing), so this view has two and `getByRole` finds both.
+      const note = await screen.findByText(/already filed under Instant/);
+      expect(note).toHaveAttribute("role", "status");
+      expect(deckMoveCard).not.toHaveBeenCalled();
     });
 
     /**
@@ -3151,7 +3250,14 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Move to/);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
 
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      RECURSION.id,
+      null,
+      "live",
+    );
   });
 
   /**
@@ -3172,7 +3278,14 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Move to/);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
 
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, RECURSION.id, "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      RECURSION.id,
+      null,
+      "live",
+    );
   });
 
   /**
@@ -3267,6 +3380,7 @@ describe("DeckEditor — a card's menu", () => {
       "c-Atraxa, Praetors' Voice",
       MAIN,
       CATEGORIES[2].id,
+      null,
       "live",
     );
   });
