@@ -7,6 +7,7 @@ pub mod deck_audit;
 pub mod deck_import;
 pub mod deck_meta;
 pub mod deck_theory;
+pub mod deck_undo;
 pub mod errors;
 pub mod export;
 pub mod filters;

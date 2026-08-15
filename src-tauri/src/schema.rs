@@ -5267,7 +5267,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "{UNDO_V15} {UNDO_V16} {UNDO_V17} PRAGMA user_version = 14;"
         ))
-            .unwrap();
+        .unwrap();
         conn
     }
 
