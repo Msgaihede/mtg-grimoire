@@ -1,6 +1,9 @@
+import type { ImportMatch } from "@/lib/ipc";
+
 /**
  * Decklists in the shapes people actually paste, shared by the parser's tests and — later —
- * by the import dialog's stories.
+ * by the import dialog's stories, plus the one stand-in every test that drives them needs:
+ * {@link match}, a resolved printing.
  *
  * `REFERENCE_LIST` is the list this feature was designed against, copied out of
  * `docs/superpowers/specs/2026-08-12-deck-import-design.md` **verbatim** — 105 lines, 117
@@ -506,3 +509,50 @@ export const EMPTY_HINT_LIST = `1 Aerith, Last Ancient () 76
 1 Wooded Bastion () 2XM-332
 1 Yasharn, Implacable Earth (ZNR) 240
 1 Yeva, Nature's Herald () 162`;
+
+/**
+ * One resolved printing, with everything the planner does not read filled in as nothing.
+ *
+ * **The whole of what a stubbed resolver may claim is "a printing answered this line".**
+ * `deck_import_resolve` is Rust asking 116 k rows which printing a name and a `(SET) 123` pick
+ * out, and no TypeScript test can answer that — so nothing here invents a fact the real resolver
+ * would have chosen differently. Everything the caller does not state is `null`, `false` or `0`,
+ * and a fixture that taught a false set code, collector number or type line would be worse than
+ * no fixture at all: the tests reading it would go green about a deck this app never builds.
+ *
+ * The two callers ask that of it in two ways, and both are honest about what they are handing
+ * in. `plan.test.ts` states the one or two fields a filing rule reads — a type line, a P/T, a
+ * colour identity — for a card it made up. `decklists.test.ts` drives real exports and echoes
+ * each line's **own** printing hint back, saying nothing where the line said nothing.
+ *
+ * It lives beside the corpus rather than in either test file because a second copy of twenty
+ * field defaults is a second thing to be wrong. Deliberately **not** borrowed from
+ * `.storybook/fake/fixtures`: this is domain logic under Vitest, and reaching into the workbench
+ * would tie the planner's contract to the fake's.
+ */
+export function match(over: Partial<ImportMatch> & { name: string }): ImportMatch {
+  return {
+    cardId: over.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    setCode: "tst",
+    collectorNumber: "1",
+    lang: "en",
+    oracleId: null,
+    manaCost: null,
+    cmc: null,
+    typeLine: null,
+    oracleText: null,
+    colors: null,
+    colorIdentity: null,
+    legalities: null,
+    power: null,
+    toughness: null,
+    layout: null,
+    rarity: null,
+    faces: null,
+    gameChanger: false,
+    everUncommon: false,
+    ownedQuantity: 0,
+    printingCount: 1,
+    ...over,
+  };
+}

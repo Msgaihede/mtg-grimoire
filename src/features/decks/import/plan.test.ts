@@ -8,7 +8,9 @@ import type {
 } from "@/lib/ipc";
 import { PREDEFINED_CATEGORY_NAMES } from "../autoCategory";
 import { spec } from "../validation/fixtures";
-import { ARCHIDEKT_SECTIONED } from "./fixtures";
+// `match` is the stubbed resolver, and it lives beside the corpus because `decklists.test.ts`
+// needs the same one — see its doc for what it claims and what it refuses to claim.
+import { ARCHIDEKT_SECTIONED, match } from "./fixtures";
 import { parseDecklist } from "./parse";
 import {
   SECTION_CATEGORY,
@@ -18,40 +20,6 @@ import {
   type CategoryTally,
   type ImportPlan,
 } from "./plan";
-
-/**
- * One resolved printing, with everything the plan does not read filled in as nothing.
- *
- * Local rather than borrowed from `.storybook/fake/fixtures`: this is domain logic under
- * Vitest, and a test that reached into the Storybook fake would tie the parser's contract to
- * the workbench's.
- */
-function match(over: Partial<ImportMatch> & { name: string }): ImportMatch {
-  return {
-    cardId: over.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    setCode: "tst",
-    collectorNumber: "1",
-    lang: "en",
-    oracleId: null,
-    manaCost: null,
-    cmc: null,
-    typeLine: null,
-    oracleText: null,
-    colors: null,
-    colorIdentity: null,
-    legalities: null,
-    power: null,
-    toughness: null,
-    layout: null,
-    rarity: null,
-    faces: null,
-    gameChanger: false,
-    everUncommon: false,
-    ownedQuantity: 0,
-    printingCount: 1,
-    ...over,
-  };
-}
 
 /**
  * A pasted list, resolved by a lookup on the name each line wrote. A name this record has
