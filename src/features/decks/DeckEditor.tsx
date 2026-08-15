@@ -76,7 +76,8 @@ import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
 
 /**
- * The toolbar's two option lists, as the toolbar draws them: alphabetically by label.
+ * Two of the toolbar's three option lists, as the toolbar draws them: alphabetically by label.
+ * The third is {@link VIEW_PICKER}, which sits beside the array it sorts.
  *
  * Sorted here rather than trusted from `grouping.ts` and `sorting.ts`, whose arrays are named
  * in domain order and happen to read alphabetically today — which is exactly how an ordering
@@ -363,6 +364,25 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
   { id: "text", label: "Text" },
   { id: "grid", label: "Grid" },
 ];
+
+/**
+ * The view switch as the toolbar draws it — and it is a `<select>`, like the two pickers beside
+ * it (changed 2026-08-15).
+ *
+ * **Three controls answering three questions about one list, in one grammar.** `View` says how a
+ * card is drawn, `Group by` says what the headings are and `Sort` says the order inside one;
+ * drawing the first as a four-button segmented group and the other two as selects made the
+ * odd one out the one a reader reaches for most, and spent a quarter of the toolbar's width on
+ * three answers nobody had asked for. A `<select>` costs one press to open and shows the picked
+ * view when it is shut, which is what the pressed button was doing at four times the width.
+ *
+ * **Alphabetically, through `sortOptions`, because there is no order here that carries
+ * information.** The array above is written in the order the views were built and reads as a
+ * decision nobody made — the two exemptions this app grants (an order that *is* the information,
+ * like a grade scale; an order the reader arranged themselves, like their own categories) fit
+ * neither. Sorted at module level for {@link GROUP_BY_PICKER}'s reason.
+ */
+const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
 
 /**
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
@@ -2307,32 +2327,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           </div>
 
+          {/* The first of the row's three pickers, and the one that says how a card is drawn.
+              It is the same control as the two beside it on purpose — see {@link VIEW_PICKER}. */}
           <div className="flex items-center gap-1.5">
-            <span className="text-[0.6875rem] text-dim">View</span>
-            <div
-              role="group"
-              aria-label="Deck view"
-              className="flex overflow-hidden rounded-md border border-border"
+            <label htmlFor="deck-view" className="text-[0.6875rem] text-dim">
+              View
+            </label>
+            <select
+              id="deck-view"
+              value={view}
+              onChange={(e) => setView(e.target.value as DeckView)}
+              className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
-              {VIEWS.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setView(id)}
-                  aria-pressed={view === id}
-                  className={cn(
-                    "h-9 border-r border-border px-3 text-xs last:border-r-0",
-                    "transition-colors duration-150 motion-reduce:transition-none",
-                    view === id
-                      ? "bg-accent font-medium text-accent-fg"
-                      : "text-dim hover:text-text",
-                    FOCUS,
-                  )}
-                >
+              {VIEW_PICKER.map(({ id, label }) => (
+                <option key={id} value={id}>
                   {label}
-                </button>
+                </option>
               ))}
-            </div>
+            </select>
           </div>
 
           <div className="flex items-center gap-1.5">
