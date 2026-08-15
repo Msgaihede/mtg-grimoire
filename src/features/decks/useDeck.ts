@@ -376,6 +376,30 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     },
   });
 
+  /**
+   * Empty one category of this variant — a pile's right-click **Clear stack**.
+   *
+   * **One command, not a `setQuantity(…, 0)` per row**, and the reason is the one that made
+   * `deck_import_commit` a command: the rows are all in hand here, so the loop would compile —
+   * and it would be one transaction, one allocator run and one `["decks"]` invalidation *per
+   * card*, with the deck re-read forty times while the reader watches. It would also be forty
+   * history rows for one press, and any one of them could be refused halfway leaving the pile
+   * half-empty with no way to say so.
+   *
+   * **No optimistic patch**, unlike the stepper beside it. The stepper is optimistic because it
+   * is *held down* — a controlled control read back from the cache mid-press sends the same
+   * number twice — and nothing here repeats: this is one press behind a confirmation, and the
+   * beat it would save is a beat the reader spends reading the dialog closing. Guessing would
+   * also mean deleting a whole column from the cache before knowing the write landed, which is
+   * exactly the shape the stepper's rollback comment calls a card silently gone.
+   *
+   * Answers the copies removed, which is what the confirmation counted.
+   */
+  const clearCategory = useMutation({
+    mutationFn: (categoryId: number) => ipc.deckCategoryClear(opened(id), categoryId, variant),
+    onSuccess: invalidate,
+  });
+
   /** Move every copy from one category to another. A claim released or made even though
    *  nothing was added or removed — an inactive category reserves nothing — so it invalidates
    *  like the rest. */
@@ -494,6 +518,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     rememberView,
     addCard,
     setQuantity,
+    clearCategory,
     moveCard,
     swapPrinting,
     setTag,

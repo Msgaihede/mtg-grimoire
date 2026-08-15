@@ -300,6 +300,7 @@ pub fn run() {
             deck::deck_last_format,
             deck::deck_add_card,
             deck::deck_set_card_quantity,
+            deck::deck_category_clear,
             deck::deck_move_card,
             deck::deck_swap_printing,
             deck::deck_missing_to_wishlist,

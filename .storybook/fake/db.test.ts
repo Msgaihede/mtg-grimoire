@@ -2812,10 +2812,15 @@ describe("the busy fault", () => {
     // `refuseIfBusy` would fail this loop; a new write correctly outside the lock has to be
     // argued for on the list above.
     //
+    // `Clear stack…` then added `deck_category_clear`, which moved it 39 → 40. It is a **card**
+    // write despite the name — it empties a pile of one variant and changes nothing about the
+    // category — so it takes the write lock like every other and belongs in the loop rather than
+    // in `unlocked`.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(39);
+    expect(names).toHaveLength(40);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
