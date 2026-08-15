@@ -410,9 +410,13 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
     // Measured either side of the insert rather than derived from its row count: `execute`
     // counts rows and a row is a line, while what a reader (and `delta`) wants is cards.
     let before = theory_copies(&tx, deck_id)?;
+    // The plan as it stood. `copied` is a count and cannot rebuild a list — and this command's
+    // whole job is to pour one list into another, so what an undo has to put back is the
+    // *other* list's rows rather than a number of them.
+    let cards_before = crate::deck_undo::read_variant(&tx, deck_id, THEORY)?;
     let rows = seed_from_live(&tx, deck_id)?;
     let copied = theory_copies(&tx, deck_id)? - before;
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         THEORY,
@@ -421,6 +425,9 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
         &serde_json::json!({ "field": "theory", "copied": copied }),
         copied,
     )?;
+    // `None` for the pile diff: `seed_from_live` re-labels rows into categories the deck
+    // already has, so this command cannot invent one.
+    crate::deck_undo::record_variant(&tx, audit_id, deck_id, THEORY, cards_before, None)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(rows)
 }

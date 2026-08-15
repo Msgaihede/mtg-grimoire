@@ -52,6 +52,14 @@ use std::sync::Arc;
 /// `DECK_VARIANTS[0]` by index rather than by spelling, so the two cannot drift.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 
+/// The other one: the list the deck is being built toward.
+///
+/// This module reads it in exactly one place — [`update_deck`]'s undo step, which has to record
+/// **both** lists because switching the theory list on moves one into the other. `DeckPatch`'s
+/// other fields never mention a variant, which is why this constant arrived so much later than
+/// [`LIVE`]. `DECK_VARIANTS[1]` by index, for [`LIVE`]'s reason.
+const THEORY: &str = crate::schema::DECK_VARIANTS[1];
+
 /// What a deck is in when nobody says otherwise — `decks.format_key`'s own DDL default, so
 /// an omitted `formatKey` means here exactly what it means in SQL.
 pub const DEFAULT_FORMAT: &str = "casual";
@@ -824,6 +832,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| GONE.to_owned())?;
+    // The undo step's "before", read whole rather than rebuilt from [`DeckBefore`] — that
+    // struct carries the twelve columns the *history* compares and this needs all sixteen.
+    // `last_variant` is the one that makes the difference rather than a completeness argument:
+    // the theory arm below moves it to `theory`, and it is not on `DeckBefore` at all.
+    let row_before = crate::deck_undo::read_deck_row(&tx, id)?;
     // **The fence the DDL cannot hold.** `default_category_id` carries no foreign key — `0`
     // means Auto and a `REFERENCES` clause cannot be added to a column whose default is not
     // NULL — so this is where "a deck's default pile is a pile of *that* deck" actually lives,
@@ -894,11 +907,25 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // for a second reason [`crate::deck_theory::move_live_into_theory`] states: `variant` is in
     // `DECK_CARD_GRAIN`, so re-labelling a live row over a theory row of the same category and
     // printing is a UNIQUE failure rather than a wrong answer.
-    let moved = patch.theory_enabled == Some(true)
+    //
+    // **The undo step's "before" for the cards has to be read between the test and the move**,
+    // which is the whole reason the condition is split in two here rather than left as one
+    // `&&` chain. The move is a bare `UPDATE … SET variant`, so once it has run there is
+    // nothing left anywhere saying which rows were live — that is the same hole in the audit
+    // log's `{field:"theory",from:false,to:true}` that made this feature need a journal at all.
+    // Reading both variants unconditionally would be two queries on every rename.
+    let will_move = patch.theory_enabled == Some(true)
         && !before.theory_enabled
-        && crate::deck_theory::theory_is_empty(&tx, id)?
-        && crate::deck_theory::move_live_into_theory(&tx, id)? > 0;
-    record_deck_edit(
+        && crate::deck_theory::theory_is_empty(&tx, id)?;
+    let cards_before = match will_move {
+        true => Some((
+            crate::deck_undo::read_variant(&tx, id, LIVE)?,
+            crate::deck_undo::read_variant(&tx, id, THEORY)?,
+        )),
+        false => None,
+    };
+    let moved = will_move && crate::deck_theory::move_live_into_theory(&tx, id)? > 0;
+    let audit_id = record_deck_edit(
         &tx,
         id,
         patch,
@@ -907,6 +934,34 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         default_category_name.as_deref(),
         &before,
     )?;
+    // No history row means nothing changed, and a step for a change that did not happen is a
+    // Ctrl+Z that appears to do nothing — `a_patch_that_changes_nothing_records_nothing`'s rule,
+    // carried into the journal.
+    if let Some(audit_id) = audit_id {
+        let mut undo = vec![crate::deck_undo::Op::Deck { fields: row_before }];
+        let mut redo = vec![crate::deck_undo::Op::Deck {
+            fields: crate::deck_undo::read_deck_row(&tx, id)?,
+        }];
+        if let Some((live, theory)) = cards_before {
+            undo.push(crate::deck_undo::Op::Variant {
+                variant: LIVE.to_owned(),
+                rows: live,
+            });
+            undo.push(crate::deck_undo::Op::Variant {
+                variant: THEORY.to_owned(),
+                rows: theory,
+            });
+            redo.push(crate::deck_undo::Op::Variant {
+                variant: LIVE.to_owned(),
+                rows: crate::deck_undo::read_variant(&tx, id, LIVE)?,
+            });
+            redo.push(crate::deck_undo::Op::Variant {
+                variant: THEORY.to_owned(),
+                rows: crate::deck_undo::read_variant(&tx, id, THEORY)?,
+            });
+        }
+        crate::deck_undo::record_step(&tx, audit_id, id, &crate::deck_undo::Step::new(undo, redo))?;
+    }
     // Two edits here change what this deck reserves, so these are the two that reallocate —
     // **once**, whichever of them happened and however many did. Sleeving a deck up (or taking
     // it apart) is the obvious one. The move is the quiet one: `deck_allocations` reserves
@@ -945,9 +1000,13 @@ fn record_deck_edit(
     // `None` where the patch names no pile *or* names [`AUTO_CATEGORY`].
     default_category_name: Option<&str>,
     before: &DeckBefore,
-) -> Result<(), String> {
-    let field = |field: &str, from: serde_json::Value, to: serde_json::Value| {
-        crate::deck_audit::record(
+) -> Result<Option<i64>, String> {
+    // The **last** row this writes, which is what the undo journal keys its one step on. A
+    // patch that changes two fields is two history rows and one Ctrl+Z: one press is one
+    // reversal, and a cursor that could land between the two would put half a form back.
+    let mut last = None;
+    let mut field = |field: &str, from: serde_json::Value, to: serde_json::Value| {
+        last = Some(crate::deck_audit::record(
             tx,
             id,
             crate::deck_audit::DECK_LEVEL,
@@ -955,7 +1014,8 @@ fn record_deck_edit(
             None,
             &json!({ "field": field, "from": from, "to": to }),
             0,
-        )
+        )?);
+        Ok::<(), String>(())
     };
     if let Some(to) = name.as_deref().filter(|n| *n != before.name) {
         field("name", json!(before.name), json!(to))?;
@@ -1032,9 +1092,9 @@ fn record_deck_edit(
         )?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
-        record_filed(tx, id, Some(to))?;
+        last = Some(record_filed(tx, id, Some(to))?);
     }
-    Ok(())
+    Ok(last)
 }
 
 /// File a deck under a folder, or — with `None` — back at the **root of the tree**.
@@ -1090,10 +1150,37 @@ pub fn set_folder(
     )
     .map_err(|e| e.to_string())?;
     if folder_id != before {
-        record_filed(&tx, deck_id, folder_id)?;
+        let audit_id = record_filed(&tx, deck_id, folder_id)?;
+        // `folder_id` alone, not the whole row: this command writes one column and **`None` is
+        // a real value here** rather than "leave it" — which is the whole reason this is a
+        // command and not a `DeckPatch` field, and it is what lets an undo put a deck back at
+        // the root of the tree.
+        crate::deck_undo::record_step(
+            &tx,
+            audit_id,
+            deck_id,
+            &crate::deck_undo::Step::new(
+                vec![crate::deck_undo::Op::Deck {
+                    fields: json_field("folder_id", before),
+                }],
+                vec![crate::deck_undo::Op::Deck {
+                    fields: json_field("folder_id", folder_id),
+                }],
+            ),
+        )?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, deck_id)?.ok_or_else(|| GONE.to_owned())
+}
+
+/// One `decks` column and its value, as an [`crate::deck_undo::Op::Deck`] carries them.
+fn json_field(
+    field: &str,
+    value: impl Into<serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    map.insert(field.to_owned(), value.into());
+    map
 }
 
 /// The one `folder` history row, written by every writer that can file a deck: the two here,
@@ -1299,6 +1386,7 @@ pub fn set_cover_image(
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| GONE.to_owned())?;
+    let row_before = crate::deck_undo::read_deck_row(&tx, deck_id)?;
     touch_deck(&tx, deck_id)?;
     crate::images::write_cover(covers, deck_id, bytes)?;
     let stored = crate::images::cover_file(covers, deck_id);
@@ -1314,7 +1402,7 @@ pub fn set_cover_image(
     // replacing one picture with another is exactly the change this command exists to make,
     // and the payload deliberately does not name the file (see [`cover_value`]), so the two
     // sides matching is what "a different picture" looks like from here.
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         crate::deck_audit::DECK_LEVEL,
@@ -1326,6 +1414,24 @@ pub fn set_cover_image(
             "to": COVER_CUSTOM,
         }),
         0,
+    )?;
+    // **Undo restores the three columns, and cannot restore the file** — the one place in this
+    // feature where "put it back exactly" stops at the database. `images::cover_file` is one
+    // path per deck, so uploading a second picture overwrites the first on disk; an undo takes
+    // the deck back to whatever it was showing before, and if that was *another custom
+    // picture* the row is right and the bytes behind it are the new ones. Restoring those would
+    // mean keeping every superseded cover for as long as its step lives, which is a cache with
+    // no ceiling for a case a reader can fix by picking the picture again.
+    crate::deck_undo::record_step(
+        &tx,
+        audit_id,
+        deck_id,
+        &crate::deck_undo::Step::new(
+            vec![crate::deck_undo::Op::Deck { fields: row_before }],
+            vec![crate::deck_undo::Op::Deck {
+                fields: crate::deck_undo::read_deck_row(&tx, deck_id)?,
+            }],
+        ),
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, deck_id)?.ok_or_else(|| GONE.to_owned())
@@ -1665,6 +1771,10 @@ pub fn add_card(
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
+    // Read before the resolution below, because that resolution is what can *create* a pile:
+    // the diff against this is how an undo knows to take an invented `Ramp` column away again
+    // along with the card that made it.
+    let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
     // Inside the transaction because the name arm *writes*: a category nobody has made yet is
     // made here, and it must not survive a card insert that fails after it.
     //
@@ -1738,7 +1848,14 @@ pub fn add_card(
         &json!({ "category": category, "quantity": quantity }),
         quantity,
     )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
+    crate::deck_undo::record_cells(
+        &tx,
+        audit_id,
+        deck_id,
+        cells,
+        before,
+        Some(categories_before),
+    )?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -1815,8 +1932,10 @@ pub fn set_card_quantity(
                 &json!({ "category": category, "quantity": was, "reason": null }),
                 -was,
             )?;
-            crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
+            crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
         }
+        // Nothing else in this arm records a step: a stepper that lands on an already-empty
+        // slot removed nothing and wrote no history row, so there is nothing to reverse.
         // A stepper that lands on a slot already empty removed nothing, so it records nothing:
         // this is the one place the "every write records a row" rule gives way, and it gives
         // way to the truth. A `remove` of zero copies would be a history of a change that
@@ -1851,7 +1970,7 @@ pub fn set_card_quantity(
         &json!({ "category": category, "from": was, "to": quantity }),
         quantity - was,
     )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -1939,7 +2058,7 @@ pub fn clear_category(
         &json!({ "action": "clear", "category": category, "cards": cleared }),
         -cleared,
     )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(cleared)
@@ -2039,7 +2158,7 @@ pub fn move_card(
         &json!({ "from": from, "to": to }),
         0,
     )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
     // A move changes what is claimed even though nothing was added or removed: an inactive
     // category reserves nothing, so a card dragged into or out of one is a claim released or
     // made.
@@ -2215,7 +2334,7 @@ pub fn swap_printing(
         }),
         0,
     )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
     // The deck wants a different printing than it did a statement ago, and the allocator
     // takes the exact printing first — so the copies it reserves can change even though the
     // count did not.
@@ -3341,9 +3460,6 @@ pub async fn deck_swap_printing(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The other variant, spelled out beside [`LIVE`] so a test that means "the plan" says so.
-    const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 
     /// The marketplace a test that is **not about prices** reads through. Named rather than
     /// spelled `Marketplace::default()` at fifteen call sites, so that the handful of tests

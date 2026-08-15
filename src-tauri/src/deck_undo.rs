@@ -317,29 +317,85 @@ pub fn record_step(
 /// read here, from the same transaction, after it. Both sides name the same scope, which is
 /// what makes the pair reversible in either direction: undo deletes the scope and puts `before`
 /// back, redo deletes it and puts `after` back.
+/// `made` is the deck's category ids **before** the write, for the two commands that can invent
+/// a pile — [`crate::deck::add_card`]'s name arm and the importer, both through
+/// `category_for_name`. `None` where the command cannot create one, which skips the diff.
+/// Without it, undoing a quick add that invented `Ramp` puts the card back and leaves the
+/// column standing: harmless on screen, because TypeScript hides an empty `auto` pile, and a
+/// lie about what the deck contained a moment ago.
 pub fn record_cells(
     tx: &Connection,
     audit_id: i64,
     deck_id: i64,
     cells: Vec<Cell>,
     before: Vec<CardRow>,
+    made: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let after = read_cells(tx, deck_id, &cells)?;
-    record_step(
-        tx,
-        audit_id,
-        deck_id,
-        &Step::new(
-            vec![Op::Cards {
-                scope: cells.clone(),
-                rows: before,
-            }],
-            vec![Op::Cards {
-                scope: cells,
-                rows: after,
-            }],
-        ),
-    )
+    let mut undo = vec![Op::Cards {
+        scope: cells.clone(),
+        rows: before,
+    }];
+    let mut redo = vec![Op::Cards {
+        scope: cells,
+        rows: after,
+    }];
+    push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
+    record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
+}
+
+/// Add the piles a write invented to both sides of a step.
+///
+/// **The order inside each list is the point.** On the undo side the delete goes *after* the
+/// cards, because the restore has already emptied the invented pile and a `deck_categories`
+/// delete CASCADEs whatever is still in it. On the redo side the restore goes *first*, because
+/// `deck_cards.category_id` is a real foreign key and the cards have nowhere to land until the
+/// pile is back.
+fn push_made_categories(
+    tx: &Connection,
+    deck_id: i64,
+    made: Option<Vec<i64>>,
+    undo: &mut Vec<Op>,
+    redo: &mut Vec<Op>,
+) -> Result<(), String> {
+    let Some(before_ids) = made else {
+        return Ok(());
+    };
+    let invented: Vec<CategoryRow> = read_categories(tx, deck_id)?
+        .into_iter()
+        .filter(|c| !before_ids.contains(&c.id))
+        .collect();
+    if invented.is_empty() {
+        return Ok(());
+    }
+    undo.push(Op::Categories {
+        restore: vec![],
+        patch: vec![],
+        delete: invented.iter().map(|c| c.id).collect(),
+        default_category_id: None,
+    });
+    redo.insert(
+        0,
+        Op::Categories {
+            restore: invented,
+            patch: vec![],
+            delete: vec![],
+            default_category_id: None,
+        },
+    );
+    Ok(())
+}
+
+/// The deck's category ids as they are now — the "before" half of the diff above.
+pub fn category_ids(conn: &Connection, deck_id: i64) -> Result<Vec<i64>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM deck_categories WHERE deck_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
 }
 
 /// The same for a write that reshapes a whole variant — an import, and the theory move.
@@ -349,23 +405,19 @@ pub fn record_variant(
     deck_id: i64,
     variant: &str,
     before: Vec<CardRow>,
+    made: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let after = read_variant(tx, deck_id, variant)?;
-    record_step(
-        tx,
-        audit_id,
-        deck_id,
-        &Step::new(
-            vec![Op::Variant {
-                variant: variant.to_owned(),
-                rows: before,
-            }],
-            vec![Op::Variant {
-                variant: variant.to_owned(),
-                rows: after,
-            }],
-        ),
-    )
+    let mut undo = vec![Op::Variant {
+        variant: variant.to_owned(),
+        rows: before,
+    }];
+    let mut redo = vec![Op::Variant {
+        variant: variant.to_owned(),
+        rows: after,
+    }];
+    push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
+    record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
 }
 
 /// The rows of `deck_cards` in these cells, as a step carries them.
@@ -521,33 +573,53 @@ pub fn read_deck_fields(
     deck_id: i64,
     fields: &[&str],
 ) -> Result<serde_json::Map<String, Value>, String> {
-    let mut out = serde_json::Map::new();
     for field in fields {
         if !DECK_FIELDS.contains(field) {
             return Err(format!(
                 "`{field}` is not a deck column an undo step may write."
             ));
         }
-        let value: Value = conn
-            .query_row(
-                &format!("SELECT {field} FROM decks WHERE id = ?1"),
-                params![deck_id],
-                |r| {
-                    Ok(match r.get_ref(0)? {
-                        rusqlite::types::ValueRef::Null => Value::Null,
-                        rusqlite::types::ValueRef::Integer(i) => json!(i),
-                        rusqlite::types::ValueRef::Real(f) => json!(f),
-                        rusqlite::types::ValueRef::Text(t) => {
-                            json!(String::from_utf8_lossy(t).into_owned())
-                        }
-                        rusqlite::types::ValueRef::Blob(_) => Value::Null,
-                    })
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        out.insert((*field).to_owned(), value);
     }
-    Ok(out)
+    if fields.is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    // One statement whatever the field count: [`read_deck_row`] asks for all sixteen on every
+    // deck edit, and a query apiece would be thirty-two round trips for a rename.
+    let sql = format!("SELECT {} FROM decks WHERE id = ?1", fields.join(", "));
+    conn.query_row(&sql, params![deck_id], |r| {
+        let mut out = serde_json::Map::new();
+        for (i, field) in fields.iter().enumerate() {
+            out.insert((*field).to_owned(), sql_value(r.get_ref(i)?));
+        }
+        Ok(out)
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Every column a step may write — the "before" and "after" of a deck-row edit.
+///
+/// **All sixteen rather than the ones the patch named**, deliberately. `update_deck` writes
+/// through `coalesce(?n, column)` and its theory arm changes `last_variant` as a side effect,
+/// so "which columns did this press change" has more than one answer; recording the whole row
+/// makes the step correct without anyone having to keep a second list in step with `DeckPatch`.
+pub fn read_deck_row(
+    conn: &Connection,
+    deck_id: i64,
+) -> Result<serde_json::Map<String, Value>, String> {
+    read_deck_fields(conn, deck_id, DECK_FIELDS)
+}
+
+/// A SQLite value as the JSON a step stores it as.
+fn sql_value(value: rusqlite::types::ValueRef<'_>) -> Value {
+    match value {
+        rusqlite::types::ValueRef::Null => Value::Null,
+        rusqlite::types::ValueRef::Integer(i) => json!(i),
+        rusqlite::types::ValueRef::Real(f) => json!(f),
+        rusqlite::types::ValueRef::Text(t) => json!(String::from_utf8_lossy(t).into_owned()),
+        // No `decks` column is a BLOB, and a step that invented one could not be put back
+        // through `JsonParam` anyway.
+        rusqlite::types::ValueRef::Blob(_) => Value::Null,
+    }
 }
 
 /// Apply a list of ops, inside the caller's transaction.
@@ -1162,7 +1234,147 @@ mod tests {
             ("deck_category_clear", nothing, |c, id| {
                 crate::deck::clear_category(c, id, ramp(c, id), "live").unwrap();
             }),
+            (
+                // The name arm, which **creates** a pile. Undo has to take the column away
+                // again along with the card that made it — otherwise the deck keeps a
+                // `Landfall` heading for a card it no longer holds, which TypeScript happens to
+                // hide (an empty `auto` pile draws nothing) and which is a lie either way.
+                "deck_add_card (inventing a category by name)",
+                nothing,
+                |c, id| {
+                    crate::deck::add_card(c, id, "serra-lea", None, Some("Landfall"), "live", 2)
+                        .unwrap();
+                },
+            ),
         ]
+    }
+
+    /// The deck-row, import and theory writes.
+    fn deck_write_cases() -> Vec<Case> {
+        vec![
+            ("deck_update (name)", nothing, |c, id| {
+                crate::deck::update_deck(
+                    c,
+                    id,
+                    &crate::deck::DeckPatch {
+                        name: Some("Burn v2".to_owned()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }),
+            (
+                // **Two history rows, one step, one Ctrl+Z.** A cursor that could land between
+                // them would put half a settings form back.
+                "deck_update (two fields at once)",
+                nothing,
+                |c, id| {
+                    crate::deck::update_deck(
+                        c,
+                        id,
+                        &crate::deck::DeckPatch {
+                            name: Some("Burn v2".to_owned()),
+                            is_built: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                // The one deck-row write that moves cards. The audit row says
+                // `{field:"theory",from:false,to:true}` and nothing anywhere else records which
+                // rows were live — this case is why the journal exists at all.
+                "deck_update (theory on, which moves the live list)",
+                nothing,
+                |c, id| {
+                    crate::deck::update_deck(
+                        c,
+                        id,
+                        &crate::deck::DeckPatch {
+                            theory_enabled: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                },
+            ),
+            ("deck_set_folder", nothing, |c, id| {
+                let folder = crate::deck_meta::create_folder(c, None, "Commander")
+                    .unwrap()
+                    .id;
+                crate::deck::set_folder(c, id, Some(folder)).unwrap();
+            }),
+            (
+                // `None` is a real value here rather than "leave it", which is the whole reason
+                // this is a command and not a `DeckPatch` field — and the half an undo needs.
+                "deck_set_folder (back to the root)",
+                |c, id| {
+                    let folder = crate::deck_meta::create_folder(c, None, "Commander")
+                        .unwrap()
+                        .id;
+                    crate::deck::set_folder(c, id, Some(folder)).unwrap();
+                },
+                |c, id| {
+                    crate::deck::set_folder(c, id, None).unwrap();
+                },
+            ),
+            ("deck_theory_copy_from_live", nothing, |c, id| {
+                crate::deck_theory::copy_from_live(c, id).unwrap();
+            }),
+            ("deck_import_commit (merge)", nothing, |c, id| {
+                crate::deck_import::commit_import(
+                    c,
+                    id,
+                    "live",
+                    "merge",
+                    &[imported("bolt-m10", 4, "Ramp")],
+                )
+                .unwrap();
+            }),
+            (
+                // The mode that clears the list first. Its `remove` row records `cleared: 42` —
+                // a count, which cannot rebuild a decklist.
+                "deck_import_commit (replace)",
+                nothing,
+                |c, id| {
+                    crate::deck_import::commit_import(
+                        c,
+                        id,
+                        "live",
+                        "replace",
+                        &[imported("serra-lea", 4, "Ramp")],
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                "deck_import_commit (inventing categories)",
+                nothing,
+                |c, id| {
+                    crate::deck_import::commit_import(
+                        c,
+                        id,
+                        "live",
+                        "merge",
+                        &[
+                            imported("bolt-m10", 2, "Burn"),
+                            imported("serra-lea", 1, "Angels"),
+                        ],
+                    )
+                    .unwrap();
+                },
+            ),
+        ]
+    }
+
+    /// One line of an imported decklist.
+    fn imported(card_id: &str, quantity: i64, category: &str) -> crate::deck_import::ImportItem {
+        crate::deck_import::ImportItem {
+            card_id: card_id.to_owned(),
+            quantity,
+            category_name: category.to_owned(),
+        }
     }
 
     /// **The rule this journal exists for.** Every deck write records a step, and undoing that
@@ -1180,7 +1392,20 @@ mod tests {
     /// is not merely lossy but *wrong*, deleting a row the reader put there separately.
     #[test]
     fn undoing_any_card_write_restores_the_deck_exactly() {
-        for (name, setup, drive) in card_write_cases() {
+        drive_cases(card_write_cases());
+    }
+
+    /// The same claim for the deck-row, import and theory writes. A separate test rather than a
+    /// longer list so a failure names which family broke.
+    #[test]
+    fn undoing_any_deck_row_write_restores_the_deck_exactly() {
+        drive_cases(deck_write_cases());
+    }
+
+    /// Drive each case once over a fresh deck: set up, snapshot, write, undo, compare, redo,
+    /// compare.
+    fn drive_cases(cases: Vec<Case>) {
+        for (name, setup, drive) in cases {
             let (conn, id) = fresh();
             setup(&conn, id);
             let before = snapshot(&conn, id);
