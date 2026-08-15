@@ -1420,7 +1420,7 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **Where the card landed, marked for ten seconds.**
+   * **Where the card landed, marked for five seconds.**
    *
    * The add is made in the docked panel and the card lands somewhere in a deck the reader is not
    * looking at, which is the whole reason the mark exists. It is keyed by the **row** the write
