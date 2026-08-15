@@ -43,7 +43,13 @@ re-running anything.
 line is what makes an untested file count as 0% rather than disappear.** Vitest 4 removed
 `coverage.all`, and with no `include` the report covers only the modules some test happened to
 import — which flatters the figure by exactly the files nobody tested. With the line in place the
-report holds **107 files, which is every source file under `src/`**, and none of them is at 0%.
+report holds **every source file under `src/`** — 107 of them on the day this was measured, and
+none at 0%. **The 107 is a fact about the tree on 2026-08-12 and not a property of the config**:
+`src/` has grown a long way past it since, and the only honest way to restate any figure on this
+page is to re-run the commands under **Reproducing it** above. Test _files_ never enter the
+denominator, so a new suite —
+`src/features/decks/decklists.test.ts`, say — moves the test count in the headline table and
+nothing else here.
 
 Excluded, and why: `*.test.{ts,tsx}` and the two test-only helpers (`test-setup.ts`,
 `test-drag.ts`); `*.stories.tsx`, because the Storybook workbench is not the product and counting

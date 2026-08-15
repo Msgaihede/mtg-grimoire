@@ -25,50 +25,95 @@ function preview(canvasElement: HTMLElement): HTMLElement {
 }
 
 /**
- * The pile being exported: two printings out of the generated corpus rather than two names typed
- * here.
+ * The pile being exported: printings out of the generated corpus rather than names typed here.
  *
- * Two, and with different set codes, because that is the smallest list that tells the four
- * formats apart — Moxfield names a printing where plain text and MTGO name only a card, and CSV
- * needs more than one row under its header to look like a file.
+ * Two in the pile, and with different set codes, because that is the smallest list that tells the
+ * six formats apart — Arena, Moxfield and Archidekt name a printing where plain text and MTGO name
+ * only a card, and CSV needs more than one row under its header to look like a file. The third is
+ * the deck-scope story's cut pile ({@link SwitchedOffPile}): a category the reader has switched
+ * off, which is the one card fact two of the six formats have nowhere to put.
  */
 const BOLT = printing("2x2", "117");
 const SOL_RING = printing("c21", "263");
+const FOREST = printing("unf", "239");
 
 /**
  * **The fixtures come from the corpus and the expected strings below are typed out, so the two
  * have to be pinned together.** This file's plays assert whole rendered lines — `1 Sol Ring (C21)
  * 263` — because the *shape* of a line is the thing under test, and a string derived from the same
  * row the writer derives it from would assert nothing about the format. The cost is that a wrong
- * `printing()` lookup shows up only as four confusing play failures: `lea 288` looks like Sol Ring
- * and is **Island**, which is how this arrived. So the pairing is checked here instead, at module
+ * `printing()` lookup shows up only as a spread of confusing play failures: `lea 288` looks like
+ * Sol Ring and is **Island**, which is how this arrived. (No count here — every play below asserts
+ * a line, so the number is a fact about this file's story list and would rot with the next one.)
+ * So the pairing is checked here instead, at module
  * load, where the message says what happened — the same discipline `printing()` itself applies
  * when the corpus has no such row at all.
  */
-if (BOLT.name !== "Lightning Bolt" || SOL_RING.name !== "Sol Ring") {
+if (BOLT.name !== "Lightning Bolt" || SOL_RING.name !== "Sol Ring" || FOREST.name !== "Forest") {
   throw new Error(
-    `ExportDialog.stories: the fixture printings are ${BOLT.name} and ${SOL_RING.name}; ` +
-      `the expected export lines in this file are written for Lightning Bolt and Sol Ring.`,
+    `ExportDialog.stories: the fixture printings are ${BOLT.name}, ${SOL_RING.name} and ` +
+      `${FOREST.name}; the expected export lines in this file are written for Lightning Bolt, ` +
+      `Sol Ring and Forest.`,
   );
 }
 
+/**
+ * One pile, which is the scope this dialog is opened in from a category heading's right-click.
+ *
+ * Every row carries the same three category fields because a pile has one name, one kind and one
+ * switch — so the grouped formats write it as a single section, `Deck` in Arena's and Moxfield's
+ * fixed vocabulary and `Ramp` in Archidekt's, which is the reader's own word for it.
+ */
 const CARDS: ExportCard[] = [
-  { name: BOLT.name, quantity: 2, setCode: BOLT.setCode, collectorNumber: BOLT.collectorNumber },
+  {
+    name: BOLT.name,
+    quantity: 2,
+    setCode: BOLT.setCode,
+    collectorNumber: BOLT.collectorNumber,
+    categoryName: "Ramp",
+    categoryKind: "main",
+    categoryActive: true,
+  },
   {
     name: SOL_RING.name,
     quantity: 1,
     setCode: SOL_RING.setCode,
     collectorNumber: SOL_RING.collectorNumber,
+    categoryName: "Ramp",
+    categoryKind: "main",
+    categoryActive: true,
+  },
+];
+
+/**
+ * The same pile plus a **switched-off** one, which is the deck-level scope: a whole deck holds
+ * piles the reader has turned off, and `is_active = 0` is the whole of what a maybeboard is.
+ *
+ * Six copies on one row rather than six rows, deliberately — {@link SwitchedOffPile} is what says
+ * the omission line counts *cards* and not rows.
+ */
+const DECK_CARDS: ExportCard[] = [
+  ...CARDS,
+  {
+    name: FOREST.name,
+    quantity: 6,
+    setCode: FOREST.setCode,
+    collectorNumber: FOREST.collectorNumber,
+    categoryName: "Cuts",
+    categoryKind: "main",
+    categoryActive: false,
   },
 ];
 
 /**
  * A pile of cards as text: a format, a live preview, Copy, and Save as….
  *
- * **This app had no export of any kind before this dialog.** It is opened from a deck category's
- * right-click, so `cards` arrives as a **prop** rather than as something this dialog fetches —
- * which is deliberately what lets a later deck-level export reuse it whole, over the deck's full
- * list instead of one pile's. Nothing on this page reaches the deck at all.
+ * **Two controls open it and only the `cards` prop tells them apart.** A deck category's
+ * right-click opens it over one pile, which is every story on this page bar one; the editor
+ * header's `Export deck` opens it over the whole variant on screen, which is
+ * {@link SwitchedOffPile} — a deck holds piles the reader has switched off and one pile does not.
+ * Taking the cards as a **prop** is what made the second control a caller rather than a rewrite.
+ * Nothing on this page reaches the deck at all.
  *
  * **Built on `DeckDialog`**, the deck surface's shared modal shell, rather than carrying its own
  * copy of the chrome; the body lives one floor down, so `open={false}` mounts nothing at all —
@@ -118,10 +163,11 @@ type Story = StoryObj<typeof meta>;
  * **Plain text**, which is what the dialog opens on — `quantity name`, and nothing about the
  * printing.
  *
- * The four formats are drawn in `EXPORT_FORMATS`' own order and deliberately **not** through
+ * The six formats are drawn in `EXPORT_FORMATS`' own order and deliberately **not** through
  * `sortOptions`: plain first is the one most readers want, the same kind of deliberate order the
  * app's option-list rule exempts a grade scale for. They are a `radiogroup`, because picking one
- * is picking *instead of* the others and the preview under them is a single answer.
+ * is picking *instead of* the others and the preview under them is a single answer. The row
+ * **maps that array** rather than listing them, so this play counts the writers `format.ts` has.
  */
 export const PlainText: Story = {
   play: async ({ canvasElement }) => {
@@ -137,7 +183,9 @@ export const PlainText: Story = {
     await expect(formats.map((r) => r.textContent)).toEqual([
       "Plain text",
       "MTGO",
+      "Arena",
       "Moxfield",
+      "Archidekt",
       "CSV",
     ]);
     await expect(formats[0]).toHaveAttribute("aria-checked", "true");
@@ -147,13 +195,14 @@ export const PlainText: Story = {
 };
 
 /**
- * **MTGO**, which writes exactly what plain text does — and that is the format's own answer
- * rather than a gap here.
+ * **MTGO**, which for a main-deck pile writes exactly what plain text does — and that is the
+ * format's own answer rather than a gap here.
  *
  * MTGO's export omits the printing entirely: it resolves a name against whatever copies a player
  * owns rather than pinning one, so naming a set would be a promise this format was never in a
- * position to keep. Two rows in one `Record<ExportFormat, …>` pointing at the same writer, rather
- * than a branch that has to be remembered in four places.
+ * position to keep. Both arms share `plainLine`, and what MTGO adds is a per-line `SB:` prefix on
+ * a sideboard or a companion — a one-line override rather than a heading, which is exactly how
+ * this app's own importer reads it back. A one-pile export has none, so the two agree here.
  */
 export const Mtgo: Story = {
   play: async ({ canvasElement }) => {
@@ -175,12 +224,18 @@ export const Mtgo: Story = {
 };
 
 /**
- * **Moxfield** — `quantity name (SET) collectorNumber`, the one format here that names a printing
- * rather than just a card.
+ * **Moxfield** — `quantity name (SET) collectorNumber` under a **section heading**, and one of
+ * three formats here that name a printing rather than just a card.
  *
  * The set code is uppercased for the reason the importer uppercases the one it reads: `(2x2)` and
  * `(2X2)` are the same set, and a decklist this app writes should pick one spelling rather than
  * echo whatever case the row happened to store.
+ *
+ * **The heading is written even for a single section**, which is what makes this format different
+ * from the plain paste above it: the vocabulary is fixed — `Commander`, `Companion`, `Deck`,
+ * `Sideboard`, `Maybeboard`, in that ladder — so `Deck` is a fact about where these cards are
+ * rather than a separator a one-pile file could do without. **Arena writes the identical text**;
+ * the two differ only in what reaches the writer, which is {@link SwitchedOffPile}'s subject.
  */
 export const Moxfield: Story = {
   play: async ({ canvasElement }) => {
@@ -191,8 +246,37 @@ export const Moxfield: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
-    await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt (2X2) 117");
-    await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
+    );
+  },
+};
+
+/**
+ * **Archidekt** — `1x`, a **lowercase** set code, and the pile's own name in brackets.
+ *
+ * Lowercase against every other writer here on purpose: it is what Archidekt itself emits, and the
+ * point of a format named for a site is that the site reads it back. Our own parser uppercases
+ * what it reads, so the round trip is unaffected either way.
+ *
+ * It is the one format whose headings are the **reader's** words rather than a fixed vocabulary —
+ * grouped by `categoryName` in the caller's own array order, so a deck comes out filed the way the
+ * reader filed it and nothing here re-files it on the way out. It is also the only one that can
+ * say `{noDeck}`, which is what makes an export and a re-import keep a maybeboard; see
+ * {@link SwitchedOffPile}.
+ */
+export const Archidekt: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(
+      async () => await expect(canvas.getByRole("radio", { name: "Archidekt" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] 1x Sol Ring (c21) 263 [Ramp]",
+    );
   },
 };
 
@@ -201,7 +285,12 @@ export const Moxfield: Story = {
  *
  * A field is quoted only when it carries a comma, a quote or a newline — never otherwise, so
  * `Lightning Bolt` stays `Lightning Bolt` rather than becoming `"Lightning Bolt"` on every row.
- * The extension changes with it (`.csv`), which is what the save dialog is seeded with.
+ * The extension changes with it (`.csv`), which is what the save dialog is seeded with. The last
+ * column is the pile's own name, which is how a spreadsheet keeps the filing the five text
+ * formats say with a heading.
+ *
+ * **It is write-only and stays so**: nothing in `parse.ts` reads a comma-separated decklist, and
+ * teaching it one would be a second grammar rather than a rule inside the one there is.
  *
  * **An empty pile is an empty string in every format, this one included**: a header over no rows
  * is a file that claims to be a decklist and is not one. See {@link EmptyPile}.
@@ -215,11 +304,60 @@ export const Csv: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "CSV" }));
-    await expect(preview(canvasElement)).toHaveTextContent("Quantity,Name,Set,Collector number");
-    await expect(preview(canvasElement)).toHaveTextContent("2,Lightning Bolt,2x2,117");
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Quantity,Name,Set,Collector number,Category",
+    );
+    await expect(preview(canvasElement)).toHaveTextContent("2,Lightning Bolt,2x2,117,Ramp");
     // The set code is **not** uppercased here, unlike Moxfield's: a CSV column is data for
     // something else to read, and the row's own spelling is what it stores.
-    await expect(preview(canvasElement)).toHaveTextContent("1,Sol Ring,c21,263");
+    await expect(preview(canvasElement)).toHaveTextContent("1,Sol Ring,c21,263,Ramp");
+  },
+};
+
+/**
+ * A deck with a **switched-off pile** in it, and the one sentence two of the six formats owe the
+ * reader because of it.
+ *
+ * `is_active = 0` is the whole of what a maybeboard is here, and the formats divide on whether
+ * they have anywhere to put one. **Arena and MTGO do not** — writing a maybeboard into an Arena
+ * deck produces an illegal import at the other end — so they write only the piles that are
+ * switched on, and the dialog says how many cards that cost **in copies**: six Forests on one row
+ * are six cards missing from the file, and "1 card" would be a true statement about the array and
+ * a false one about the deck. **Moxfield has a `Maybeboard` section and Archidekt has `{noDeck}`**,
+ * so both write the pile and leave nothing out — and the line goes with the format that needed it.
+ *
+ * **Not a `role="alert"`, deliberately**: nothing failed. It is a fact about the text underneath
+ * it, which is why it sits between the radios and the preview rather than down beside the two
+ * failure lines — and why it has to be on screen *before* Copy is pressed rather than after.
+ */
+export const SwitchedOffPile: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(
+      async () => await expect(canvas.getByRole("radio", { name: "Arena" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Arena" }));
+    await expect(
+      canvas.getByText("6 cards in switched-off piles are not written in this format."),
+    ).toBeVisible();
+    // Said before Copy could be pressed, and true of the text on screen: no Forest in it.
+    await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
+
+    // Moxfield puts the cut pile in its maybeboard, so nothing is left out and the line goes.
+    await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    await expect(preview(canvasElement)).toHaveTextContent("Maybeboard 6 Forest (UNF) 239");
+    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+
+    // Archidekt keeps the reader's own word for the pile and flags it, which is what makes an
+    // export and a re-import agree about a maybeboard.
+    await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Cuts 6x Forest (unf) 239 [Cuts{noDeck}]",
+    );
+    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
   },
 };
 

@@ -419,6 +419,9 @@ mod tests {
                 card_id: card_id.to_owned(),
                 quantity,
                 category_name: category.to_owned(),
+                // An ordinary, counted pile: this sweep is about which commands write history,
+                // and switching a pile off is not one of the effects it counts.
+                inactive: false,
             }
         }
 

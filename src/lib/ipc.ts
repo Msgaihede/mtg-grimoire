@@ -1897,9 +1897,9 @@ export type ImportMode = "merge" | "replace";
 /**
  * One line of a decklist after this side has decided everything a *deck* decision is.
  *
- * The three fields are the three answers the backend cannot compute for itself: which printing
- * (resolved by {@link ipc.deckImportResolve}, and perhaps overridden in the preview), how many,
- * and which pile.
+ * The first three fields are the three answers the backend cannot compute for itself: which
+ * printing (resolved by {@link ipc.deckImportResolve}, and perhaps overridden in the preview),
+ * how many, and which pile.
  */
 export interface ImportItem {
   cardId: string;
@@ -1918,6 +1918,18 @@ export interface ImportItem {
    * before it is keyed, so `Ramp` and `  Ramp  ` are one pile and count as one creation.
    */
   categoryName: string;
+  /**
+   * The file said this pile counts toward nothing — Archidekt's `{noDeck}`, which is this app's
+   * `is_active = 0`.
+   *
+   * **Applied only to a pile the import creates.** A name the reader already has keeps whatever
+   * they set; an import must not reach into filing somebody did by hand.
+   *
+   * Optional because absent has always meant "an ordinary, counted pile" and the backend reads it
+   * that way (`#[serde(default)]`) — so every caller written before Archidekt's maybeboard existed
+   * is unchanged, the Storybook fake's literals included.
+   */
+  inactive?: boolean;
 }
 
 /**

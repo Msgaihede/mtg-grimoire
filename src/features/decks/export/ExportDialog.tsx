@@ -2,10 +2,12 @@
  * A dialog that turns a pile of cards into decklist text: a format, a live preview, Copy, and
  * Save as….
  *
- * **This app has had no export feature of any kind before this one.** It is opened from a deck
- * category's right-click menu (Task 12 wires that), so `cards` arrives as a prop rather than
- * something this dialog fetches — that is deliberately what lets a later *deck-level* export
- * reuse it whole, over the deck's full card list instead of one category's.
+ * **Two controls open it, and the difference between them is the `cards` prop and nothing else.**
+ * A deck category's right-click opens it over one pile; the editor header's `Export deck` opens
+ * it over every row of the variant on screen. That was the point of taking the cards as a prop
+ * rather than fetching them: a whole-deck export turned out to be a *caller* rather than a
+ * rewrite, and this file did not change for it. `DeckEditor`'s `exportSubject` is where the two
+ * scopes are resolved, and `layerMatches` is why one layer can carry both.
  *
  * **Built on `DeckDialog`**, the deck surface's shared modal shell (`src/CLAUDE.md`), rather
  * than carrying its own copy of the chrome — `ImportDeckDialog`, `TheoryDiffDialog` and
@@ -26,6 +28,15 @@
  * already avoid; the guard below is the whole of what stops it here. And a refused write is
  * reported rather than closing the dialog on it: the reader's text is still on screen and still
  * copyable, so the failure costs them nothing they cannot immediately retry.
+ *
+ * **What a format leaves out is said on screen before Copy is pressed, and it is deliberately not
+ * a `role="alert"`.** Arena and MTGO have no maybeboard, so `formatExport` writes only the piles
+ * the reader has switched on — and a maybeboard silently missing from an export is a file that
+ * looks complete and is not. Nothing has *failed* when that happens, so the sentence is an
+ * ordinary `text-dim` line beside the format that chose it rather than an alert: it is a fact
+ * about the text under it, which is why it sits between the radios and the preview and not down
+ * beside the two failure lines. {@link omittedCount} counts **copies** rather than rows, because
+ * six basic lands on one row are six cards missing from the file.
  *
  * **The Copied status is a claim about the clipboard's contents, and it is cleared the moment
  * that claim could go stale** (2026-08-14, code review). Switching format redraws the preview
@@ -50,6 +61,7 @@ import {
   EXPORT_FORMAT_EXTENSION,
   EXPORT_FORMAT_LABEL,
   formatExport,
+  omittedCount,
   type ExportCard,
   type ExportFormat,
 } from "./format";
@@ -118,6 +130,9 @@ function Body({
   const [error, setError] = useState<string | null>(null);
 
   const text = useMemo(() => formatExport(cards, format), [cards, format]);
+  /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
+   *  it is a claim about the text on screen and goes stale the moment that changes. */
+  const omitted = useMemo(() => omittedCount(cards, format), [cards, format]);
 
   const handleCopy = useCallback(() => {
     setError(null);
@@ -153,7 +168,8 @@ function Body({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-      {/* A radio group over the four named formats, in the order `EXPORT_FORMATS` declares —
+      {/* A radio group over every format `EXPORT_FORMATS` names — six of them, and the map is
+          what keeps this row from being a list to remember to grow. In that array's own order and
           **not** through `sortOptions`: plain first is the one most readers want, the same kind
           of deliberate order `lib/options.ts` exempts a grade scale for. */}
       <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
@@ -183,6 +199,18 @@ function Body({
         ))}
       </div>
 
+      {/* Not a `role="alert"`: nothing failed. It is a fact about the format the reader just
+          chose, and it has to be on screen before they press Copy rather than after — a
+          maybeboard silently missing from an Arena export is the failure this line prevents. */}
+      {omitted > 0 && (
+        <p className="text-sm text-dim">
+          {omitted === 1
+            ? "1 card in a switched-off pile is"
+            : `${omitted} cards in switched-off piles are`}{" "}
+          not written in this format.
+        </p>
+      )}
+
       <pre
         className={cn(
           "min-h-0 flex-1 overflow-auto rounded-md border border-border bg-surface p-3",
@@ -196,10 +224,7 @@ function Body({
         <button
           type="button"
           onClick={handleCopy}
-          className={cn(
-            "h-9 rounded-md border border-border px-3 text-sm hover:bg-surface",
-            FOCUS,
-          )}
+          className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
         >
           Copy
         </button>
@@ -210,10 +235,7 @@ function Body({
             if (!saving) void handleSaveAs();
           }}
           aria-busy={saving || undefined}
-          className={cn(
-            "h-9 rounded-md border border-border px-3 text-sm hover:bg-surface",
-            FOCUS,
-          )}
+          className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
         >
           Save as…
         </button>

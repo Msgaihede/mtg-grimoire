@@ -248,9 +248,21 @@ const NO_EXPORT_CARDS: readonly DeckCard[] = [];
  * can delete a category while this dialog is open over it, and the editor re-reads the deck
  * without it. The empty card list that follows is honest; `Export ""` as the dialog's accessible
  * name is not, which is the whole reason this string exists rather than a fallback of `""`.
- * **Not the deck's name**: that would claim a deck-level export nobody asked for.
+ * **Not the deck's name**, and that is sharper now than when it was written: the header's
+ * `Export deck` titles itself with exactly that, so a deleted pile falling back to it would be
+ * indistinguishable from a press nobody made.
  */
 const DELETED_CATEGORY = "a deleted category";
+
+/**
+ * What the export dialog is titled when the **deck** has no name of its own.
+ *
+ * {@link DELETED_CATEGORY}'s argument applied to the other scope — `Export ""` is not an
+ * accessible name — and the state is reachable rather than defensive: the header's name field
+ * takes an empty string, and the editor renders with `row` still `null` for the length of the
+ * first read.
+ */
+const UNNAMED_DECK = "this deck";
 
 /**
  * What the save dialog's file name starts as: the deck and the pile.
@@ -266,9 +278,10 @@ const DELETED_CATEGORY = "a deleted category";
  * filtering before stripping would answer `"-"` for a deck whose whole name is punctuation this
  * has to remove.
  *
- * Exported for its test: it is reached only through a dialog this editor has no control to open
- * (the opener is a category heading's right-click, which `views/` wires), so there is no rendered
- * path to assert it through yet.
+ * Exported for its test, and still exported now that the header has an `Export deck` to open the
+ * dialog with: what this answers is only ever *seen* inside the native save picker, which
+ * `dialog:allow-save` opens outside the page — no test and no CDP pass can read the name in that
+ * box. The dialog has a rendered path; this string does not.
  */
 export function exportFileName(deck: string, category: string): string {
   const name = [deck, category]
@@ -281,36 +294,58 @@ export function exportFileName(deck: string, category: string): string {
 }
 
 /**
- * The three arguments `ExportDialog` takes, for the pile the `export` layer names.
+ * What is being exported: the whole deck, or one pile.
  *
- * **Derived from the deck's live list rather than from what a menu row was holding**, which is
- * why the layer carries an id and not the cards: a deck is re-read after every write, so a
- * snapshot taken when the menu opened would describe the pile as it was. A rename under the open
- * dialog therefore retitles it, and a delete empties it and says so.
+ * **Three states rather than a nullable id**, counting the `null` {@link exportSubject} takes for
+ * a closed dialog: `null` already carries a meaning in the layer's own arm — the whole deck — so
+ * reusing it for "nothing is being exported" would be one sentinel answering two questions. Two
+ * shapes ask them separately, and each answer is then narrowed by the type rather than by a
+ * comment.
+ */
+export type ExportScope = { kind: "deck" } | { kind: "category"; categoryId: number };
+
+/**
+ * The three arguments `ExportDialog` takes, for whatever the `export` layer is aimed at.
+ *
+ * **Derived from the deck's live list rather than from what a control was holding**, which is why
+ * the layer carries an id and not the cards: a deck is re-read after every write, so a snapshot
+ * taken when the menu opened would describe the pile as it was. A rename under the open dialog
+ * therefore retitles it, and a delete empties it and says so.
  *
  * `cards` is the deck's rows and **not** `shown`: the toolbar's filter narrows what is *drawn*,
  * and exporting "Removal" means the pile rather than the four of it a search box happens to be
- * showing.
+ * showing. **The deck scope passes every row of the variant on screen, switched-off piles
+ * included** — what a format does with a maybeboard is the *format's* decision, and
+ * `format.ts`'s `omittedCount` is what says so in the dialog rather than a filter here.
  *
- * `categoryId` is `null` for a closed dialog, which is every render but the ones it is up — the
+ * A `null` scope is a **closed** dialog, which is every render but the ones it is up — the
  * subject is `""` there because nothing draws it, and that is the one case that must **not** read
  * {@link DELETED_CATEGORY}: a closed dialog is not a statement about a deleted pile.
  *
  * Pure, and exported for that reason: see {@link exportFileName}.
  */
-export function categoryExport(
-  categoryId: number | null,
+export function exportSubject(
+  scope: ExportScope | null,
   categories: readonly DeckCategory[],
   cards: readonly DeckCard[],
   deckName: string,
 ): { subject: string; cards: readonly DeckCard[]; fileName: string } {
-  if (categoryId === null) {
+  if (scope === null) {
     return { subject: "", cards: NO_EXPORT_CARDS, fileName: exportFileName(deckName, "") };
   }
-  const name = categories.find((c) => c.id === categoryId)?.name ?? null;
+  if (scope.kind === "deck") {
+    return {
+      subject: deckName === "" ? UNNAMED_DECK : deckName,
+      cards,
+      // The deck's own name and no second half, which `exportFileName` already answers for an
+      // empty one: a whole-deck export is the deck, so there is no pile to name after it.
+      fileName: exportFileName(deckName, ""),
+    };
+  }
+  const name = categories.find((c) => c.id === scope.categoryId)?.name ?? null;
   return {
     subject: name ?? DELETED_CATEGORY,
-    cards: cards.filter((c) => c.categoryId === categoryId),
+    cards: cards.filter((c) => c.categoryId === scope.categoryId),
     // The **name**, never the subject: a file called `Burn - a deleted category` is a sentence
     // where a name belongs, and the deck's own name is the honest suggestion for a pile that is
     // not there any more.
@@ -449,10 +484,10 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
  * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
  * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds **the ones with a
- * control in this view** together — the export dialog and the delete-category and clear-stack
- * confirmations are opened from a category heading's right-click and have no button to point that
- * sweep at — and it is a **behavioural** sweep for a reason worth reading before the next
- * modality edit.
+ * control in this view** together — the delete-category and clear-stack confirmations and the
+ * quick zones' New category have no button to point that sweep at, and the export dialog joined
+ * it when the header grew `Export deck` — and it is a **behavioural** sweep for a reason worth
+ * reading before the next modality edit.
  *
  * **All but two of the overlays are a `DeckDialog`** — where the scrim, the centring,
  * `aria-modal`, the trap, the ✕ and the `"inner"` rung are written once. **`TheoryDiffDialog`
@@ -474,11 +509,16 @@ type Layer =
    *  from the toolbar's own press, which files each card by what it does. */
   | { kind: "import"; forcedCategoryName?: string }
   /**
-   * Which pile is being exported. **The id and not the cards**: the deck is re-read after every
-   * write and this editor already holds the answer, so the dialog is fed from the live list
-   * rather than from an array frozen at the moment a menu row was pressed.
+   * What is being exported. **The id and not the cards**: the deck is re-read after every write
+   * and this editor already holds the answer, so the dialog is fed from the live list rather
+   * than from an array frozen at the moment a control was pressed.
+   *
+   * **`null` is the whole deck**, which is the header's `Export deck`; a number is one pile,
+   * which is a category heading's right-click. Two controls, one layer — so this is the one kind
+   * whose *kind* is not enough to say which button is open, and {@link layerMatches} is what
+   * asks the rest.
    */
-  | { kind: "export"; categoryId: number }
+  | { kind: "export"; categoryId: number | null }
   /**
    * The pile a `Delete…` was pressed on. The **id**, like `export` and for the same reason: the
    * deck is re-read after every write, so the question is asked about the live row rather than
@@ -514,6 +554,62 @@ type Layer =
    */
   | { kind: "quickCategory"; payload: DragPayload }
   | null;
+
+/**
+ * Is the open layer the one this control opens?
+ *
+ * `export` is the only kind **two** controls reach — the header's `Export deck` and a category
+ * heading's `Export cards…` — so it is the only one where the kind alone is not the answer, and a
+ * header button that read `aria-expanded` off the kind would claim to be open while a pile's
+ * dialog was up. Every other arm has one opener, which is why this is a widening of
+ * `layer?.kind === kind` rather than a second rule beside it.
+ *
+ * Pure and exported for its test, like the two functions above it: the case it exists for is
+ * unreachable by a press — an open export paints a scrim over both of its openers — so the only
+ * way to assert it is to ask it directly.
+ */
+export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
+  if (open === null || open.kind !== target.kind) return false;
+  if (open.kind === "export" && target.kind === "export") {
+    return open.categoryId === target.categoryId;
+  }
+  return true;
+}
+
+/**
+ * The header's dialog buttons, each carrying the layer it opens.
+ *
+ * It used to carry a `kind` per row, which stopped being enough when `export` grew a payload: the
+ * header exports the **whole deck** (`categoryId: null`) and a category heading exports one pile,
+ * and both are the same layer kind.
+ *
+ * **"Import cards" and not "Import"**, which is what it said for one test run: the dialog it
+ * opens carries a control called `Import`, and two buttons with one name on screen at once is a
+ * pair a screen reader can only tell apart by position. It names what it puts in the deck, the
+ * way the gallery's `Import deck` names what it makes. **"Export deck" and not "Export cards"**
+ * for the mirror of that reason — the category menu's row is already called `Export cards…`, so
+ * this one names its scope instead.
+ *
+ * **Two buttons where there was one called "Categories & tags".** The piles and the labels were
+ * two sections of one drawer, so reaching the second cost a press and a scroll; they are two
+ * dialogs now, each one press away and each sized for what it draws. The ampersand went with the
+ * split — a control named for two things is a control that can only ever be right about one of
+ * them.
+ *
+ * **Every row here costs width on a row that already wraps.** This block measured **825px** at
+ * 1280×800 against the ~729 the ribbon can spare (2026-08-14, a debug build) with five buttons on
+ * it; `Export deck` is the sixth and the figure has not been re-measured. The wrap is pre-existing
+ * either way — what a live pass would answer is how much worse it got, and whether the deck's
+ * 44px of height is still the whole of the cost.
+ */
+const ACTIONS: readonly { layer: NonNullable<Layer>; label: string }[] = [
+  { layer: { kind: "import" }, label: "Import cards" },
+  { layer: { kind: "export", categoryId: null }, label: "Export deck" },
+  { layer: { kind: "categories" }, label: "Categories" },
+  { layer: { kind: "tags" }, label: "Tags" },
+  { layer: { kind: "history" }, label: "History" },
+  { layer: { kind: "settings" }, label: "Deck settings" },
+];
 
 /**
  * How long the quick zones' "nothing to do" sentence stays up.
@@ -1042,8 +1138,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.cards],
   );
 
-  /** What the export dialog draws, for the pile the layer names — {@link categoryExport}, which
-   *  is pure and carries the whole of the reasoning. */
   /** The pile the delete confirmation is about, read from the **live** list — a rename made
    *  under the open question retitles it, and a delete from another surface empties it. */
   const deletedCategory =
@@ -1059,9 +1153,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ? (categories.find((c) => c.id === layer.categoryId) ?? null)
       : null;
 
-  const exportedId = layer?.kind === "export" ? layer.categoryId : null;
+  /**
+   * What the export dialog draws — {@link exportSubject}, which is pure and carries the whole of
+   * the reasoning.
+   *
+   * **The id is what the memo keys on, and it is three-valued on purpose**: `undefined` is a
+   * closed dialog, `null` is the whole deck and a number is one pile. Building an
+   * {@link ExportScope} out here and depending on *that* would hand the memo a fresh object every
+   * render and recompute the filter on each one, which is the entire thing a memo over the deck's
+   * card list is for.
+   */
+  const exportedId = layer?.kind === "export" ? layer.categoryId : undefined;
   const exported = useMemo(
-    () => categoryExport(exportedId, categories, deck.cards, row?.name ?? ""),
+    () =>
+      exportSubject(
+        exportedId === undefined
+          ? null
+          : exportedId === null
+            ? { kind: "deck" }
+            : { kind: "category", categoryId: exportedId },
+        categories,
+        deck.cards,
+        row?.name ?? "",
+      ),
     [exportedId, categories, deck.cards, row?.name],
   );
 
@@ -1401,14 +1515,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * means the caret lands on `<body>` (see {@link handBackRef}).
    *
    * **A press on the layer that is already up closes it**, which is what a toolbar toggle should
-   * do and is why the kind is compared. The note that used to sit here asked the agent wiring
-   * the category heading's menu to check whether that toggle could re-aim a payload arm at a
-   * *different* pile rather than closing it. **It is wired now, and the answer is that it still
-   * cannot**: `export` and `deleteCategory` are modal, so the heading behind the scrim cannot be
-   * right-clicked, and `import` is reached from that same heading. Every payload arm is opened
-   * from a menu that only exists while no overlay is up. It becomes reachable the day anything
-   * can ask for one of these without going through a scrim, and the right answer then is one
-   * line — close only when the payload matches too — still left unwritten rather than guessed.
+   * do and is why the kind is compared. The note that used to sit here asked whether that toggle
+   * could re-aim a payload arm at a *different* pile rather than closing it. **It still cannot**,
+   * and the reason survived `export` growing a second opener: every overlay in this union is
+   * modal, so neither the heading behind the scrim nor the header button behind it can be
+   * pressed while one is up. It becomes reachable the day anything can ask for one of these
+   * without going through a scrim — and the right answer then is one line, {@link layerMatches}
+   * in place of the kind comparison below, which now exists for the `aria-expanded` half of the
+   * same question. Left unwritten here rather than guessed, because a toggle nothing can reach
+   * is a behaviour no test can pin.
    */
   const openLayer = useCallback((next: NonNullable<Layer>, handBack: (() => void) | null) => {
     handBackRef.current = handBack;
@@ -2510,33 +2625,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 </span>
               )}
 
-              {(
-                [
-                  // **"Import cards" and not "Import"**, which is what it said for one test
-                  // run: the dialog it opens carries a control called `Import`, and two
-                  // buttons with one name on screen at once is a pair a screen reader can
-                  // only tell apart by position. It names what it puts in the deck, the way
-                  // the gallery's `Import deck` names what it makes.
-                  { kind: "import", label: "Import cards" },
-                  // **Two buttons where there was one called "Categories & tags".** The piles
-                  // and the labels were two sections of one drawer, so reaching the second cost
-                  // a press and a scroll; they are two dialogs now, each one press away and each
-                  // sized for what it draws. The ampersand went with the split — a control named
-                  // for two things is a control that can only ever be right about one of them.
-                  { kind: "categories", label: "Categories" },
-                  { kind: "tags", label: "Tags" },
-                  { kind: "history", label: "History" },
-                  { kind: "settings", label: "Deck settings" },
-                ] as const
-              ).map(({ kind, label }) => (
+              {/* Each row carries the layer it opens rather than a kind — see {@link ACTIONS},
+                  which is where every one of these buttons' names is argued. */}
+              {ACTIONS.map(({ layer: target, label }) => (
                 <button
-                  key={kind}
+                  key={label}
                   type="button"
                   onClick={(e) => {
                     const trigger = e.currentTarget;
-                    openLayer({ kind }, () => trigger.focus());
+                    openLayer(target, () => trigger.focus());
                   }}
-                  aria-expanded={layer?.kind === kind}
+                  aria-expanded={layerMatches(layer, target)}
                   aria-haspopup="dialog"
                   className={cn(CONTROL, FILTER_FOCUS, "hover:text-text")}
                 >
@@ -2551,11 +2650,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       {row && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border pb-3">
           {/* **Icons rather than words, and on this row rather than in the header.** The
-              header's actions block measures 825px against the ~729 a 1280px window can spare,
-              so it already wraps — and a wrapped header costs 44px of deck height at the app's
-              own default size (see {@link CONTROL}). Two more text buttons there would make
-              that worse at every width; two 36px icons here cost 76px on the row that is
-              already about editing the deck's contents.
+              header's actions block measured 825px against the ~729 a 1280px window can spare
+              (2026-08-14, a debug build, **five** buttons — `Export deck` is a sixth and nothing
+              has been re-measured since), so it already wraps — and a wrapped header costs 44px
+              of deck height at the app's own default size (see {@link CONTROL}). Two more text
+              buttons there would make that worse at every width; two 36px icons here cost 76px
+              on the row that is already about editing the deck's contents.
 
               The name is the whole sentence — "Undo — Removed 2 × Lightning Bolt" — which is
               what a caret and a pointer both get, since the glyph says nothing. It comes from
@@ -3027,8 +3127,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </section>
       )}
 
-      {/* The seven overlays, mounted **at the editor's top level and as siblings of the layout
-          above**, which is not a tidiness preference. Each is `fixed inset-0` and none is
+      {/* The overlays, mounted **at the editor's top level and as siblings of the layout
+          above**, which is not a tidiness preference. (Count them off the `Layer` union rather
+          than from a number here — this comment said "seven" through three separate additions,
+          and a prose-only edit routes to neither CI job.) Each is `fixed inset-0` and none is
           portalled, so a transformed ancestor would become its containing block and pin it to
           whatever box that ancestor happens to occupy — and this editor has transformed
           elements in it (a virtualised table's rows are `absolute` *and* `transform`ed, which
@@ -3190,15 +3292,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         )}
       </DeckDialog>
 
-      {/* **One of the overlays with no control in this view** — the delete and clear
-          confirmations above are the others, and all three are opened from a category heading's
-          right-click. It used to say "the last of the seven, and the only one", then "one of the
-          two"; the delete arm made the first false twice over and `Clear stack…` made the second
-          false on 2026-08-15. The union is the count, and this sentence carries none.
+      {/* **The one overlay two controls open**, and the only one whose scope decides which. The
+          header's `Export deck` opens it over the deck; a category heading's right-click opens
+          it over one pile, and *that* scope is still an overlay with no control in this view —
+          as the delete and clear confirmations above it are, both opened from the same menu.
+          This used to say "the last of the seven, and the only one", then "one of the two", then
+          "one of the overlays with no control"; each was made false by the next thing wired. The
+          union is the count, and this sentence carries none.
 
-          `cards` is an argument the dialog never fetches — which is exactly what lets one pile be
-          handed to a component a deck-level export will reuse whole — and it is derived from the
-          deck's live list rather than from whatever the menu was holding. See {@link exported}. */}
+          `cards` is an argument the dialog never fetches — which is exactly what let a deck-level
+          export be a caller rather than a rewrite — and it is derived from the deck's live list
+          rather than from whatever the control was holding. See {@link exported}. */}
       <ExportDialog
         open={layer?.kind === "export"}
         subject={exported.subject}

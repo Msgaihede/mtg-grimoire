@@ -97,7 +97,7 @@ const meta = {
           "“autosave drafts” honestly means for a deck — the row *is* the draft.\n\n" +
           "**This component is a header, a toolbar and a frame.** It decides which variant is " +
           "read, how the cards are grouped, sorted and filtered, which of the four views draws " +
-          "them and which of seven layers is open — and it draws no card and no heading itself. " +
+          "them and which of its layers is open — and it draws no card and no heading itself. " +
           "`grouping.ts` says what the groups are and `views/` draw them, which is what stops " +
           "four surfaces answering “how many cards are in the Ramp column” four ways.\n\n" +
           "**The groups are the deck's own categories** (schema v8), in `sortOrder`, " +
@@ -134,22 +134,23 @@ const meta = {
           "and a pile the filter empties **is** empty, so they stay out either way — while the " +
           "reader's own piles go on drawing, filter or no filter, exactly as they do when the " +
           "reader empties one by hand.\n\n" +
-          "**Seven layers, one piece of state.** The anchored format check and six full-window " +
-          "dialogs — Import cards, Categories, Tags, History, the theory difference and Deck " +
-          'settings — each register the `"inner"` Escape rung, and `useDismissOnEscape` orders ' +
-          "exactly two rungs, so two of them open at once would both close on one press. A " +
-          "union rather than seven booleans is what makes “never two” structural; " +
-          "{@link NeverTwoLayers} is that, pressed.\n\n" +
-          "**Four of the six dialogs are one component, `DeckDialog`** (2026-08-14) — " +
-          "Categories, Tags, History and Deck settings. Categories and history used to be " +
-          "right-hand drawers, and “in the style of Deck settings” used to be a resemblance " +
-          "between three files rather than one shell — so the scrim, the " +
-          "centring, `aria-modal`, the tab trap, the ✕ and the Escape rung are written once and " +
-          "every host passes a title, a close label and a width. **Import cards and the theory " +
-          "difference are not on it yet**: each still carries its own copy of that chrome, " +
-          "deliberately out of scope rather than exempt, and they should move onto the shell — " +
-          "until they do, a change to how a modal behaves in this editor is an edit to more " +
-          "than one file. **The card search column did " +
+          "**Every layer, one piece of state.** The anchored format check and the editor's " +
+          'full-window dialogs each register the `"inner"` Escape rung, and two of them open at ' +
+          "once is not a state this editor draws — a union rather than a boolean apiece is what " +
+          "makes “never two” structural rather than remembered, and {@link NeverTwoLayers} is " +
+          "that, pressed. **Count them off the `Layer` union in `DeckEditor.tsx`, never off a " +
+          "list or a number on this page**: this paragraph carried both, and both had stopped " +
+          "being true by the next thing that landed, with nothing going red — which is exactly " +
+          "what a prose-only edit costs.\n\n" +
+          "**The shell is `DeckDialog`** (2026-08-14), and the exception list is the thing worth " +
+          "carrying rather than the count: the scrim, the centring, `aria-modal`, the tab trap, " +
+          "the ✕ and the Escape rung are written once and every host passes a title, a close " +
+          "label and a width, so Categories, Tags, History, Deck settings, the export dialog, " +
+          "the quick zones' New category and both destructive confirmations are one behaviour. " +
+          "**Import cards and the theory difference are the two still off it**: each carries its " +
+          "own copy of that chrome, deliberately out of scope rather than exempt, so until they " +
+          "move a change to how a modal behaves here is an edit to more than one file. " +
+          "**The card search column did " +
           "not follow them**, because it is worked *out of* rather than consulted: its tiles " +
           "are drag sources into the deck's own columns, and a scrim would end that path and " +
           "cover the card pane a reader flips printings in. It stays docked, and collapsed " +

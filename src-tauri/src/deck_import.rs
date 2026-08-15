@@ -702,7 +702,7 @@ pub async fn deck_import_resolve(
 
 /// One line of a decklist, after TypeScript has decided everything a *deck* decision is.
 ///
-/// The three fields are the three answers this command cannot compute for itself: which
+/// The first three fields are the three answers this command cannot compute for itself: which
 /// printing (resolved by [`resolve_lines`] and chosen, perhaps overridden, in the preview), how
 /// many, and which pile. The category arrives as a **name** rather than an id because an
 /// imported list names sections the deck may not have yet — and because the word itself is
@@ -713,6 +713,23 @@ pub struct ImportItem {
     pub card_id: String,
     pub quantity: i64,
     pub category_name: String,
+    /// The file said this pile counts toward nothing — Archidekt's `{noDeck}`, which is exactly
+    /// what `is_active = 0` means here.
+    ///
+    /// **Applied only to a pile this import creates.** A name the reader already has keeps
+    /// whatever they set: an import may not reach into filing somebody did by hand, which is the
+    /// same reasoning that makes `replace` clear the cards and leave the categories. The
+    /// `existed` lookup [`commit_import`] already makes for `categories_created` is that fact, so
+    /// this costs no second query.
+    ///
+    /// **The first item naming a pile decides**, because the name is memoised for the list. Every
+    /// export in scope is consistent about it — Archidekt writes the same bracket on every card
+    /// of a category — and a list that disagreed with itself has no better answer available.
+    ///
+    /// `#[serde(default)]` so every caller written before this field still deserialises: absent
+    /// means an ordinary, counted pile, which is what an import has always made.
+    #[serde(default)]
+    pub inactive: bool,
 }
 
 /// What an import did, in the three numbers the "Imported 117 cards" report is written from.
@@ -855,6 +872,17 @@ pub fn commit_import(
                     // nothing is made. See `category_for_name`'s doc for why the lookup cannot
                     // be narrowed to `main`.
                     let id = crate::deck_meta::category_for_name(&tx, deck_id, category_name)?;
+                    if existed.is_none() && item.inactive {
+                        // Straight to the column rather than through `deck_meta::set_category_active`:
+                        // that one opens a transaction of its own, writes a history row and
+                        // reallocates, and all three are already this function's — the allocator
+                        // runs once at the end, over the finished deck.
+                        tx.execute(
+                            "UPDATE deck_categories SET is_active = 0 WHERE id = ?1",
+                            params![id],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
                     if existed.is_none() {
                         categories_created += 1;
                     }
@@ -1589,6 +1617,10 @@ mod tests {
             card_id: card_id.to_owned(),
             quantity,
             category_name: category_name.to_owned(),
+            // An ordinary, counted pile — what an import has always made, and what an absent
+            // `inactive` deserialises to. The two tests about `{noDeck}` build their item by
+            // hand rather than widen this helper for a flag every other test would pass `false`.
+            inactive: false,
         }
     }
 
@@ -1798,6 +1830,82 @@ mod tests {
     /// A `Sideboard` section lands on the seeded `side` category rather than making a second
     /// pile with the same word on it — `category_for_name` looks up by name alone, which is
     /// what `DECK_CATEGORY_GRAIN` (one name per deck) requires of it.
+    /// A pile the import **creates** for a `{noDeck}` line arrives switched off.
+    ///
+    /// Archidekt's `{noDeck}` is "counts toward nothing", which is this schema's `is_active = 0`.
+    /// Without this the reference deck's 17 maybeboard cards land in a counted pile and a 100-card
+    /// commander deck reports 117.
+    #[test]
+    fn an_import_creates_a_no_deck_pile_switched_off() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[ImportItem {
+                card_id: "sol-c21".to_owned(),
+                quantity: 1,
+                category_name: "(New) Maybeboard".to_owned(),
+                inactive: true,
+            }],
+        )
+        .unwrap();
+
+        let active: bool = conn
+            .query_row(
+                "SELECT is_active FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
+                params![id, "(New) Maybeboard"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !active,
+            "a pile the import made for a {{noDeck}} line is switched off"
+        );
+    }
+
+    /// A pile the reader already has is **left alone**, however the file describes it.
+    ///
+    /// An import must not reach into filing somebody did by hand: `category_for_name` finds before
+    /// it creates, and the `existed` lookup `categories_created` already makes is the same fact.
+    #[test]
+    fn an_import_never_switches_off_a_pile_the_reader_already_had() {
+        let conn = seeded();
+        let id = deck(&conn);
+        let keepers = crate::deck_meta::create_category(&conn, id, "Keepers")
+            .unwrap()
+            .id;
+
+        commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[ImportItem {
+                card_id: "sol-c21".to_owned(),
+                quantity: 1,
+                category_name: "Keepers".to_owned(),
+                inactive: true,
+            }],
+        )
+        .unwrap();
+
+        let active: bool = conn
+            .query_row(
+                "SELECT is_active FROM deck_categories WHERE id = ?1",
+                params![keepers],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            active,
+            "an import may not switch off a pile the reader made"
+        );
+    }
+
     #[test]
     fn a_section_name_lands_on_the_predefined_category() {
         let conn = seeded();

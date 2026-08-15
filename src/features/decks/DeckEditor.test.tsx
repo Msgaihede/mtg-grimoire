@@ -135,7 +135,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { categoryExport, DeckEditor, exportFileName } from "./DeckEditor";
+import { DeckEditor, exportFileName, exportSubject, layerMatches } from "./DeckEditor";
 import { useAppStore } from "@/lib/store";
 
 /** The change the Undo button would reverse — a history row like any other, because that is
@@ -2202,16 +2202,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Each of the five toolbar buttons opens its own full-window dialog, and Escape closes the
-   * one that is up and hands the caret back to the control that opened it — the editor stays a
-   * *view*, so the deck is still on screen afterwards.
+   * Each toolbar button opens its own full-window dialog, and Escape closes the one that is up
+   * and hands the caret back to the control that opened it — the editor stays a *view*, so the
+   * deck is still on screen afterwards.
    *
-   * **Five, because Categories & tags became two.** The piles and the labels were two sections
-   * of one right-hand drawer; a sweep that went on listing four surfaces while the editor grew
-   * a fifth would be the failure this file's counts exist to prevent.
+   * **The list is the row, and it has grown twice.** Categories & tags was one right-hand drawer
+   * and became two dialogs; `Export deck` arrived beside `Import cards` when the export layer
+   * grew a deck scope. A sweep that went on listing the old set while the editor drew one more
+   * is the failure this file's lists exist to prevent — so it is written out rather than counted
+   * in the prose.
    */
   it.each([
     ["Import cards", "Import a decklist"],
+    ["Export deck", 'Export "Burn"'],
     ["Categories", "Categories"],
     ["Tags", "Tags"],
     ["History", "History"],
@@ -2265,12 +2268,13 @@ describe("DeckEditor", () => {
    * caret walk back into the editor anyway, which offered the capability to one input method and
    * denied it to the other while the docs argued it was deliberate.
    *
-   * **The editor has seven and this drives the six with a control in the view.** The seventh is
-   * the export dialog, opened from a category heading's right-click, so there is no button here
-   * to point the sweep at; it is a `DeckDialog` like four of the six, which is what the four
-   * cases below hold to the shell's behaviour.
+   * **This drives every full-window overlay with a control in the view**, which the export
+   * dialog joined when the header grew `Export deck` — it was the one surface named here as
+   * unreachable, on the argument that a category heading's right-click was its only opener. The
+   * ones still outside the sweep are the delete-category and clear-stack confirmations and the
+   * quick zones' New category, all opened without a button to point it at.
    *
-   * **Five of the seven are one component now (`DeckDialog`) and two are not**: the import dialog
+   * **Most of them are one component now (`DeckDialog`) and two are not**: the import dialog
    * and the theory diff still carry their own scrim, `aria-modal` and `onKeyDown={trapTab}`,
    * which is why this sweep is driven per surface rather than pointed at the shell. It is the
    * only thing holding the two copies to the shell's behaviour, and it is what would go red if
@@ -2290,6 +2294,7 @@ describe("DeckEditor", () => {
    */
   it.each([
     ["Import cards", "Import a decklist", null],
+    ["Export deck", 'Export "Burn"', null],
     ["Categories", "Categories", null],
     ["Tags", "Tags", null],
     ["History", "History", null],
@@ -2413,22 +2418,35 @@ describe("DeckEditor", () => {
   /**
    * **Each toolbar button reports its own layer, and only its own.**
    *
-   * `aria-expanded` is how a screen reader is told which of these five presses has a dialog
-   * behind it, and the mapping is one expression over one union — so the failure mode is not
-   * "one button forgot" but "every button says what the *open* one says", which is exactly what
-   * a test pressing one button and reading one button cannot see. Read as a row, and read after
-   * a press: five buttons, one `true`, four `false`.
+   * `aria-expanded` is how a screen reader is told which of these presses has a dialog behind
+   * it, and the mapping is one expression over one union — so the failure mode is not "one
+   * button forgot" but "every button says what the *open* one says", which is exactly what a
+   * test pressing one button and reading one button cannot see. Read as a row, and read after a
+   * press: one `true` and the rest `false`, however long the row grows.
+   *
+   * **`Export deck` is the case that expression had to grow for.** `export` is the only kind two
+   * controls reach, so `layer?.kind === kind` would have lit this button while a *pile's* export
+   * was up — which no press here can reach (the scrim is in the way), and which `layerMatches`'
+   * own tests pin directly. What this row proves is that widening the expression did not cost
+   * the five buttons that were already right.
    */
   it("reflects the open layer on the toolbar button that owns it, and on no other", async () => {
     await open();
-    const BUTTONS = ["Import cards", "Categories", "Tags", "History", "Deck settings"];
+    const BUTTONS = [
+      "Import cards",
+      "Export deck",
+      "Categories",
+      "Tags",
+      "History",
+      "Deck settings",
+    ];
     const expanded = () =>
       BUTTONS.map((name) => screen.getByRole("button", { name }).getAttribute("aria-expanded"));
 
-    expect(expanded()).toEqual(["false", "false", "false", "false", "false"]);
+    expect(expanded()).toEqual(BUTTONS.map(() => "false"));
 
     // Straight down the row without closing anything in between: one slot means the next press
-    // takes the last one down, so five presses are also five checks that it did.
+    // takes the last one down, so every press is also a check that it did.
     for (const [i, name] of BUTTONS.entries()) {
       await userEvent.click(screen.getByRole("button", { name }));
       expect(expanded()).toEqual(BUTTONS.map((_, j) => String(i === j)));
@@ -2436,10 +2454,11 @@ describe("DeckEditor", () => {
 
     // And pressing the open one again is the way back out — `openLayer` toggles on a repeat.
     await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
-    expect(expanded()).toEqual(["false", "false", "false", "false", "false"]);
+    expect(expanded()).toEqual(BUTTONS.map(() => "false"));
   });
 
-  /** The toolbar's last full-window surface, and the only one that writes cards in bulk. */
+  /** The toolbar's one surface that writes cards in bulk, and the mirror of the export beside
+   *  it. */
   it("opens the import dialog from the toolbar", async () => {
     await open();
 
@@ -2448,6 +2467,28 @@ describe("DeckEditor", () => {
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     // Into *this* deck, so the choice the gallery's entry point cannot offer is here.
     expect(within(dialog).getByText(/Into Burn · Live/)).toBeInTheDocument();
+  });
+
+  /**
+   * **The export's deck scope, which is what the header button is for.**
+   *
+   * The dialog is titled for the *deck* — `Export "Burn"` — where the category menu's row titles
+   * it for the pile, and that title is the whole of what tells the two presses apart on screen.
+   * The cards are the deck's own list, so a card in a pile nothing filtered to is in the text: a
+   * whole-deck export that quietly exported one column would look identical to this one at the
+   * dialog's frame.
+   */
+  it("exports the whole deck from the header", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt(), card({ name: "Sol Ring", categoryId: SIDE, quantity: 1 })]),
+    );
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Export deck" }));
+
+    const dialog = await screen.findByRole("dialog", { name: 'Export "Burn"' });
+    expect(within(dialog).getByText(/Lightning Bolt/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Sol Ring/)).toBeInTheDocument();
   });
 
   /**
@@ -2482,9 +2523,12 @@ describe("DeckEditor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
+    // `inactive` rides on every item now — Archidekt's `{noDeck}`, `false` for a paste that
+    // names no such pile — and this assertion is an exact object, so the field is not optional
+    // here even though `ImportItem` makes it so.
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "theory", "merge", [
-        { cardId: "sol-ring", quantity: 1, categoryName: "Artifact" },
+        { cardId: "sol-ring", quantity: 1, categoryName: "Artifact", inactive: false },
       ]),
     );
   });
@@ -3200,38 +3244,60 @@ describe("DeckEditor drag and drop", () => {
  * The pure half of the export layer, asserted **directly** rather than through the rendered
  * dialog.
  *
- * That is a stated compromise and not the usual preference: the export dialog is **one of the
- * editor surfaces with no control in this view** — the delete-category and clear-stack
- * confirmations are the others, and all three are opened from a category heading's right-click,
- * which is why this sentence names them rather than counting them — so when this was written
- * there was nothing here to press and no rendered path to reach it through. Both functions are
- * exported for that reason.
+ * That is a stated compromise and not the usual preference: when this was written the export
+ * dialog was **one of the editor surfaces with no control in this view** — the delete-category
+ * and clear-stack confirmations are the others — so there was nothing here to press and no
+ * rendered path to reach it through. Both functions are exported for that reason.
  *
- * **The heading is wired now**, so the rendered path exists: `DeckEditor — a category's menu`
- * presses `Export cards…` and asserts the dialog opens on the pile that was right-clicked.
- * These stay all the same, because they pin the *pure* answers — the file name's punctuation
- * rules, the deleted-category title — which an integration case would only reach through a
- * dialog that draws one of them and not the other.
+ * **Both scopes are wired now**, so the rendered path exists twice: `DeckEditor — a category's
+ * menu` presses `Export cards…` and asserts the dialog opens on the pile that was right-clicked,
+ * and the header's `Export deck` opens it over the whole list. These stay all the same, because
+ * they pin the *pure* answers — the file name's punctuation rules, the deleted-category title —
+ * which an integration case would only reach through a dialog that draws one of them and not the
+ * other.
  */
-describe("categoryExport", () => {
+describe("exportSubject", () => {
   const REMOVAL = category(11, "Removal", "main");
   const CARDS: DeckCard[] = [
     card({ name: "Swords to Plowshares", categoryId: REMOVAL.id }),
     card({ name: "Sol Ring", categoryId: 12 }),
   ];
+  const pile = (categoryId: number) => ({ kind: "category", categoryId }) as const;
 
   it("takes the pile's own cards and nothing from another", () => {
-    const exported = categoryExport(REMOVAL.id, [REMOVAL], CARDS, "Burn");
+    const exported = exportSubject(pile(REMOVAL.id), [REMOVAL], CARDS, "Burn");
 
     expect(exported.subject).toBe("Removal");
     expect(exported.cards.map((c) => c.name)).toEqual(["Swords to Plowshares"]);
     expect(exported.fileName).toBe("Burn - Removal");
   });
 
+  /**
+   * The header's press, which is the other half of the same layer.
+   *
+   * **Every row of the variant on screen and no filtering at all** — the switched-off piles
+   * included, because what a format does with a maybeboard is the *format's* decision and
+   * `omittedCount` is what says so in the dialog. Identity rather than contents, since handing
+   * the deck's own array through untouched is the claim.
+   */
+  it("answers the whole deck for a deck scope", () => {
+    const exported = exportSubject({ kind: "deck" }, [REMOVAL], CARDS, "Burn");
+
+    expect(exported.subject).toBe("Burn");
+    expect(exported.cards).toBe(CARDS);
+    expect(exported.fileName).toBe("Burn");
+  });
+
+  /** `Export ""` is not an accessible name — the deleted-pile title's argument, applied to the
+   *  other scope. A deck with no name is reachable: the name field takes an empty string. */
+  it("names an unnamed deck rather than titling itself with nothing", () => {
+    expect(exportSubject({ kind: "deck" }, [REMOVAL], CARDS, "").subject).toBe("this deck");
+  });
+
   /** Every render but the ones the dialog is up. `""` and **not** the deleted-pile wording: a
    *  closed dialog is not a statement about a pile that has gone. */
   it("says nothing at all while the layer is closed", () => {
-    expect(categoryExport(null, [REMOVAL], CARDS, "Burn")).toEqual({
+    expect(exportSubject(null, [REMOVAL], CARDS, "Burn")).toEqual({
       subject: "",
       cards: [],
       fileName: "Burn",
@@ -3250,7 +3316,7 @@ describe("categoryExport", () => {
     // itself is not what empties the list: it answers whatever rows still claim that id, which
     // is the honest reading of a pile mid-delete.
     const cascaded = CARDS.filter((c) => c.categoryId !== REMOVAL.id);
-    const exported = categoryExport(REMOVAL.id, [], cascaded, "Burn");
+    const exported = exportSubject(pile(REMOVAL.id), [], cascaded, "Burn");
 
     expect(exported.subject).toBe("a deleted category");
     expect(exported.cards).toEqual([]);
@@ -3264,7 +3330,37 @@ describe("categoryExport", () => {
   it("follows a rename made under the open dialog", () => {
     const renamed = { ...REMOVAL, name: "Interaction" };
 
-    expect(categoryExport(REMOVAL.id, [renamed], CARDS, "Burn").subject).toBe("Interaction");
+    expect(exportSubject(pile(REMOVAL.id), [renamed], CARDS, "Burn").subject).toBe("Interaction");
+  });
+});
+
+/**
+ * **`export` is the one layer kind two controls reach**, so it is the one kind whose *kind* is
+ * not enough to say which control is open.
+ *
+ * The header's `Export deck` and a category heading's `Export cards…` are the two, and a header
+ * button reading `aria-expanded` off the kind alone would claim to be open while a *pile's*
+ * dialog was up. Everything else in the union has one opener and answers on the kind, which is
+ * the third case below — this must stay a widening of the old expression rather than a second
+ * rule beside it.
+ */
+describe("layerMatches", () => {
+  it("tells the header's export from a category's", () => {
+    const deckScope = { kind: "export", categoryId: null } as const;
+
+    expect(layerMatches(deckScope, deckScope)).toBe(true);
+    expect(layerMatches({ kind: "export", categoryId: 3 }, deckScope)).toBe(false);
+    expect(layerMatches(deckScope, { kind: "export", categoryId: 3 })).toBe(false);
+    expect(layerMatches({ kind: "export", categoryId: 3 }, { kind: "export", categoryId: 3 })).toBe(
+      true,
+    );
+  });
+
+  it("answers on the kind for every layer that has one opener, and never for a closed one", () => {
+    expect(layerMatches({ kind: "tags" }, { kind: "tags" })).toBe(true);
+    expect(layerMatches({ kind: "tags" }, { kind: "history" })).toBe(false);
+    expect(layerMatches(null, { kind: "tags" })).toBe(false);
+    expect(layerMatches(null, { kind: "export", categoryId: null })).toBe(false);
   });
 });
 

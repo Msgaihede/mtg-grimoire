@@ -20,12 +20,31 @@ import { save as saveMock } from "@tauri-apps/plugin-dialog";
 import { copyText as copyTextMock } from "@/lib/clipboard";
 import { ExportDialog } from "./ExportDialog";
 
-const BOLT: ExportCard = {
+/**
+ * One card, overridden per test.
+ *
+ * The three category defaults are what a single-pile export always looked like — the main deck,
+ * switched on — so every assertion written before `ExportCard` widened still means what it did.
+ * `format.test.ts` keeps the same builder for the same reason; the two are deliberately not
+ * shared, because a fixture exported from either file would be a second thing to keep in step.
+ */
+const exportCard = (over: Partial<ExportCard> = {}): ExportCard => ({
+  name: "Sol Ring",
+  quantity: 1,
+  setCode: "ltc",
+  collectorNumber: "285",
+  categoryName: "Main deck",
+  categoryKind: "main",
+  categoryActive: true,
+  ...over,
+});
+
+const BOLT = exportCard({
   name: "Lightning Bolt",
   quantity: 2,
   setCode: "lea",
   collectorNumber: "161",
-};
+});
 
 const noop = () => {};
 
@@ -66,7 +85,78 @@ describe("ExportDialog", () => {
       />,
     );
     await user.click(await screen.findByRole("radio", { name: "Moxfield" }));
-    expect(await screen.findByText("2 Lightning Bolt (LEA) 161")).toBeInTheDocument();
+    // Moxfield writes its section heading even for a single section — the vocabulary is fixed, so
+    // `Deck` is a fact about where these cards are and not a separator a one-pile file can drop.
+    // `findByText` normalizes the newline between the two, which is why this reads as one line.
+    expect(await screen.findByText("Deck 2 Lightning Bolt (LEA) 161")).toBeInTheDocument();
+  });
+
+  it("offers all six formats", async () => {
+    render(
+      <ExportDialog
+        open
+        subject="Removal"
+        cards={[BOLT]}
+        suggestedFileName="Removal"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    // The row maps `EXPORT_FORMATS`, so this counts the array rather than a list drawn by hand —
+    // a seventh writer reaches the reader without an edit here, and this is what says so.
+    expect(await screen.findAllByRole("radio")).toHaveLength(6);
+    expect(screen.getByRole("radio", { name: "Archidekt" })).toBeInTheDocument();
+  });
+
+  it("says how many cards a format leaves out, and stops saying it when one does not", async () => {
+    const user = userEvent.setup();
+    render(
+      <ExportDialog
+        open
+        subject="Atraxa"
+        cards={[
+          exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
+          exportCard({
+            name: "Forest",
+            quantity: 6,
+            categoryName: "Cuts",
+            categoryActive: false,
+          }),
+        ]}
+        suggestedFileName="Atraxa"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    // Copies, not rows: six basic lands on one row are six cards missing from the file.
+    await user.click(await screen.findByRole("radio", { name: "Arena" }));
+    expect(screen.getByText(/6 cards in switched-off piles are not written/)).toBeInTheDocument();
+
+    // Moxfield has a maybeboard, so it writes that pile and leaves nothing out. The sentence is
+    // about the format on screen, so it has to go with it.
+    await user.click(screen.getByRole("radio", { name: "Moxfield" }));
+    expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+  });
+
+  it("says it in the singular for one card", async () => {
+    const user = userEvent.setup();
+    render(
+      <ExportDialog
+        open
+        subject="Atraxa"
+        cards={[
+          exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
+          exportCard({ name: "Mox Amber", categoryName: "Cuts", categoryActive: false }),
+        ]}
+        suggestedFileName="Atraxa"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    await user.click(await screen.findByRole("radio", { name: "MTGO" }));
+    expect(
+      screen.getByText("1 card in a switched-off pile is not written in this format."),
+    ).toBeInTheDocument();
   });
 
   it("copies the text of the format that is showing", async () => {
@@ -85,7 +175,7 @@ describe("ExportDialog", () => {
     await user.click(await screen.findByRole("radio", { name: "CSV" }));
     await user.click(screen.getByRole("button", { name: /Copy/ }));
     expect(copy).toHaveBeenCalledWith(
-      "Quantity,Name,Set,Collector number\n2,Lightning Bolt,lea,161\n",
+      "Quantity,Name,Set,Collector number,Category\n2,Lightning Bolt,lea,161,Main deck\n",
     );
   });
 

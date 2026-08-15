@@ -2790,6 +2790,26 @@ describe("the decklist import", () => {
     expect(db.deckCards.filter((dc) => dc.categoryId === categoryId(1, "side"))).toHaveLength(1);
   });
 
+  it("switches off a pile it creates for a {noDeck} item, and leaves an existing one alone", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    const mine = w.deck_category_create({ deckId: 1, name: "Keepers" });
+    w.deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "merge",
+      items: [
+        { cardId: BOLT.id, quantity: 1, categoryName: "(New) Maybeboard", inactive: true },
+        // The reader's own pile, described by the file the same way — and left exactly as they
+        // set it, because an import may not reach into filing somebody did by hand.
+        { cardId: BOLT.id, quantity: 1, categoryName: "Keepers", inactive: true },
+      ],
+    });
+    const made = db.deckCategories.find((c) => c.deckId === 1 && c.name === "(New) Maybeboard");
+    expect(made?.isActive).toBe(false);
+    expect(db.deckCategories.find((c) => c.id === mine.id)?.isActive).toBe(true);
+  });
+
   it("refuses an empty item list", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],

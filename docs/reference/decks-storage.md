@@ -460,6 +460,24 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   standing** — a category is the reader's filing, not the list's. An empty item list is refused
   in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
   clearing the deck to put nothing back are the same call.
+- **`ImportItem.inactive` is the one field this boundary grew for the format work, and it applies
+  to a pile the import _creates_ and to nothing else.** Archidekt's `{noDeck}` is that site's word
+  for a pile counting toward nothing, which is exactly this schema's `is_active = 0`; without it
+  the reference deck's 17 maybeboard cards land in a counted pile and a 100-card commander deck
+  reports 117 in every total the reader looks at. Three decisions inside it, each with its reason:
+  **a name the reader already has is left exactly as they set it**, because an import must not
+  reach into filing somebody did by hand — the same principle that makes `replace` clear the cards
+  and leave the categories — and it is free, since the `existed` lookup `commit_import` already
+  makes for `categories_created` is that same fact. **The first item naming a pile decides**: the
+  name is memoised for the list, every export in scope writes the same bracket on every card of a
+  category, and a list disagreeing with itself has no better answer available. And **the write goes
+  straight to the column** rather than through `deck_meta::set_category_active`, which opens a
+  transaction of its own, records a history row and reallocates — all three already
+  `commit_import`'s, whose whole reason for existing is that the allocator runs **once**, at the
+  end, over the finished deck. `#[serde(default)]` keeps every caller written before the field
+  deserialising, and absent means the ordinary counted pile an import has always made. Rust records
+  the flag and concludes nothing from it: which lines carry it is `parse.ts`'s reading of the
+  bracket's **first** entry, carried to the item by `plan.ts`.
 - **`deck_import_resolve` is the import's read half, and it answers the one question TypeScript
   cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
   reused down the list, tried narrowest first — a set **and** a collector number; the set with the
@@ -516,6 +534,53 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   not narrowed to it**: the engine really does read `categoryKind`, `categoryActive` and
   `quantity`, so a card in a deck is more than a card, and every existing caller passes a whole
   `DeckCard`, which satisfies a `Pick` of itself.
+- **The corpus the format work was designed against is three real exports of _one_ deck**, held
+  verbatim in `src/features/decks/import/fixtures.ts`. **Most of this table is asserted rather than
+  remembered**: `parse.test.ts`'s `the format fixtures` block counts the rows, the card lines, the
+  copies, the 17 first-entry `{noDeck}` lines and the decoration columns off the fixture **text**
+  rather than off the parser's reading of it, so a tidied fixture is a failing assertion rather
+  than a page that quietly stopped being true. The two columns it does not carry — the heading
+  count, and `//` in the flat list — were re-counted from the same text by the same rules on
+  2026-08-16.
+
+  | Fixture | rows | headings | card lines | copies | `()` | `^tag^` | `//` names | `{noDeck}` first |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | `ARCHIDEKT_SECTIONED` | 132 | 14 | 105 | 117 | 0 | 44 | 7 | 17 |
+  | `ARCHIDEKT_FLAT` | 88 | 0 | 88 | 100 | 0 | 43 | 5 | 0 |
+  | `EMPTY_HINT_LIST` | 88 | 0 | 88 | 100 | 33 | 0 | 0 | 0 |
+
+  Three cross-checks fall out of that table and are worth more than any assertion invented for the
+  purpose. **105 − 17 = 88 and 117 − 17 = 100**: the two flat lists are the sectioned one minus its
+  maybeboard, so mis-handling `{noDeck}` breaks the arithmetic *between two fixtures* rather than
+  one number in one test. **The sectioned list is `REFERENCE_LIST`'s deck** with printings,
+  categories and tags added, so the two fixtures check each other — its 105 names and 117 copies
+  are the list the import feature was designed against in the first place. And **14 headings
+  against 14 distinct first-bracket names, identical sets** — re-counted 2026-08-16, along with the
+  stronger form: in **all 105** lines the first bracket entry is the heading that line is printed
+  under, 0 disagreements. The heading and the bracket never disagree in a real export, which is
+  what makes preferring the bracket safe.
+- **What the TypeScript side learnt for those exports**, each rule with the failure behind it in
+  [the deck folder's own CLAUDE.md](../../src/features/decks/CLAUDE.md): four per-line decorations
+  (an **empty** `()` hint, an Archidekt `^Tag,#colour^`, the `[Category]` bracket, the existing
+  `*F*`) plus one heading rule that is **the only lookahead in the parser**; a bracket's first
+  entry as the pile with `{flag}`s stripped, `{noDeck}` there meaning `is_active = 0` and `{noDeck}`
+  on a later entry meaning nothing at all; **a heading or a bracket naming a section word setting
+  the _section_ rather than a category**, so the four seeded piles are reached by one mechanism and
+  not two; and `categoryName` held `null` whenever the section is not `deck`, which is the whole of
+  what keeps the precedence chain at three rungs rather than four —
+  `forcedCategoryName`, then `SECTION_CATEGORY[kind]`, then `line.categoryName`, then
+  `autoCategoryFor(…)`. **The one cost is stated rather than discovered**:
+  `resolve_lines` sets `hint_missed` for a collector number with no set beside it without trying it
+  at all, so `EMPTY_HINT_LIST` previews **33 hint misses** where it previewed 33 unresolved cards.
+  That is the honest trade and the alternative was 33 cards nothing found.
+- **The export side is the mirror, and `src/features/decks/decklists.test.ts` is what holds the two
+  writers and the parser to each other**: three real decklists crossed with six formats
+  (`plain · mtgo · arena · moxfield · archidekt · csv`), driven text → planner → writer → parser,
+  with **every readable format a fixed point** — export → import → export byte-identical. `csv` is
+  write-only and is excluded from that table **by name**, so a format dropped out of it by accident
+  fails rather than shrinking the matrix quietly. Rust's only part in any of it is
+  `export_write_file` taking the path `save()` answered, for `deck_import_read_file`'s reason one
+  shelf up: **no `fs:` permission is granted anywhere**.
 - **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
   native window CDP cannot reach, so `deck_import_read_file` was exercised by invoking the command
   with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;

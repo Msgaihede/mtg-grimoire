@@ -308,6 +308,23 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   language key is the decision: a copy you own in any language is still a copy you own, while
   "newest" is exactly the key that put 5 of the reference list's 105 lines on a `ja`/`dw`/`ph`
   printing. `fold_match` repeats the same keys in Rust and may never disagree.
+- **`deck_import.rs`: `ImportItem.inactive` switches off _only a pile this import creates_.**
+  Archidekt's `{noDeck}` says a pile counts toward nothing, which is exactly `is_active = 0` here;
+  without it a reference deck's 17 maybeboard cards land in a counted pile and a 100-card commander
+  deck reports 117. **A name the reader already has keeps whatever they set** — an import may not
+  reach into filing somebody did by hand, the same reasoning that makes `replace` clear the cards
+  and leave the categories standing — and the `existed` lookup `commit_import` already makes for
+  `categories_created` is that same fact, so the rule costs no second query. **The first item
+  naming a pile decides**, because the name is memoised for the list: every export in scope writes
+  the same bracket on every card of a category, and a list that disagreed with itself has no better
+  answer available. **It writes the column directly rather than going through
+  `deck_meta::set_category_active`** — that one opens a transaction of its own, writes a history row
+  and reallocates, and all three are already `commit_import`'s, whose allocator runs once at the end
+  over the finished deck. `#[serde(default)]`, so every caller written before the field still
+  deserialises and absent means the ordinary counted pile an import has always made. Which lines
+  carry the flag is TypeScript's reading of the file, not Rust's: `parse.ts` takes it off the
+  bracket's **first** entry and `plan.ts` rides it to the item — Rust supplies the write, TS draws
+  the conclusion.
 
 ## Scryfall and the network
 

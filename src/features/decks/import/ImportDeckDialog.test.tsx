@@ -429,10 +429,12 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
-        { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander" },
+        // `inactive` is on every item: this list said nothing about a switched-off pile, which
+        // is what `false` says. Only an Archidekt `{noDeck}` bracket makes it `true`.
+        { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander", inactive: false },
         // The one not picked keeps the pile its type line filed it in.
-        { cardId: KENRITH.cardId, quantity: 1, categoryName: "Creature" },
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact" },
+        { cardId: KENRITH.cardId, quantity: 1, categoryName: "Creature", inactive: false },
+        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
       ] satisfies ImportItem[]),
     );
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(4, OUTCOME));
@@ -507,9 +509,9 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
-        { cardId: BOLT.cardId, quantity: 1, categoryName: "Instant" },
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact" },
-        { cardId: ELVES.cardId, quantity: 2, categoryName: "Creature" },
+        { cardId: BOLT.cardId, quantity: 1, categoryName: "Instant", inactive: false },
+        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
+        { cardId: ELVES.cardId, quantity: 2, categoryName: "Creature", inactive: false },
       ] satisfies ImportItem[]),
     );
   });
@@ -541,8 +543,8 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
-        { cardId: SELVALA.cardId, quantity: 1, categoryName: "Commander" },
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Ramp" },
+        { cardId: SELVALA.cardId, quantity: 1, categoryName: "Commander", inactive: false },
+        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Ramp", inactive: false },
       ] satisfies ImportItem[]),
     );
   });
@@ -567,9 +569,9 @@ describe("the import deck dialog", () => {
     );
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(MADE.id, "live", "merge", [
-        { cardId: ELVES.cardId, quantity: 4, categoryName: "Creature" },
-        { cardId: BOLT.cardId, quantity: 2, categoryName: "Instant" },
-        { cardId: DURESS.cardId, quantity: 2, categoryName: "Sideboard" },
+        { cardId: ELVES.cardId, quantity: 4, categoryName: "Creature", inactive: false },
+        { cardId: BOLT.cardId, quantity: 2, categoryName: "Instant", inactive: false },
+        { cardId: DURESS.cardId, quantity: 2, categoryName: "Sideboard", inactive: false },
       ]),
     );
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(MADE.id, OUTCOME));
@@ -652,7 +654,7 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "replace", [
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact" },
+        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
       ]),
     );
   });
