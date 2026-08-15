@@ -419,6 +419,16 @@ price | type`). An **inactive category stays its own group in all three grouping
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
   views' rail — still sees a sideboard in the two modes that otherwise have no categories
   in them, which is the right answer in both cases and is a special case in neither.
+- **The toolbar asks those three questions with three identical `<select>`s** (changed
+  2026-08-15). `View` was a four-button segmented group beside two selects, which made the control
+  a reader reaches for most the one that looked unlike its neighbours and spent four buttons'
+  width saying what a shut select says in one word. It is `VIEW_PICKER` now — `VIEWS` through
+  `sortOptions`, so it reads `Grid · Stacks · Table · Text`, **not** the order the array is
+  written in. That array is written default-first and the order carries no information, so this is
+  no exemption from the app's option-list rule; the two that are (an order that _is_ the
+  information, an order the reader arranged) are in [`src/CLAUDE.md`](../../CLAUDE.md). The view
+  is still session state — `useState` in the editor, never `rememberView`, which remembers the
+  variant, the grouping and the sort and not this.
 - **The deck stats are a band at the foot of the editor, and there is no control that hides
   them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
   the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
