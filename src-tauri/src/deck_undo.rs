@@ -1368,6 +1368,114 @@ mod tests {
         ]
     }
 
+    /// The category and tag writes.
+    fn meta_write_cases() -> Vec<Case> {
+        vec![
+            ("deck_category_create", nothing, |c, id| {
+                crate::deck_meta::create_category(c, id, "Removal").unwrap();
+            }),
+            ("deck_category_rename", nothing, |c, id| {
+                crate::deck_meta::rename_category(c, ramp(c, id), "Acceleration").unwrap();
+            }),
+            ("deck_category_set_active (off)", nothing, |c, id| {
+                crate::deck_meta::set_category_active(c, ramp(c, id), false).unwrap();
+            }),
+            ("deck_category_reorder", nothing, |c, id| {
+                let ids: Vec<i64> = crate::deck_undo::read_categories(c, id)
+                    .unwrap()
+                    .into_iter()
+                    .rev()
+                    .map(|cat| cat.id)
+                    .collect();
+                crate::deck_meta::reorder_categories(c, id, &ids).unwrap();
+            }),
+            (
+                // The CASCADE case: the pile goes and takes its cards, in **both** variants.
+                // Its history row says `cards: 7` and calls that "the only part of a deleted
+                // category a reader cannot get back".
+                "deck_category_delete (cascading its cards)",
+                |c, id| {
+                    crate::deck::add_card(c, id, "serra-lea", Some(ramp(c, id)), None, "theory", 2)
+                        .unwrap();
+                },
+                |c, id| {
+                    crate::deck_meta::delete_category(c, ramp(c, id), None).unwrap();
+                },
+            ),
+            (
+                // The move arm, which folds into whatever the target already held — so the
+                // step has to carry the target's rows too, or undoing gains the deck cards.
+                "deck_category_delete (moving its cards, folding)",
+                |c, id| {
+                    crate::deck::add_card(c, id, "bolt-lea", Some(draw(c, id)), None, "live", 5)
+                        .unwrap();
+                },
+                |c, id| {
+                    crate::deck_meta::delete_category(c, ramp(c, id), Some(draw(c, id))).unwrap();
+                },
+            ),
+            (
+                // The `default_category_id` clean-up: deleting the pile a deck files by puts
+                // the deck back on Auto, and undo has to put the pile *and* the setting back.
+                "deck_category_delete (the deck's default pile)",
+                |c, id| {
+                    crate::deck::update_deck(
+                        c,
+                        id,
+                        &crate::deck::DeckPatch {
+                            default_category_id: Some(ramp(c, id)),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                },
+                |c, id| {
+                    crate::deck_meta::delete_category(c, ramp(c, id), None).unwrap();
+                },
+            ),
+            ("deck_tag_create", nothing, |c, id| {
+                crate::deck_meta::create_tag(c, id, "Keep", "jade").unwrap();
+            }),
+            (
+                // A recolour shares the `rename` verb because the palette token never reaches a
+                // sentence — so the colour is a thing only the step records.
+                "deck_tag_update (renaming and recolouring)",
+                nothing,
+                |c, id| {
+                    let tag = tag_id(c, id);
+                    crate::deck_meta::update_tag(c, tag, "Cut", "jade").unwrap();
+                },
+            ),
+            (
+                // `SET NULL` un-labels N cards on the way out, and the history counts them.
+                "deck_tag_delete (un-labelling its cards)",
+                nothing,
+                |c, id| {
+                    crate::deck_meta::delete_tag(c, tag_id(c, id)).unwrap();
+                },
+            ),
+            ("deck_card_set_tag", nothing, |c, id| {
+                let tag = tag_id(c, id);
+                crate::deck_meta::set_card_tag(c, id, "bolt-lea", ramp(c, id), "live", Some(tag))
+                    .unwrap();
+            }),
+            ("deck_card_set_tag (clearing one)", nothing, |c, id| {
+                crate::deck_meta::set_card_tag(c, id, "serra-lea", draw(c, id), "live", None)
+                    .unwrap();
+            }),
+        ]
+    }
+
+    /// The tag [`fresh`] seeds.
+    fn tag_id(conn: &Connection, deck_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT id FROM deck_tags WHERE deck_id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// One line of an imported decklist.
     fn imported(card_id: &str, quantity: i64, category: &str) -> crate::deck_import::ImportItem {
         crate::deck_import::ImportItem {
@@ -1400,6 +1508,12 @@ mod tests {
     #[test]
     fn undoing_any_deck_row_write_restores_the_deck_exactly() {
         drive_cases(deck_write_cases());
+    }
+
+    /// And for the category and tag writes.
+    #[test]
+    fn undoing_any_category_or_tag_write_restores_the_deck_exactly() {
+        drive_cases(meta_write_cases());
     }
 
     /// Drive each case once over a fresh deck: set up, snapshot, write, undo, compare, redo,

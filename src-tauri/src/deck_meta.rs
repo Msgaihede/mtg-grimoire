@@ -567,7 +567,25 @@ pub fn create_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    record_category(&tx, deck_id, &json!({ "action": "create", "name": name }))?;
+    let audit_id = record_category(&tx, deck_id, &json!({ "action": "create", "name": name }))?;
+    // Nothing is in it yet, so the pile itself is the whole of the change.
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: vec![],
+            delete: vec![id],
+            default_category_id: None,
+        }],
+        vec![crate::deck_undo::Op::Categories {
+            restore: category_step_row(&tx, id)?,
+            patch: vec![],
+            delete: vec![],
+            default_category_id: None,
+        }],
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
@@ -590,6 +608,42 @@ fn record_category(
         payload,
         0,
     )
+}
+
+/// One undo step for a category or tag write, with the two `Step::new` lines every caller here
+/// would otherwise repeat.
+fn record_category_step(
+    tx: &Connection,
+    audit_id: i64,
+    deck_id: i64,
+    undo: Vec<crate::deck_undo::Op>,
+    redo: Vec<crate::deck_undo::Op>,
+) -> Result<(), String> {
+    crate::deck_undo::record_step(
+        tx,
+        audit_id,
+        deck_id,
+        &crate::deck_undo::Step::new(undo, redo),
+    )
+}
+
+/// One category as a step carries it, in the one-element list the ops take.
+///
+/// A vector rather than the row, because a category that has gone (a delete's *redo* side asks
+/// about one that will not be there) is an empty list rather than an error — the op then
+/// restores nothing, which is exactly right.
+fn category_step_row(
+    tx: &Connection,
+    id: i64,
+) -> Result<Vec<crate::deck_undo::CategoryRow>, String> {
+    Ok(crate::deck_undo::read_category(tx, id)?
+        .into_iter()
+        .collect())
+}
+
+/// The same for a tag.
+fn tag_step_row(tx: &Connection, id: i64) -> Result<Vec<crate::deck_undo::TagRow>, String> {
+    Ok(crate::deck_undo::read_tag(tx, id)?.into_iter().collect())
 }
 
 /// One `tag`-kind history row **about the label itself** — created, renamed or deleted. No
@@ -635,15 +689,35 @@ pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCat
         return Err(CATEGORY_NAME_TAKEN.to_owned());
     }
     crate::deck::touch_deck(&tx, deck_id)?;
+    let before = category_step_row(&tx, id)?;
     tx.execute(
         "UPDATE deck_categories SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
         params![id, name],
     )
     .map_err(|e| e.to_string())?;
-    record_category(
+    let audit_id = record_category(
         &tx,
         deck_id,
         &json!({ "action": "rename", "name": name, "previousName": current_name }),
+    )?;
+    // `patch`, never `restore`: the row is there and its columns go back. A restore would
+    // insert a second pile the moment its id had been reused — the two lists are two intents.
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: before,
+            delete: vec![],
+            default_category_id: None,
+        }],
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: category_step_row(&tx, id)?,
+            delete: vec![],
+            default_category_id: None,
+        }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
@@ -674,6 +748,7 @@ pub fn set_category_active(
         .map_err(|e| e.to_string())?;
     let (deck_id, name) = category.ok_or_else(|| CATEGORY_GONE.to_owned())?;
     crate::deck::touch_deck(&tx, deck_id)?;
+    let before = category_step_row(&tx, id)?;
     tx.execute(
         "UPDATE deck_categories SET is_active = ?2, updated_at = unixepoch() WHERE id = ?1",
         params![id, is_active],
@@ -683,7 +758,24 @@ pub fn set_category_active(
     // renderer that had to read `{"active": false}` to write "switched off" would be deriving
     // the sentence from a field whose name is about state rather than about what happened.
     let action = if is_active { "activate" } else { "deactivate" };
-    record_category(&tx, deck_id, &json!({ "action": action, "name": name }))?;
+    let audit_id = record_category(&tx, deck_id, &json!({ "action": action, "name": name }))?;
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: before,
+            delete: vec![],
+            default_category_id: None,
+        }],
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: category_step_row(&tx, id)?,
+            delete: vec![],
+            default_category_id: None,
+        }],
+    )?;
     crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
@@ -699,6 +791,11 @@ pub fn reorder_categories(
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
+    // **Every pile, both sides.** The history row is a bare `{"action":"reorder"}` — it names no
+    // category *and no order*, deliberately, because the drawer records changes rather than
+    // state — so this is the one write whose reversal the audit log cannot even begin to
+    // describe. `read_categories` is in id order and each row carries its own `sort_order`.
+    let before = crate::deck_undo::read_categories(&tx, deck_id)?;
     for (order, id) in ids.iter().enumerate() {
         tx.execute(
             "UPDATE deck_categories SET sort_order = ?3, updated_at = unixepoch()
@@ -710,7 +807,24 @@ pub fn reorder_categories(
     // A reorder names no category, because every one of them moved: there is no "from" and no
     // "to" that is about one pile, and listing the whole order would be storing the state
     // rather than the change.
-    record_category(&tx, deck_id, &json!({ "action": "reorder" }))?;
+    let audit_id = record_category(&tx, deck_id, &json!({ "action": "reorder" }))?;
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: before,
+            delete: vec![],
+            default_category_id: None,
+        }],
+        vec![crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: crate::deck_undo::read_categories(&tx, deck_id)?,
+            delete: vec![],
+            default_category_id: None,
+        }],
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     list_categories(conn, deck_id, READBACK_VARIANT, readback_marketplace(conn))
 }
@@ -774,6 +888,38 @@ pub fn delete_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    // **The undo step's "before", and the single largest thing the audit log could not
+    // describe.** That row records `{"action":"delete","name":"Ramp","cards":7}` — a *count* of
+    // what the CASCADE took, which its own comment calls "the only part of a deleted category a
+    // reader cannot get back". These are the cards themselves.
+    //
+    // Four cells, not two: **both variants of the deleted pile and both of the target**, because
+    // the move arm folds on `DECK_CARD_GRAIN` into whatever the target already held. Without the
+    // target's own two, undoing a delete-with-move would put the deleted pile back and leave the
+    // folded copies in the target as well — the deck would gain cards by being un-deleted.
+    let mut cells = vec![
+        crate::deck_undo::Cell::pile(crate::schema::DECK_VARIANTS[0], id),
+        crate::deck_undo::Cell::pile(crate::schema::DECK_VARIANTS[1], id),
+    ];
+    if let Some(target) = move_to_category_id {
+        cells.push(crate::deck_undo::Cell::pile(
+            crate::schema::DECK_VARIANTS[0],
+            target,
+        ));
+        cells.push(crate::deck_undo::Cell::pile(
+            crate::schema::DECK_VARIANTS[1],
+            target,
+        ));
+    }
+    let cards_before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+    let category_before = category_step_row(&tx, id)?;
+    let default_before: i64 = tx
+        .query_row(
+            "SELECT default_category_id FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
@@ -813,10 +959,63 @@ pub fn delete_category(
     .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM deck_categories WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
-    record_category(
+    let audit_id = record_category(
         &tx,
         deck_id,
         &json!({ "action": "delete", "name": name, "cards": cards }),
+    )?;
+    // **Order is load-bearing on both sides**, and in opposite directions.
+    //
+    // Undo: the pile comes back *first*, because `deck_cards.category_id` is a real foreign key
+    // and the cards have nowhere to land until it exists. If its rowid has been taken since,
+    // `restore_category` files it under a fresh id and every cell below is rewritten through the
+    // remap — which is also why `default_category_id` rides on this op rather than on a
+    // `Op::Deck`: the number it stores has to move with the pile.
+    //
+    // Redo: the cards go *first*, because a `deck_categories` delete CASCADEs whatever is still
+    // filed under the pile — and what the redo puts in those cells is the post-delete state,
+    // which has nothing in the deleted pile at all.
+    // Both read after the delete: the cells that survive it (the target's folded rows, and
+    // nothing at all under the deleted pile), and whatever the deck's default actually became —
+    // which is `AUTO_CATEGORY` only when it had been pointing at the pile that just went, and
+    // otherwise is untouched. Forcing Auto here would reset a default the reader had set to a
+    // different pile entirely, on redo, for no reason.
+    let cards_after = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+    let default_after: i64 = tx
+        .query_row(
+            "SELECT default_category_id FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![
+            crate::deck_undo::Op::Categories {
+                restore: category_before,
+                patch: vec![],
+                delete: vec![],
+                default_category_id: Some(default_before),
+            },
+            crate::deck_undo::Op::Cards {
+                scope: cells.clone(),
+                rows: cards_before,
+            },
+        ],
+        vec![
+            crate::deck_undo::Op::Cards {
+                scope: cells,
+                rows: cards_after,
+            },
+            crate::deck_undo::Op::Categories {
+                restore: vec![],
+                patch: vec![],
+                delete: vec![id],
+                default_category_id: Some(default_after),
+            },
+        ],
     )?;
     // Reallocates for [`set_category_active`]'s reason at one remove: the cards either left
     // the deck with the category (the CASCADE) or landed under one whose `is_active` may
@@ -904,10 +1103,28 @@ pub fn create_tag(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    record_tag(
+    let audit_id = record_tag(
         &tx,
         deck_id,
         &json!({ "action": "create", "tag": name, "previous": null }),
+    )?;
+    // Nothing wears it yet, so the label itself is the whole of the change.
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Tags {
+            restore: vec![],
+            patch: vec![],
+            delete: vec![id],
+            carriers: vec![],
+        }],
+        vec![crate::deck_undo::Op::Tags {
+            restore: tag_step_row(&tx, id)?,
+            patch: vec![],
+            delete: vec![],
+            carriers: vec![],
+        }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
@@ -945,6 +1162,10 @@ pub fn update_tag(
         return Err(TAG_NAME_TAKEN.to_owned());
     }
     crate::deck::touch_deck(&tx, deck_id)?;
+    // The colour as well as the name. The history row carries only the two names — a recolour
+    // shares the `rename` verb because the palette token never appears in a sentence — so this
+    // is the second thing an audit-log reversal would have got wrong, quietly.
+    let before = tag_step_row(&tx, id)?;
     tx.execute(
         "UPDATE deck_tags SET name = ?2, color = ?3, updated_at = unixepoch() WHERE id = ?1",
         params![id, name, color],
@@ -953,10 +1174,27 @@ pub fn update_tag(
     // `rename` covers a recolour too, which is the honest simplification: the colour is a
     // token from a fixed palette and never appears in a history line, so a second verb would
     // name a distinction no reader could see.
-    record_tag(
+    let audit_id = record_tag(
         &tx,
         deck_id,
         &json!({ "action": "rename", "tag": name, "previous": previous }),
+    )?;
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Tags {
+            restore: vec![],
+            patch: before,
+            delete: vec![],
+            carriers: vec![],
+        }],
+        vec![crate::deck_undo::Op::Tags {
+            restore: vec![],
+            patch: tag_step_row(&tx, id)?,
+            delete: vec![],
+            carriers: vec![],
+        }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     read_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
@@ -982,15 +1220,41 @@ pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), String> {
     };
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
+    // **The label, and every card wearing it.** `deck_cards.tag_id` is `ON DELETE SET NULL`, so
+    // the DELETE below silently un-labels N cards and the history row says only that a tag went
+    // — `auditText` renders "N cards untagged" from a count. Undo has to put the label back
+    // *and* put it back on those cards, which is the only place either fact still exists.
+    let before = tag_step_row(&tx, id)?;
+    let carriers = crate::deck_undo::read_carriers(&tx, id)?;
     tx.execute("DELETE FROM deck_tags WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     // `previous` is null: this row is about the label, and the label it is about is `tag`.
     // `previous` carries the *former* name of a renamed one and nothing else, so filling it
     // here would make a delete read as a rename that went nowhere.
-    record_tag(
+    let audit_id = record_tag(
         &tx,
         deck_id,
         &json!({ "action": "delete", "tag": name, "previous": null }),
+    )?;
+    // The carriers ride on the same op as the restore, so they are written after it and can be
+    // rewritten through the remap when the label comes back under a fresh id. On the redo side
+    // there are none: the delete's own `SET NULL` is what clears them again.
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Tags {
+            restore: before,
+            patch: vec![],
+            delete: vec![],
+            carriers,
+        }],
+        vec![crate::deck_undo::Op::Tags {
+            restore: vec![],
+            patch: vec![],
+            delete: vec![id],
+            carriers: vec![],
+        }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
@@ -1078,6 +1342,11 @@ pub fn set_card_tag(
         .optional()
         .map_err(|e| e.to_string())?;
     let (card_name, previous) = card.ok_or_else(|| CARD_NOT_IN_CATEGORY.to_owned())?;
+    // The whole row, not just its label. The history carries the two tag *names* and `previous`
+    // is `null` for an untagged card — indistinguishable from a card wearing a tag called
+    // nothing — while the step carries the id the column actually held.
+    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     tx.execute(
         "UPDATE deck_cards SET tag_id = ?5, updated_at = unixepoch()
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
@@ -1087,7 +1356,7 @@ pub fn set_card_tag(
     // `card_id` set is what marks this the *card's* half of the `tag` kind, and `tag: null` is
     // how a row says the card wears nothing now — clearing a label is as much a change as
     // applying one, and `previous` is the only place the label it lost is written down.
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -1096,6 +1365,7 @@ pub fn set_card_tag(
         &json!({ "tag": applied, "previous": previous }),
         0,
     )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1251,6 +1521,25 @@ pub fn move_folder(
 /// (`deck::list_decks`), and a folder delete would otherwise throw every deck that was in it to
 /// the front of the gallery. `set_folder` does move it, and the asymmetry is the point: there
 /// the user acted on that one deck and it is meant to rise.
+///
+/// # It records history and **no undo step**, which is the one place those two part company
+///
+/// Every other write in this module and in [`crate::deck`] records both. This one cannot, and
+/// the reason is structural rather than a gap left open:
+///
+/// * [`crate::deck_undo`]'s cursor is **per deck** — `deck_undo.deck_id` — so a step can only
+///   ever be undone from the editor of the one deck it is filed under. This press changes N
+///   decks at once and belongs to none of them.
+/// * Putting one deck's `folder_id` back means putting the **folder row** back, and
+///   `decks.folder_id` is a real `REFERENCES deck_folders(id)`: restoring the id alone is a
+///   foreign-key failure, not a partial success. So an honest reversal has to resurrect the
+///   whole deleted subtree — a shared thing, for a step filed under one deck, which the other
+///   N−1 decks' cursors would then be able to undo again.
+///
+/// Undoing this belongs to a folder-level undo in the sidebar, where the unit of the press is.
+/// Until there is one, the audit rows say what happened and the reader re-files by hand — which
+/// is the same standing [`crate::deck::delete_deck`] has, and for the same reason: a write made
+/// from the gallery is not an edit to the deck anybody has open.
 pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let unfiled: Vec<i64> = {
