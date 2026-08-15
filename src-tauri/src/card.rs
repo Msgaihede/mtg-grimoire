@@ -27,7 +27,7 @@
 //! validates — and for the same two reasons, which are written out on [`stored_group_by`] and
 //! [`store_group_by`].
 
-use crate::sorting::Marketplace;
+use crate::sorting::{Marketplace, FINISH_LITERALS};
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -75,15 +75,12 @@ pub struct FinishPrices {
     pub etched: Option<f64>,
 }
 
-/// The three finishes, as the SQL literals [`crate::sorting::price_expr`] takes.
-///
-/// That builder's `finish` argument is the *caller's expression* for the finish being priced —
-/// `e.finish` on the collection, `coalesce(w.preferred_finish, 'nonfoil')` on the wishlist. Here
-/// a card is priced in all three at once, so each is a constant, and the order is
-/// [`FinishPrices`]' own.
-const FINISH_LITERALS: [&str; 3] = ["'nonfoil'", "'foil'", "'etched'"];
-
 /// The three price expressions as a `SELECT` list, for a query whose `cards` is aliased `c`.
+///
+/// [`crate::sorting::FINISH_LITERALS`] is the finish list and its order, which is
+/// [`FinishPrices`]' own field order — kept beside the builder that consumes it rather than
+/// here, so that this pane and the deck's chain across the same three cannot come to disagree
+/// about what a finish is called.
 ///
 /// Built by [`crate::sorting::price_expr`] and never by hand, which is the crate rule and is
 /// what keeps this pane's etched hole on Cardmarket, and its lookups into `marketplace_prices`,

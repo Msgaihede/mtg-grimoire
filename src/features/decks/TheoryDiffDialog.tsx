@@ -140,8 +140,8 @@ function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
 interface Totals {
   /** Copies, not rows: a card wanted three more times counts three. */
   copies: number;
-  /** The shown printings' nonfoil unit price at the marketplace the diff was read at, times
-   *  the copies wanted. */
+  /** The shown printings' unit price at the marketplace the diff was read at, times the copies
+   *  wanted. */
   cost: number;
   /** Copies the sum above could not price, so the total never lies by rounding down. */
   unpriced: number;
@@ -152,9 +152,10 @@ interface Totals {
 /**
  * The strip's arithmetic, and the one line of it worth reading twice.
  *
- * `cost` sums **the row's own printing's** price, which is what `unitPrice` is: that printing's
- * nonfoil price at the marketplace the diff was read at, never `cards.price_usd`, which is a
- * display fallback chain and must not be summed. A row that marketplace does not quote is
+ * `cost` sums **the row's own printing's** price, which is what `unitPrice` is: what that
+ * printing costs at the marketplace the diff was read at, in whichever finish it is sold in,
+ * never `cards.price_usd`, which is the same chain precomputed for the search's sort and is the
+ * column nothing here sums. A row that marketplace does not quote is
  * *counted* as unpriced rather than charged at anything — there is no second number to reach
  * for, and reaching to another marketplace for one is the thing this whole shape forbids.
  *
@@ -557,7 +558,7 @@ function Row({
       </span>
 
       {/* The printing the price belongs to. The direction's row leaves it out; it is here because
-          the price beside it is *this* printing's nonfoil rate and the strip's total is the sum of
+          the price beside it is *this* printing's own rate and the strip's total is the sum of
           them — a figure a reader cannot attribute to a card they can name is a figure they cannot
           check. Same spelling as every other card row in the app. */}
       <span className="hidden shrink-0 font-mono text-[0.7rem] tabular-nums text-dim md:block">

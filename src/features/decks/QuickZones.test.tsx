@@ -169,20 +169,20 @@ describe("QuickZones", () => {
   });
 
   /**
-   * **`Auto` refuses a card the deck already holds, and refusing means not writing.** The
-   * payload carries no type line, so there is nothing to file by; the box greys, the library is
-   * told `canDrop: false`, and letting go over it writes nothing at all.
+   * **`Auto` re-files a card the deck already holds** (changed 2026-08-15; it used to grey and
+   * refuse). The write it resolves to is an **address** rather than a destination — the pile is
+   * not knowable here, because naming it means reading the card's Oracle tags — so what this
+   * pins is that the zone stays live for such a drag and hands the slot up.
    */
-  it("refuses a deck card dropped on Auto, and greys the box for it", async () => {
+  it("re-files a deck card dropped on Auto rather than refusing it", async () => {
     const pick = mount(ROW);
 
     const held = await pick();
-    expect(zone("Auto")).toHaveClass("opacity-40");
-    expect(zone("Sideboard")).not.toHaveClass("opacity-40");
+    expect(zone("Auto")).not.toHaveClass("opacity-40");
     await held.over(zone("Auto"));
     await held.drop();
 
-    expect(onDrop).not.toHaveBeenCalled();
+    expect(onDrop).toHaveBeenCalledWith({ write: "auto-refile", cardId: "c-bolt", from: MAIN });
   });
 
   /** A row dropped on the pile it is already in is not a move — `dropWrite` says so, and the

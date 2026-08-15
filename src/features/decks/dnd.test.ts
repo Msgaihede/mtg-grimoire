@@ -241,11 +241,29 @@ describe("dropWrite", () => {
   });
 
   /**
-   * A card already in the deck is refused, and structurally: `deck-card` carries no type line,
-   * so there is nothing for the rule to read. The zone greys instead of guessing — re-filing a
-   * card the deck already holds is the Categories dialog's bulk action.
+   * A card already in the deck is **re-filed** (changed 2026-08-15; this used to be a refusal,
+   * on the argument that `deck-card` carries no type line).
+   *
+   * What comes back is an *address* — the card and the slot it is leaving — and deliberately not
+   * a destination, because the pile is `autoCategoryFor`'s answer over the card's Oracle tags and
+   * this function neither reads nor awaits anything. The type line is absent for the same reason
+   * it is absent from the payload: the editor is holding the row.
    */
-  it("refuses a deck row dropped on the auto zone", () => {
-    expect(dropWrite(ROW, { kind: "auto" })).toBeNull();
+  it("re-files a deck row dropped on the auto zone", () => {
+    expect(dropWrite(ROW, { kind: "auto" })).toEqual({
+      write: "auto-refile",
+      cardId: "c-bolt",
+      from: MAIN,
+    });
+  });
+
+  /** The slot travels from the payload, so a row picked up in another pile is addressed to
+   *  that one — the same care every other write in this feature takes about `from`. */
+  it("addresses the re-file to the pile the card was picked up in", () => {
+    expect(dropWrite({ ...ROW, fromCategoryId: SIDE }, { kind: "auto" })).toEqual({
+      write: "auto-refile",
+      cardId: "c-bolt",
+      from: SIDE,
+    });
   });
 });

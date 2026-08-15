@@ -180,11 +180,11 @@ pub struct DeckCategoryRow {
     /// shape that made this worth a schema-to-webview change rather than a note: a control that
     /// lies about its scope lies in the direction of the reader pressing it.
     pub card_count_all_variants: i64,
-    /// Nonfoil unit price × copies at the marketplace the read was given, summed over the same
+    /// Unit price × copies at the marketplace the read was given, summed over the same
     /// `variant`. `None` when nothing filed here has a price there — `deck.rs`'s own
-    /// `unit_price` expression verbatim, through [`crate::sorting::price_expr`] over
-    /// [`crate::deck::DECK_FINISH`], and never `cards.price_usd`, which is a display fallback
-    /// chain and must not be summed. SQL's `sum()` already skips NULL terms, which is what
+    /// `unit_price` expression verbatim, [`crate::sorting::printing_price_by_finish_expr`], and
+    /// never `cards.price_usd`, which is that same chain precomputed for the search's sort and
+    /// is the column this crate does not sum. SQL's `sum()` already skips NULL terms, which is what
     /// makes an all-unpriced category (or an empty one) read `None` rather than `Some(0.0)`
     /// with no extra branch: a sum of zero NULL-or-priced rows is NULL either way.
     ///
@@ -382,7 +382,7 @@ fn category_select(marketplace: crate::sorting::Marketplace) -> String {
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                        WHERE dc.category_id = cat.id), 0)
        FROM deck_categories cat",
-        price = crate::sorting::price_expr(marketplace, crate::deck::DECK_FINISH)
+        price = crate::sorting::printing_price_by_finish_expr(marketplace)
     )
 }
 
@@ -2236,22 +2236,34 @@ mod tests {
         assert_eq!(left, 0, "all {quoted} copies went, across both lists");
     }
 
+    /// The heading's figure is `unit_price × copies` summed, and a card the marketplace does not
+    /// quote is skipped rather than counted at zero.
+    ///
+    /// **A foil-only printing is not one of those**, and that is what this pins beyond the
+    /// arithmetic: it has no nonfoil price anywhere, so while the deck priced its rows at the
+    /// literal `'nonfoil'` a Secret Lair in a pile was silently left out of the pile's own total.
     #[test]
-    fn total_price_sums_nonfoil_price_times_copies_and_skips_unpriced_cards() {
+    fn total_price_sums_unit_price_times_copies_and_skips_unpriced_cards() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "commander", "Commander");
         priced_card(&conn, "priced", "2.00");
+        priced_card_both(
+            &conn,
+            "foil-only",
+            r#"{"usd":null,"usd_foil":"1.50","eur":null,"eur_foil":"1.20"}"#,
+        );
         crate::schema::tests::seed_card(&conn, "unpriced", "lea", "162");
         deck_card(&conn, deck_id, "priced", cat, 3);
+        deck_card(&conn, deck_id, "foil-only", cat, 2);
         deck_card(&conn, deck_id, "unpriced", cat, 5);
 
         let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         let row = rows.iter().find(|c| c.id == cat).unwrap();
         assert_eq!(
             row.total_price,
-            Some(6.0),
-            "3 copies at $2.00, the unpriced card skipped"
+            Some(9.0),
+            "3 copies at $2.00 and 2 at the foil-only printing's $1.50, the unpriced card skipped"
         );
     }
 

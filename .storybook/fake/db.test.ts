@@ -45,6 +45,10 @@ const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
 /** The second Bolt printing — `2x2 117`, uncommon. Used wherever "a different printing of
  *  the same card" is the point. */
 const BOLT_2X2 = CARDS.filter((c) => c.name === "Lightning Bolt")[1];
+/** The corpus's foil-only printing — the `mp2` Consecrated Sphinx Invocation, `finishes:
+ *  ["foil"]`, `usd` null and `usd_foil` 164.95. What a deck row priced at a flat `nonfoil`
+ *  rendered as an em dash. */
+const FOIL_ONLY = CARDS.find((c) => c.finishes === '["foil"]')!;
 /** Fixed rather than `Date.now()`: a story fixture with a moving timestamp is a story
  *  fixture that renders differently every second. 2026-08-09T09:00:00Z. */
 const WHEN = 1786266000;
@@ -754,6 +758,35 @@ describe("prices", () => {
     expect(at("manapool")).toBeNull();
     // And the Scryfall-backed one is untouched by either.
     expect(at("tcgplayer")).toBe(17.85);
+  });
+
+  /**
+   * **A deck row is a printing, so it is priced in whatever finish that printing is sold in.**
+   *
+   * The chain is `nonfoil → foil → etched` (`sorting::printing_price_by_finish_expr`), and the
+   * case it exists for is the foil-only printing: `usd` is null on all 13 515 of them in the live
+   * corpus, so a deck priced at a flat nonfoil rate drew an em dash on every Invocation, Secret
+   * Lair and promo in it — beside a search wall quoting that same printing.
+   *
+   * Each marketplace keeps its own holes, because the chain is built out of the per-finish
+   * expression rather than beside it: Card Kingdom quotes this printing because its feed carries
+   * a foil row for it, and Mana Pool does not because it carries none.
+   */
+  it("prices a deck card in the finish the printing is sold in, at every marketplace", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: FOIL_ONLY.id, quantity: 1 })],
+      marketplacePrices: [
+        { marketplace: "cardkingdom", cardId: FOIL_ONLY.id, finish: "foil", price: 181.45 },
+      ],
+    });
+    const at = (marketplace: MarketplaceId) =>
+      readHandlers(db).deck_get({ id: 1, variant: "live", marketplace })!.cards[0].unitPrice;
+
+    expect(at("tcgplayer")).toBe(164.95);
+    expect(at("cardmarket")).toBe(149.75);
+    expect(at("cardkingdom")).toBe(181.45);
+    expect(at("manapool")).toBeNull();
   });
 
   it("counts a zero row in uniqueCards and not in totalCards", () => {
@@ -1731,7 +1764,7 @@ describe("the deck read", () => {
     expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.tags[0].cardCount).toBe(7);
   });
 
-  it("prices a deck card at the printing's nonfoil usd, and leaves the piles beside the deck out of its size", () => {
+  it("prices a deck card in the finish it is sold in, and leaves the piles beside the deck out of its size", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
@@ -1739,13 +1772,19 @@ describe("the deck read", () => {
         deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 2 }),
         deckCard({ id: 3, cardId: BOLT.id, categoryKind: "commander", quantity: 1 }),
         deckCard({ id: 4, cardId: BOLT.id, categoryKind: "companion", quantity: 1 }),
+        deckCard({ id: 5, cardId: FOIL_ONLY.id, categoryKind: "main", quantity: 1 }),
       ],
     });
     const detail = liveDeck(db)!;
-    // `lea 161`'s blob is `usd` 620.00 with both foil keys null.
-    expect(detail.cards[0].unitPrice).toBe(620);
+    // `lea 161`'s blob is `usd` 620.00 with both foil keys null: the chain starts at nonfoil
+    // and stops there whenever there is one.
+    expect(detail.cards.find((c) => c.cardId === BOLT.id)!.unitPrice).toBe(620);
+    // The Invocation exists only in foil, so its `usd` is null and its `usd_foil` is not — the
+    // whole of the bug this chain fixed. A deck names a printing, and this printing costs
+    // $164.95.
+    expect(detail.cards.find((c) => c.cardId === FOIL_ONLY.id)!.unitPrice).toBe(164.95);
     // CR 100.4a for the sideboard, EDH's "effectively a 101st card" for the companion.
-    expect(detail.deck.cardCount).toBe(4);
+    expect(detail.deck.cardCount).toBe(5);
   });
 
   /**
@@ -2231,6 +2270,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
       cardId: BOLT.id,
       fromCategoryId: categoryId(1, "maybe"),
       toCategoryId: MAIN.categoryId,
+      toCategoryName: null,
       variant: "live",
     });
     expect(db.deckCards).toHaveLength(1);
@@ -2251,6 +2291,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
       cardId: BOLT.id,
       fromCategoryId: MAIN.categoryId,
       toCategoryId: SIDE.categoryId,
+      toCategoryName: null,
       variant: "live",
     });
     expect(db.deckCards.map((dc) => [dc.variant, dc.categoryId, dc.quantity]).sort()).toEqual([
@@ -2275,6 +2316,7 @@ describe("the deck grain (deck, variant, category, card)", () => {
       cardId: BOLT.id,
       fromCategoryId: categoryId(1, "maybe"),
       toCategoryId: MAIN.categoryId,
+      toCategoryName: null,
       variant: "live",
     });
     const moved = db.deckCards.find((dc) => dc.cardId === BOLT.id)!;
@@ -2317,6 +2359,7 @@ describe("what a card write does to the deck row", () => {
         cardId: BOLT.id,
         fromCategoryId: categoryId(1, "main"),
         toCategoryId: categoryId(1, "side"),
+        toCategoryName: null,
         variant: "live",
       }),
     ).toThrow(/not in this deck's Main deck category/);

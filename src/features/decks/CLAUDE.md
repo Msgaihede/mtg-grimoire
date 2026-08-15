@@ -279,12 +279,39 @@ reader to configure the deck they had just made; it now asks all of them.
     the very tile the reader has hold of — mid-drag. These zones have to answer for exactly the
     drags it refuses, so widening it was never available; a component with a monitor of its own
     re-renders **itself** and leaves that rule true.
-  - **`{ kind: "auto" }` is a `DropTarget` and `auto-add` is a `DeckWrite`**, both new in `dnd.ts`.
-    An auto add names no category — the pile is per card, decided inside `useDeck.addCard` — so it
-    could not be spelled as a category id without inventing one. `deck-card` is **refused** there
-    and the box greys: that payload deliberately carries no `typeLine`, so there is nothing for
-    `autoCategoryFor` to read, and re-filing a card the deck already holds is the Categories
-    dialog's bulk action.
+  - **`{ kind: "auto" }` is a `DropTarget`, and it resolves to one of two writes.** An auto add
+    names no category — the pile is per card, decided inside `useDeck.addCard` — so it could not
+    be spelled as a category id without inventing one. A printing off a wall becomes `auto-add`;
+    **a card the deck already holds becomes `auto-refile`** and is filed again by what it does
+    (2026-08-15). That second arm replaced a refusal, and the reasoning it replaced is worth
+    keeping because it was nearly right: a `deck-card` payload carries no `typeLine`, so there is
+    nothing in *the payload* for `autoCategoryFor` to read — true, and the wrong place to conclude
+    from, because the editor is drawing the row and has the type line, the pile's name and the
+    tags query already. So `auto-refile` carries an **address** (`cardId`, `from`) and the caller
+    supplies the fact, exactly as it does for the pile a `move` lands in. The payload did not have
+    to grow a field, and `dnd.ts` says why at the type.
+  - **`useDeck.refileCard` is `addCard`'s auto arm read backwards, and deliberately the same
+    three steps in the same order**: the card's Oracle tags, `autoCategoryFor`, then a command
+    that finds-or-creates the pile that names. One rule at two entrances — a card filed on the way
+    *in* and the same card filed again later must not disagree about where it belongs. **Two
+    answers write nothing and neither is a failure**: a card the rule cannot place
+    (`Uncategorised`) stays put, because moving it out of a pile somebody chose into the bin is a
+    downgrade dressed as tidying; and a card already in the pile the rule names is already filed.
+    Neither reaches IPC — the comparison is against the row's own `categoryName` — so "press it
+    again" costs one tag read. `DeckEditor` draws a `role="status"` sentence for both, clearing
+    itself after `REFILE_NOTE_MS`, because a deliberate gesture that changes the screen not at all
+    is the shape of thing that reads as a broken control. A card that *moves* gets no sentence:
+    the caret follows it and the pile announces its own name.
+  - **The pile is resolved in Rust, in the move's own transaction**, which is what `deck_move_card`
+    grew a name arm for — `add_card`'s two-arm target copied rather than approximated. Three
+    things follow and each is why: a pile the app invents comes out `origin: 'auto'`, so
+    `drawsWhenEmpty` takes it off the desk once its last card leaves, where `deckCategoryCreate`
+    writes `'user'` and would leave a column nobody asked for standing for ever; the create and
+    the move are one transaction, so a refused move cannot strand an empty pile; and it is one
+    round trip rather than three. **`useDeckMeta`'s bulk `autoCategorise` deliberately keeps
+    sending the id arm** — it resolves every target once for the whole press, and its three
+    refusals (a switched-off target, a pile the reader made, a card the rule cannot place) are
+    TypeScript's and would be lost to `category_for_name`, which knows none of them.
   - **`New category` is two acts.** A modal cannot be opened mid-gesture, so the drop hands the
     whole `DragPayload` up and `DeckEditor`'s `quickCategory` layer asks for a name; the submit
     creates the pile and then puts `dropWrite` to the id it answered with — so an add stays an add
@@ -367,9 +394,19 @@ reader to configure the deck they had just made; it now asks all of them.
   therefore never fails. **Deriving it from the column gives `separateX`, which is wrong** — the
   Storybook fake guessed exactly that before it was corrected — so `auditText.test.ts` pins the
   right word _and_ the wrong-but-plausible one. Copy the word from `deck.rs`; never re-derive it.
-- **A deck card's unit price is that printing's nonfoil price at the selected marketplace** — a
-  deck names a printing, not a finish. `cards.price_usd` is a fallback chain across finishes and
-  is never summed. **One `unitPrice` per row, not a pair**: the marketplace is in `useDeck`'s
+- **A deck card's unit price is what that printing costs at the selected marketplace, in
+  whichever finish it is _sold_ in** — `nonfoil → foil → etched`, `sorting::printing_price_by_
+finish_expr`. A deck names a printing and not a finish, so there is no finish to price at; the
+  rule was the flat **nonfoil** rate until 2026-08-15 and that was a bug, because **13 515
+  foil-only and 892 etched-only printings have no nonfoil price at any marketplace**. An
+  Invocation or a Secret Lair drew an em dash on its card foot, was left out of its pile's
+  heading total _and_ the deck's — counted as "unpriced" — and did all three beside a docked
+  search panel quoting the same printing. Measured on the machine that reported it: **8 of 49
+  deck rows** unpriced, 7 of them recovered by the chain, and the eighth genuinely unquoted in
+  dollars. `cards.price_usd` is that same chain precomputed for the search's `ORDER BY` and is
+  still never summed; the numbers agree, and the em dash still means "this marketplace does not
+  quote this printing" rather than "look somewhere else". **One `unitPrice` per row, not a
+  pair**: the marketplace is in `useDeck`'s
   query key, so switching re-reads the deck, and `deckStats`, `buildGroups`, `sortCards` and
   `diffTotals` take no `Currency` at all any more — a heading, the rows under it and the strip
   above them cannot be about different money, by construction.
@@ -830,6 +867,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   what it *is*, and given no height it draws its own scrollbar **and** the page's. So the desk row
   keeps `DECK_HEIGHT_FLOOR` under that one view and the view box keeps `min-h-0 overflow-auto` —
   the arrangement all four used to share.
+  **The page section is `relative`, and that word is a second scrollbar** (2026-08-15). It was
+  missing, so the editor's `.sr-only` labels — `position: absolute`, no positioned ancestor —
+  took the *initial* containing block, were laid out at their static position deep inside the
+  scrolled column, and were clipped by nothing: `DeckStats`' `"0 cards at mana value 8 or more"`
+  sat at y **1703** and stretched the **document** to 1704 against an 800px window. The reader saw
+  the editor's scrollbar with the window's beside it, and an `h-screen` app that slid up off its
+  own window leaving page background under it. One class took it to **800 / 0**, and it belongs on
+  this section rather than on `AppShell`'s `main` — there the phantom scroll merely moved
+  (`main.scrollHeight` 742 → 1646). The general rule and both measurements are in
+  [`src/CLAUDE.md`](../../CLAUDE.md) and
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
   **`min-h-96` moved from the desk row to the view box, and that is the load-bearing half.** A
   flex item's automatic minimum size is what stops it being squeezed below its content, and a
   `min-height` number *replaces* that `auto` — so on the row it was a ceiling as well as a floor:
@@ -1011,10 +1059,16 @@ price | type`). An **inactive category stays its own group in all three grouping
   _this app_ wrote is never clipped.
   **The box that mark is drawn in is `components/CountTag.tsx` and no longer this folder's**
   (2026-08-14): the slant, the 22px height, the mono face, the `aria-hidden` and the bare number.
-  The search wall counts printings with the same object, so the grey moved with it —
-  `NEUTRAL_COUNT_PAINT` is what `UNTAGGED_COLOR` became, and `QuantityTag` now passes `paint` for
-  a tagged card and nothing at all for an untagged one. What stayed here is what makes this one a
-  _tag_: the colour, the two-fact sentence in its `title`, and `LAYER.overlappingMark`.
+  The grey went with it — `NEUTRAL_COUNT_PAINT` is what `UNTAGGED_COLOR` became, and
+  `QuantityTag` now passes `paint` for a tagged card and nothing at all for an untagged one. What
+  stayed here is what makes this one a _tag_: the colour, the two-fact sentence in its `title`,
+  and `LAYER.overlappingMark`.
+  **The move was made for a second caller that has since left, and the box stays where it is**
+  (2026-08-15). The search wall counted printings with this same object for a day; it says
+  `132 printings` in its own corner chip now, because a bare number is honest here — the tag it
+  is printed on says what is being counted — and was not honest there. So `QuantityTag` is the
+  one caller again. `components/` is still the right shelf for the geometry, and
+  [`src/CLAUDE.md`](../../CLAUDE.md) carries the rule both halves came out of.
 - **The data line is a sibling of the button, not a child** — so unlike every mark over the art
   its text is genuinely announced rather than swallowed by the button's `aria-label`. It is the
   card's foot: a 28px bar under the face, ridden **4px** up so the face's clipped corners cover

@@ -53,9 +53,10 @@ pub struct TheoryDiffRow {
     /// How many more copies theory wants than live has. Always positive: a card live has as
     /// many of is not on this list at all, and one it has *more* of is a cut, not a purchase.
     pub quantity: i64,
-    /// What one copy costs at the marketplace the read was given, **nonfoil** —
-    /// `DeckCardRow::unit_price`'s rule over [`crate::deck::DECK_FINISH`], and never
-    /// `cards.price_usd`, which is a display fallback chain and must not be summed.
+    /// What one copy costs at the marketplace the read was given —
+    /// `DeckCardRow::unit_price`'s rule, [`crate::sorting::printing_price_by_finish_expr`], so a
+    /// foil-only printing is quoted at its foil rate rather than reading as unpriced. Never
+    /// `cards.price_usd`, which is that chain precomputed for the search's sort.
     ///
     /// `None` where that marketplace does not price the printing, which is a fact about the
     /// shop rather than a hole: a shopping list quoting a price from somewhere the reader is
@@ -125,7 +126,7 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND cat.is_active = 1
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::price_expr(marketplace, crate::deck::DECK_FINISH)
+        price = crate::sorting::printing_price_by_finish_expr(marketplace)
     )
 }
 
@@ -1119,9 +1120,11 @@ mod tests {
     /// A shopping list is priced at the marketplace the reader shops at, and at nowhere else —
     /// one figure per line, out of the printing the theory row names, never `cards.price_usd`.
     ///
-    /// The second line is an etched-only printing. A theory row, like every deck row, is
-    /// **nonfoil**, so it has no price at any of the four: TCGplayer's `usd` key is null, there
-    /// is no euro key at all, and neither feed carries a nonfoil row for it.
+    /// The second line is an etched-only printing, and it is what separates the four. A theory
+    /// row is a **printing**, priced in the finish it is sold in, so TCGplayer quotes it at
+    /// `usd_etched` and Card Kingdom at its own etched row — while Cardmarket has no
+    /// `eur_etched` key to quote and Mana Pool has never listed the card. **A shopping list must
+    /// not borrow a figure across that line**: the reader is buying where they shop.
     #[test]
     fn a_diff_line_is_priced_by_the_marketplace_it_was_asked_for() {
         let conn = seeded();
@@ -1167,12 +1170,14 @@ mod tests {
         assert_eq!(price("both", Cardkingdom), Some(9.0));
         assert_eq!(price("both", Manapool), Some(11.0));
 
-        for marketplace in [Tcgplayer, Cardmarket, Cardkingdom, Manapool] {
+        assert_eq!(price("etched-only", Tcgplayer), Some(0.71));
+        assert_eq!(price("etched-only", Cardkingdom), Some(0.6));
+        for marketplace in [Cardmarket, Manapool] {
             assert_eq!(
                 price("etched-only", marketplace),
                 None,
-                "{marketplace:?}: a theory row is nonfoil — `price_usd`'s 0.71 fallback chain \
-                 is not this figure, and neither is an etched feed row"
+                "{marketplace:?} quotes this printing in no finish it is sold in, and the 0.71 \
+                 the other two carry is not this shop's number"
             );
         }
 

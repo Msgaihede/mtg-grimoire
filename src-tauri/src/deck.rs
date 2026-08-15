@@ -2075,22 +2075,67 @@ pub fn clear_category(
 ///
 /// `tag_id` travels with it too, where the printing does — a label is the user's word about
 /// *this card in this deck*, and re-filing it is not a reason to lose it.
+///
+/// **Either `to_category_id` or `to_category_name`**, and at least one ([`NO_CATEGORY`]) —
+/// [`add_card`]'s two-arm target, copied deliberately rather than approximated, because the two
+/// commands are answering the same question about the same table. An explicit id is a drop onto
+/// a column the reader pointed at; a name is the quick zones' `Auto`, found-or-created through
+/// [`crate::deck_meta::category_for_name`], with the word itself computed in TypeScript
+/// (`autoCategoryFor`) because which pile a Sol Ring belongs in is domain logic and this module
+/// is plumbing. When both arrive the id wins, for `add_card`'s reason: it is the more specific
+/// instruction.
+///
+/// **The name arm is why this resolves inside the transaction and why `from == to` is checked
+/// after it and not before.** A refile whose target does not exist yet *writes* — the category
+/// is made here — and a card whose rule names the pile it is already in has to be answered
+/// `Ok`, not moved; neither is knowable until the name has been resolved.
+///
+/// Answers the id of the category the copies are now in, which for the name arm is the only way
+/// a caller learns what was found or made. The caret follows a moved card to its new pile, so
+/// that id is not a convenience.
 pub fn move_card(
     conn: &Connection,
     deck_id: i64,
     card_id: &str,
     from_category_id: i64,
-    to_category_id: i64,
+    to_category_id: Option<i64>,
+    to_category_name: Option<&str>,
     variant: &str,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
-    if from_category_id == to_category_id {
-        return Ok(());
+    if to_category_id.is_none() && to_category_name.is_none() {
+        return Err(NO_CATEGORY.to_owned());
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
     let from = category_of_deck(&tx, deck_id, from_category_id)?;
-    let to = category_of_deck(&tx, deck_id, to_category_id)?;
+    let (to_category_id, to) = match to_category_id {
+        Some(id) => (id, category_of_deck(&tx, deck_id, id)?),
+        // Unreachable past the guard above, and written as a second refusal rather than an
+        // `expect` for `add_card`'s reason: an edit that ever drops that guard answers the
+        // sentence instead of panicking in a reader's face.
+        None => {
+            let Some(name) = to_category_name else {
+                return Err(NO_CATEGORY.to_owned());
+            };
+            (
+                crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+                name.trim().to_owned(),
+            )
+        }
+    };
+    // **After the resolution, because the name arm cannot answer before it.** A card the rule
+    // files where it already is is not an error and is not a move: the caller is told which
+    // pile that was, and this returns **without committing**, so the `touch_deck` above is
+    // rolled back with the transaction. Bumping `updated_at` to leave the list exactly as it
+    // was is the thing the id arm's caller-side guard exists to prevent, and a second entrance
+    // must not reintroduce it.
+    //
+    // Nothing can have been created on this path: `category_for_name` answers a **new** id when
+    // it makes a pile, and a new id is never a pile the card is already in.
+    if from_category_id == to_category_id {
+        return Ok(to_category_id);
+    }
     // The moved row's own denormalized name, read before the move folds it into whatever the
     // target already held — and it is the row's name rather than a fresh `cards` lookup for
     // the reason the identity below travels from the row: an orphan is exactly the card most
@@ -2164,7 +2209,7 @@ pub fn move_card(
     // made.
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(to_category_id)
 }
 
 /// What a swap answers: where the copies ended up, and whether they had company.
@@ -2475,13 +2520,19 @@ pub struct DeckCardRow {
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
     pub ever_uncommon: bool,
-    /// What one copy costs at the marketplace the read was given, **nonfoil** —
-    /// `WishRow::unit_price`'s rule over [`DECK_FINISH`]. Never `cards.price_usd`, which is a
-    /// display fallback chain and must not be summed.
+    /// What one copy costs at the marketplace the read was given —
+    /// [`crate::sorting::printing_price_by_finish_expr`], the **printing** grain.
     ///
-    /// A deck names a *printing* and never a finish, so this is the nonfoil rate everywhere
-    /// and the etched hole cannot arise: an etched-only printing simply has no nonfoil price
-    /// at any marketplace, and reads `None` at all of them.
+    /// A deck names a printing and never a finish, so there is no finish to price at and the row
+    /// is quoted in whichever one that marketplace sells it in: nonfoil where there is a nonfoil
+    /// price, else foil, else etched. **The literal `'nonfoil'` this used to pass was a bug** —
+    /// 13 515 foil-only and 892 etched-only printings have no nonfoil price at any marketplace,
+    /// so every one of them read `None` while the search wall quoted the same printing.
+    ///
+    /// Still never `cards.price_usd`, which is that chain precomputed for the search's `ORDER
+    /// BY`: the numbers agree, and what a deck may not do is sum the display column.
+    /// The euro etched hole is unchanged, because it lives in
+    /// [`crate::sorting::price_expr`] — an etched-only printing is unpriced on Cardmarket.
     pub unit_price: Option<f64>,
     /// Copies of this oracle card the allocator secured for this deck, attributed to this
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
@@ -2568,17 +2619,9 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND dc.variant = ?2
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::price_expr(marketplace, DECK_FINISH)
+        price = crate::sorting::printing_price_by_finish_expr(marketplace)
     )
 }
-
-/// The finish every deck price is quoted at.
-///
-/// **A deck row names a printing and has no finish** — `deck_cards`' grain is
-/// `(deck_id, variant, category_id, card_id)` and stops there, so there is nothing in the
-/// model that says whether a copy is foil. Nonfoil is the answer that reads as "what this
-/// card costs", and it is the one every deck total in this crate has always used.
-pub(crate) const DECK_FINISH: &str = "'nonfoil'";
 
 /// The whole deck in one read: the gallery's row, one variant's cards, every category, every
 /// tag, every fact, every number.
@@ -3403,15 +3446,20 @@ pub async fn deck_category_clear(
     .map_err(unfinished)?
 }
 
+/// A drag onto a column, and the quick zones' `Auto` — one command, two ways of naming the
+/// target, which is [`add_card`]'s arrangement and is documented on [`move_card`]. Answers the
+/// category the copies are now in, because the name arm's caller has no other way to learn what
+/// was found or made.
 #[tauri::command]
 pub async fn deck_move_card(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     card_id: String,
     from_category_id: i64,
-    to_category_id: i64,
+    to_category_id: Option<i64>,
+    to_category_name: Option<String>,
     variant: String,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
@@ -3421,6 +3469,7 @@ pub async fn deck_move_card(
                 &card_id,
                 from_category_id,
                 to_category_id,
+                to_category_name.as_deref(),
                 &variant,
             )
         })
@@ -3840,7 +3889,7 @@ mod tests {
         let err = set_card_quantity(&conn, deck.id, "bolt-lea", main, "draft", 1).unwrap_err();
         assert!(err.contains("draft"), "{err}");
         assert_eq!(
-            move_card(&conn, deck.id, "bolt-lea", main, theirs, LIVE).unwrap_err(),
+            move_card(&conn, deck.id, "bolt-lea", main, Some(theirs), None, LIVE).unwrap_err(),
             crate::deck_meta::CATEGORY_WRONG_DECK,
             "the destination is fenced as well as the source"
         );
@@ -4065,7 +4114,7 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-lea", side, 1);
 
-        move_card(&conn, deck.id, "bolt-lea", main, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
 
         assert_eq!(count(&conn, "deck_cards"), 1, "one row, not two");
         let (category, quantity): (i64, i64) = conn
@@ -4082,7 +4131,7 @@ mod tests {
         // move that needed the id to resolve would refuse it.
         conn.execute("DELETE FROM cards", []).unwrap();
 
-        move_card(&conn, deck.id, "bolt-lea", side, scratch, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", side, Some(scratch), None, LIVE).unwrap();
 
         assert_eq!(count(&conn, "deck_cards"), 1);
         let (category, quantity, name, set): (i64, i64, String, String) = conn
@@ -4099,6 +4148,147 @@ mod tests {
         );
     }
 
+    /// The name arm's whole point: the quick zones' `Auto` names a pile the deck has not got,
+    /// and one command makes it and files the card into it. `origin` is **`auto`**, because
+    /// `category_for_name` is what made it — a pile nobody asked for, which is exactly what
+    /// `grouping.ts`'s `drawsWhenEmpty` reads to keep it off the desk once its last card
+    /// leaves. Answering the new id is what lets the caret follow the card there.
+    #[test]
+    fn a_move_by_name_makes_the_pile_it_names_and_marks_it_auto() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        let to = move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            None,
+            Some("Removal"),
+            LIVE,
+        )
+        .unwrap();
+
+        let (name, origin, kind, active): (String, String, String, i64) = conn
+            .query_row(
+                "SELECT name, origin, kind, is_active FROM deck_categories WHERE id = ?1",
+                params![to],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), origin.as_str(), kind.as_str(), active),
+            ("Removal", "auto", "main", 1),
+            "the pile the rule named, recorded as the app's own"
+        );
+        let (category, quantity): (i64, i64) = conn
+            .query_row(
+                "SELECT category_id, quantity FROM deck_cards WHERE variant = ?1",
+                params![LIVE],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((category, quantity), (to, 4), "every copy went with it");
+    }
+
+    /// A pile the reader already made is **found**, not made again — `category_for_name`'s
+    /// rule, reached through this arm. So a refile into their own "Removal" keeps that pile's
+    /// `user` origin, and the deck grows no second column by the same name.
+    #[test]
+    fn a_move_by_name_files_into_the_readers_own_pile_and_leaves_its_origin_alone() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let theirs = crate::deck_meta::create_category(&conn, deck.id, "Removal").unwrap();
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        let to = move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            None,
+            Some("Removal"),
+            LIVE,
+        )
+        .unwrap();
+
+        assert_eq!(to, theirs.id, "found, not made");
+        let origin: String = conn
+            .query_row(
+                "SELECT origin FROM deck_categories WHERE id = ?1",
+                params![to],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(origin, "user", "a pile they made stays theirs");
+        assert_eq!(
+            count(&conn, "deck_categories"),
+            6,
+            "four seeded zones, `main_of`'s own Main deck, and their one Removal — \
+             no second column by that name"
+        );
+    }
+
+    /// **A card the rule files where it already is writes nothing at all**, and the check that
+    /// says so runs after the name has been resolved because there is no other moment it could.
+    /// `updated_at` must not move: a refile that changed nothing is not an edit to the deck, and
+    /// the transaction is dropped rather than committed precisely so the `touch_deck` above it
+    /// is rolled back with it.
+    #[test]
+    fn a_move_by_name_onto_the_cards_own_pile_touches_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        conn.execute(
+            "UPDATE decks SET updated_at = 1 WHERE id = ?1",
+            params![deck.id],
+        )
+        .unwrap();
+        let audits = count(&conn, "deck_audit");
+
+        let to = move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            None,
+            Some("Main deck"),
+            LIVE,
+        )
+        .unwrap();
+
+        assert_eq!(to, main, "it names the pile the card is in");
+        let touched: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(touched, 1, "a no-op move does not bump the deck");
+        assert_eq!(count(&conn, "deck_audit"), audits, "and writes no history");
+    }
+
+    /// Neither half of the target given is the one refusal this arm adds, and it is
+    /// [`add_card`]'s `NO_CATEGORY` verbatim — two commands answering the same question answer
+    /// it with the same sentence.
+    #[test]
+    fn a_move_with_no_target_at_all_is_refused() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        assert_eq!(
+            move_card(&conn, deck.id, "bolt-lea", main, None, None, LIVE).unwrap_err(),
+            NO_CATEGORY,
+        );
+    }
+
     /// A move re-files a card; it never promotes a plan into the deck. The two variants hold
     /// the same printing in the same category, and moving one leaves the other exactly where
     /// it was.
@@ -4111,7 +4301,7 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 2).unwrap();
 
-        move_card(&conn, deck.id, "bolt-lea", main, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
 
         let rows: Vec<(String, i64, i64)> = conn
             .prepare("SELECT variant, category_id, quantity FROM deck_cards ORDER BY variant, id")
@@ -5569,7 +5759,7 @@ mod tests {
         assert!(updated_at(&conn) > 0, "so does the stepper");
 
         backdate(&conn);
-        move_card(&conn, deck.id, "bolt-lea", main, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
         assert!(updated_at(&conn) > 0, "and so does the move");
 
         // The same statement is the existence check: a stale deck id from a gallery that
@@ -6521,9 +6711,9 @@ mod tests {
     }
 
     /// A deck row's one price comes from the marketplace the read was given, and from nowhere
-    /// else. A deck names a *printing* and never a finish, so the price is the nonfoil rate
-    /// everywhere — which is what makes the etched-only printing read `None` on all four,
-    /// where the collection's etched *entry* is priced by two of them.
+    /// else — no cross-marketplace fallback, at any finish. The etched-only printing is what
+    /// separates the four: two of them quote it and two do not, and neither pair borrows the
+    /// other's number.
     #[test]
     fn a_deck_row_is_priced_by_the_marketplace_the_read_was_given() {
         let conn = seeded();
@@ -6542,8 +6732,8 @@ mod tests {
             &conn,
             &[
                 ("cardkingdom", "both", "nonfoil", 9.00),
-                // Card Kingdom has never listed `bolt-lea`, and the etched printing has only
-                // an etched row — which a deck, being nonfoil, does not read.
+                // Card Kingdom has never listed `bolt-lea`, and the etched printing has only an
+                // etched row — the last link of the chain, and the only one it can be sold in.
                 ("cardkingdom", "etched-only", "etched", 0.60),
                 ("manapool", "both", "nonfoil", 11.00),
                 ("manapool", "bolt-lea", "nonfoil", 390.00),
@@ -6568,12 +6758,23 @@ mod tests {
         assert_eq!(price("both", Cardkingdom), Some(9.0));
         assert_eq!(price("both", Manapool), Some(11.0));
 
-        for marketplace in [Tcgplayer, Cardmarket, Cardkingdom, Manapool] {
+        assert_eq!(
+            price("etched-only", Tcgplayer),
+            Some(0.71),
+            "the printing is sold in one finish and TCGplayer quotes it"
+        );
+        assert_eq!(
+            price("etched-only", Cardkingdom),
+            Some(0.60),
+            "the feed's own etched row, not the blob's figure"
+        );
+        for marketplace in [Cardmarket, Manapool] {
             assert_eq!(
                 price("etched-only", marketplace),
                 None,
-                "{marketplace:?}: a deck reads the nonfoil rate, and there is not one — \
-                 `price_usd`'s 0.71 fallback chain is not it, and neither is an etched feed row"
+                "{marketplace:?} does not quote this printing in any finish it is sold in — \
+                 Cardmarket because `eur_etched` is a key Scryfall does not have, Mana Pool \
+                 because it has never listed it — and neither borrows the other's 0.71"
             );
         }
 
@@ -6588,6 +6789,86 @@ mod tests {
             "and a printing the feed has never listed is unpriced too"
         );
         assert_eq!(price("bolt-lea", Manapool), Some(390.0));
+    }
+
+    /// **A printing sold only in foil is priced at its foil rate, and this is the bug that made
+    /// the rule.**
+    ///
+    /// A deck row was priced at the literal `'nonfoil'`, on the reasoning that a deck names a
+    /// printing and not a finish — but the corpus has **13 515 foil-only and 892 etched-only
+    /// printings, and not one of them has a nonfoil price at any marketplace** (measured against
+    /// a synced database on 2026-08-15). So the finish a deck row does not name was answered
+    /// with a price that does not exist, and a Secret Lair or a promo drew an em dash on the
+    /// card's foot while the search panel beside it quoted the same printing.
+    ///
+    /// The chain is [`crate::sorting::printing_price_by_finish_expr`]'s, so the euro hole is
+    /// still the euro hole: `eur_etched` is a key Scryfall does not have, and an etched-only
+    /// printing stays unpriced on Cardmarket rather than being quoted at a rate nobody published.
+    #[test]
+    fn a_foil_only_printing_is_priced_at_the_finish_it_is_sold_in() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    finishes,prices,raw)
+               VALUES
+                 ('foil-only','o5','Foil Only','sld','780','en','normal','["foil"]',
+                  '{"usd":null,"usd_foil":"3.48","usd_etched":null,
+                    "eur":null,"eur_foil":"2.90"}','{}'),
+                 ('etched-only','o6','Etched Only','tst','2','en','normal','["etched"]',
+                  '{"usd":null,"usd_foil":null,"usd_etched":"0.71",
+                    "eur":null,"eur_foil":null}','{}');"#,
+        )
+        .unwrap();
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "foil-only", "foil", 3.83),
+                ("cardkingdom", "etched-only", "etched", 0.60),
+                ("manapool", "foil-only", "foil", 3.20),
+            ],
+        );
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "foil-only", main, 1);
+        add(&conn, deck.id, "etched-only", main, 1);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+
+        let price = |card: &str, marketplace| {
+            card_row(
+                &get_deck(&conn, deck.id, LIVE, marketplace)
+                    .unwrap()
+                    .unwrap(),
+                card,
+                main,
+            )
+            .unit_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Manapool, Tcgplayer};
+
+        assert_eq!(price("foil-only", Tcgplayer), Some(3.48));
+        assert_eq!(price("foil-only", Cardmarket), Some(2.90));
+        assert_eq!(price("foil-only", Cardkingdom), Some(3.83));
+        assert_eq!(price("foil-only", Manapool), Some(3.20));
+
+        assert_eq!(price("etched-only", Tcgplayer), Some(0.71));
+        assert_eq!(price("etched-only", Cardkingdom), Some(0.60));
+        assert_eq!(
+            price("etched-only", Cardmarket),
+            None,
+            "there is no `eur_etched` key in Scryfall's data, and a chain must not reach past a \
+             hole into the nonfoil rate"
+        );
+        assert_eq!(
+            price("etched-only", Manapool),
+            None,
+            "a printing this feed has never listed is unpriced, in any finish"
+        );
+
+        assert_eq!(
+            price("bolt-lea", Tcgplayer),
+            Some(400.0),
+            "a printing quoted nonfoil is still quoted nonfoil — the chain starts there"
+        );
     }
 
     /// Rows in `marketplace_prices` — [`crate::collection`]'s helper, kept per module.
@@ -7006,14 +7287,14 @@ mod tests {
             "the stepper hands three copies back"
         );
 
-        move_card(&conn, deck.id, "bolt-lea", main, scratch, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", main, Some(scratch), None, LIVE).unwrap();
         assert_eq!(
             claims(&conn, deck.id),
             vec![],
             "an inactive category is a scratchpad, and a scratchpad reserves nothing"
         );
 
-        move_card(&conn, deck.id, "bolt-lea", scratch, side, LIVE).unwrap();
+        move_card(&conn, deck.id, "bolt-lea", scratch, Some(side), None, LIVE).unwrap();
         assert_eq!(claims(&conn, deck.id), vec![(entry, 1)], "a sideboard does");
 
         set_card_quantity(&conn, deck.id, "bolt-lea", side, LIVE, 0).unwrap();

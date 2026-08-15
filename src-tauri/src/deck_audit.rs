@@ -554,7 +554,8 @@ mod tests {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
                         .unwrap();
                     clear(&conn);
-                    crate::deck::move_card(&conn, id, "bolt-lea", main, side, "live").unwrap();
+                    crate::deck::move_card(&conn, id, "bolt-lea", main, Some(side), None, "live")
+                        .unwrap();
                 }),
             ),
             (
@@ -828,7 +829,7 @@ mod tests {
         let maybe = kind_of(&conn, id, "maybe");
         crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", 1).unwrap();
 
-        crate::deck::move_card(&conn, id, "serra-lea", main, maybe, "live").unwrap();
+        crate::deck::move_card(&conn, id, "serra-lea", main, Some(maybe), None, "live").unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, MOVE);
