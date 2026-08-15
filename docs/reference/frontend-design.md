@@ -967,6 +967,26 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     states the rule instead. Every exemption carries a comment at its own site saying which of
     the two it is — that comment is the record, and it is what stops the next sweep for unsorted
     selects "fixing" them.
+  - **The deck editor's `View` switch joined this block on 2026-08-15, from the other side.** It
+    was a four-button segmented group (`role="group"`, `aria-label="Deck view"`, `aria-pressed`
+    on the picked one) standing between two selects that ask the toolbar's other two questions,
+    so the control a reader reaches for most was the one that looked unlike its neighbours. It is
+    `VIEW_PICKER` now — `DeckEditor`'s `VIEWS` through `sortOptions`, reading
+    `Grid · Stacks · Table · Text` — and **no exemption**: the array is written default-first,
+    which is a fact about how it was typed rather than information the reader is owed.
+    **Driven in the shipped window 2026-08-15** (`npm run tauri dev`, a debug build, 1280×800,
+    on a 14-card Commander deck): the three selects computed `top: 182` and `height: 36` each —
+    one line, no wrap — at **80px** (View), **105** (Group by) and **111** (Sort), with the
+    toolbar's five clusters all on that line and `document.body.scrollWidth` **1265** against a
+    `clientWidth` of **1265**, so the row that the 1024px floor forbids overflowing does not.
+    The select carried `CONTROL`'s 12px type and its transition list, `filter-focus`'s gold
+    outline (`oklch(0.75 0.12 85)`) on focus, and `role=group` was down to the two that are not
+    this control. Each of the four rows drew its own view — `table` one `[role=table]` and 19
+    rows with no card art, `text` nine lists and none, `grid` 14 pictures, `stacks` 14 pictures
+    across five `[data-deck-stack]` piles — with no horizontal overflow in any of them, and the
+    console recorder caught 16 entries and no error or warning. **The width the segmented group
+    used was not measured before it was replaced**, so "about 100px back" is arithmetic off its
+    four `px-3` buttons rather than a reading.
 
 - **The search's `Unplayable` chip is a row of its format select now** (2026-08-14) — one control
   where there were two, `FilterBar.tsx` plus `useCardSearch.ts`'s `ANY_CARD` and `formatParams`.
