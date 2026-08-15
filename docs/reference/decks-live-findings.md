@@ -273,3 +273,55 @@ thin` was measured as an alternative and is not one: **10px instead of 15**, des
 - The console recorder caught **29** entries and the only four errors were mid-edit HMR states of
   this pass's own work (a constant referenced before it was renamed); nothing after the layout
   settled.
+
+## The quick zones — 2026-08-15, `npm run tauri dev` (debug), 1280×800 unless stated
+
+The bar of four drop targets across the top of the editor (`QuickZones.tsx`), driven end to end
+against a real deck of 14 cards. Every claim its doc comment makes about layout is here, because
+jsdom has no layout engine and every one of them is a claim about a box.
+
+- **It costs no layout, and that is the whole of the `h-0 -mb-3` arrangement.** With a card in the
+  air the editor's header row was at **78** and the first card at **341.5** — *exactly* the
+  coordinates they held with nothing being dragged. The sticky wrapper measured `height` **0**,
+  `margin-bottom` **−12px**, `position: sticky`, `z-index` **40**.
+- **It is pinned to the scrollport, not to the content.** With the editor scrolled to **500** the
+  header row had travelled to **−422** while the bar held at **78–136**.
+- **It clears the deck at both window sizes.** The bar is **58px** tall. At 1280×800 it spans
+  **49–107** against a desk row beginning at **262** — **155px** of clearance; at 1920×1080,
+  **49–107** against **172**, so **65px**. The difference is the header row, which wraps to two
+  lines at 1280 and does not at 1920, and the tighter figure is still the whole bar clear of every
+  pile.
+- **It is the editor's width, minus the scrollbar.** Bar left **228** = the editor's left; bar
+  right **1230** against the editor's **1245**, the 15px being the page scroller's own bar, which
+  `inset-x-0` correctly excludes. Zones measured **240px** each at 1280, **400** at 1920 and
+  **176** at 1024, with no label truncated at any of them.
+- **The tray and the bar are drawn together and do not meet.** During one deck-card drag the bar
+  sat at **78–136** and the remove tray at **751** in a **780**-tall window, both computing
+  `z-index: 40`, with the deck between them.
+- **`Auto` really is refused for a card already in the deck.** Dragging a deck card, `Auto`
+  carried `opacity-40` and the other three did not; dragging a tile out of the docked panel, none
+  did. The glyphs changed with the drag as intended — `lucide-plus` on the two fixed zones for an
+  add, `lucide-wand-sparkles` on `Auto`, `lucide-folder-plus` on `New category`.
+- **The writes land.** A panel tile dropped on `Auto` took the deck 14 → 15 cards and created a
+  **`Recursion`** pile — the Oracle-tag rule running over a real taxonomy, not the type-line
+  fallback. A tile dropped on `New category` opened the dialog with the caret **in the field**,
+  its scrim at `z-index` **45** and `Create` `aria-disabled="true"` on the empty name; naming the
+  pile made it and filed the card into it (15 → 16). Re-running it with the name `Sideboard` left
+  the dialog open, the name in the field, the card unfiled at 16, and the alert reading *"Could
+  not make that category — This deck already has a category with that name."*
+
+### One thing this pass found that is not the quick zones'
+
+**The deck editor overflows horizontally by a constant 66px, with nothing being dragged.**
+`section.scrollWidth` **812** against `clientWidth` **746** at 1024×768, and **1708** against
+**1642** at 1920×1080 — the same 66 at both, so it is not a narrow-window failure but a control
+that hangs past the row at every size. The overflowing element is a toolbar `<select>` (right
+edge **1040** in a 1009px viewport). That is precisely the failure `src/CLAUDE.md`'s wrapping
+rule exists to prevent and the 1024px floor forbids, and it is **older than this branch** — the
+measurement above was taken with `[data-quick-zone]` counting **0**. Written down here rather
+than fixed here.
+
+Its one consequence for the bar was fixed: a scroller that scrolls on two axes needs a sticky
+element pinned on two, or the bar rides the content sideways. Measured before the fix at 1024,
+with the drag's own auto-scroller having run right — bar left **162** against the editor's
+**228**; after `left-0`, with `scrollLeft` still **66**, bar left **228**.

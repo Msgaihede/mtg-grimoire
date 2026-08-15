@@ -73,9 +73,13 @@ export const LAYER = {
   /** Anchored to a control and floating over the page: pickers, quick-adds, menus, previews. */
   popup: "z-30",
   /**
-   * The deck editor's remove tray, which appears only during a drag. Above `popup` on
-   * purpose: a drag can start while a menu is open, and the tray is the drop target the
-   * pointer is being carried to.
+   * The two surfaces the deck editor draws **only during a drag**: the remove tray at the foot
+   * of the window and the quick zones across the top of it. Above `popup` on purpose — a drag
+   * can start while a menu or a select is open, and these are the drop targets the pointer is
+   * being carried to.
+   *
+   * One rung for both, and they cannot overlap: the tray is `sticky bottom-0` and the zones are
+   * `sticky top-0`, at opposite ends of a scroller with the deck between them.
    */
   dragTray: "z-40",
   /**

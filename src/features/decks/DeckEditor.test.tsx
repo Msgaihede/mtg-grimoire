@@ -17,13 +17,9 @@ import type {
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { dragOnto, startDrag } from "@/test-drag";
-import {
-  CARD_BODY_ATTR,
-  DECK_CARD_VARIANT,
-  DECK_GROUP_ATTR,
-  LANDED_ATTR,
-} from "./cardControl";
+import { CARD_BODY_ATTR, DECK_CARD_VARIANT, DECK_GROUP_ATTR, LANDED_ATTR } from "./cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
+import { QUICK_ZONE_ATTR } from "./QuickZones";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -55,6 +51,14 @@ const deckTagCreate = vi.hoisted(() => vi.fn());
 // The one write a card's menu makes that is not a deck write at all — "Add to → Collection".
 // Its refusal is the editor's second banner, because the menu has closed by the time one lands.
 const collectionAdd = vi.hoisted(() => vi.fn());
+// The quick zones' New category — a pile made from a drop, then filed into. The only caller of
+// `deck_category_create` outside the Categories dialog.
+const deckCategoryCreate = vi.hoisted(() => vi.fn());
+// What the auto-add path reads to file a card by what it *does*. `useDeck`'s `oracleTagsFor`
+// catches a refusal and answers `[]`, so an empty list here is not a stub of nothing: it is the
+// state every install is in until the taxonomy has been downloaded, and the type-line fallback
+// is what these tests then exercise.
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 // The three category writes a pile's right-click reaches, through `useDeckMeta`.
 const deckCategoryRename = vi.hoisted(() => vi.fn());
 const deckCategorySetActive = vi.hoisted(() => vi.fn());
@@ -108,6 +112,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCardSetTag,
     deckTagCreate,
     collectionAdd,
+    deckCategoryCreate,
+    oracleTagsForPrintings,
     deckCategoryRename,
     deckCategorySetActive,
     deckCategoryDelete,
@@ -503,6 +509,8 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
   collectionAdd.mockReset().mockResolvedValue(undefined);
+  deckCategoryCreate.mockReset().mockResolvedValue(category(9, "Removal", "main"));
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   deckCategoryRename.mockReset().mockResolvedValue(CATEGORIES[0]);
   deckCategorySetActive.mockReset().mockResolvedValue(CATEGORIES[0]);
   deckCategoryDelete.mockReset().mockResolvedValue(undefined);
@@ -2863,6 +2871,116 @@ describe("DeckEditor drag and drop", () => {
     expect(deckMoveCard).not.toHaveBeenCalled();
     window.removeEventListener("keydown", listen);
   });
+
+  /**
+   * The quick zones, wired to this editor's writes.
+   *
+   * `QuickZones.test.tsx` drives the bar itself against a stub payload; what these prove is the
+   * other half — that the writes a drop resolves to reach the same commands the controls beside
+   * them do, and that the two-step New category really makes a pile and then files into it.
+   */
+  describe("quick zones", () => {
+    /** One box in the bar. Addressed by its attribute rather than by its text: the bar is
+     *  `aria-hidden` and `Sideboard` is also a heading on the desk behind it. */
+    const zone = (label: string) =>
+      document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="${label}"]`)!;
+
+    /**
+     * **They answer for a card dragged *in*, which is exactly what the remove tray does not** —
+     * and it is the whole reason they own a monitor of their own rather than reading the state
+     * the tray is drawn from. A drop on `Auto` names no category, so `deck_add_card` is sent a
+     * `categoryId` of `null` and a pile name the rule worked out.
+     */
+    it("files a panel tile by what it does when it lands on the Auto zone", async () => {
+      const tile = panelHolds("Goblin Guide");
+      await open();
+
+      const held = await startDrag(await tile());
+      expect(zone("Auto")).toBeInTheDocument();
+      // The tray is not: there is nothing in this deck to take out.
+      expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+      await held.over(zone("Auto"));
+      await held.drop();
+
+      await waitFor(() =>
+        expect(deckAddCard).toHaveBeenCalledWith(
+          4,
+          "s-Goblin Guide",
+          // No column was pointed at, so `useDeck.addCard` names the pile — which name is
+          // `autoCategory.test.ts`'s to pin, and pinning it twice would make one of the two a
+          // copy that quietly stops meaning anything.
+          null,
+          expect.any(String),
+          "live",
+          1,
+        ),
+      );
+    });
+
+    /** A fixed zone is an ordinary category drop, and it moves a card that is already in the
+     *  deck — the same write a drop onto that pile's own heading makes. */
+    it("moves a deck card into the sideboard from the quick zone", async () => {
+      await open();
+
+      const held = await startDrag(card_("Lightning Bolt"));
+      await held.over(zone("Sideboard"));
+      await held.drop();
+
+      await waitFor(() =>
+        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, "live"),
+      );
+    });
+
+    /**
+     * **Two acts, and the drop is only the first.** A modal cannot be opened mid-gesture, so the
+     * name is asked for after the card has landed — and the pile is made and filled in that
+     * order, by the same `dropWrite` rule a drop onto a drawn heading goes through.
+     */
+    it("makes a pile from a drop on New category and files the card into it", async () => {
+      const tile = panelHolds("Goblin Guide");
+      await open();
+
+      const held = await startDrag(await tile());
+      await held.over(zone("New category"));
+      await held.drop();
+
+      const field = await screen.findByLabelText("New category name");
+      expect(screen.getByRole("dialog", { name: "New category" })).toBeInTheDocument();
+      await userEvent.type(field, "Removal");
+      await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+      await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Removal"));
+      // The id the create answered with, not the name — the second write addresses a row.
+      await waitFor(() =>
+        expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", 9, null, "live", 1),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "New category" })).not.toBeInTheDocument(),
+      );
+    });
+
+    /**
+     * A refused create keeps the dialog open with the name still in the field, and says so where
+     * the reader is looking: the editor's own banner is behind this dialog's scrim. Nothing is
+     * filed, because there is no pile to file into.
+     */
+    it("keeps the dialog open and says so when the pile cannot be made", async () => {
+      const tile = panelHolds("Goblin Guide");
+      deckCategoryCreate.mockRejectedValue("a category called Removal already exists");
+      await open();
+
+      const held = await startDrag(await tile());
+      await held.over(zone("New category"));
+      await held.drop();
+
+      await userEvent.type(await screen.findByLabelText("New category name"), "Removal");
+      await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+      await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("already exists"));
+      expect(screen.getByLabelText("New category name")).toHaveValue("Removal");
+      expect(deckAddCard).not.toHaveBeenCalled();
+    });
+  });
 });
 
 /**
@@ -3105,7 +3223,9 @@ describe("DeckEditor — a card's menu", () => {
    * stay in the tab order.
    */
   it("greys the commander row with its reason in Commander", async () => {
-    deckGet.mockResolvedValue(detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]));
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]),
+    );
     await open();
     await seeded("Modern");
 
@@ -3548,7 +3668,11 @@ describe("DeckEditor — a category's menu", () => {
    *  menu built just before a change would otherwise write the opposite of what it drew. */
   it("says Activate on a pile that is already off", async () => {
     deckGet.mockResolvedValue(
-      detail({}, [bolt()], [category(1, "Main deck", "main", { isActive: false }), ...CATEGORIES.slice(1)]),
+      detail(
+        {},
+        [bolt()],
+        [category(1, "Main deck", "main", { isActive: false }), ...CATEGORIES.slice(1)],
+      ),
     );
     await open();
     await rightClickGroup(MAIN);
@@ -3604,7 +3728,9 @@ describe("DeckEditor — a category's menu", () => {
     expect(await screen.findByRole("dialog", { name: /Delete “Main deck”/ })).toBeInTheDocument();
     expect(deckCategoryDelete).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
+    );
     await waitFor(() => expect(deckCategoryDelete).toHaveBeenCalled());
   });
 
@@ -3701,9 +3827,7 @@ describe("DeckEditor — a category's menu", () => {
     await userEvent.keyboard("{Escape}");
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(document.activeElement).toBe(
-      document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`),
-    );
+    expect(document.activeElement).toBe(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`));
   });
 
   /** The two arms that were already built for this menu, wired to the rows that open them. */
