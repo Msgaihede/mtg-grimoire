@@ -92,7 +92,7 @@ describe("dragData / readDragData", () => {
    * point. `cardId` and `name` decide *what* is being dropped, so a bad one has to stop the drop.
    * A type line only decides which pile the card lands in, and `autoCategoryFor` already has an
    * answer for not knowing — so a source that sends nothing, or sends rubbish, files the card
-   * under `Uncategorised` instead of silently failing to drop it at all.
+   * under `Uncategorized` instead of silently failing to drop it at all.
    */
   it("normalises an unusable type line instead of refusing the payload", () => {
     const marked = (fields: Record<string, unknown>) => ({ ...dragData(CARD), ...fields });
@@ -231,7 +231,7 @@ describe("dropWrite", () => {
   });
 
   /** A type line the app does not know is the answer rather than a refusal — `autoCategoryFor`
-   *  files a `null` under `Uncategorised`, which is the honest pile. */
+   *  files a `null` under `Uncategorized`, which is the honest pile. */
   it("carries an unknown type line onto the auto zone rather than refusing the drop", () => {
     expect(dropWrite({ ...SEARCH, typeLine: null }, { kind: "auto" })).toEqual({
       write: "auto-add",

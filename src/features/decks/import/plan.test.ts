@@ -149,10 +149,10 @@ describe("buildImportPlan", () => {
    * genuinely has none — never the "the caller said nothing" case `DEFAULT_CATEGORY_NAME`
    * answers for a single add.
    */
-  it("files a card with no type line as Uncategorised", () => {
+  it("files a card with no type line as Uncategorized", () => {
     const plan = planFor("1 Undercity", { Undercity: match({ name: "Undercity" }) });
 
-    expect(plan.cards[0].categoryName).toBe("Uncategorised");
+    expect(plan.cards[0].categoryName).toBe("Uncategorized");
   });
 
   it("lets a file section name the category", () => {
@@ -273,7 +273,7 @@ Maybeboard
       "Artifact",
       "Instant",
       "Land",
-      "Uncategorised",
+      "Uncategorized",
     ]);
   });
 

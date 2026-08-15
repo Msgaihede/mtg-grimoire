@@ -746,7 +746,7 @@ export function DeleteCategory({
  * the cards left is still the place the next one goes. That argument survives for a pile a
  * *person* made and for the seeded zones, and `origin` is now what tells them apart. The two
  * piles this press is allowed to empty (`useDeckMeta`'s `LOOSE_PILES`) are one of each:
- * `Main deck` is the v8 migration's own pile and keeps its heading, while `Uncategorised` is made
+ * `Main deck` is the v8 migration's own pile and keeps its heading, while `Uncategorized` is made
  * by the app filing a card and is therefore `origin: 'auto'` — so emptying it takes its heading
  * off the desk. Nothing is lost either way, and the list above never depended on it at all: it is
  * `deck_category_list` and draws every category a deck has, because this is the surface where a

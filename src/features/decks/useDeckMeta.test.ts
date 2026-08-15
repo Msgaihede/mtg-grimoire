@@ -352,7 +352,7 @@ describe("useDeckMeta.autoCategorise", () => {
    * exactly this deck.
    */
   it("files both rows when one printing sits in two loose piles", async () => {
-    const LOOSE = category({ id: 9, name: "Uncategorised", sortOrder: 3 });
+    const LOOSE = category({ id: 9, name: "Uncategorized", sortOrder: 3 });
     const RAMP = category({ id: 10, name: "Ramp", sortOrder: 4 });
     deckCategoryList.mockResolvedValue([MAIN, LOOSE, RAMP]);
     oracleTagsForPrintings.mockResolvedValue([{ cardId: "p7", slugs: ["ramp"] }]);
@@ -543,7 +543,7 @@ describe("useDeckMeta.autoCategorise", () => {
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 7, null, "live");
   });
 
-  /** `autoCategoryFor` answers "Uncategorised" for an orphan or a layout it has no word for.
+  /** `autoCategoryFor` answers "Uncategorized" for an orphan or a layout it has no word for.
    *  Moving those from one loose pile into another is churn dressed as work. */
   it("leaves a card the rule cannot place where it is", async () => {
     const { result } = renderHook(() => useDeckMeta(4), { wrapper });

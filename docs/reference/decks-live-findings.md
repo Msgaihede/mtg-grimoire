@@ -366,8 +366,37 @@ suite can reach are the gesture and the provenance.
   nothing being dragged. The bar spans **78–136** and the desk row begins at **243**, so **107px**
   of clearance.
 
-**What this pass did not reach**: the _unplaceable_ answer, where `autoCategoryFor` returns
-`Uncategorised` and the card stays put with a sentence of its own. It needs an orphaned row or a
-layout the rule has no word for, and this deck has neither. `useDeck.test.ts` covers it, and the
-sibling branch — "already filed" — was driven here, so what is unproven is the second arm of one
-`if` rather than the path to it.
+**What this pass did not reach**: the _unplaceable_ answer, where `autoCategoryFor` returns the
+fallback pile. It needs an orphaned row or a layout the rule has no word for, and this deck has
+neither. `useDeck.test.ts` covers it, and the sibling branch — "already filed" — was driven here,
+so what is unproven is the second arm of one `if` rather than the path to it.
+
+> **Superseded 2026-08-16 — that arm no longer stays put.** A card the rule cannot place is filed
+> into `Uncategorized` like any other answer, so the branch this paragraph called unproven has
+> been replaced rather than driven. What is unproven now is narrower and of the same kind: that
+> the fallback pile is _created_ by a re-file, which is the ordinary name arm the pass already
+> drove for `Draw`. See the corpus counts below for how rare reaching it is at all.
+
+### How often the fallback is actually reached — counted 2026-08-16, not estimated
+
+Against the live corpus, **116,703 printings**, mirroring `autoCategoryFor` exactly (the eight
+type buckets, and the thirteen functional anchors joined through `oracle_tag_cards`):
+
+|                                                             | Printings                                       |
+| ----------------------------------------------------------- | ----------------------------------------------- |
+| No type line at all, in `cards`                             | **0**                                           |
+| Front type line matching no bucket                          | 4,141                                           |
+| …of those, rescued by a functional tag before the type step | 613                                             |
+| **…so genuinely answering the fallback**                    | **3,528** (3.0%), across 60 distinct type lines |
+
+**91.7% of that is art series** — `Card // Card` (2,712), `Card` (521) and one
+`Card // Token Creature — Elemental`: objects with no game type, so there is no type to fall back
+to and the fallback pile is the only honest home. The rest is a long tail that is not deckbuilt
+either (Token 38, Emblem ~35, Stickers 17, Dungeon 1) or belongs to a supplementary format
+(Vanguard 45, Scheme 40, Plane ~70, Conspiracy 23, Phenomenon 21).
+
+**Seven of them are a real mis-filing and are still open**: `Summon Dragon`, `Summon — Specter`,
+`Summon Licid` — Portal-era wording for what modern cards call `Creature` — plus Unhinged's
+`Eaturecray — Igpay`, which is pig latin for the same word. They are castable creatures and the
+rule files them by the fallback. Fixing that is a mapping, not a new bucket, and nobody has done
+it.

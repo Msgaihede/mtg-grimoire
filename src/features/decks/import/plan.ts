@@ -31,7 +31,7 @@ import type {
 import {
   AUTO_CATEGORY_DISPLAY_ORDER,
   PREDEFINED_CATEGORY_NAMES,
-  UNCATEGORISED,
+  UNCATEGORIZED,
   autoCategoryFor,
 } from "../autoCategory";
 import { commanderIneligibility } from "../validation/commanders";
@@ -84,7 +84,7 @@ const SEEDED_INACTIVE: string = SECTION_CATEGORY.maybeboard;
 const TALLY_ORDER: readonly string[] = [
   ...PREDEFINED_CATEGORY_NAMES,
   ...AUTO_CATEGORY_DISPLAY_ORDER,
-  UNCATEGORISED,
+  UNCATEGORIZED,
 ];
 
 /** One line that is going into the deck: the printing it resolved to, how many, and where. */
@@ -229,7 +229,7 @@ function identityOf(m: ImportMatch): CardIdentity {
  *
  * An import is never in the "caller said nothing" case that `DEFAULT_CATEGORY_NAME` answers —
  * a resolved line always has its printing's `typeLine` in hand, so a `null` there means the
- * card really has none (an odd layout) and `Uncategorised` is the honest pile for it.
+ * card really has none (an odd layout) and `Uncategorized` is the honest pile for it.
  */
 function categoryFor(
   line: ParsedLine,
