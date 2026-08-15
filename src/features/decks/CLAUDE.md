@@ -121,6 +121,23 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 - **The history row names the pile, never its id** — `defaultCategory`, resolved to the name in
   `record_deck_edit` at the moment it is true, `null` for Auto. `record_filed`'s rule for a folder
   path, applied to the only other column pointing at a row with a name of its own.
+- **Driven in the shipped window 2026-08-15** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against the real 116 703-card corpus), and it found nothing the suite had not — which is worth
+  writing down for the two halves it confirms rather than for a defect. **The absences**: the
+  "New deck" dialog draws Name, Format, Description, Notes, the theory switch and Folder and **no
+  `Add cards to` row**, and the docked panel's only `<select>` is the filter row's `Format`. **The
+  agreements**: settings opened on `Auto (by what it does)` over
+  `Commander · Sideboard · Companion · Maybeboard (off)` — the seeded-inactive pile offered like
+  any other — and one press on `Sideboard` moved the quick-add field's label to
+  `Quick add a card to Sideboard` **and** every panel Add button to
+  `Add <card> to Sideboard` in the same commit, which is the asymmetry the whole change exists to
+  close. It survived closing the deck and reopening it. The history read
+  **"New cards now go to Sideboard"** — the name, not the id. Deleting a pile the deck was filing
+  into put it back to Auto and **a fresh `deck_get` answered `0`**, so the clean-up is the
+  backend's write rather than the editor's read-side fallback. And a duplicate of a deck on
+  `Sideboard` came back pointing at **its own** row (`{id: 38, deckId: 7}` against the original's
+  `{id: 34, deckId: 6}`), which is the one thing about the remap that no name on screen could have
+  shown.
 - **The X pile is a _heading_, not a category, and its key says so.** `X_GROUP_KEY` is `"mv-x"`
   and shares the `mv-…` namespace deliberately: it is one more mana-value heading, so no
   `deck_cards.category_id` points at it, nothing can be dropped into it, and it is gone the moment
