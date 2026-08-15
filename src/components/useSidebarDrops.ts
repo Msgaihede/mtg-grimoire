@@ -138,7 +138,7 @@ export function useSidebarDrops() {
         // found or created. The line comes from the payload rather than a lookup, which is what
         // keeps this a gesture and not a query: every source that carries a `"card"` has it in
         // hand when it registers its draggable (`dnd.ts`). `null` — an orphaned collection row
-        // whose printing has left `cards` — files under `Uncategorised`.
+        // whose printing has left `cards` — files under `Uncategorized`.
         //
         // **A card dragged out of the open deck keeps its own category**, because it has one:
         // `fromCategoryId` is a pile of *this* deck (a deck card exists only while its editor is

@@ -48,7 +48,7 @@ import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
  * component away, and the one that goes stale is the copy.
  *
  * `null` is a real value here and means the app does not know — an orphaned row whose printing
- * has left `cards`. `autoCategoryFor` answers `Uncategorised` for it, which is the honest pile.
+ * has left `cards`. `autoCategoryFor` answers `Uncategorized` for it, which is the honest pile.
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string; typeLine: string | null }
@@ -84,7 +84,7 @@ export type DeckWrite =
    * A separate arm rather than an `add` with a sentinel id, because it carries a different
    * thing: `categoryId` names the pile and this names the **card**, leaving the pile to
    * `autoCategoryFor`. The type line travels because the payload already has it — see
-   * {@link DragPayload} — and `null` is a real answer that files under `Uncategorised`.
+   * {@link DragPayload} — and `null` is a real answer that files under `Uncategorized`.
    */
   | { write: "auto-add"; cardId: string; typeLine: string | null }
   /**
@@ -260,7 +260,7 @@ export function readDragData(data: Record<string, unknown>): DragPayload | null 
     // between this field and the two above it: `cardId` and `name` decide *what* is being
     // dropped and a bad one has to stop the drop, while this only decides which pile the card
     // lands in — and `autoCategoryFor` already has an answer for not knowing. A source that
-    // sends nothing (or sends rubbish) files under `Uncategorised` instead of failing to drop.
+    // sends nothing (or sends rubbish) files under `Uncategorized` instead of failing to drop.
     return { kind, cardId, name, typeLine: typeof typeLine === "string" ? typeLine : null };
   }
   if (kind === "deck-card" && isCategoryId(fromCategoryId)) {

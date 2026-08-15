@@ -198,7 +198,7 @@ export type AutoCategory = (typeof AUTO_CATEGORIES)[number];
  * above it.** One constant cannot be both, which is why "tidying" these back together is the
  * change to refuse.
  *
- * {@link UNCATEGORISED} is deliberately **absent**: it earns its place at the foot by being
+ * {@link UNCATEGORIZED} is deliberately **absent**: it earns its place at the foot by being
  * unknown to {@link autoCategoryDisplayOrder}, not by being written into the end of a list.
  */
 export const AUTO_CATEGORY_DISPLAY_ORDER: readonly string[] = [
@@ -211,11 +211,24 @@ export const AUTO_CATEGORY_DISPLAY_ORDER: readonly string[] = [
  * Where a card with no type line and no tags goes — an orphan whose printing has left
  * `cards`, or a layout this list has no word for (a Dungeon, a Plane, an Attraction).
  *
+ * **A pile like any other, and that is the point of it having a name.** It is answered by the
+ * same rule that answers `Removal`, so `category_for_name` finds-or-creates it, it arrives
+ * `origin: 'auto'`, and it goes off the desk with its last card. Nothing branches on it being
+ * this particular word — see `useDeck.refileCard`, which used to and no longer does.
+ *
  * **Never `""`.** The backend's find-or-create matches on `schema::DECK_CATEGORY_GRAIN`,
  * which is `(deck_id, name)`, so an empty name would be a real category — one with no
  * heading, which the reader can neither see, rename, nor switch back on.
+ *
+ * **Spelled with a `z`, against the file's own prose, and deliberately** (2026-08-16). This is
+ * a name a reader sees on their desk and types into a rename box, not a word in a comment, and
+ * it is the one Markus asked for. `schema.rs`'s v15 backfill still lists the **`s`** spelling
+ * and must keep it: that step is a frozen record of what this rule could answer on the day it
+ * ran, and a machine that has already run v15 never runs it again. Measured before the change —
+ * **0** categories in the live database matched `%ategori%`, so nothing had to be migrated and
+ * no deck can end up holding one of each.
  */
-export const UNCATEGORISED = "Uncategorised";
+export const UNCATEGORIZED = "Uncategorized";
 
 /**
  * The four names `schema::PREDEFINED_CATEGORIES` seeds with every deck, mirrored here for
@@ -249,7 +262,7 @@ export const PREDEFINED_CATEGORY_NAMES: readonly string[] = [
 export const AUTO_CATEGORY_NAMES: readonly string[] = [
   ...ORACLE_CATEGORY_NAMES,
   ...AUTO_CATEGORIES,
-  UNCATEGORISED,
+  UNCATEGORIZED,
 ];
 
 /**
@@ -289,7 +302,7 @@ export function autoCategoryFor(
     if (byFunction) return byFunction.name;
   }
 
-  return AUTO_CATEGORIES.find((bucket) => front.includes(bucket)) ?? UNCATEGORISED;
+  return AUTO_CATEGORIES.find((bucket) => front.includes(bucket)) ?? UNCATEGORIZED;
 }
 
 /**
@@ -297,7 +310,7 @@ export function autoCategoryFor(
  * last.
  *
  * One function so the sort and the grouping share an order as well as a vocabulary.
- * {@link UNCATEGORISED}, and any name this list has never heard of, sorts with the unknowns
+ * {@link UNCATEGORIZED}, and any name this list has never heard of, sorts with the unknowns
  * at the foot rather than at the head, which is where an unknown belongs.
  *
  * There is deliberately **no** exported "matching order" equivalent: the match order is

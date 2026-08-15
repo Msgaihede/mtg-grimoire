@@ -9,7 +9,7 @@ import {
   ORACLE_CATEGORIES,
   ORACLE_CATEGORY_NAMES,
   PREDEFINED_CATEGORY_NAMES,
-  UNCATEGORISED,
+  UNCATEGORIZED,
 } from "./autoCategory";
 
 /**
@@ -279,7 +279,7 @@ describe("autoCategoryFor, by what the card does", () => {
     const noise = ["triggered-ability", "meme", "flavors-of-vanilla"];
     expect(autoCategoryFor(tagged("Instant", noise))).toBe("Instant");
     expect(autoCategoryFor(tagged("Creature — Human Shaman", noise))).toBe("Creature");
-    expect(autoCategoryFor(tagged(null, noise))).toBe(UNCATEGORISED);
+    expect(autoCategoryFor(tagged(null, noise))).toBe(UNCATEGORIZED);
     // Noise beside an anchor changes nothing: the anchor still decides.
     expect(autoCategoryFor(tagged("Instant", [...noise, "removal"]))).toBe("Removal");
   });
@@ -290,11 +290,11 @@ describe("autoCategoryFor, by what the card does", () => {
    * still filed by what it does, and only a card it knows nothing about at all falls to the
    * fallback.
    */
-  it("files a row with no type line by its tags, and only then Uncategorised", () => {
+  it("files a row with no type line by its tags, and only then Uncategorized", () => {
     expect(autoCategoryFor(tagged(null, ["removal"]))).toBe("Removal");
     expect(autoCategoryFor(tagged("", ["ramp", "mana-producer"]))).toBe("Ramp");
-    expect(autoCategoryFor(tagged(null, []))).toBe(UNCATEGORISED);
-    expect(autoCategoryFor(tagged("", []))).toBe(UNCATEGORISED);
+    expect(autoCategoryFor(tagged(null, []))).toBe(UNCATEGORIZED);
+    expect(autoCategoryFor(tagged("", []))).toBe(UNCATEGORIZED);
   });
 });
 
@@ -364,10 +364,10 @@ describe("autoCategoryFor, by what the card is", () => {
    * thing it must never answer is `""`: the backend's find-or-create matches on
    * `(deck_id, name)`, and a blank name is a category nobody can see, name or switch back on.
    */
-  it("answers Uncategorised for a row with no type line", () => {
-    expect(autoCategoryFor(card({ typeLine: null }))).toBe(UNCATEGORISED);
-    expect(autoCategoryFor(card({ typeLine: "" }))).toBe(UNCATEGORISED);
-    expect(autoCategoryFor(card({ typeLine: "Dungeon" }))).toBe(UNCATEGORISED);
+  it("answers Uncategorized for a row with no type line", () => {
+    expect(autoCategoryFor(card({ typeLine: null }))).toBe(UNCATEGORIZED);
+    expect(autoCategoryFor(card({ typeLine: "" }))).toBe(UNCATEGORIZED);
+    expect(autoCategoryFor(card({ typeLine: "Dungeon" }))).toBe(UNCATEGORIZED);
   });
 
   /**
@@ -399,7 +399,7 @@ describe("autoCategoryFor, by what the card is", () => {
     expect([...AUTO_CATEGORY_NAMES]).toEqual([
       ...ORACLE_CATEGORY_NAMES,
       ...AUTO_CATEGORIES,
-      UNCATEGORISED,
+      UNCATEGORIZED,
     ]);
     expect(AUTO_CATEGORY_NAMES).toHaveLength(ORACLE_CATEGORIES.length + AUTO_CATEGORIES.length + 1);
     expect(new Set(AUTO_CATEGORY_NAMES).size).toBe(AUTO_CATEGORY_NAMES.length);
@@ -503,9 +503,9 @@ describe("the matching order and the reading order", () => {
   /** An unknown sorts with the unknowns at the foot, not at the head — including the
    *  fallback the orphan gets. */
   it("sorts the fallback and anything it has never heard of after every bucket", () => {
-    expect(autoCategoryDisplayOrder(UNCATEGORISED)).toBe(AUTO_CATEGORY_DISPLAY_ORDER.length);
+    expect(autoCategoryDisplayOrder(UNCATEGORIZED)).toBe(AUTO_CATEGORY_DISPLAY_ORDER.length);
     expect(autoCategoryDisplayOrder("Dungeon")).toBe(AUTO_CATEGORY_DISPLAY_ORDER.length);
-    expect(autoCategoryDisplayOrder(UNCATEGORISED)).toBeGreaterThan(
+    expect(autoCategoryDisplayOrder(UNCATEGORIZED)).toBeGreaterThan(
       autoCategoryDisplayOrder("Land"),
     );
   });
@@ -513,7 +513,7 @@ describe("the matching order and the reading order", () => {
   /** The reading order is the twenty-one buckets and nothing else — the fallback earns its
    *  place at the foot by being absent from the list, not by being written into the end of it. */
   it("keeps the fallback out of the reading order entirely", () => {
-    expect(AUTO_CATEGORY_DISPLAY_ORDER).not.toContain(UNCATEGORISED);
+    expect(AUTO_CATEGORY_DISPLAY_ORDER).not.toContain(UNCATEGORIZED);
     expect(AUTO_CATEGORY_DISPLAY_ORDER).toHaveLength(
       ORACLE_CATEGORIES.length + AUTO_CATEGORIES.length,
     );
@@ -528,10 +528,10 @@ describe("the matching order and the reading order", () => {
   it("gives every answerable name a position, and no position a name it cannot answer", () => {
     for (const name of AUTO_CATEGORY_NAMES) {
       const placed = autoCategoryDisplayOrder(name) < AUTO_CATEGORY_DISPLAY_ORDER.length;
-      expect([name, placed]).toEqual([name, name !== UNCATEGORISED]);
+      expect([name, placed]).toEqual([name, name !== UNCATEGORIZED]);
     }
     expect([...AUTO_CATEGORY_DISPLAY_ORDER].sort()).toEqual(
-      AUTO_CATEGORY_NAMES.filter((name) => name !== UNCATEGORISED).sort(),
+      AUTO_CATEGORY_NAMES.filter((name) => name !== UNCATEGORIZED).sort(),
     );
   });
 });

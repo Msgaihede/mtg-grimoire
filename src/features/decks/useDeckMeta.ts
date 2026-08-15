@@ -11,7 +11,7 @@ import {
   type TagSuggestion,
 } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { autoCategoryFor, UNCATEGORISED } from "./autoCategory";
+import { autoCategoryFor, UNCATEGORIZED } from "./autoCategory";
 import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./useDeck";
 
 /** Stable identities for "not loaded yet", so a consumer's `useMemo` does not re-run on every
@@ -32,7 +32,7 @@ const NO_SUGGESTIONS: readonly TagSuggestion[] = [];
  * feature sounds like, and it is the version that silently undoes a reader's hand-built
  * "Removal" column the first time they press it.
  */
-const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORISED];
+const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORIZED];
 
 /**
  * What the reader is told when the tag read is refused — **and the press files nothing.**
@@ -267,7 +267,7 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
    *   be called anything. Such a card is left where it is; switching the pile back on and
    *   pressing again files it.
    * * It leaves a card the rule cannot place where it is. `autoCategoryFor` answers
-   *   {@link UNCATEGORISED} for an orphan or a layout it has no word for, and moving those from
+   *   {@link UNCATEGORIZED} for an orphan or a layout it has no word for, and moving those from
    *   one loose pile into another is churn dressed as work.
    * * It creates a target pile only when the deck has none by that name, reading the deck's
    *   **current** categories rather than this hook's cached list — a panel that was one write
@@ -321,7 +321,15 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
             oracleTags: slugsByCardId.get(card.cardId) ?? null,
           }),
         }))
-        .filter(({ card, target }) => target !== UNCATEGORISED && target !== card.categoryName);
+        // **The `UNCATEGORIZED` guard stays here after the quick zones' `Auto` dropped it**
+        // (2026-08-16), and the asymmetry is the point rather than a drift. This press is over
+        // every loose card in the deck at once, and `Uncategorized` is itself one of
+        // {@link LOOSE_PILES} — so filing into it would walk a card from one pile nobody chose
+        // to another, in bulk, and call it tidying. A drag is the opposite act: one card, aimed
+        // by hand at a zone the reader pressed, where "I could not place it" is worth a pile they
+        // can see and drag out of. It is the same split this action already makes about a pile
+        // the reader built and a switched-off target — blast radius decides.
+        .filter(({ card, target }) => target !== UNCATEGORIZED && target !== card.categoryName);
       if (moves.length === 0) return 0;
 
       // The deck as it is now, not as this panel last read it. The marketplace is along for

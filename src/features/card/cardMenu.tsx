@@ -76,7 +76,7 @@ export interface CardMenuTarget {
    * has nothing to say" and files the card under `DEFAULT_CATEGORY_NAME` with **no rule run at
    * all**; `null` is a card whose printing has left `cards`, and it still goes through
    * `autoCategoryFor` — the Land pin first, then the Oracle-tag buckets — reaching
-   * `Uncategorised` only when nothing matches. So omitting the key takes the filing rule off a
+   * `Uncategorized` only when nothing matches. So omitting the key takes the filing rule off a
    * menu add that a drag of the same card would get, and nothing goes red when it happens.
    *
    * The printings list is the case worth naming. A `Printing` row has no type line of its own,

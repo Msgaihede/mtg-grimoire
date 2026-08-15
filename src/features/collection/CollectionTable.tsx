@@ -272,7 +272,7 @@ function DraggableRow({
     // An orphaned entry has no name — `cards` does not know this printing any more — and an
     // empty one is what the payload contract allows for exactly that (`dnd.ts`: a name may be
     // empty, an id may not). Its type line is `null` for the same reason, which files it under
-    // `Uncategorised` if it is carried into a deck — the honest pile for a card the database
+    // `Uncategorized` if it is carried into a deck — the honest pile for a card the database
     // cannot describe.
     return cardDraggable({
       element,

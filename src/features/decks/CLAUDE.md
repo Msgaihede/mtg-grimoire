@@ -56,7 +56,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   **thirteen** Oracle-tag buckets whose anchor slugs the card's tags reach (Removal, Ramp,
   Recursion, Draw, Tutor, Protection, Anthem, Stax, Tokens, Sacrifice, Lifegain, Mill, Burn — the
   order _is_ the rule); else the old card-type answer. `null` (an orphan, or a layout with no
-  bucket word) is `Uncategorised`; **absent** is `DEFAULT_CATEGORY_NAME`.
+  bucket word) is `Uncategorized`; **absent** is `DEFAULT_CATEGORY_NAME`.
 - **The empty slug list is the floor, not an error**, and every path preserves it: a database that
   has never downloaded the taxonomy, a card Tagger has never tagged, an unknown printing and a
   refused tag read all file by type line. **Nothing about categorising a card may fail an add** —
@@ -66,7 +66,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   in the deck rather than one.
 - **That bulk action can now take a column off the desk, and nobody had written that down.** "File
   cards by what they do" empties `useDeckMeta`'s `LOOSE_PILES` — `DEFAULT_CATEGORY_NAME` and
-  `Uncategorised` — and `Uncategorised` is a name the app files under, so the pile it empties is an
+  `Uncategorized` — and `Uncategorized` is a name the app files under, so the pile it empties is an
   `auto` one and its heading goes with its last card. Nothing breaks and nothing is lost: the row
   is still there, still in the Categories dialog, and it comes back with the next card the rule
   cannot place. `Main deck` is the other loose name and the v8 migration's own pile, which the v15
@@ -95,7 +95,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   the ordinary `deckUpdate` beside the format and the theory switch, and asked in
   **`DeckSettingsForm`**. It was a `useState` in `DeckEditor` with an `Add to` select on the
   docked search panel's header row, and both halves of that were wrong: a reader who pointed it
-  at their Sideboard lost the choice the moment they closed the deck, and the *other* surface it
+  at their Sideboard lost the choice the moment they closed the deck, and the _other_ surface it
   governed — the toolbar's quick-add field — drew no control at all, so the only way to find out
   where a quick add would land was to read that field's label. The editor now derives
   `targetCategoryId` from the row and the panel takes it read-only.
@@ -246,7 +246,7 @@ reader to configure the deck they had just made; it now asks all of them.
   which draws its own sentence for its own observer. A write a reader can now make from a card's
   menu or a pile's heading is a write whose refusal has to be said somewhere, and **the menu that
   started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
-  *different* one from the dialog's — TanStack shares a query's cache between observers and a
+  _different_ one from the dialog's — TanStack shares a query's cache between observers and a
   mutation's state with nobody — so this banner speaks only for presses made out here.
 - **There is no remove mutation.** The tray's drop, the stepper's zero **and the card menu's
   `Remove card`** are all `setQuantity(…, 0)`, because zero removes a deck row. That third caller
@@ -285,7 +285,7 @@ reader to configure the deck they had just made; it now asks all of them.
     **a card the deck already holds becomes `auto-refile`** and is filed again by what it does
     (2026-08-15). That second arm replaced a refusal, and the reasoning it replaced is worth
     keeping because it was nearly right: a `deck-card` payload carries no `typeLine`, so there is
-    nothing in *the payload* for `autoCategoryFor` to read — true, and the wrong place to conclude
+    nothing in _the payload_ for `autoCategoryFor` to read — true, and the wrong place to conclude
     from, because the editor is drawing the row and has the type line, the pile's name and the
     tags query already. So `auto-refile` carries an **address** (`cardId`, `from`) and the caller
     supplies the fact, exactly as it does for the pile a `move` lands in. The payload did not have
@@ -293,14 +293,20 @@ reader to configure the deck they had just made; it now asks all of them.
   - **`useDeck.refileCard` is `addCard`'s auto arm read backwards, and deliberately the same
     three steps in the same order**: the card's Oracle tags, `autoCategoryFor`, then a command
     that finds-or-creates the pile that names. One rule at two entrances — a card filed on the way
-    *in* and the same card filed again later must not disagree about where it belongs. **Two
-    answers write nothing and neither is a failure**: a card the rule cannot place
-    (`Uncategorised`) stays put, because moving it out of a pile somebody chose into the bin is a
-    downgrade dressed as tidying; and a card already in the pile the rule names is already filed.
-    Neither reaches IPC — the comparison is against the row's own `categoryName` — so "press it
-    again" costs one tag read. `DeckEditor` draws a `role="status"` sentence for both, clearing
+    _in_ and the same card filed again later must not disagree about where it belongs. **One
+    answer writes nothing and it is not a failure**: a card already in the pile the rule names is
+    already filed. It does not reach IPC — the comparison is against the row's own `categoryName`
+    — so "press it again" costs one tag read. **A card the rule cannot place is filed under
+    `Uncategorized` like any other answer** (changed 2026-08-16; it used to stay put here too, and
+    the note below is what is left of that arm). That pile is `origin: 'auto'` and leaves the desk
+    with its last card, so the card lands somewhere the reader can see and drag out of rather than
+    not moving at all. **The bulk `autoCategorise` still refuses it, and the asymmetry is the
+    point**: that press is over every loose card at once and `Uncategorized` is itself one of its
+    `LOOSE_PILES`, so filing into it would walk cards from one pile nobody chose to another and
+    call it tidying — the same blast-radius split that action already makes about a pile the
+    reader built. `DeckEditor` draws a `role="status"` sentence for the one no-op, clearing
     itself after `REFILE_NOTE_MS`, because a deliberate gesture that changes the screen not at all
-    is the shape of thing that reads as a broken control. A card that *moves* gets no sentence:
+    is the shape of thing that reads as a broken control. A card that _moves_ gets no sentence:
     the caret follows it and the pile announces its own name.
   - **The pile is resolved in Rust, in the move's own transaction**, which is what `deck_move_card`
     grew a name arm for — `add_card`'s two-arm target copied rather than approximated. Three
@@ -384,7 +390,7 @@ reader to configure the deck they had just made; it now asks all of them.
 - **An undo is a `deck` audit row with `field: "undo"`, not a tenth kind**, and `auditText` words
   it around the change it reversed by resolving `of` against the day's other entries — "Undid:
   Removed 2 × Lightning Bolt". The fallback for a row out of reach is `Undid a change`, which is
-  true; the `default` arm's "Changed the deck" is true of *every* deck edit and would say nothing.
+  true; the `default` arm's "Changed the deck" is true of _every_ deck edit and would say nothing.
   The reasons the kind list did not grow, and everything the backend does:
   [decks-storage.md](../../../docs/reference/decks-storage.md).
 - **The audit field for the X split is `"xGroup"`, the one multi-word field name in that switch,
@@ -531,7 +537,7 @@ category-level in this branch; the same `format.ts` is what a later deck-level e
   every format, CSV included** — a header row over no rows is a file claiming to be a decklist and
   is not one.
 - **Rust writes the file, and that is a permission decision rather than a division of labour.**
-  `save()` answers a *path*; writing bytes at it from the page would need an `fs:` permission this
+  `save()` answers a _path_; writing bytes at it from the page would need an `fs:` permission this
   app grants nowhere, so `export_write_file` takes the path and the text — the same shape
   `deck_set_cover_image` has, for the same reason.
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both.
@@ -841,7 +847,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The per-card "Move…" select was removed on 2026-08-14, and a drawn heading is what replaced
   it — and then the card's right-click `Move to` replaced it properly, later the same day.** The
   select built from the `categories` array rather than from the drawn groups, so it reached a pile
-  that had no heading; a *drop* target has to be on screen. For the two classes a reader files into
+  that had no heading; a _drop_ target has to be on screen. For the two classes a reader files into
   deliberately the heading costs nothing — every pile of their own draws, filter or no filter, and
   so do the fixed zones — and deck settings' "Add cards to" is a third route to both. **The one pile with no
   drag route is an auto pile that has gone empty**, which is the class nobody asked for, and it is
@@ -864,12 +870,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   scroll in a box with no height of its own.
   **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
   `VirtualTable` mounts the rows in view and holds a spacer open for the rest; a scrollport is
-  what it *is*, and given no height it draws its own scrollbar **and** the page's. So the desk row
+  what it _is_, and given no height it draws its own scrollbar **and** the page's. So the desk row
   keeps `DECK_HEIGHT_FLOOR` under that one view and the view box keeps `min-h-0 overflow-auto` —
   the arrangement all four used to share.
   **The page section is `relative`, and that word is a second scrollbar** (2026-08-15). It was
   missing, so the editor's `.sr-only` labels — `position: absolute`, no positioned ancestor —
-  took the *initial* containing block, were laid out at their static position deep inside the
+  took the _initial_ containing block, were laid out at their static position deep inside the
   scrolled column, and were clipped by nothing: `DeckStats`' `"0 cards at mana value 8 or more"`
   sat at y **1703** and stretched the **document** to 1704 against an 800px window. The reader saw
   the editor's scrollbar with the window's beside it, and an `h-screen` app that slid up off its
@@ -880,7 +886,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   [frontend-design.md](../../../docs/reference/frontend-design.md).
   **`min-h-96` moved from the desk row to the view box, and that is the load-bearing half.** A
   flex item's automatic minimum size is what stops it being squeezed below its content, and a
-  `min-height` number *replaces* that `auto` — so on the row it was a ceiling as well as a floor:
+  `min-height` number _replaces_ that `auto` — so on the row it was a ceiling as well as a floor:
   measured live, 2 783px of piles in a desk box of 384, with the price strip and the stats band
   laid out over the deck rather than under it and the sticky search panel clamped to a 384px
   containing block. On the view it floors without capping. **jsdom has no layout engine, so
@@ -904,7 +910,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   the X axis stays** — one column zoomed past the desk's own width really is wider than its box,
   and clipping a card is worse than a scrollbar the reader asked for. Wrapping
   is what makes that the rare case instead of the ordinary one. (It was `overflow-auto` here and
-  is `overflow-x-auto` since the bullet above: the *vertical* half of that class was the letterbox,
+  is `overflow-x-auto` since the bullet above: the _vertical_ half of that class was the letterbox,
   and this reasoning is about the horizontal half, which is untouched.) **Driven 2026-08-14** on a seeded
   16-category deck: no X scrollbar at 1024, 1280 or 1920, the two wrap thresholds exact, and the
   rare case contained to the view rather than the page — every figure in
@@ -1280,7 +1286,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **Four card surfaces outside the editor are drag sources, all through the one `cardDraggable`**,
   carrying `{ kind: "card"; cardId; name; typeLine }`. The `typeLine` is **normalised rather than
   validated** — `readDragData` refuses a bad `cardId` or `name`, but turns an unusable type line
-  into `null`, because the pile is all it decides and `Uncategorised` is already the answer for
+  into `null`, because the pile is all it decides and `Uncategorized` is already the answer for
   not knowing. The remove tray narrows to `"deck-card"`, so a card from another wall never draws
   it.
 - **A printings row in the card pane is clickable to view that printing** — `store.viewPrinting`
@@ -1298,7 +1304,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   a union is what makes "never two" structural rather than remembered. **Three members carry a
   payload** — `export` and `deleteCategory` a category id, `import` an optional forced category
   name — which is the other thing a union buys: a second `useState` could hold a category id while
-  a *different* layer was open. Each payload is an **id and never the cards**, because the deck is
+  a _different_ layer was open. Each payload is an **id and never the cards**, because the deck is
   re-read after every write and a frozen array would answer about the deck as it was at the moment
   a menu row was pressed.
 - **The two that were drawers are centred modals, and the search column deliberately is not**
@@ -1397,7 +1403,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
   as the docked panel's set filter. **Most of the editor's full-window surfaces are opened by
   pressing a button** — five of them in the toolbar (`Import cards · Categories · Tags · History
-  · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
+· Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
   — and pressing a button takes the focus out of this field, so the root's `onBlur` closes the list
   on the way.
 - **Some of them arrive another way, and the rung this used to say was missing has since been

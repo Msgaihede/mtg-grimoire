@@ -496,13 +496,19 @@ describe("useDeck", () => {
   });
 
   /**
-   * A card the rule cannot place is **left where it is**. `autoCategoryFor` answers
-   * `Uncategorised` for an orphan or a layout it has no word for, and moving a card out of a
-   * pile somebody chose into the bin is a downgrade dressed as tidying — the same call the
-   * Categories dialog's bulk action makes, for the same reason.
+   * A card the rule cannot place goes to **`Uncategorized`, a pile like any other** (changed
+   * 2026-08-16). It used to be left where it was, on the argument that moving a card out of a
+   * pile somebody chose into the bin is a downgrade dressed as tidying — which is still what
+   * `useDeckMeta.autoCategorise` does, and still right *there*, because that press is over every
+   * loose card in the deck at once. Here the reader picked up one card and pointed at `Auto`.
+   *
+   * It travels through the same **name arm** as any other answer, so the pile is found or made
+   * by `category_for_name` and arrives `origin: 'auto'` — which is what lets it leave the desk
+   * again with its last card.
    */
-  it("leaves a card the rule cannot place where it is", async () => {
+  it("files a card the rule cannot place under Uncategorized", async () => {
     oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    deckMoveCard.mockResolvedValue(77);
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
@@ -513,7 +519,25 @@ describe("useDeck", () => {
       categoryName: MAIN.name,
     });
 
-    expect(answer).toEqual({ moved: false, category: "Uncategorised", categoryId: null });
+    expect(answer).toEqual({ moved: true, category: "Uncategorized", categoryId: 77 });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Uncategorized", "live");
+  });
+
+  /** And a card **already** in that pile is the one press that still writes nothing — the only
+   *  no-op left, now that being unplaceable is a destination rather than a refusal. */
+  it("says a card already in Uncategorized is already filed", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      typeLine: null,
+      categoryName: "Uncategorized",
+    });
+
+    expect(answer).toEqual({ moved: false, category: "Uncategorized", categoryId: null });
     expect(deckMoveCard).not.toHaveBeenCalled();
   });
 
@@ -583,26 +607,26 @@ describe("useDeck", () => {
    * A type line the rule has no bucket word for, and one that is missing outright — an orphan
    * whose printing has left `cards`, or a layout this app has no column for (a Dungeon, a Plane).
    *
-   * Both answer `Uncategorised`, which is `autoCategoryFor`'s own answer and needs no second
+   * Both answer `Uncategorized`, which is `autoCategoryFor`'s own answer and needs no second
    * fallback here — with no tags to go on either, which is this file's default. The pile is a
    * real category the reader can rename, reorder or switch off; what it may never be is `""`,
    * which the backend's find-or-create would accept as a heading nobody can see.
    */
-  it("files a card it cannot place under Uncategorised", async () => {
+  it("files a card it cannot place under Uncategorized", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: null, quantity: 1 });
-    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorised", "live", 1);
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", 1);
 
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Dungeon", quantity: 1 });
-    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorised", "live", 1);
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", 1);
   });
 
   /**
    * **Absent** is not `null`, and this is the difference: a caller that passes no type line at
    * all has said nothing about the card, where one passing `null` has said the app cannot
-   * describe it. The first gets `DEFAULT_CATEGORY_NAME`, the second `Uncategorised`.
+   * describe it. The first gets `DEFAULT_CATEGORY_NAME`, the second `Uncategorized`.
    *
    * No surface in the app takes this arm today — every add either points at a column or carries a
    * type line — so it is a fence, and the test is what says the fence is where it was left.

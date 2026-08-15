@@ -197,7 +197,7 @@ export const DeletingACategoryAndItsCards: Story = {
  * backend.
  *
  * **Deck 1, and it has to be**: the button only empties the loose piles (`Main deck` and
- * `Uncategorised`), and deck 4 has no `Main deck` at all — a deck made today files its first add
+ * `Uncategorized`), and deck 4 has no `Main deck` at all — a deck made today files its first add
  * under that name and every pile after it is the reader's. Deck 1 is the deck the migration left
  * with sixty cards in one, which is exactly the pile this button exists for.
  *

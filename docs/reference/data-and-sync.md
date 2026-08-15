@@ -171,11 +171,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   against the same 563 MB database, timing the two-step collapsed query with **no filter** —
   the worst case there is, because every one of the 37 556 groups is built before the `LIMIT`:
 
-  | Marketplace | Old rule | New rule | |
-  | --- | --- | --- | --- |
-  | TCGplayer — `c.price_usd`, in `idx_cards_collapse` | 108 ms | **127 ms** | 1.18× |
-  | Cardmarket — `c.price_eur`, row lookups | 548 ms | **577 ms** | 1.05× |
-  | Card Kingdom / Mana Pool — `marketplace_prices` subquery | 891 ms | **1 044 ms** | 1.17× |
+  | Marketplace                                              | Old rule | New rule     |       |
+  | -------------------------------------------------------- | -------- | ------------ | ----- |
+  | TCGplayer — `c.price_usd`, in `idx_cards_collapse`       | 108 ms   | **127 ms**   | 1.18× |
+  | Cardmarket — `c.price_eur`, row lookups                  | 548 ms   | **577 ms**   | 1.05× |
+  | Card Kingdom / Mana Pool — `marketplace_prices` subquery | 891 ms   | **1 044 ms** | 1.17× |
 
   A **narrowed** browse — anything a reader actually types — is a wash: `name LIKE '%dragon%'`
   is 24 → 24 ms at TCGplayer and 27 → 28 ms at Card Kingdom. So the whole cost is the
@@ -187,7 +187,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **Provenance, and its limit.** Medians of old and new run **interleaved** (15 pairs
   unfiltered, 40 narrowed, 9 for the feed), because run-to-run drift on this machine is wider
   than the effect being measured — a first, non-interleaved pass had the narrowed browse
-  getting *faster*, which it does not. Taken through Python's SQLite **3.40.1** against the
+  getting _faster_, which it does not. Taken through Python's SQLite **3.40.1** against the
   app's own database file rather than through the crate, so these figures are comparable _to
   each other_ and not to a release-build number — the reason to trust the pair is that the old
   rule's 108 ms lands exactly on the release-build figure above. **The feed row is
@@ -196,6 +196,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   fact. The ~900 ms the feed marketplaces already cost unfiltered is **pre-existing** and had
   never been measured before — `sorting::printing_price_expr` says so in as many words — and it
   dwarfs what this change added to it.
+
 - **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must _not_ be.**
   `oracle_id` is nullable, so a bare `GROUP BY c.oracle_id` merges every null-oracle printing
   into one card — silently, with a printing count and price range spanning unrelated cards.
@@ -282,7 +283,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`marketplace, fetched_at, feed_built_at, row_count`) for the Card Kingdom and Mana Pool
   price feeds. **They are tables and not `cards` columns because `swap_staging` drops `cards`
   on every sync**, and re-downloading 112 MiB of feed to restore a price column is not a
-  recovery plan; `card_id` is a *soft* reference with **no foreign key**, since a feed and the
+  recovery plan; `card_id` is a _soft_ reference with **no foreign key**, since a feed and the
   corpus are collected on different days and a price for a printing this database has never
   seen is the expected case. The step touches `cards` not at all, so — like v8 and v9 — it
   neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
@@ -319,7 +320,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **which of the deck's own categories an add that names no pile lands in**. It is the deck
   editor's old "Add to" answer, which lived in a `useState` in `DeckEditor` and a select on the
   docked search panel until 2026-08-15: a reader who pointed it at their Sideboard lost the choice
-  the moment they closed the deck, and the *other* surface it governed — the toolbar's quick-add
+  the moment they closed the deck, and the _other_ surface it governed — the toolbar's quick-add
   field — drew no control at all. It is asked in the deck settings dialog now, beside the format
   and the folder.
   **`0` is `Auto` and is a value rather than an absence**, which is the whole of why this is a
@@ -327,7 +328,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   an `INTEGER PRIMARY KEY`, so rowids start at 1 and no pile can ever collide with the sentinel —
   the frontend already rested on that, spelling it `AUTO_CATEGORY`, and Rust now spells the same
   number `deck::AUTO_CATEGORY`. `DeckPatch` writes `coalesce(?n, column)`, where a bound NULL means
-  *leave it alone*, so a nullable column would have needed a command of its own to say "back to
+  _leave it alone_, so a nullable column would have needed a command of its own to say "back to
   Auto" — `decks.folder_id`'s exact problem, and `deck::set_folder` is the price it pays. And **the
   cost is that `ON DELETE SET NULL` cannot do the clean-up**, so two sites do it by hand and are
   named at the step: `deck_meta::delete_category` puts a deck filing by the deleted pile back to
@@ -338,13 +339,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   is nothing to recover: the value it would recover was never stored anywhere, and every deck that
   predates the column opens exactly where the editor used to open. Rust owns one fence — a non-zero
   id must name a category **of this deck** (`category_of_deck`), since nothing in the DDL says so —
-  and knows nothing about what Auto *does*: `autoCategoryFor` reads Oracle tags and is TypeScript's.
+  and knows nothing about what Auto _does_: `autoCategoryFor` reads Oracle tags and is TypeScript's.
   The step touches `cards` not at all, so like v8, v9, v11, v12, v13, v14 and v15 it neither needs
   the `CARDS_INDEXES` replay nor takes it from v10, and owes no `cards_fts` rebuild.
 - v15 adds `deck_categories.origin`
   (`TEXT NOT NULL DEFAULT 'user'`) — **who made the pile**: `'auto'` is the app, filing a card it
   had to invent a column for, `'user'` is the reader pressing "New category", and the four seeded
-  zones count as the reader's. TypeScript hides an *empty* `auto` pile and always draws a `user`
+  zones count as the reader's. TypeScript hides an _empty_ `auto` pile and always draws a `user`
   one; Rust records the fact and concludes nothing from it. **No CHECK** (`ALTER TABLE ADD COLUMN`
   cannot add one, `decks.last_variant`'s constraint) and **no Rust fence either**, which is the
   deliberate difference from `last_variant`: `origin` is never a caller's value — four INSERTs
@@ -354,11 +355,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it) and no command parameter reaches it. **The point of storing it is that `category_for_name`
   finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader's own "Ramp"
   is found rather than re-made and keeps `'user'` forever, which is exactly the case a rule driven
-  off the *name* — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
+  off the _name_ — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
   wrong. The backfill is a **one-time frozen guess**: `kind = 'main'` plus one of the 22 names
   `autoCategoryFor` could answer with on the day it shipped (the 13 functional buckets, the 8 type
   buckets, `Uncategorised`), spelled as literals and deliberately **not** kept in step with
-  TypeScript's list, for `PREDEFINED_CATEGORIES`' reason. **`Main deck` is not on it** — that is
+  TypeScript's list, for `PREDEFINED_CATEGORIES`' reason. **That divergence is real rather than
+  theoretical since 2026-08-16**: the rule's fallback was renamed to `Uncategorized`, with a `z`,
+  and this step still says `Uncategorised` because it is a record of what the rule answered on the
+  day it ran — a machine that has already run v15 never runs it again, so editing the literal here
+  would describe a backfill nobody performed. Nothing is stranded by the split: `category_for_name`
+  writes `'auto'` for any pile it invents, so a `Uncategorized` pile made after the rename is
+  marked correctly without this step's help. **`Main deck` is not on it** — that is
   the v8 migration's own pile, holding real cards. Both ways of being wrong are mild and
   self-correcting: a mis-marked pile either hides until a card is added or draws until the reader
   deletes it, and neither loses a card. The step touches `cards` not at all, so like v8, v9, v11,
@@ -373,7 +380,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `ingested_at` for `sync_meta.last_check_at`'s reason**: a 304 leaves the rows alone, so only
   the "when did we last ask" stamp may move — without it a taxonomy that is simply up to date
   reads as due on every launch and spends one API call per start to learn nothing. `oracle_tag_cards` is the **closure** — every
-  tag a card holds *and* every ancestor of those tags, flattened once at ingest — and it is
+  tag a card holds _and_ every ancestor of those tags, flattened once at ingest — and it is
   the only one the app reads at query time, as a prefix scan per card. Measured live
   2026-08-14 over that day's file: 4 521 tags · 926 roots · **684 with more than one parent** ·
   max depth 5 · no cycles and no dangling parent ids (neither of which the ingest assumes) ·
@@ -433,7 +440,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
   actually run over, and `v10_database` to 10 before it, for
-  `the_v11_step_creates_the_marketplace_price_tables`. `v9_database` is a *different* claim again
+  `the_v11_step_creates_the_marketplace_price_tables`. `v9_database` is a _different_ claim again
   and is pinned to the literal 9: it is the last version **below the `CARDS_INDEXES` replay**,
   which is the only thing that can prove a machine entering the ladder under v10 still ends up
   with every index a fresh install has.
