@@ -371,3 +371,77 @@ suite can reach are the gesture and the provenance.
 layout the rule has no word for, and this deck has neither. `useDeck.test.ts` covers it, and the
 sibling branch — "already filed" — was driven here, so what is unproven is the second arm of one
 `if` rather than the path to it.
+
+## The four decklist formats, end to end — 2026-08-16, `npm run tauri dev` (debug), 1280×800
+
+Driven against the **live corpus of 116 712 cards, Scryfall data of 2026-08-15**, through the real
+`deck_import_resolve` / `deck_import_commit` rather than a stub. The three fixtures are the reader's
+own exports of one deck, held verbatim in `src/features/decks/import/fixtures.ts`; two decks were
+created for this pass and deleted afterwards.
+
+### Import: all three lists resolved, and nothing was lost
+
+| Fixture | lines | copies | issues | resolve | matched | unmatched | `hintMissed` | inactive items | piles |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ARCHIDEKT_SECTIONED` | 105 | 117 | 0 | **83 ms** | **105** | 0 | 0 | 17 | 14 |
+| `ARCHIDEKT_FLAT` | 88 | 100 | 0 | **64 ms** | **88** | 0 | 0 | 0 | 12 |
+| `EMPTY_HINT_LIST` | 88 | 100 | 0 | **196 ms** | **88** | 0 | **33** | 0 | 6 |
+
+- **Every printing hint in a real Archidekt export names a real printing.** 105 of 105 resolved
+  with **zero** `hintMissed`, `(plst) IMA-18`, `(pbro) 12p` and `(plst) 2XM-332` included — the
+  three shapes most likely to be a typo and none of them was.
+- **The 33 `hintMissed` rows are exactly the 33 empty `()` lines**, which is the cost this design
+  accepted in writing before it was measured. All 88 still matched: a collector number with no set
+  cannot narrow, so the name arms answer and the reader is told the printing was not honoured.
+- **`EMPTY_HINT_LIST` is 3× the cost of the other two (196 ms against 64)** and is the only one
+  that writes **front faces only** — `Branchloft Pathway`, never `Branchloft Pathway //
+  Boulderloft Pathway`. Both facts have the same cause: with no set code, every line falls past
+  `BY_SET_AND_NUMBER` to the name arms and the split names fall past `BY_NAME` to
+  `BY_FRONT_FACE`. It is the arm sequence being paid for, working exactly as designed, and 196 ms
+  is still well inside the 100 ms-per-*preview* budget's spirit at 88 lines.
+- **The six piles `EMPTY_HINT_LIST` lands in are `autoCategoryFor`'s**, because that list carries
+  no categories at all — the floor this feature stands on, unchanged.
+
+### The commit, and the number the whole design exists for
+
+`deck_import_commit` of the sectioned list: **246 ms**, `added: 117`, `categoriesCreated: 12` (the
+14 piles less the two the deck seeds), `commander: fromFile` — the `[Commander{top}]` bracket
+reached the command zone.
+
+`deck_get` immediately after:
+
+- **`cardCount` is 100**, over **105 rows** and **117 copies**, with 100 counted. A 100-card
+  commander deck imports as 100. The gallery tile reads `Commander · 100 cards`.
+- **`(New) Maybeboard` is `is_active = 0` and `origin = 'auto'`** — the pile the import created,
+  switched off by `ImportItem.inactive`. `Maybeboard` beside it is `origin = 'user'` and was
+  already off, untouched.
+- **`Flash Enabler`, `Counters` and `Stax` survived** as ordinary `auto` piles. Those three are
+  the proof: no `autoCategoryFor` bucket answers any of them, so they can only have come from the
+  file.
+
+### The header, re-measured with six buttons
+
+The 825px figure recorded on 2026-08-14 was five buttons on a different deck; `Export deck` is a
+sixth. Measured on this deck:
+
+- The actions block is **919 × 36**, on **one line**, inside a header row of **1017**.
+- `Export deck` is **88 × 36**.
+- The header row is **92px over two lines** — `distinctTops: 4`. **It wrapped before this branch
+  and still does**; what changed is that the second line is 919 rather than ~831, still short of
+  1017. **`document.documentElement.scrollWidth === clientWidth`**: no horizontal overflow, which
+  is the one thing the 1024px floor forbids.
+
+### The export dialog, and the round trip
+
+Six radios in `EXPORT_FORMATS` order — `Plain text · MTGO · Arena · Moxfield · Archidekt · CSV`.
+
+- **Plain** keeps `1 Serah Farron // Crystallized Serah` whole and draws **no** omission line.
+- **Arena** writes **100 copies** under `Commander` / `Deck` with the set uppercased, and draws
+  **"17 cards in switched-off piles are not written in this format."** 100 + 17 = 117.
+- **Archidekt** writes all **14** headings, **117** copies, **17** `{noDeck}` lines, `1x` counts
+  and a **lowercase** set code: `1x Akroma's Will (lcc) 125 [Maybeboard{noDeck}]`.
+- **The round trip is exact.** That Archidekt text pasted into a second deck parsed to **105 lines
+  / 117 copies / 0 issues / 0 unmatched**, chose its commander `fromFile`, created **12**
+  categories, and read **`cardCount` 100 over 105 rows** with both maybeboards off — every number
+  identical to the original import. `decklists.test.ts` pins the same trip as a fixed point; this
+  is that claim made against the real corpus and the real database.
