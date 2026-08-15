@@ -368,9 +368,19 @@ reader to configure the deck they had just made; it now asks all of them.
   therefore never fails. **Deriving it from the column gives `separateX`, which is wrong** — the
   Storybook fake guessed exactly that before it was corrected — so `auditText.test.ts` pins the
   right word _and_ the wrong-but-plausible one. Copy the word from `deck.rs`; never re-derive it.
-- **A deck card's unit price is that printing's nonfoil price at the selected marketplace** — a
-  deck names a printing, not a finish. `cards.price_usd` is a fallback chain across finishes and
-  is never summed. **One `unitPrice` per row, not a pair**: the marketplace is in `useDeck`'s
+- **A deck card's unit price is what that printing costs at the selected marketplace, in
+  whichever finish it is _sold_ in** — `nonfoil → foil → etched`, `sorting::printing_price_by_
+finish_expr`. A deck names a printing and not a finish, so there is no finish to price at; the
+  rule was the flat **nonfoil** rate until 2026-08-15 and that was a bug, because **13 515
+  foil-only and 892 etched-only printings have no nonfoil price at any marketplace**. An
+  Invocation or a Secret Lair drew an em dash on its card foot, was left out of its pile's
+  heading total _and_ the deck's — counted as "unpriced" — and did all three beside a docked
+  search panel quoting the same printing. Measured on the machine that reported it: **8 of 49
+  deck rows** unpriced, 7 of them recovered by the chain, and the eighth genuinely unquoted in
+  dollars. `cards.price_usd` is that same chain precomputed for the search's `ORDER BY` and is
+  still never summed; the numbers agree, and the em dash still means "this marketplace does not
+  quote this printing" rather than "look somewhere else". **One `unitPrice` per row, not a
+  pair**: the marketplace is in `useDeck`'s
   query key, so switching re-reads the deck, and `deckStats`, `buildGroups`, `sortCards` and
   `diffTotals` take no `Currency` at all any more — a heading, the rows under it and the strip
   above them cannot be about different money, by construction.
