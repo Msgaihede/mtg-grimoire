@@ -14,6 +14,7 @@ import type {
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
+const deckCategoryClear = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     deckSetCardQuantity,
+    deckCategoryClear,
     deckMoveCard,
     deckMissingToWishlist,
     deckSwapPrinting,
@@ -172,6 +174,8 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(DETAIL);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 4, removed: false });
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 9, quantity: 3, removed: false });
+  // The copies it removed — this command answers a number, not a row.
+  deckCategoryClear.mockReset().mockResolvedValue(4);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
@@ -265,6 +269,30 @@ describe("useDeck", () => {
 
     await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id });
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, "theory");
+
+    // The clear is variant-scoped like the rest, and that is the whole difference between it
+    // and `deckCategoryDelete`, which takes both lists because the CASCADE does. Emptying the
+    // deck while the reader is looking at the plan is the failure this pins.
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+    expect(deckCategoryClear).toHaveBeenCalledWith(4, MAIN.id, "theory");
+  });
+
+  /**
+   * **The clear is one command, never a `setQuantity(…, 0)` per row.**
+   *
+   * The rows are all in hand, so the loop would compile — and would be a transaction, an
+   * allocator run and an invalidation per card. This asserts the shape rather than the count:
+   * the stepper's command is not called at all.
+   */
+  it("empties a pile in one command rather than a stepper press per card", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const cleared = await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    expect(cleared).toBe(4);
+    expect(deckCategoryClear).toHaveBeenCalledTimes(1);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
   });
 
   /** A deck the gallery has not refreshed since another view deleted it. `null` is the

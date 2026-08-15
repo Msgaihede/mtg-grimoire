@@ -84,7 +84,7 @@ number to compare against.
 | [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
-| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the seven card commands, the allocator, the audit log, the decklist import |
+| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, the allocator, the audit log, the decklist import |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |

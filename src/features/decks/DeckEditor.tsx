@@ -41,6 +41,7 @@ import {
 } from "./cardControl";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
 import { buildCategoryMenu } from "./categoryMenu";
+import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
 import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
@@ -446,9 +447,10 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * so nothing behind one can be reached by Tab any more than by a pointer. Two of them used to
  * argue the opposite in their own docs while drawn as right-hand drawers; the scrim had always
  * contradicted it. `DeckEditor.test.tsx`'s "keeps Tab inside itself" sweep holds **the ones with a
- * control in this view** together — the export dialog and the delete-category confirmation are
- * both opened from a category heading's right-click and have no button to point that sweep at —
- * and it is a **behavioural** sweep for a reason worth reading before the next modality edit.
+ * control in this view** together — the export dialog and the delete-category and clear-stack
+ * confirmations are opened from a category heading's right-click and have no button to point that
+ * sweep at — and it is a **behavioural** sweep for a reason worth reading before the next
+ * modality edit.
  *
  * **All but two of the overlays are a `DeckDialog`** — where the scrim, the centring,
  * `aria-modal`, the trap, the ✕ and the `"inner"` rung are written once. **`TheoryDiffDialog`
@@ -486,6 +488,18 @@ type Layer =
    */
   | { kind: "deleteCategory"; categoryId: number }
   /**
+   * The pile a `Clear stack…` was pressed on. The **id**, like the two arms above and for their
+   * reason — and here it buys one thing more: the confirmation counts copies off the live row,
+   * so a card added or stepped under the open question is counted as it now is rather than as it
+   * was when a menu row was pressed.
+   *
+   * A separate arm from `deleteCategory` rather than a flag on it, because the two ask different
+   * questions with different scopes — a delete takes both lists and offers somewhere to put the
+   * cards, a clear takes one list and offers nothing — and a union arm is where a state that
+   * means nothing while the other is open belongs.
+   */
+  | { kind: "clearCategory"; categoryId: number }
+  /**
    * A card was let go over the quick zones' **New category**, and the pile it is going into has
    * no name yet.
    *
@@ -493,8 +507,8 @@ type Layer =
    * card is doing depends on where it was picked up — a printing off a wall is *added* to the
    * new pile and a row of this deck is *moved* into it — and that is exactly what a
    * {@link DragPayload} says and a card id does not. It is also frozen on purpose, unlike
-   * `export` and `deleteCategory` one line up: those name a row the deck is re-read into, while
-   * this names a gesture that is over. There is nothing live to look it up from.
+   * `export`, `deleteCategory` and `clearCategory` above: those name a row the deck is re-read
+   * into, while this names a gesture that is over. There is nothing live to look it up from.
    */
   | { kind: "quickCategory"; payload: DragPayload }
   | null;
@@ -884,6 +898,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * observer, so putting it in a dependency list costs the menu memo nothing.
    */
   const resetCategoryDelete = meta.deleteCategory.reset;
+  /** The clear's half of the pair above, and it is owed for the same reason: this observer is
+   *  the editor's and outlives every open of the `clearCategory` layer, so without the reset the
+   *  question reopens with the last refusal already announced inside it. */
+  const resetCategoryClear = deck.clearCategory.reset;
+  const clearCategory = deck.clearCategory.mutate;
+  const clearPending = deck.clearCategory.isPending;
   const createTagFor = useCallback(
     (card: DeckCard, name: string) => {
       void startTagCreate({ name, color: DEFAULT_TAG_COLOR.token })
@@ -920,6 +940,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // only for presses made out here, and the dialog goes on speaking for its own.
   const writes = [
     deck.setQuantity,
+    deck.clearCategory,
     deck.moveCard,
     deck.update,
     deck.setTag,
@@ -968,6 +989,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *  under the open question retitles it, and a delete from another surface empties it. */
   const deletedCategory =
     layer?.kind === "deleteCategory"
+      ? (categories.find((c) => c.id === layer.categoryId) ?? null)
+      : null;
+
+  /** The pile the clear confirmation is about, from the **live** list for `deletedCategory`'s
+   *  reason and one of its own: this dialog quotes `cardCount`, so a card added under the open
+   *  question has to be in the number the reader presses through. */
+  const clearedCategory =
+    layer?.kind === "clearCategory"
       ? (categories.find((c) => c.id === layer.categoryId) ?? null)
       : null;
 
@@ -1502,6 +1531,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deckId, openCardFromDeck, variant],
   );
 
+  /**
+   * **Remove card** — the stepper's zero, addressed by the row.
+   *
+   * `setQuantity(card, 0)` and nothing else, which is what makes this row free of consequences:
+   * it goes through `setQuantityAt`, so it is the same optimistic patch, the same rollback and
+   * the same hand-off of the caret to the pile the card just left that the stepper and the
+   * remove tray already get. There is no `remove` mutation in this app because zero is the
+   * removal — see `useDeck.setQuantity`.
+   */
+  const removeCard = useCallback(
+    (card: DeckCard) => setQuantityAt(card.cardId, card.categoryId, 0),
+    [setQuantityAt],
+  );
+
   /** The two deck writes the menu adds, each addressed by the **row** — a menu is opened on one
    *  card, which is more than a drop carries and is why these are not `applyDrop`'s pair. */
   const moveCardTo = useCallback(
@@ -1550,6 +1593,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           setTag: setCardTag,
           tags: deck.tags,
           createTag: createTagFor,
+          remove: removeCard,
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
@@ -1565,6 +1609,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       moveCardTo,
       setCardTag,
       createTagFor,
+      removeCard,
     ],
   );
 
@@ -1598,6 +1643,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           openExport: ({ categoryId: id }) =>
             openLayer({ kind: "export", categoryId: id }, () => focusDeckGroup(id)),
           setActive: (pile, isActive) => setCategoryActive({ id: pile.id, isActive }),
+          // The clear's confirmation, and the reset on the way in is `askDelete`'s below —
+          // same observer lifetime, same stale-sentence bug it prevents.
+          askClear: (pile) => {
+            resetCategoryClear();
+            openLayer({ kind: "clearCategory", categoryId: pile.id }, () =>
+              focusDeckGroup(pile.id),
+            );
+          },
           // **The refusal from the last time is cleared on the way in**, because the confirmation
           // draws its own sentence off an observer this file holds and the layer opens with that
           // sentence already in it otherwise. See {@link resetCategoryDelete} — and note the
@@ -1612,7 +1665,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
-    [menu, menuKey, categories, deck.cards, openLayer, setCategoryActive, resetCategoryDelete],
+    [
+      menu,
+      menuKey,
+      categories,
+      deck.cards,
+      openLayer,
+      setCategoryActive,
+      resetCategoryClear,
+      resetCategoryDelete,
+    ],
   );
 
   /**
@@ -2839,10 +2901,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         )}
       </DeckDialog>
 
-      {/* **One of the two overlays with no control in this view** — the delete confirmation
-          above is the other, and both are opened from a category heading's right-click. It used
-          to say "the last of the seven, and the only one", which the delete arm made false twice
-          over; the union is the count, and this sentence has stopped carrying one.
+      {/* The confirmation a `Clear stack…` owes, beside the delete's and deliberately **not**
+          folded into it. That dialog asks which of two things should happen to the cards; this
+          one has a single outcome and a different scope — one list, not both — so sharing a
+          component would mean a picker with nothing to pick and a sentence with a branch for
+          each caller. What they do share is the chrome, which is `DeckDialog`'s.
+
+          A refused clear is said **inside** this dialog for the delete's reason, in full there:
+          the editor's own banner draws behind this dialog's `LAYER.overlay` scrim, and a
+          refusal leaves the question open with its button still live — so without this the
+          reader sees a press that did nothing. */}
+      <DeckDialog
+        open={layer?.kind === "clearCategory"}
+        title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
+        closeLabel="Close clear stack"
+        width="w-[28rem]"
+        onDismiss={dismiss}
+        onClose={close}
+      >
+        {clearedCategory && (
+          <div className="px-4 pb-4">
+            {deck.clearCategory.isError && (
+              <p
+                role="alert"
+                className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+              >
+                Could not clear that stack — {ipcError(deck.clearCategory.error)}
+              </p>
+            )}
+            <ClearCategory
+              category={clearedCategory}
+              variant={variant}
+              pending={clearPending}
+              onCancel={dismiss}
+              onCleared={() => clearCategory(clearedCategory.id, { onSuccess: dismiss })}
+            />
+          </div>
+        )}
+      </DeckDialog>
+
+      {/* **One of the overlays with no control in this view** — the delete and clear
+          confirmations above are the others, and all three are opened from a category heading's
+          right-click. It used to say "the last of the seven, and the only one", then "one of the
+          two"; the delete arm made the first false twice over and `Clear stack…` made the second
+          false on 2026-08-15. The union is the count, and this sentence carries none.
 
           `cards` is an argument the dialog never fetches — which is exactly what lets one pile be
           handed to a component a deck-level export will reuse whole — and it is derived from the
