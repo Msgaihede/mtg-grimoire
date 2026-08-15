@@ -84,10 +84,26 @@ const line = (...parts: (string | null)[]): string | null => {
  *  if the backend failed to denormalize one, which is a history line worth still showing. */
 const cardName = (entry: DeckAuditEntry) => entry.cardName ?? "a card";
 
-/** One history entry as a person reads it. */
-export function auditSentence(entry: DeckAuditEntry): AuditLine {
+/**
+ * One history entry as a person reads it.
+ *
+ * `others` is the rest of the day's entries, and it exists for exactly one pair of rows: an
+ * undo and a redo, whose payload names the change they reversed rather than describing one of
+ * their own. Absent — every caller that has no list to hand — those two degrade to "Undid a
+ * change", which is true and is what an entry whose subject has scrolled out of the drawer
+ * gets anyway.
+ */
+export function auditSentence(
+  entry: DeckAuditEntry,
+  others: readonly DeckAuditEntry[] = [],
+): AuditLine {
   const p = facts(entry.payload);
   const name = cardName(entry);
+
+  // Read before the `deck` branch, because that switch is keyed on `field` and these two are
+  // the only fields whose sentence is about **another row**.
+  const reversal = reversalLine(entry, p, others);
+  if (reversal !== null) return reversal;
 
   // An import is the one `add` that names no card: it is a hundred of them. The payload
   // carries the counts because the table records facts and this file words them — which is
@@ -178,6 +194,38 @@ export function auditSentence(entry: DeckAuditEntry): AuditLine {
     default:
       return { text: "Changed the deck", detail: null };
   }
+}
+
+/**
+ * An undo or a redo, worded around the change it reversed.
+ *
+ * **These are `deck` rows and not a tenth audit kind**, which is the backend's decision and
+ * worth knowing here: `deck_audit.kind` carries a CHECK, SQLite cannot alter one, and a tenth
+ * word would rebuild every reader's whole deck history for a spelling. `deck_import_commit`
+ * reached the same conclusion first and reused `add`/`remove` with a keyed payload.
+ *
+ * `null` for every other row, so the `deck` switch below sees exactly what it always did.
+ *
+ * **The nested sentence is the whole point.** "Changed the deck" is what the `default` arm
+ * would answer, and it is true of every deck edit — a reader looking at their own history
+ * wants "Undid: Removed 2 × Lightning Bolt". `of` is the id, resolved against the rows the
+ * drawer already has rather than by a second query, and **the recursion is one level deep by
+ * construction**: an undo's own row records no step, so nothing can name one.
+ */
+function reversalLine(
+  entry: DeckAuditEntry,
+  p: Record<string, unknown>,
+  others: readonly DeckAuditEntry[],
+): AuditLine | null {
+  if (entry.kind !== "deck") return null;
+  const field = text(p.field);
+  if (field !== "undo" && field !== "redo") return null;
+  const verb = field === "undo" ? "Undid" : "Redid";
+  const of = typeof p.of === "number" ? p.of : null;
+  const target = of === null ? undefined : others.find((row) => row.id === of);
+  if (target === undefined) return { text: `${verb} a change`, detail: null };
+  const line = auditSentence(target);
+  return { text: `${verb}: ${line.text}`, detail: line.detail };
 }
 
 /**
