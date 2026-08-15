@@ -1024,6 +1024,26 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     states the rule instead. Every exemption carries a comment at its own site saying which of
     the two it is — that comment is the record, and it is what stops the next sweep for unsorted
     selects "fixing" them.
+  - **The deck editor's `View` switch joined this block on 2026-08-15, from the other side.** It
+    was a four-button segmented group (`role="group"`, `aria-label="Deck view"`, `aria-pressed`
+    on the picked one) standing between two selects that ask the toolbar's other two questions,
+    so the control a reader reaches for most was the one that looked unlike its neighbours. It is
+    `VIEW_PICKER` now — `DeckEditor`'s `VIEWS` through `sortOptions`, reading
+    `Grid · Stacks · Table · Text` — and **no exemption**: the array is written default-first,
+    which is a fact about how it was typed rather than information the reader is owed.
+    **Driven in the shipped window 2026-08-15** (`npm run tauri dev`, a debug build, 1280×800,
+    on a 14-card Commander deck): the three selects computed `top: 182` and `height: 36` each —
+    one line, no wrap — at **80px** (View), **105** (Group by) and **111** (Sort), with the
+    toolbar's five clusters all on that line and `document.body.scrollWidth` **1265** against a
+    `clientWidth` of **1265**, so the row that the 1024px floor forbids overflowing does not.
+    The select carried `CONTROL`'s 12px type and its transition list, `filter-focus`'s gold
+    outline (`oklch(0.75 0.12 85)`) on focus, and `role=group` was down to the two that are not
+    this control. Each of the four rows drew its own view — `table` one `[role=table]` and 19
+    rows with no card art, `text` nine lists and none, `grid` 14 pictures, `stacks` 14 pictures
+    across five `[data-deck-stack]` piles — with no horizontal overflow in any of them, and the
+    console recorder caught 16 entries and no error or warning. **The width the segmented group
+    used was not measured before it was replaced**, so "about 100px back" is arithmetic off its
+    four `px-3` buttons rather than a reading.
 
 - **The search's `Unplayable` chip is a row of its format select now** (2026-08-14) — one control
   where there were two, `FilterBar.tsx` plus `useCardSearch.ts`'s `ANY_CARD` and `formatParams`.
@@ -1080,12 +1100,31 @@ and what driving it found.
   A deck card and a search tile answer the same question — _is the pane about this one_ — and the
   deck editor draws both walls at once, the desk and the docked search column. Two vocabularies
   eight inches apart is the failure to avoid, so there is one.
-- **Landed is parchment, not gold, and the reason is arithmetic rather than taste.** Gold is
-  already spent four ways on this one surface: keyboard focus, the picked ring, and both halves of
-  the drop affordance (`DROP_RING` / `DROP_OVER`). Red is the rule break's edge. Green would be a
-  five-colour token spent on something that is not mana, which the direction doc forbids in as many
-  words. `--color-text` is what is left, and it is the right answer anyway: a card that has just
-  arrived should read as **lit up** rather than as tinted.
+- **Landed is gold with a glow since 2026-08-15, and it was parchment before that.** The original
+  argument was that gold is already spent four ways on this one surface — keyboard focus, the
+  picked ring, and both halves of the drop affordance (`DROP_RING` / `DROP_OVER`) — with red the
+  rule break's edge and green forbidden by the direction doc for anything that is not mana, so
+  `--color-text` was what was left. It was right about the colour census and wrong about the
+  outcome: parchment is the app's **text** colour, so the mark was the same value as most of what
+  is already on screen, and a mark whose whole job is to be found across a deck the reader is not
+  looking at was the quietest thing in front of them. The reader's report was that they could not
+  see it.
+- **What keeps the fourth gold apart from the other three is shape and place, not hue.** All three
+  of the others are a **line around the outside** of a box — a ring on the card, a ring on the pile
+  — and this is a **filled face**: washed, and lit from its own rim inward. A picked card wears a
+  gold ring around an unwashed card; a card that has just landed is gold all the way through and
+  wears no ring; a pile being dropped into is ringed while the cards in it are untouched. All three
+  can be true of one card at one moment and still read as three facts.
+- **The glow is an `inset` box-shadow, and that is a clipping fact rather than a preference.** The
+  mark is drawn inside the card's face, which is `overflow-hidden` in `CardStack` — it is what
+  clips the picture's corners. Anything painted outside the mark's border box (a plain
+  `box-shadow`, a `drop-shadow()` filter) is clipped away in the stack view and drawn in the other
+  three, which is one mark that looks like two depending on which view the reader left the deck in.
+  An inset shadow is painted by the element inside its own box, survives every clip, and lands the
+  light along the top edge — which is the 34px of itself a card in the middle of a pile shows.
+  `inset 0 0 26px 4px`, blur far wider than the spread so the band falls off into the art instead
+  of drawing a second border inside the first, in `color-mix(in oklab, var(--color-accent) 60%,
+  transparent)` because full-strength gold at that radius is a lamp.
 - **It is drawn _inside_ the card's face, and that is the requirement rather than a detail.** The
   brief was "visible from the middle of a stack". A collapsed card shows only the 34px of its own
   printed title bar that its successor has not painted over, so a ring on the card's outer box has
@@ -1095,23 +1134,30 @@ and what driving it found.
   (Storybook over CDP, headless Edge on 9333, 2026-08-14 — the `app` lock was held by another
   worktree). A flat `bg-text/15` was **invisible** in the reveal strip at a glance and only findable
   once the neighbouring card was moved away; a flat wash strong enough for the strip whites out an
-  open card, which is 293px of it. `bg-gradient-to-b from-text/35 to-text/10` answers both, and it
-  is the same trade `CARD_MARKS_STRIP`'s own scrim makes one element away — which is the precedent
-  for spending a gradient here at all, against the direction's "no gradients".
-- **The border went from `border-text/70` to full `border-text` for the same reason**: at 70 % the
-  hairline sits immediately inside the picked card's gold ring and the two blur into one edge. At
-  full strength the card reads as gold outside, parchment inside.
+  open card, which is 293px of it. The gradient answers both, and it is the same trade
+  `CARD_MARKS_STRIP`'s own scrim makes one element away — which is the precedent for spending a
+  gradient here at all, against the direction's "no gradients". **The percentages moved with the
+  colour**: `from-text/35 to-text/10` became `from-accent/40 to-accent/12`, because gold sits at
+  0.75 lightness against parchment's 0.93 and the same alpha puts less light on the card.
+- **The border went from `border-text/70` to full `border-text` for the same reason**, and is
+  `border-accent` now: at 70 % the hairline sat immediately inside the picked card's gold ring and
+  the two blurred into one edge. That specific collision is gone — the two are the same gold today
+  — and what tells them apart is the ring standing outside the card's edge with a washed, lit face
+  inside it.
 - **What that pass could not show is the mark over card art.** The Storybook fake draws no
   pictures, so every screenshot above is the app-drawn no-image frame — a flat dark card, which is
   the _worst_ case for a white wash and the best case for a white hairline. Over a real `grid`
   image the wash has more to lift and the hairline has a printed black border to sit on. **Not
   driven in the shipped window.**
-- **The ten seconds are in `src/index.css` (`--animate-card-landed`) and in `LANDED_MS`, and
+- **The five seconds are in `src/index.css` (`--animate-card-landed`) and in `LANDED_MS`, and
   `cardControl.test.ts` compares them.** They are not in `src/lib/motion.ts` and must not be moved
   there: that module is a three-tier scale capped at 260ms and `motion.test.ts` fails any duration
-  off it, correctly — everything in it is a _transition_, and this is a mark that decays. Held at
-  full for the first fifth, then linear to nothing: a fade that starts the instant the card lands
-  is at 80 % before the eye has arrived.
+  off it, correctly — everything in it is a _transition_, and this is a mark that decays. **It was
+  ten until 2026-08-15 and was halved by the same change that made the mark gold**: ten seconds was
+  buying a quiet mark the time it needed to be found, and a mark found at a glance does not need
+  that time. Held at full for the first **two fifths**, then linear to nothing — the hold is the
+  same **two seconds** it was at ten, because what it measures is the trip the reader's eye makes
+  and not a fraction of the total, so what the halving spent is fade rather than hold (8s → 3s).
 
 ## The context menu, driven in the shipped window
 

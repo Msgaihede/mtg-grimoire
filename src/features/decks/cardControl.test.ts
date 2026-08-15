@@ -10,12 +10,12 @@ import { CARD_BODY_ATTR, keepsSelection, LANDED_MS } from "./cardControl";
 /** The token the mark's fade is written as, and the duration inside it. */
 const FADE = /--animate-card-landed:\s*card-landed\s+([\d.]+)(ms|s)\b/;
 
-describe("the landed mark's ten seconds", () => {
+describe("the landed mark's five seconds", () => {
   /**
    * **Two files, one number, and nothing else would notice.**
    *
-   * The stylesheet fades the mark over ten seconds and {@link LANDED_MS} takes it out of the DOM
-   * after ten seconds, and the two are genuinely two consumers rather than a copy — there is no
+   * The stylesheet fades the mark over five seconds and {@link LANDED_MS} takes it out of the DOM
+   * after five seconds, and the two are genuinely two consumers rather than a copy — there is no
    * expression that could compute one from the other, because a CSS animation cannot read a TS
    * constant and Tailwind emits no rule for an interpolated class.
    *

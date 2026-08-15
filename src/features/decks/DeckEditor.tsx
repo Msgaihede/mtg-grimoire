@@ -75,7 +75,8 @@ import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
 
 /**
- * The toolbar's two option lists, as the toolbar draws them: alphabetically by label.
+ * Two of the toolbar's three option lists, as the toolbar draws them: alphabetically by label.
+ * The third is {@link VIEW_PICKER}, which sits beside the array it sorts.
  *
  * Sorted here rather than trusted from `grouping.ts` and `sorting.ts`, whose arrays are named
  * in domain order and happen to read alphabetically today — which is exactly how an ordering
@@ -364,6 +365,25 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
 ];
 
 /**
+ * The view switch as the toolbar draws it — and it is a `<select>`, like the two pickers beside
+ * it (changed 2026-08-15).
+ *
+ * **Three controls answering three questions about one list, in one grammar.** `View` says how a
+ * card is drawn, `Group by` says what the headings are and `Sort` says the order inside one;
+ * drawing the first as a four-button segmented group and the other two as selects made the
+ * odd one out the one a reader reaches for most, and spent a quarter of the toolbar's width on
+ * three answers nobody had asked for. A `<select>` costs one press to open and shows the picked
+ * view when it is shut, which is what the pressed button was doing at four times the width.
+ *
+ * **Alphabetically, through `sortOptions`, because there is no order here that carries
+ * information.** The array above is written in the order the views were built and reads as a
+ * decision nobody made — the two exemptions this app grants (an order that *is* the information,
+ * like a grade scale; an order the reader arranged themselves, like their own categories) fit
+ * neither. Sorted at module level for {@link GROUP_BY_PICKER}'s reason.
+ */
+const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
+
+/**
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
  *
  * **At most one of these is ever meant to be open, and a union is what makes that structural
@@ -506,7 +526,7 @@ interface RecentAdds {
  *
  * Two reasons, and neither is the fade. The mark has to **leave the DOM**, or a session's worth
  * of adds is a session's worth of invisible overlays sitting on cards; and the map has to empty,
- * or nothing above ever goes back to `NOTHING_LANDED`. {@link LANDED_MS} is the same ten seconds
+ * or nothing above ever goes back to `NOTHING_LANDED`. {@link LANDED_MS} is the same five seconds
  * the stylesheet fades over — see it for why the number is in two places and what holds them
  * together.
  */
@@ -531,8 +551,8 @@ function useRecentAdds(): RecentAdds {
     nonce.current += 1;
     const stamp = nonce.current;
     const running = timers.current;
-    // At most one timer per row: a card added three times in five seconds glows once, for ten
-    // seconds from the last press, rather than going dark while the reader is still pressing.
+    // At most one timer per row: a card added three times in quick succession glows once, for
+    // five seconds from the last press, rather than going dark while the reader is still pressing.
     const pending = running.get(entryId);
     if (pending !== undefined) clearTimeout(pending);
     running.set(
@@ -676,7 +696,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [targetCategoryId, setTargetCategoryId] = useState<number>(AUTO_CATEGORY);
 
   /**
-   * Which cards have just arrived, so the deck can point at them for ten seconds.
+   * Which cards have just arrived, so the deck can point at them for five seconds.
    *
    * Held here rather than in a view, because the three surfaces that add a card — the quick-add
    * field, a drop onto a pile, and the docked panel's own Add button — are all *this*
@@ -2245,32 +2265,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           </div>
 
+          {/* The first of the row's three pickers, and the one that says how a card is drawn.
+              It is the same control as the two beside it on purpose — see {@link VIEW_PICKER}. */}
           <div className="flex items-center gap-1.5">
-            <span className="text-[0.6875rem] text-dim">View</span>
-            <div
-              role="group"
-              aria-label="Deck view"
-              className="flex overflow-hidden rounded-md border border-border"
+            <label htmlFor="deck-view" className="text-[0.6875rem] text-dim">
+              View
+            </label>
+            <select
+              id="deck-view"
+              value={view}
+              onChange={(e) => setView(e.target.value as DeckView)}
+              className={cn(CONTROL, FILTER_FOCUS, "text-text")}
             >
-              {VIEWS.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setView(id)}
-                  aria-pressed={view === id}
-                  className={cn(
-                    "h-9 border-r border-border px-3 text-xs last:border-r-0",
-                    "transition-colors duration-150 motion-reduce:transition-none",
-                    view === id
-                      ? "bg-accent font-medium text-accent-fg"
-                      : "text-dim hover:text-text",
-                    FOCUS,
-                  )}
-                >
+              {VIEW_PICKER.map(({ id, label }) => (
+                <option key={id} value={id}>
                   {label}
-                </button>
+                </option>
               ))}
-            </div>
+            </select>
           </div>
 
           <div className="flex items-center gap-1.5">

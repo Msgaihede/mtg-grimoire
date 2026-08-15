@@ -419,6 +419,19 @@ price | type`). An **inactive category stays its own group in all three grouping
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
   views' rail — still sees a sideboard in the two modes that otherwise have no categories
   in them, which is the right answer in both cases and is a special case in neither.
+- **The toolbar asks those three questions with three identical `<select>`s** (changed
+  2026-08-15). `View` was a four-button segmented group beside two selects, which made the control
+  a reader reaches for most the one that looked unlike its neighbours and spent four buttons'
+  width saying what a shut select says in one word. It is `VIEW_PICKER` now — `VIEWS` through
+  `sortOptions`, so it reads `Grid · Stacks · Table · Text`, **not** the order the array is
+  written in. That array is written default-first and the order carries no information, so this is
+  no exemption from the app's option-list rule; the two that are (an order that _is_ the
+  information, an order the reader arranged) are in [`src/CLAUDE.md`](../../CLAUDE.md). The view
+  is still session state — `useState` in the editor, never `rememberView`, which remembers the
+  variant, the grouping and the sort and not this. **Driven in the shipped window 2026-08-15**
+  (debug build, 1280×800): all three selects at `top: 182`, 36px tall, on one line, and each of
+  the four rows drew its own view with no horizontal overflow — the figures are in
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The deck stats are a band at the foot of the editor, and there is no control that hides
   them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
   the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
@@ -889,7 +902,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character
   `components/CardArt`'s `selected` recipe, because the deck is answering the same question the
   search wall answers and a reader must not have to learn two vocabularies two clicks apart. Landed
-  is a card the reader has just added, for **ten seconds, fading the whole way**. Both are keyed the
+  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed the
   way the question is asked: picked by `cardId` (a pane is open on a _printing_, so a card filed in
   two piles is marked in both — `TableView` already did this and the other three now agree), landed
   by `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
@@ -897,22 +910,35 @@ price | type`). An **inactive category stays its own group in all three grouping
   `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
   agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
   sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
-- **The landed mark is parchment and it is drawn _inside_ the card's face, and both halves are the
-  requirement rather than a preference.** Gold is taken four times over on this one surface —
-  focus, the picked ring, and both halves of the drop affordance (`AppShell`'s
-  `DROP_RING`/`DROP_OVER`) — red is the rule break's, and green would be a five-colour token spent
-  on something that is not mana, which the visual direction forbids in as many words. What is left
-  is `--color-text`: a card that has just arrived **lights up** rather than being tinted. Inside the
-  face, because the mark has to be legible **from the middle of a stack**, where a card shows only
-  the 34px of its own printed title bar that its successor has not painted over — an outset ring
-  there has three of its four sides covered, while a border on an `inset-0` overlay leaves a bright
-  hairline across the card's top and a lit strip under it. `rounded-[inherit]` **emits no rule at
+- **The landed mark is gold with a glow since 2026-08-15, and it was parchment before that — but
+  the half that is a _requirement_ is that it is drawn _inside_ the card's face.** The old rule
+  read gold as taken four times over on this one surface — focus, the picked ring, and both halves
+  of the drop affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`) — with red the rule break's and
+  green forbidden for anything that is not mana, leaving `--color-text`. The census was right and
+  the answer was wrong: parchment is the app's **text** colour, so the mark was the same value as
+  most of what is already on screen, and the reader reported not being able to see it. **What keeps
+  the fourth gold apart is shape and place, not hue** — the other three are each a _line around the
+  outside_ of a box, and this is a **filled face**: `border-accent`, a
+  `from-accent/40 to-accent/12` wash, and an `inset` box-shadow glowing in from its own rim. A
+  picked card wears a ring around an unwashed card; a landed card is lit through and wears no ring.
+  **The glow is `inset` for a clipping reason and not a stylistic one**: the face is
+  `overflow-hidden` (it clips the picture's corners), so an outward `box-shadow` or a
+  `drop-shadow()` filter is cut off in `Stacks` and drawn in the other three views — one mark
+  looking like two. Inside the face, because the mark has to be legible **from the middle of a
+  stack**, where a card shows only the 34px of its own printed title bar that its successor has not
+  painted over — an outset ring there has three of its four sides covered, while a border on an
+  `inset-0` overlay leaves a bright hairline across the card's top and a lit strip under it, and an
+  inset glow puts its brightest band on exactly that edge. `rounded-[inherit]` **emits no rule at
   all** (Tailwind validates an arbitrary `rounded-*` as a length and drops a bare keyword), so each
   surface passes the radius of the box it lays the mark over.
-- **The ten seconds live in `src/index.css` _and_ in `LANDED_MS`, and `cardControl.test.ts` is what
+- **The five seconds live in `src/index.css` _and_ in `LANDED_MS`, and `cardControl.test.ts` is what
   holds them together.** They are two consumers rather than a copy — the stylesheet fades the mark
-  (`--animate-card-landed`, held at full for the first fifth then linear to nothing) and the
-  constant unmounts it — and no expression can compute one from the other. **It is deliberately not
+  (`--animate-card-landed`, held at full for the first two fifths then linear to nothing) and the
+  constant unmounts it — and no expression can compute one from the other. **They were ten seconds
+  until 2026-08-15 and were halved by the same change that made the mark gold**: ten was buying a
+  quiet mark the time it needed to be found. The hold stayed at **two seconds** through the halving,
+  because it measures the trip the reader's eye makes rather than a fraction of the total, so what
+  was spent is fade (8s → 3s). **It is deliberately not
   in `src/lib/motion.ts`**: that module is a three-tier scale capped at 260ms and `motion.test.ts`
   fails any duration off it, correctly, because everything in it is a _transition_. This is a mark
   that decays. The map's **value is a nonce, not a timestamp**, and it is passed straight through
@@ -924,8 +950,8 @@ price | type`). An **inactive category stays its own group in all three grouping
   surface that borrows the hook, including `useSidebarDrops` with no editor on screen. The docked
   panel holds the mutation and presses it itself (which is what makes its Add button never
   disabled), so it takes `onAdded` and hands the row back. `useRecentAdds` holds one timer per row,
-  restarted on each press, so a card added three times in five seconds glows once for ten seconds
-  from the last press. The import is deliberately outside all of this: 117 lit cards is not a mark.
+  restarted on each press, so a card added three times in quick succession glows once for five
+  seconds from the last press. The import is deliberately outside all of this: 117 lit cards is not a mark.
 - **A click on the desk puts the card down, and putting it down closes the pane** — one listener on
   the editor's root, `keepsSelection` deciding what counts. The two facts are one: the ring means
   "the pane is about this card", so a mark outliving the pane is a ring around nothing and a pane

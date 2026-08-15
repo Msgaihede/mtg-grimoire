@@ -663,15 +663,15 @@ describe("DeckEditor", () => {
     expect(stacks.view.className).not.toContain("overflow");
     expect(stacks.row.className).not.toContain("min-h-");
 
-    for (const label of ["Text", "Grid"]) {
-      await userEvent.click(screen.getByRole("button", { name: label }));
+    for (const id of ["text", "grid"]) {
+      await userEvent.selectOptions(screen.getByLabelText("View"), id);
       const wall = deskOf();
-      expect(wall.view.className, label).toContain("min-h-96");
-      expect(wall.view.className, label).not.toContain("overflow");
-      expect(wall.row.className, label).not.toContain("min-h-");
+      expect(wall.view.className, id).toContain("min-h-96");
+      expect(wall.view.className, id).not.toContain("overflow");
+      expect(wall.row.className, id).not.toContain("min-h-");
     }
 
-    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+    await userEvent.selectOptions(screen.getByLabelText("View"), "table");
     const table = deskOf();
     // The squeezable box, back where it was — and `min-h-96` merged away rather than fighting it.
     expect(table.view.className).toContain("min-h-0");
@@ -1133,15 +1133,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The two toolbar pickers, alphabetically — the app-wide rule (`src/lib/options.ts`), applied
+   * The three toolbar pickers, alphabetically — the app-wide rule (`src/lib/options.ts`), applied
    * to lists that already happened to read that way.
    *
    * That coincidence is exactly why this is pinned: `GROUP_BY_OPTIONS` and `SORT_OPTIONS` are
    * written in the order that explains the modes, and the first entry appended to either would
    * land at the end of the dropdown with nothing to notice it. The sequences are asserted whole
    * so the *property* fails, not one position.
+   *
+   * **`VIEWS` is the one that does not read that way**, so this is the assertion that says the
+   * view switch became an option list like the other two rather than a segmented group wearing a
+   * select's clothes: `Stacks` is written first because it is the default, and it is drawn third.
    */
-  it("offers both toolbar pickers alphabetically", async () => {
+  it("offers all three toolbar pickers alphabetically", async () => {
     await open();
 
     const labels = (select: HTMLElement) =>
@@ -1149,6 +1153,7 @@ describe("DeckEditor", () => {
         .getAllByRole("option")
         .map((o) => o.textContent);
 
+    expect(labels(screen.getByLabelText("View"))).toEqual(["Grid", "Stacks", "Table", "Text"]);
     expect(labels(screen.getByLabelText("Group by"))).toEqual(["Categories", "Mana value", "Type"]);
     expect(labels(screen.getByLabelText("Sort"))).toEqual([
       "Alphabetical",
@@ -1234,23 +1239,27 @@ describe("DeckEditor", () => {
    *  the same headings from the same `CardGroup[]`. */
   it("draws the deck in whichever of the four views is chosen", async () => {
     await open();
-    const press = (label: string) => userEvent.click(screen.getByRole("button", { name: label }));
+    const pick = (id: string) => userEvent.selectOptions(screen.getByLabelText("View"), id);
 
-    await press("Table");
+    // The switch is a `<select>`, so the picked view is also what the control *reads* — which a
+    // segmented group said with a colour and this says in words.
+    expect(screen.getByLabelText("View")).toHaveValue("stacks");
+
+    await pick("table");
     expect(screen.getByRole("table", { name: "This deck" })).toBeInTheDocument();
 
-    await press("Text");
+    await pick("text");
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(
       within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
     ).toBeVisible();
 
-    await press("Grid");
+    await pick("grid");
     expect(
       within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
     ).toBeVisible();
 
-    await press("Stacks");
+    await pick("stacks");
     expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
   });
 
@@ -1420,7 +1429,7 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **Where the card landed, marked for ten seconds.**
+   * **Where the card landed, marked for five seconds.**
    *
    * The add is made in the docked panel and the card lands somewhere in a deck the reader is not
    * looking at, which is the whole reason the mark exists. It is keyed by the **row** the write
@@ -3237,11 +3246,11 @@ describe("DeckEditor — a card's menu", () => {
    * them on a row `VirtualTable` already made focusable — so the table passes either way, and a
    * sweep is what stops that masking the other three.
    */
-  it.each(["Stacks", "Table", "Text", "Grid"])(
+  it.each(["stacks", "table", "text", "grid"])(
     "gives the caret back to the card when the menu closes in %s",
     async (view) => {
       await open();
-      await userEvent.click(screen.getByRole("button", { name: view }));
+      await userEvent.selectOptions(screen.getByLabelText("View"), view);
 
       const marked = await waitFor(() => {
         const el = document.querySelector<HTMLElement>(
@@ -3327,9 +3336,9 @@ describe("DeckEditor — a category's menu", () => {
     return screen.findByRole("menu");
   }
 
-  it.each(["Stacks", "Table", "Text", "Grid"])("offers a pile its menu in %s", async (view) => {
+  it.each(["stacks", "table", "text", "grid"])("offers a pile its menu in %s", async (view) => {
     await open();
-    await userEvent.click(screen.getByRole("button", { name: view }));
+    await userEvent.selectOptions(screen.getByLabelText("View"), view);
 
     await rightClickGroup(MAIN);
 
@@ -3575,7 +3584,7 @@ describe("DeckEditor — a category's menu", () => {
    */
   it("makes the table's band taller while its pile is being renamed", async () => {
     await open();
-    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+    await userEvent.selectOptions(screen.getByLabelText("View"), "table");
 
     const band = () => screen.getByText("Main deck").closest("[role=row]") as HTMLElement;
     expect(band().style.height).toBe("44px");
