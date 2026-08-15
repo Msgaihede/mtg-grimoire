@@ -766,9 +766,65 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   layout nowhere — `columnHeight`, `DEFAULT_COLUMN_HEIGHT` and the view's `groupHeight` are all
   gone. **`TextView` kept the pack**, because a decklist line is 21px and a column of thirty of
   them is the point of that view, where a 300px card makes a stack column hold two piles at most.
-  The cost is a **ragged foot**: a wrapped line is as tall as its tallest pile, so short piles
-  beside a long one leave space the pack would have used. Taken deliberately — reading order is
-  now left-to-right in `sortOrder`, and unspent width was the complaint.
+  The cost was a **ragged foot**: a wrapped line is as tall as its tallest pile, so short piles
+  beside a long one left space the pack would have used. Taken deliberately at the time — reading
+  order is now left-to-right in `sortOrder`, and unspent width was the complaint — and **paid off
+  the next day** by the bullet below, which keeps the reading order and stops paying for it.
+- **A flex line is as tall as its tallest pile, and that was the same bug a third time** (2026-08-15).
+  The pack spent the desk's height and left its width; wrapping spent the width and left a band of
+  blank desk under every short pile the height of the long one beside it. A deck's piles are not
+  the same size and are not meant to be — the creature pile _is_ the deck and the rest are two or
+  three cards apiece — so a forty-card stack set the height of a whole line, and the reader was
+  looking at the empty half of it. `StackView`'s flowing half is a **masonry** now:
+  `display: grid`, `grid-template-columns: repeat(auto-fill, stackColumnWidth(zoom))`,
+  `grid-auto-rows: 1px`, and each pile placed by `grid-row: span <its own measured height + 20>`
+  (`flowRowSpan`). With every row a pixel, grid's ordinary row-major placement _is_ a masonry: it
+  fills the first free cell at or after the cursor and never walks back up the page, so a wrapped
+  pile starts at the foot of the pile above it and the reader's `sortOrder` still reads down the
+  page. Four things follow, and each is the reason for a line of code.
+  - **The column count is still CSS's**, `auto-fill` off a definite track width, so nothing here
+    measures the desk and the rule in the bullet below survives whole.
+  - **What is measured is each pile, not the box they are in** — a `useLayoutEffect` read on every
+    render (before paint, so the first frame is right) plus a `ResizeObserver` per pile for the
+    changes no render causes, a heading wrapping as the search panel is dragged wider being the
+    one that matters. A pile's height cannot be computed from its cards: `stackHeight(n, zoom)` is
+    exact for the stack, but the heading above it wraps or does not.
+  - **`items-start` is what makes the measurement safe.** A grid item aligned to the start of its
+    area is content-sized, so its height does not depend on the span it was given; stretch it — the
+    default — and measure → span → measure oscillates.
+  - **The vertical gutter cannot be a `row-gap`.** A grid gap is drawn at every row boundary an
+    item crosses, so a `gap-y-5` on a grid of one-pixel rows would draw one 20px gutter per pixel
+    of every pile's height. The 20 is added to each pile's own span instead, which puts it once
+    under each pile; the visible cost is one trailing gutter at the foot of each column.
+    `gap-x-4`, the horizontal one, is unchanged and is still what the rail is spaced by.
+
+  **Driven in Storybook over CDP, 2026-08-15 — and _not_ in the shipped window**, which is the
+  carve-out to read first: the `app` lock was held by another worktree for the whole session
+  (roughly eight agents shipping deck-builder work at once), so every figure below is a headless
+  Chromium at a story's own viewport rather than the app's. What that cannot answer is anything
+  about the desk's real width, the docked search panel beside it, or the editor's page scroller.
+  What it does answer is the mechanism, which is where the risk was.
+  - **The declaration arrives intact.** The flowing box computed
+    `grid-template-columns: repeat(auto-fill, 224px)`, `grid-auto-rows: 1px`, class
+    `grid flex-1 items-start gap-x-4`, and its six piles carried spans
+    `[404, 642, 404, 404, 404, 404]` — a one-card pile measures **384px** and an eight-card pile
+    **621.5px**, each plus the 20px gutter, `Math.ceil` doing the .5.
+  - **The placement is the masonry.** At a 736px desk (three tracks) the `UnevenPiles` story drew
+    Commander, Creatures (eight cards) and Ramp across the first line, then **Removal directly
+    under Commander and Card draw directly under Ramp** — both starting while the eight-card stack
+    was still running down the middle — and Lands under Creatures.
+  - **The bug reproduced, in the same page.** Backing the change out through `element.style`
+    (`display: flex; flex-wrap: wrap; row-gap: 20px` on the box, spans cleared and
+    `flex: 0 0 224px` restored on the piles) moved all three wrapped piles down to the foot of the
+    eight-card stack, leaving the blank band under Commander and Ramp that this was reported as.
+  - **An open card costs no reflow.** With a card lifted in the eight-card pile the section still
+    measured **621.5px** and still spanned **642** — `stackHeight(n, zoom)` is fixed and the lift
+    pushes the tail _out_ of a box whose height does not move, so nothing re-measures and nothing
+    below it shifts. The tail paints over the pile beneath exactly as it did under the flex flow.
+  - **The win is distribution, not height, and this fixture says so honestly.** Six piles over
+    three columns is two per column either way, so both layouts came to the same **1026px** of
+    flow. The height is only won where a column holds more than two; what is won at every size is
+    that the space is under the *last* pile instead of in a band across the middle of the desk.
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
   — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.
   `packColumns` is greedy and in the reader's own order (never reordering, never splitting a
@@ -792,8 +848,9 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   text view, whose gap is `gap-6` and whose 300px column has no zoom to move it. `min-w-0` and
   `flex-1` cannot express it, because a flex item that may shrink to nothing never wraps at all.
   An observer could, and is refused: **a view has no business observing its own box** — a rule that
-  outlived the `DEFAULT_COLUMN_HEIGHT` whose doc used to carry it, and that `StackView` now holds
-  in both axes rather than one — and a second reading of the same box answers a frame behind the
+  outlived the `DEFAULT_COLUMN_HEIGHT` whose doc used to carry it, and that `StackView` still holds
+  in both axes: the masonry above observes each **pile**, and nothing in either view reads the desk
+  it is drawn in — and a second reading of the same box answers a frame behind the
   layout it is reacting to, which at exactly this threshold is one frame of the scrollbar the whole
   change exists to remove. **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build,
   a seeded 16-category deck — twelve named piles plus the four predefined), and the two

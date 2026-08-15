@@ -2,7 +2,7 @@
  * The deck as stacks of cards in columns — the default view, and the one the redesign is
  * built around.
  */
-import { useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -73,6 +73,101 @@ export function stackColumnWidth(zoom: number): number {
 }
 
 /**
+ * The row the flowing grid is ruled in, in pixels — and it is 1 so that **a span is a height**.
+ *
+ * The flow is a grid of `stackColumnWidth` tracks whose rows are one pixel each, and a pile claims
+ * as many of them as it is tall ({@link flowRowSpan}). That is what turns CSS Grid's ordinary
+ * row-major placement into a masonry: with every row a pixel, "the next free cell at or after the
+ * cursor" is "the foot of the shortest pile that is not in the way", so a pile that wraps lands
+ * directly **under the pile above it** rather than under the tallest pile on a shared line.
+ *
+ * A coarser rule (4px, say) would cut the implicit row count fourfold and put up to 3px of slop
+ * between two piles in a column. The row count a pixel costs is the height of the tallest column
+ * in the deck, which is the same order as the pixels already being laid out; it is the first thing
+ * to trade away if this view is ever measured as slow, and nothing has measured it yet.
+ */
+const FLOW_ROW = 1;
+
+/**
+ * The gutter between two piles in the same column, in pixels — the `gap-y-5` this view had when
+ * the flow was a wrapping flex box, drawn a different way.
+ *
+ * **It cannot be a `row-gap` any more and that is arithmetic, not taste.** A grid gap is drawn at
+ * every row boundary an item *crosses*, so a pile spanning 400 one-pixel rows would carry 399
+ * gutters inside itself. The row gap is therefore zero and the gutter is added to each pile's own
+ * span, which puts it exactly once under each pile. The visible cost is one trailing gutter at the
+ * foot of every column — 20px of slack under the last pile, on top of the root's `pb-2`.
+ */
+const FLOW_GAP_Y = 20;
+
+/**
+ * How many rows of the flowing grid a pile of this pixel height claims — its height, plus the one
+ * gutter under it.
+ *
+ * `Math.ceil` because a measured height is fractional and a span is an integer: rounding *up* is
+ * the only safe direction, since a span a pixel short would let the pile below it start a pixel
+ * inside this one. `Math.max(1, …)` because `grid-row: span 0` is invalid and would be dropped,
+ * and because **jsdom measures every box as 0** — a suite that never sees a layout still has to
+ * produce a legal span.
+ */
+export function flowRowSpan(height: number): number {
+  return Math.max(1, Math.ceil(height) + FLOW_GAP_Y);
+}
+
+/**
+ * A pile's own height, measured, as a row span for the flowing grid — `null` until it has been.
+ *
+ * **The measurement is of the pile, never of the box the piles are in**, which is the distinction
+ * that lets this exist beside the rule stated on `TextView`'s flowing box: a view has no business
+ * observing *its own* box, because a second reading of the box it is laid out in answers a frame
+ * behind the layout it is reacting to. Nothing here reads the desk. How many columns fit is still
+ * CSS's answer — `repeat(auto-fill, …)`, which needs no number from us — and what a pile measures
+ * cannot be derived from it: a heading wraps or it does not, and only the browser knows.
+ *
+ * **There is no feedback loop, and `align-items: start` is what forbids one.** A grid item aligned
+ * to the start of its area is sized by its content, so a pile's height does not depend on the span
+ * we give it; the span depends on the height and never the other way round. Stretch it — the
+ * default — and this would oscillate.
+ *
+ * The read is a `useLayoutEffect` on **every** render rather than a dependency list, so a span is
+ * never a frame behind the thing that changed it: a card added, a zoom step, a filter. It runs
+ * before paint, so the first frame a pile is drawn in already has its right span. The
+ * `ResizeObserver` beside it is for the changes no render of this component causes — the desk
+ * narrowing under a dragged search panel until a heading wraps, a font arriving late.
+ *
+ * `enabled` is false in the rail, which is a `flex-col` box where a grid row means nothing: the
+ * piles there are plain blocks and measuring them would be a rect read and a state update per
+ * render for a number nobody would use.
+ */
+function useFlowRowSpan(enabled: boolean) {
+  // The name has to end in `Ref` — `react-hooks/immutability` refuses a write to anything else a
+  // hook returned. It is the mirror of `useCategoryDrop`'s `attach`, which must *not* be called
+  // `ref` because the same plugin would then read every use of it as a ref access during render.
+  const elementRef = useRef<HTMLElement | null>(null);
+  const [span, setSpan] = useState<number | null>(null);
+
+  const read = useCallback(() => {
+    const node = elementRef.current;
+    if (!node || !enabled) return;
+    // Setting the value it already holds is a bail-out in React, so the every-render read costs
+    // one extra pass only when the pile has actually changed height.
+    setSpan(flowRowSpan(node.getBoundingClientRect().height));
+  }, [enabled]);
+
+  useLayoutEffect(read);
+
+  useEffect(() => {
+    const node = elementRef.current;
+    if (!node || !enabled) return;
+    const observer = new ResizeObserver(read);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [enabled, read]);
+
+  return { elementRef, span };
+}
+
+/**
  * How a test finds one pile's box in the flow. An attribute rather than a role, because where a
  * pile was drawn is a *layout* and carries no meaning for a reader. `DropIndicator`'s
  * `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for the same reason.
@@ -80,13 +175,22 @@ export function stackColumnWidth(zoom: number): number {
  * **It marks one pile, not a box several piles share, and that is the change of 2026-08-14.**
  * The flowing half of this view used to be `packColumns`' answer — groups packed into columns of
  * a measured height, each column a box, opening a new one when the next group would not fit under
- * the last. That pack is gone from this view: **every pile is now a flex item of one wrapping
- * container**, left to right in the reader's own order, dropping to the next line when it runs
- * out of width. The reason is a bug a reader could see and the pack could not: a column height is
- * a fact about the *desk*, and the pack knew nothing about the desk's **width** — so a tall window
- * filled three columns to the brim and left half the desk empty beside them, while the same deck
- * in a shorter window spread across six. The width is what a reader is looking at, and CSS is
- * already measuring it.
+ * the last. That pack is gone from this view: **every pile is now an item of one grid**, left to
+ * right in the reader's own order, dropping to the next line when it runs out of width. The reason
+ * is a bug a reader could see and the pack could not: a column height is a fact about the *desk*,
+ * and the pack knew nothing about the desk's **width** — so a tall window filled three columns to
+ * the brim and left half the desk empty beside them, while the same deck in a shorter window
+ * spread across six. The width is what a reader is looking at, and CSS is already measuring it.
+ *
+ * **A wrapping flex box was the first answer and it left half the bug standing**, which is the
+ * change of 2026-08-15. A flex line is as tall as the tallest item in it, so one forty-card
+ * Creature pile made the whole line 1 500px tall and every short pile beside it sat over that much
+ * blank desk — the reader's own screenshot of exactly what the pack had been doing, arriving by
+ * the other axis. The flow is a **masonry** now: a grid of one-pixel rows in which each pile spans
+ * its own height ({@link flowRowSpan}), so a pile that wraps starts at the foot of the pile above
+ * it. Nothing about the order moved — the piles are still the reader's `sortOrder` in the DOM, and
+ * grid placement never walks backwards up the page — so reading order, tab order and what a screen
+ * reader hears are what they were.
  *
  * **The rail is deliberately not one of these.** Its piles are taken out before the flow is drawn
  * and stacked down a box of their own, so a sweep counting the flow must not find them. That box
@@ -212,35 +316,51 @@ export function StackView({
         className,
       )}
     >
-      {/* The flowing half, and **every pile in it is a flex item of this one box** — no columns,
-          no packing, nothing measuring a height. They run left to right in the reader's own order
-          and the one that will not fit drops to the next line, which is what fills the desk's
-          width before it spends any of its height. See {@link STACK_ATTR} for what this replaced
-          and the bug that replaced it: a pack fills a *column*, and the desk's shortage is
-          *width*, so at a tall window it left half the desk blank.
+      {/* The flowing half, and **every pile in it is an item of this one grid** — no columns, no
+          packing, nothing measuring this box. They run left to right in the reader's own order and
+          the one that will not fit drops to the next line, which is what fills the desk's width
+          before it spends any of its height. See {@link STACK_ATTR} for the two layouts this
+          replaced and the bug each of them left standing.
 
-          `minWidth` is one pile, and that number is the whole mechanism above: below it the rail
-          wraps, rather than this box squeezing under a pile's fixed width and scrolling sideways.
-          `min-w-0`/`flex-1` cannot say it — they describe how a box shares slack, not the width at
-          which it must stop sharing. `items-start` keeps each pile its own height: stretched, a
-          switched-off pile's `bg-surface/60` wash would grow to the tallest thing on its line and
-          read as an empty box nobody drew. (It was the dashed outline that made this obvious,
-          until 2026-08-14 took the outline away — the wash it left behind stretches exactly as
-          far.) It is also what makes a line of piles ragged at the foot rather than a grid of
-          equal boxes, which is the honest drawing: a pile is as tall as the cards in it.
+          **The masonry is `auto-fill` tracks over one-pixel rows, and nothing else.**
+          `repeat(auto-fill, columnWidth)` is CSS counting how many piles fit on a line — the one
+          number this view refuses to work out for itself — and `gridAutoRows: 1px` makes a row
+          span a pixel height, so each pile claims exactly its own ({@link flowRowSpan}). Grid's
+          own placement does the rest: it fills the first free cell at or after the cursor and
+          never walks back up the page, which with pixel rows means a wrapped pile lands at the
+          foot of the shortest pile that is not in its way rather than under the tallest pile of a
+          shared line. That line was the whole defect — one forty-card Creature stack set the
+          height of every short pile beside it, and the reader was looking at the blank desk under
+          them.
 
-          **The two gaps differ, and they are the two this view already had.** `gap-x-4` is the
-          16px that used to sit between columns; `gap-y-5` is the 20px that used to sit between
-          two groups sharing one — the same rhythm the rail keeps with its own `gap-5`. One `gap-4`
-          for both would quietly tighten the vertical spacing the day the columns went.
+          `minWidth` is one pile, and that number is the whole of the narrow case: below it the
+          rail wraps, rather than this box squeezing under a pile's fixed width and scrolling
+          sideways. `min-w-0`/`flex-1` cannot say it — they describe how a box shares slack, not
+          the width at which it must stop sharing.
+
+          **`items-start` is load-bearing twice over now.** It keeps each pile its own height —
+          stretched, a switched-off pile's `bg-surface/60` wash would grow to fill its whole grid
+          area and read as an empty box nobody drew — and that same content-sizing is what makes
+          the measurement above safe: a pile's height cannot depend on the span it was given, so
+          measure → span → measure cannot oscillate.
+
+          **`gap-x-4` only, and the vertical gutter is inside each span.** A grid gap is drawn at
+          every row boundary an item crosses, so a `gap-y` here would put hundreds of gutters
+          inside a single pile; {@link FLOW_GAP_Y} carries the same 20px the `gap-y-5` this
+          replaced drew, once, under each pile. The 16px horizontal gutter is unchanged and is
+          still the one the rail is spaced by.
 
           **No `content-start` here, on purpose.** This box is a flex item of a line the outer
           `items-start` never stretches, so its height is exactly its content's, there is no free
           cross-space in it, and an `align-content` would have nothing to align. The one place
           that rule can act is the root above. */}
       <div
-        style={{ minWidth: columnWidth }}
-        className="flex flex-1 flex-wrap items-start gap-x-4 gap-y-5"
+        style={{
+          minWidth: columnWidth,
+          gridTemplateColumns: `repeat(auto-fill, ${columnWidth}px)`,
+          gridAutoRows: `${FLOW_ROW}px`,
+        }}
+        className="grid flex-1 items-start gap-x-4"
       >
         {flow.map((group) => (
           <StackGroup
@@ -334,26 +454,53 @@ function StackGroup({
    *  are the same number rather than two reads of one store. */
   zoom: number;
   /**
-   * The width to draw at as a flex item of the flow, and the mark that says it is one.
+   * The width to draw at as an item of the flowing grid, and the mark that says it is one.
    *
-   * **Absent in the rail, and that is load-bearing** — the rail is `flex-col`, so the `flex`
-   * shorthand below would be read down its main axis and set a *height*. The rail's own box
-   * carries the width for the piles in it.
+   * **Absent in the rail, and that is what tells the two boxes apart here.** The rail is a
+   * `flex-col` box that carries the width for every pile in it, so a pile there is a plain block —
+   * no width of its own, no `STACK_ATTR`, and no row span, a grid row meaning nothing in a flex
+   * column. One prop answers all four, which is what keeps a rail pile from being a second, quietly
+   * different kind of pile.
    */
   flowWidth?: number;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
+  const inFlow = flowWidth !== undefined;
+  const { elementRef, span } = useFlowRowSpan(inFlow);
+  // One `ref` for two consumers — the drop target and the measurement — because a `<section>` has
+  // one. It returns a cleanup, which React 19 takes *instead of* calling the callback with `null`,
+  // so releasing the node is this function's job rather than a later `null` call's: forget it and
+  // the observer holds an unmounted pile for the life of the view.
+  const attachSection = useCallback(
+    (node: HTMLElement | null) => {
+      elementRef.current = node;
+      const detach = attach(node);
+      return () => {
+        elementRef.current = null;
+        detach?.();
+      };
+    },
+    [attach, elementRef],
+  );
 
   return (
     <section
-      ref={attach}
+      ref={attachSection}
       aria-labelledby={`group-${group.key}`}
-      // The pile *is* the flex item now — there is no column box around it to carry these. Inline
+      // The pile *is* the grid item — there is no column box around it to carry these. Inline
       // rather than a class, because Tailwind scans source text and a class built from a number
-      // emits no CSS rule at all; and in both halves of the shorthand, because a basis left at
-      // `auto` lets the content decide and the width above is then decoration.
-      style={flowWidth === undefined ? undefined : { width: flowWidth, flex: `0 0 ${flowWidth}px` }}
-      {...(flowWidth === undefined ? {} : { [STACK_ATTR]: "" })}
+      // emits no CSS rule at all. The width is redundant against a track of exactly that size and
+      // is kept because it is the number this view's geometry is stated in: it survives a change
+      // to how the tracks are declared, and it is what a probe reads a pile's box off.
+      //
+      // The span is the masonry (see {@link useFlowRowSpan}) and is absent for exactly one frame —
+      // the render before the layout effect that measures it, which happens before paint.
+      style={
+        inFlow
+          ? { width: flowWidth, gridRow: span === null ? undefined : `span ${span}` }
+          : undefined
+      }
+      {...(inFlow ? { [STACK_ATTR]: "" } : {})}
       // **The pile's own menu, on the section rather than on `GroupHeader`** — see
       // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
       // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
