@@ -182,6 +182,13 @@ pub struct DeckAuditEntry {
 /// is the outcome's, and the drawer is a record of what happened rather than of what was new).
 /// The `remove` row exists only when a `replace` actually cleared something: a history of a
 /// removal that removed nothing is a line the drawer would have to explain.
+/// # It answers the id of the row it wrote
+///
+/// Which is what [`crate::deck_undo::record_step`] files its reversal under — the journal is
+/// keyed 1:1 on this table's `id`. Reaching for `last_insert_rowid()` at each of the fifteen
+/// call sites would have worked and would have been wrong the first time somebody put an
+/// INSERT between the two lines; an explicit return cannot drift. Every call site that wants
+/// nothing back still reads `record(…)?;`, which discards it.
 pub fn record(
     tx: &Connection,
     deck_id: i64,
@@ -190,7 +197,7 @@ pub fn record(
     card: Option<(&str, &str)>,
     payload: &serde_json::Value,
     delta: i64,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
     if !crate::schema::AUDIT_KINDS.contains(&kind) {
         return Err(format!(
@@ -217,7 +224,7 @@ pub fn record(
         ],
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(tx.last_insert_rowid())
 }
 
 /// One deck's history, newest first.

@@ -310,6 +310,64 @@ pub fn record_step(
     Ok(())
 }
 
+/// Record the step for a write that changed one scope of `deck_cards` — the shape five of the
+/// six card commands have, and the reason none of them spells a `Step` out by hand.
+///
+/// `before` is the caller's read of `cells` taken **before** its write; the "after" side is
+/// read here, from the same transaction, after it. Both sides name the same scope, which is
+/// what makes the pair reversible in either direction: undo deletes the scope and puts `before`
+/// back, redo deletes it and puts `after` back.
+pub fn record_cells(
+    tx: &Connection,
+    audit_id: i64,
+    deck_id: i64,
+    cells: Vec<Cell>,
+    before: Vec<CardRow>,
+) -> Result<(), String> {
+    let after = read_cells(tx, deck_id, &cells)?;
+    record_step(
+        tx,
+        audit_id,
+        deck_id,
+        &Step::new(
+            vec![Op::Cards {
+                scope: cells.clone(),
+                rows: before,
+            }],
+            vec![Op::Cards {
+                scope: cells,
+                rows: after,
+            }],
+        ),
+    )
+}
+
+/// The same for a write that reshapes a whole variant — an import, and the theory move.
+pub fn record_variant(
+    tx: &Connection,
+    audit_id: i64,
+    deck_id: i64,
+    variant: &str,
+    before: Vec<CardRow>,
+) -> Result<(), String> {
+    let after = read_variant(tx, deck_id, variant)?;
+    record_step(
+        tx,
+        audit_id,
+        deck_id,
+        &Step::new(
+            vec![Op::Variant {
+                variant: variant.to_owned(),
+                rows: before,
+            }],
+            vec![Op::Variant {
+                variant: variant.to_owned(),
+                rows: after,
+            }],
+        ),
+    )
+}
+
 /// The rows of `deck_cards` in these cells, as a step carries them.
 ///
 /// Called **before** the write it is recording a reversal for, which is the whole discipline of
@@ -899,6 +957,251 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    /// Everything about this deck that a step is supposed to be able to put back, as one
+    /// comparable value.
+    ///
+    /// **`deck_cards.id`, `created_at` and `updated_at` are deliberately left out**, for
+    /// [`CardRow`]'s reason: a restored row is a new row, and a snapshot that compared ids
+    /// would assert the one thing this design says is not promised. Everything a reader can
+    /// see is in here — including `tag_id` and `needs_review`, which are the two columns an
+    /// "obvious" reversal built out of the audit payload would silently drop.
+    fn snapshot(conn: &Connection, deck_id: i64) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cards = conn
+            .prepare(
+                "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
+                        coalesce(tag_id, -1), quantity, coalesce(needs_review, '')
+                   FROM deck_cards WHERE deck_id = ?1",
+            )
+            .unwrap();
+        out.extend(
+            cards
+                .query_map(params![deck_id], |r| {
+                    Ok(format!(
+                        "card {}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, i64>(7)?,
+                        r.get::<_, i64>(8)?,
+                        r.get::<_, String>(9)?,
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap),
+        );
+        let mut cats = conn
+            .prepare(
+                "SELECT name, kind, is_active, sort_order, origin
+                   FROM deck_categories WHERE deck_id = ?1",
+            )
+            .unwrap();
+        out.extend(
+            cats.query_map(params![deck_id], |r| {
+                Ok(format!(
+                    "category {}|{}|{}|{}|{}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap),
+        );
+        let mut tags = conn
+            .prepare("SELECT name, color FROM deck_tags WHERE deck_id = ?1")
+            .unwrap();
+        out.extend(
+            tags.query_map(params![deck_id], |r| {
+                Ok(format!(
+                    "tag {}|{}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap),
+        );
+        for field in DECK_FIELDS {
+            let value = read_deck_fields(conn, deck_id, &[field]).unwrap();
+            out.push(format!("deck {field}={}", value[*field]));
+        }
+        out.sort();
+        out
+    }
+
+    /// Undo the deck's newest step, the way the command will.
+    fn undo(conn: &Connection, deck_id: i64) -> Result<(), String> {
+        let audit_id = next_undo(conn, deck_id)?.ok_or("nothing to undo")?;
+        let (step, _) = read_step(conn, audit_id)?.ok_or("no step")?;
+        apply(conn, deck_id, &step.undo)?;
+        conn.execute(
+            "UPDATE deck_undo SET undone_at = unixepoch() WHERE audit_id = ?1",
+            params![audit_id],
+        )
+        .map_err(|e| e.to_string())?;
+        crate::deck::allocate_deck(conn, deck_id)
+    }
+
+    /// Redo it again.
+    fn redo(conn: &Connection, deck_id: i64, audit_id: i64) -> Result<(), String> {
+        let (step, _) = read_step(conn, audit_id)?.ok_or("no step")?;
+        apply(conn, deck_id, &step.redo)?;
+        conn.execute(
+            "UPDATE deck_undo SET undone_at = NULL WHERE audit_id = ?1",
+            params![audit_id],
+        )
+        .map_err(|e| e.to_string())?;
+        crate::deck::allocate_deck(conn, deck_id)
+    }
+
+    /// One command under test: what to call it in a failure, the state it needs, and the one
+    /// call being measured.
+    ///
+    /// **The setup is a separate function and not the first two lines of `drive`**, because the
+    /// snapshot is taken between them. A case that built its fixture inside `drive` would be
+    /// asserting that undo reverses *two* writes, which is the opposite of the strict-stack
+    /// rule — `every_deck_write_leaves_exactly_one_audit_row` splits them the same way, by
+    /// clearing the history between the two.
+    type Case = (&'static str, fn(&Connection, i64), fn(&Connection, i64));
+
+    /// A case that needs nothing beyond [`fresh`].
+    fn nothing(_: &Connection, _: i64) {}
+
+    /// A deck with two piles, a tag and some cards in it — enough state that a step which
+    /// dropped a column would show up in [`snapshot`] rather than comparing two empty decks.
+    fn fresh() -> (Connection, i64) {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let ramp = category(&conn, id, "Ramp");
+        let draw = category(&conn, id, "Draw");
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", 2).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-m10", Some(ramp), None, "theory", 3).unwrap();
+        let tag = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
+            .unwrap()
+            .id;
+        crate::deck_meta::set_card_tag(&conn, id, "serra-lea", draw, "live", Some(tag)).unwrap();
+        (conn, id)
+    }
+
+    fn ramp(conn: &Connection, deck_id: i64) -> i64 {
+        category(conn, deck_id, "Ramp")
+    }
+
+    fn draw(conn: &Connection, deck_id: i64) -> i64 {
+        category(conn, deck_id, "Draw")
+    }
+
+    /// The card commands, each driven once over the same fixture.
+    fn card_write_cases() -> Vec<Case> {
+        vec![
+            ("deck_add_card", nothing, |c, id| {
+                crate::deck::add_card(c, id, "serra-lea", Some(ramp(c, id)), None, "live", 4)
+                    .unwrap();
+            }),
+            ("deck_add_card (folding onto a row)", nothing, |c, id| {
+                crate::deck::add_card(c, id, "bolt-lea", Some(ramp(c, id)), None, "live", 3)
+                    .unwrap();
+            }),
+            ("deck_set_card_quantity", nothing, |c, id| {
+                crate::deck::set_card_quantity(c, id, "bolt-lea", ramp(c, id), "live", 7).unwrap();
+            }),
+            ("deck_set_card_quantity (zero)", nothing, |c, id| {
+                crate::deck::set_card_quantity(c, id, "bolt-lea", ramp(c, id), "live", 0).unwrap();
+            }),
+            (
+                // The tag and the `needs_review` sentence are what a reversal rebuilt from the
+                // audit payload would lose: that row records a category, a quantity and a
+                // reason, and the label the reader put on the card is in none of them.
+                "deck_set_card_quantity (zero, a tagged row)",
+                nothing,
+                |c, id| {
+                    crate::deck::set_card_quantity(c, id, "serra-lea", draw(c, id), "live", 0)
+                        .unwrap();
+                },
+            ),
+            ("deck_move_card", nothing, |c, id| {
+                crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), draw(c, id), "live")
+                    .unwrap();
+            }),
+            (
+                "deck_move_card (folding onto a row)",
+                |c, id| {
+                    crate::deck::add_card(c, id, "bolt-lea", Some(draw(c, id)), None, "live", 5)
+                        .unwrap();
+                },
+                |c, id| {
+                    crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), draw(c, id), "live")
+                        .unwrap();
+                },
+            ),
+            ("deck_swap_printing", nothing, |c, id| {
+                crate::deck::swap_printing(c, id, "bolt-lea", "bolt-m10", ramp(c, id), "live")
+                    .unwrap();
+            }),
+            (
+                "deck_swap_printing (folding onto a row)",
+                |c, id| {
+                    crate::deck::add_card(c, id, "bolt-m10", Some(ramp(c, id)), None, "live", 6)
+                        .unwrap();
+                },
+                |c, id| {
+                    crate::deck::swap_printing(c, id, "bolt-lea", "bolt-m10", ramp(c, id), "live")
+                        .unwrap();
+                },
+            ),
+            ("deck_category_clear", nothing, |c, id| {
+                crate::deck::clear_category(c, id, ramp(c, id), "live").unwrap();
+            }),
+        ]
+    }
+
+    /// **The rule this journal exists for.** Every deck write records a step, and undoing that
+    /// step puts the deck back exactly — row for row over `deck_cards`, `deck_categories`,
+    /// `deck_tags` and every `decks` column a step may write.
+    ///
+    /// Written as a list of cases rather than as ten tests for
+    /// `every_deck_write_leaves_exactly_one_audit_row`'s reason, one module over: the claim is
+    /// about the **set** of commands, and a new write that records no step fails here the
+    /// moment its line is added. **Count the list, never a remembered number.**
+    ///
+    /// **The `folding onto a row` cases are the point of the list.** Add, move and swap all
+    /// sum into a row the category already holds, and the history records only that they did —
+    /// a boolean, or a delta. Those three are where a reversal built out of the audit payload
+    /// is not merely lossy but *wrong*, deleting a row the reader put there separately.
+    #[test]
+    fn undoing_any_card_write_restores_the_deck_exactly() {
+        for (name, setup, drive) in card_write_cases() {
+            let (conn, id) = fresh();
+            setup(&conn, id);
+            let before = snapshot(&conn, id);
+
+            drive(&conn, id);
+            assert_ne!(
+                snapshot(&conn, id),
+                before,
+                "`{name}` must actually change the deck, or the case proves nothing"
+            );
+            let audit_id = next_undo(&conn, id)
+                .unwrap()
+                .unwrap_or_else(|| panic!("`{name}` recorded no undo step"));
+            let after = snapshot(&conn, id);
+
+            undo(&conn, id).unwrap();
+            assert_eq!(snapshot(&conn, id), before, "`{name}` must undo exactly");
+
+            redo(&conn, id, audit_id).unwrap();
+            assert_eq!(snapshot(&conn, id), after, "`{name}` must redo exactly");
+        }
     }
 
     /// The primitive the whole module rests on: a scope is exact in both directions — every

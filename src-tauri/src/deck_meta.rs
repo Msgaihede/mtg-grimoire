@@ -580,7 +580,7 @@ fn record_category(
     tx: &Connection,
     deck_id: i64,
     payload: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     crate::deck_audit::record(
         tx,
         deck_id,
@@ -594,7 +594,7 @@ fn record_category(
 
 /// One `tag`-kind history row **about the label itself** — created, renamed or deleted. No
 /// card, and an `action` verb: see the module doc for why the two halves of this kind share it.
-fn record_tag(tx: &Connection, deck_id: i64, payload: &serde_json::Value) -> Result<(), String> {
+fn record_tag(tx: &Connection, deck_id: i64, payload: &serde_json::Value) -> Result<i64, String> {
     crate::deck_audit::record(
         tx,
         deck_id,

@@ -1107,7 +1107,7 @@ pub(crate) fn record_filed(
     tx: &Connection,
     deck_id: i64,
     folder_id: Option<i64>,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let folder = match folder_id {
         Some(id) => json!(folder_path(tx, id)?),
         None => json!(null),
@@ -1688,6 +1688,11 @@ pub fn add_card(
             )
         }
     };
+    // The cell this add is about, read before the INSERT. **The fold is why this is a read
+    // rather than "the row was not there"**: an add onto a category that already holds the
+    // printing takes it from 2 to 3, so undoing means putting 2 back rather than deleting.
+    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index
     // was created from. Anything else is a runtime "ON CONFLICT clause does not match any
     // PRIMARY KEY or UNIQUE constraint" at the first quick-add, which is why it is a
@@ -1724,7 +1729,7 @@ pub fn add_card(
     // The copies **added**, never the total the row landed on: the history is a list of
     // changes, and `delta` is what the day header adds up. A fold that took a row from 2 to 3
     // is one copy of history, not three.
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -1733,6 +1738,7 @@ pub fn add_card(
         &json!({ "category": category, "quantity": quantity }),
         quantity,
     )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -1782,6 +1788,12 @@ pub fn set_card_quantity(
         .optional()
         .map_err(|e| e.to_string())?;
 
+    // Read whole rather than rebuilt from `current`: the step has to put the **tag** and any
+    // `needs_review` sentence back too, and a delete takes all of it. `current` answers what
+    // the history line needs and is deliberately not widened to answer both questions.
+    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+
     if quantity == 0 {
         if let Some((_, was, name)) = &current {
             tx.execute(
@@ -1794,7 +1806,7 @@ pub fn set_card_quantity(
             // that could ever have one to give, and it does not delete — it flags. The key is
             // in the shape so a later caller that *does* remove a card for a stated reason has
             // somewhere to put it, rather than a second payload shape for one kind.
-            crate::deck_audit::record(
+            let audit_id = crate::deck_audit::record(
                 &tx,
                 deck_id,
                 variant,
@@ -1803,6 +1815,7 @@ pub fn set_card_quantity(
                 &json!({ "category": category, "quantity": was, "reason": null }),
                 -was,
             )?;
+            crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
         }
         // A stepper that lands on a slot already empty removed nothing, so it records nothing:
         // this is the one place the "every write records a row" rule gives way, and it gives
@@ -1829,7 +1842,7 @@ pub fn set_card_quantity(
         params![deck_id, card_id, category_id, variant, quantity],
     )
     .map_err(|e| e.to_string())?;
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -1838,6 +1851,7 @@ pub fn set_card_quantity(
         &json!({ "category": category, "from": was, "to": quantity }),
         quantity - was,
     )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -1901,6 +1915,11 @@ pub fn clear_category(
     if cleared == 0 {
         return Ok(0);
     }
+    // One wide cell — the whole pile of the one variant, which is exactly what the DELETE
+    // below takes and exactly what an undo has to put back. `cleared` is copies and cannot
+    // rebuild the rows; this is the only record of what was in the pile.
+    let cells = vec![crate::deck_undo::Cell::pile(variant, category_id)];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     tx.execute(
         "DELETE FROM deck_cards WHERE deck_id = ?1 AND category_id = ?2 AND variant = ?3",
         params![deck_id, category_id, variant],
@@ -1911,7 +1930,7 @@ pub fn clear_category(
     // about a pile rather than about a printing, and there is no one name to file it under.
     // `action` is what tells the two apart in `auditText.ts` — that renderer reads a bare
     // `remove` as "Removed n × a card", which is a sentence about a card this row does not have.
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -1920,6 +1939,7 @@ pub fn clear_category(
         &json!({ "action": "clear", "category": category, "cards": cleared }),
         -cleared,
     )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
     allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(cleared)
@@ -1971,6 +1991,15 @@ pub fn move_card(
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| card_gone(&from))?;
+    // **Both** cells, because a move is two changes to one variant and the target's fold is
+    // the half that is not obvious: moving onto a category that already holds the printing
+    // takes that row from 2 to 3, so undoing means putting the 2 back rather than deleting a
+    // row the reader put there separately.
+    let cells = vec![
+        crate::deck_undo::Cell::card(variant, from_category_id, card_id),
+        crate::deck_undo::Cell::card(variant, to_category_id, card_id),
+    ];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     // `INSERT … SELECT … ON CONFLICT` over the same table: the `WHERE` is what makes it
     // unambiguous to parse, and it is here anyway. `needs_review` comes across with a row
     // that lands in an empty category and is left alone where the target row already exists —
@@ -2001,7 +2030,7 @@ pub fn move_card(
     .map_err(|e| e.to_string())?;
     // `delta` 0: a move changes no count. The copies are in the deck before and after, and a
     // day roll-up that charged them twice would report a tidy-up as a shopping trip.
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -2010,6 +2039,7 @@ pub fn move_card(
         &json!({ "from": from, "to": to }),
         0,
     )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
     // A move changes what is claimed even though nothing was added or removed: an inactive
     // category reserves nothing, so a card dragged into or out of one is a claim released or
     // made.
@@ -2115,6 +2145,16 @@ pub fn swap_printing(
         }
     }
 
+    // **Both printings' cells, and this is the one that makes the fold reversible.** A swap
+    // onto a printing the category already holds sums the two rows into one, and the history
+    // records only that it `folded` — a boolean cannot say what the two quantities were. These
+    // rows can, so undoing a fold splits it back into exactly the two rows it ate.
+    let cells = vec![
+        crate::deck_undo::Cell::card(variant, category_id, from_card_id),
+        crate::deck_undo::Cell::card(variant, category_id, to_card_id),
+    ];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+
     // [`add_card`]'s insert, grain and all — the same statement, because "put these copies
     // in that category" is the same write whether they came from a search or from another row.
     let sql = format!(
@@ -2161,7 +2201,7 @@ pub fn swap_printing(
     // and a different printing of it, so the line the history draws is about the row that
     // exists now. `folded` rides along because a deck list that silently loses a line reads
     // like a bug, and the history is the one place that can say it did not.
-    crate::deck_audit::record(
+    let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
@@ -2175,6 +2215,7 @@ pub fn swap_printing(
         }),
         0,
     )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before)?;
     // The deck wants a different printing than it did a statement ago, and the allocator
     // takes the exact printing first — so the copies it reserves can change even though the
     // count did not.
