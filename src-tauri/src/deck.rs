@@ -1070,8 +1070,10 @@ const NO_MODE: &str = "A remembered view mode cannot be blank.";
 ///   be worse than one that said nothing. It is the seventh deliberate exception to
 ///   [`crate::deck_audit`]'s one-row rule, listed there with the other six.
 /// * **It does not reallocate.** Nothing here changes what the deck lists, so nothing changes
-///   what it reserves — and the allocator runs on seven writes and nothing else, a list this
-///   must not quietly become the eighth member of.
+///   what it reserves — and the allocator runs on one named list of writes and nothing else,
+///   which this must not quietly join. (`src-tauri/CLAUDE.md` has the list; it deliberately no
+///   longer carries a count, because the one it carried went stale when `clear_category`
+///   landed.)
 ///
 /// A deck id that resolves to nothing is [`GONE`], like every other deck write: a stale editor
 /// deserves the sentence rather than a write that silently lands nowhere.
@@ -1695,6 +1697,84 @@ pub fn set_card_quantity(
         quantity,
         removed: false,
     })
+}
+
+/// Empty one category of one variant — the pile's right-click `Clear stack`.
+///
+/// ## Why this is a command and not a loop over [`set_card_quantity`]
+///
+/// The frontend already holds every row of the pile, so stepping each to zero would work — and
+/// would be a transaction, an allocator run and a `["decks"]` invalidation **per card**, which
+/// on a forty-card pile is forty of each. That is the same arithmetic that made
+/// [`crate::deck_import::commit_import`] a command rather than a loop over `add_card`, and the
+/// answer is the same: one statement, one allocator run, one history row.
+///
+/// ## Scope: this variant, and deliberately not both
+///
+/// The opposite of [`crate::deck_meta::delete_category`], which takes the live list and the
+/// theory list together because `deck_cards.category_id` is `ON DELETE CASCADE` and a category
+/// is not variant-scoped. A clear is not a delete: the pile survives, and what a reader is
+/// pointing at when they clear a stack is the list on screen. So the `WHERE` carries `variant`
+/// like every other card command, and the confirmation says out loud that the other list is
+/// untouched.
+///
+/// ## An empty pile writes nothing
+///
+/// Not merely an optimisation — [`set_card_quantity`]'s zero arm makes the same choice for the
+/// same reason, and states it: a `remove` row of zero copies is a history of a change that never
+/// happened. So no `touch_deck`, no audit row and no allocator run, and the deck's `updated_at`
+/// does not move because somebody opened a menu on an empty column. The UI greys the row in that
+/// state; this is the fence behind it, since a pile can empty under an open menu.
+///
+/// Answers the copies removed — **copies, not rows**, which is what the confirmation counted and
+/// what `delta` means in the history.
+pub fn clear_category(
+    conn: &Connection,
+    deck_id: i64,
+    category_id: i64,
+    variant: &str,
+) -> Result<i64, String> {
+    let variant = crate::deck_meta::valid_variant(variant)?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The fence before the count, as every card command opens: a category of *another* deck
+    // must not be counted, let alone emptied, and nothing in the DDL says so.
+    let category = category_of_deck(&tx, deck_id, category_id)?;
+    // Summed **before** the delete, and in copies rather than rows — two printings at 2 and 3
+    // is 5 cards, which is the number the confirmation quoted and the number the day header
+    // adds up. `delete_category` counts the same way one module over.
+    let cleared: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+              WHERE deck_id = ?1 AND category_id = ?2 AND variant = ?3",
+            params![deck_id, category_id, variant],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if cleared == 0 {
+        return Ok(0);
+    }
+    tx.execute(
+        "DELETE FROM deck_cards WHERE deck_id = ?1 AND category_id = ?2 AND variant = ?3",
+        params![deck_id, category_id, variant],
+    )
+    .map_err(|e| e.to_string())?;
+    touch_deck(&tx, deck_id)?;
+    // `REMOVE` with **no card**, which is `commit_import`'s replace row exactly: the event is
+    // about a pile rather than about a printing, and there is no one name to file it under.
+    // `action` is what tells the two apart in `auditText.ts` — that renderer reads a bare
+    // `remove` as "Removed n × a card", which is a sentence about a card this row does not have.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::REMOVE,
+        None,
+        &json!({ "action": "clear", "category": category, "cards": cleared }),
+        -cleared,
+    )?;
+    allocate_deck(&tx, deck_id)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(cleared)
 }
 
 /// Move every copy from one category to another, in one transaction, folding into the row the
@@ -2996,6 +3076,25 @@ pub async fn deck_set_card_quantity(
     .map_err(unfinished)?
 }
 
+/// Answers the copies it removed, so the caller can say what happened without re-reading the
+/// deck to work it out.
+#[tauri::command]
+pub async fn deck_category_clear(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    category_id: i64,
+    variant: String,
+) -> Result<i64, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| {
+            clear_category(c, deck_id, category_id, &variant)
+        })
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 #[tauri::command]
 pub async fn deck_move_card(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3475,6 +3574,156 @@ mod tests {
             (added.id, 0, true)
         );
         assert_eq!(count(&conn, "deck_cards"), 0);
+    }
+
+    /// `Clear stack` empties **one pile of one variant**, and the two things it must not
+    /// reach are the other pile and the other list.
+    ///
+    /// The theory half is the one worth the seeding: a clear is the opposite of
+    /// [`crate::deck_meta::delete_category`], which takes both lists because the CASCADE does.
+    /// Nothing in the `WHERE` would go red if `variant` were dropped from it — the live rows
+    /// still vanish — so the theory row is what pins the scope.
+    #[test]
+    fn clearing_a_stack_empties_one_pile_of_one_variant() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "bolt-m10", main, 3);
+        add(&conn, deck.id, "bolt-lea", side, 2);
+        add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 1).unwrap();
+
+        // Copies, not rows: two printings at 4 and 3 is the 7 the confirmation quoted.
+        let cleared = clear_category(&conn, deck.id, main, LIVE).unwrap();
+        assert_eq!(cleared, 7, "copies, never the two rows it deleted");
+
+        let rows: Vec<(i64, String, i64)> = conn
+            .prepare(
+                "SELECT category_id, variant, quantity FROM deck_cards
+                  WHERE deck_id = ?1 ORDER BY category_id, variant",
+            )
+            .unwrap()
+            .query_map(params![deck.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // Sideboard first: it is a seeded predefined pile, and `main_of` creates "Main deck" on
+        // first ask, so the id it gets is the higher one.
+        assert_eq!(
+            rows,
+            vec![(side, LIVE.to_owned(), 2), (main, THEORY.to_owned(), 1)],
+            "the theory copy in the same pile stays, and so does the other pile's live row"
+        );
+
+        let history = crate::deck_audit::list(&conn, deck.id, 10).unwrap();
+        let removes: Vec<(i64, Option<String>, serde_json::Value)> = history
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::REMOVE)
+            .map(|r| {
+                (
+                    r.delta,
+                    r.card_id.clone(),
+                    serde_json::from_str(&r.payload).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            removes,
+            vec![(
+                -7,
+                None,
+                json!({ "action": "clear", "category": "Main deck", "cards": 7 })
+            )],
+            "one row for the whole pile, naming no card because the event is about a pile — \
+             and carrying the `action` that keeps `auditText.ts` from reading it as \
+             `Removed 7 × a card`"
+        );
+    }
+
+    /// An empty pile is not a write. No history, no `updated_at`, no allocator run — the same
+    /// choice [`set_card_quantity`]'s zero arm makes, for the same stated reason.
+    #[test]
+    fn clearing_an_empty_stack_writes_nothing_at_all() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        conn.execute(
+            "UPDATE decks SET updated_at = 0 WHERE id = ?1",
+            params![deck.id],
+        )
+        .unwrap();
+        let before = crate::deck_audit::list(&conn, deck.id, 50).unwrap().len();
+
+        assert_eq!(clear_category(&conn, deck.id, side, LIVE).unwrap(), 0);
+        assert_eq!(
+            crate::deck_audit::list(&conn, deck.id, 50).unwrap().len(),
+            before,
+            "a `remove` of zero copies is a history of a change that never happened"
+        );
+        let touched: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            touched, 0,
+            "and opening a menu on an empty column does not move the deck"
+        );
+    }
+
+    /// The two fences every card write opens with, on the one command that takes a category
+    /// without taking a card.
+    #[test]
+    fn clearing_a_stack_runs_the_same_two_fences() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let theirs = main_of(
+            &conn,
+            create_deck(&conn, &input("Somebody else's", "modern"))
+                .unwrap()
+                .id,
+        );
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        assert_eq!(
+            clear_category(&conn, deck.id, theirs, LIVE).unwrap_err(),
+            crate::deck_meta::CATEGORY_WRONG_DECK
+        );
+        assert_eq!(
+            clear_category(&conn, deck.id, main + 9_999, LIVE).unwrap_err(),
+            crate::deck_meta::CATEGORY_GONE,
+            "gone and not-yours stay different things to tell a stale editor"
+        );
+        let err = clear_category(&conn, deck.id, main, "draft").unwrap_err();
+        assert!(err.contains("draft"), "{err}");
+        assert_eq!(count(&conn, "deck_cards"), 1, "and nothing was emptied");
+    }
+
+    /// The allocator runs, so the copies the cleared pile was holding are free again. It is
+    /// the eighth write on that list and the reason this is a command rather than a loop.
+    #[test]
+    fn clearing_a_stack_releases_the_collection_claims() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let entry = own_and_claim(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        assert_eq!(claims(&conn, deck.id), vec![(entry, 2)], "the premise");
+
+        clear_category(&conn, deck.id, main, LIVE).unwrap();
+        assert_eq!(
+            claims(&conn, deck.id),
+            vec![],
+            "and the copies are free again"
+        );
     }
 
     /// A stepper pointed at a row that is not in that category any more is a stale editor,
