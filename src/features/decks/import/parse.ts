@@ -40,6 +40,18 @@ export interface ParsedLine {
   /** Verbatim. Collector numbers are TEXT (`123★`, `A-45`, `285`), so nothing is parsed out. */
   collectorNumber: string | null;
   section: Section;
+  /**
+   * The pile the **file** named for this line, or `null` when it named none.
+   *
+   * A bracket's first entry. It is `null` whenever `section` is not `"deck"`, and that invariant
+   * is the whole of what keeps `plan.ts`'s precedence chain three rungs rather than four: a
+   * bracket naming one of the four seeded zones sets the *section*, and only a name the section
+   * vocabulary has never heard of lands here.
+   */
+  categoryName: string | null;
+  /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's
+   *  `is_active = 0`. */
+  excluded: boolean;
 }
 
 /** A line that named nothing this could import, kept so the preview can show it. */
@@ -108,19 +120,51 @@ const SECTIONS = new Map<string, Section>([
  * not one copy of `"4 x Shock"`. That is the losing side of the trade and it is a loud
  * failure: an unresolvable name is a row the preview asks about, where "Marks the Spot"
  * would have imported quietly and correctly-looking.
+ *
+ * **The set may be empty, and that is a real export rather than a tolerance.** `1 Aerith, Last
+ * Ancient () 76` is 33 of one reference export's 88 lines: the exporter had a collector number
+ * and no set, and wrote the parentheses anyway. `\w{0,10}` reads it, and an empty match is
+ * `setCode: null` below. Widening the count to zero cannot cost `Erase (Not the Urza's Legacy
+ * One)` its parentheses — the hint is still anchored to the end and a set code still holds no
+ * spaces, so a parenthesised *phrase* can never satisfy it.
+ *
+ * What it costs is honest and worth stating: `resolve_lines` reads a collector number with no
+ * set as a hint it cannot use (a number is not unique across sets) and sets `hint_missed`. So
+ * such a list previews 33 missed hints where it used to preview 33 unresolved cards.
  */
 const LINE =
-  /^(?:(?<qty>\d{1,4})[xX]?\s+)?(?<name>.+?)(?:\s+\((?<set>\w{1,10})\)(?:\s+(?<cn>\S+))?)?$/;
+  /^(?:(?<qty>\d{1,4})[xX]?\s+)?(?<name>.+?)(?:\s+\((?<set>\w{0,10})\)(?:\s+(?<cn>\S+))?)?$/;
 
 /**
  * Trailing decoration that belongs to the exporter rather than to the card: the `*F*`/`*E*`
- * finish markers, a bracketed `[Foil]` or `[Ramp]`, and a trailing `#tag`.
+ * finish markers, an Archidekt `^Tag,#colour^`, and a trailing `#tag`.
  *
  * Every one is anchored to the **end** and requires whitespace in front of it. Both halves of
  * that matter: a `#` in the middle of a line is part of a name, and a marker regex that
  * matched anywhere would cut one out of the middle of one.
+ *
+ * **The `^…^` arm is not the `#` arm widened.** Archidekt writes `^Keeper,#4aab08^`, where the
+ * hash follows a comma rather than whitespace, so the `#` arm never saw it and the whole tail
+ * stayed inside the card's name. `[^^]*` rather than `\S*` because a tag's text has spaces and
+ * parentheses in it — `^Fence (flavor),#fa890d^` is one of them.
+ *
+ * **The bracket is no longer here**, because it is read rather than discarded: see
+ * {@link stripDecorations}.
  */
-const MARKERS = [/\s+\*[A-Z]\*$/, /\s+\[[^\]]+\]$/, /\s+#\S+$/];
+const MARKERS = [/\s+\*[A-Z]\*$/, /\s+\^[^^]*\^$/, /\s+#\S+$/];
+
+/** A trailing `[…]`, anchored like every {@link MARKERS} pattern. */
+const BRACKET = /\s+\[([^\]]+)\]$/;
+
+/**
+ * Bracket contents that are a *finish* rather than a pile.
+ *
+ * `[Foil]` is decoration in the same way `*F*` is, and a deck names a printing rather than a
+ * finish, so reading it as a category would put a pile called "Foil" in somebody's deck. Matched
+ * whole and case-insensitively; anything else in a bracket is a category, because guessing which
+ * words are "really" categories is the format detector this file exists without.
+ */
+const FINISH_WORDS = /^(?:foil|etched|non-?foil)$/i;
 
 /**
  * What ends a line. CRLF first so a Windows paste splits once and not twice.
@@ -154,21 +198,60 @@ function sectionFor(line: string): Section | null {
   return SECTIONS.get(word) ?? null;
 }
 
+/** What a line carries besides its card: the text with every decoration peeled off, and the
+ *  bracket if it had one. */
+interface Decorations {
+  body: string;
+  /** Verbatim, flags and all — {@link bracketCategory} is what reads it. */
+  bracket: string | null;
+}
+
 /**
- * The line with every trailing {@link MARKERS} shape removed.
+ * The line with its trailing decoration removed, and its bracket kept.
  *
- * Repeatedly, to a fixed point, because each pattern is anchored to the end and a line can
- * carry two. `1 Sol Ring *F* #Ramp` is the case: one pass takes `#Ramp` off the tail, which
- * is the only thing that puts `*F*` at the end where the next pass can see it — so a single
- * pass would import a card called `Sol Ring *F*`.
+ * Repeatedly, to a fixed point, because each pattern is anchored to the end and a line can carry
+ * three. `1x Skrelv, Defector Mite (one) 33 *F* [Protection] ^Keeper,#4aab08^` is the case: the
+ * tag comes off first, which is the only thing that puts the bracket at the end, which is the
+ * only thing that puts `*F*` there. The same loop is what `1 Sol Ring *F* #Ramp` has always
+ * needed — one pass takes `#Ramp` off the tail and a single pass would import `Sol Ring *F*`.
+ *
+ * **The first bracket peeled wins**, which is the rightmost one on the line. No export in scope
+ * writes two; a line that did would be naming a pile twice and the nearer one is the later word.
  */
-function stripMarkers(line: string): string {
-  let out = line;
+function stripDecorations(line: string): Decorations {
+  let body = line;
+  let bracket: string | null = null;
   for (;;) {
-    const before = out;
-    for (const marker of MARKERS) out = out.replace(marker, "");
-    if (out === before) return out;
+    const before = body;
+    const found = BRACKET.exec(body);
+    if (found !== null) {
+      bracket ??= found[1];
+      body = body.slice(0, found.index);
+    }
+    for (const marker of MARKERS) body = body.replace(marker, "");
+    if (body === before) return { body, bracket };
   }
+}
+
+/**
+ * A bracket's first entry, as a pile name and a flag.
+ *
+ * **The first entry is the pile.** Verified against a real Archidekt export: in all 105 of its
+ * lines the first entry is the heading the line is printed under. The rest are the card's other
+ * categories, which this app's grain could hold but an import item cannot name.
+ *
+ * `{flag}` suffixes come off every entry — `{top}`, `{noDeck}`, `{noPrice}` are Archidekt's, and
+ * anything in braces is a flag rather than part of a name. **`{noDeck}` on the first entry is the
+ * only one that means anything here**: it says this pile counts toward nothing, which is this
+ * app's `is_active = 0`. On a later entry it says only that the card is *also* filed in some
+ * maybeboard, and the card is still in the deck.
+ */
+function bracketCategory(bracket: string): { name: string; excluded: boolean } {
+  const first = bracket.split(",")[0] ?? "";
+  return {
+    name: first.replace(/\{[^}]*\}/g, "").trim(),
+    excluded: /\{noDeck\}/i.test(first),
+  };
 }
 
 /**
@@ -238,7 +321,24 @@ export function parseDecklist(text: string): ParsedList {
       lineSection = "sideboard";
     }
 
-    body = stripMarkers(body);
+    const decorated = stripDecorations(body);
+    body = decorated.body;
+
+    // The pile the file named for this line. A bracket naming one of the section words is the
+    // *section* — `[Commander{top}]` has to reach the command zone through the one mechanism the
+    // seeded piles already use — and only an unknown name is a category.
+    let categoryName: string | null = null;
+    let excluded = false;
+    if (decorated.bracket !== null && !FINISH_WORDS.test(decorated.bracket.trim())) {
+      const read = bracketCategory(decorated.bracket);
+      excluded = read.excluded;
+      const known = read.name === "" ? undefined : SECTIONS.get(read.name.toLowerCase());
+      if (known !== undefined) lineSection = known;
+      else if (read.name !== "") categoryName = read.name;
+    }
+    // The invariant `ParsedLine.categoryName` documents: a card in one of the four zones is
+    // filed by that zone, so a free-form name only ever applies inside the deck proper.
+    if (lineSection !== "deck") categoryName = null;
 
     // `RegExpExecArray["groups"]` types every named group as `string`, optional ones included,
     // and at runtime an unmatched one is `undefined`. Widening here rather than trusting that
@@ -254,10 +354,10 @@ export function parseDecklist(text: string): ParsedList {
       // and 1 issue.
       //
       // What does **not** reach it, having been checked rather than assumed: a line of only
-      // markers. Every {@link MARKERS} pattern needs `\s+` in front of it and `body` is
-      // already trimmed, so `stripMarkers` cannot empty a string — `*F*` alone parses as a
-      // card named `*F*`, which resolution refuses. There is no path here through an empty
-      // name after a strip.
+      // decoration. Every {@link MARKERS} pattern and {@link BRACKET} needs `\s+` in front of
+      // it and `body` is already trimmed, so `stripDecorations` cannot empty a string — `*F*`
+      // alone parses as a card named `*F*`, and `[Ramp]` alone as one named `[Ramp]`, both of
+      // which resolution refuses. There is no path here through an empty name after a strip.
       issues.push({ lineNumber, raw, reason: "No card name on this line." });
       continue;
     }
@@ -277,9 +377,14 @@ export function parseDecklist(text: string): ParsedList {
       raw,
       quantity,
       name,
-      setCode: groups.set?.toUpperCase() ?? null,
+      // `""` is what an empty `()` matches and it is not a set code. `?? null` alone would put
+      // an empty string in the field, which `resolve_lines` trims to absent anyway — but a DTO
+      // that says `""` where it means "none" is a field two readers will disagree about.
+      setCode: groups.set ? groups.set.toUpperCase() : null,
       collectorNumber: groups.cn ?? null,
       section: lineSection,
+      categoryName,
+      excluded,
     });
   }
 

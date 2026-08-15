@@ -156,6 +156,117 @@ describe("parseDecklist", () => {
     expect(junk.lines).toHaveLength(1);
   });
 
+  it("reads an empty printing hint as no set and keeps the collector number", () => {
+    const { lines } = parseDecklist("1 Aerith, Last Ancient () 76");
+    expect(lines[0]).toMatchObject({
+      name: "Aerith, Last Ancient",
+      setCode: null,
+      collectorNumber: "76",
+      quantity: 1,
+    });
+  });
+
+  it("still refuses to read a parenthesised phrase as a set", () => {
+    // The hint is anchored to the end and a set code holds no spaces, so widening the count to
+    // zero cannot make this one match.
+    const { lines } = parseDecklist("1 Erase (Not the Urza's Legacy One)");
+    expect(lines[0]).toMatchObject({ name: "Erase (Not the Urza's Legacy One)", setCode: null });
+  });
+
+  it("strips an Archidekt tag whose hash follows a comma", () => {
+    // `MARKERS`' `#` arm needs whitespace in front of the hash; this one has a comma, which is
+    // why the whole tail used to stay inside the name.
+    const { lines } = parseDecklist("1x Sol Ring (fic) 358 [Ramp] ^Keeper,#4aab08^");
+    expect(lines[0]).toMatchObject({ name: "Sol Ring", setCode: "FIC", collectorNumber: "358" });
+  });
+
+  it("strips a tag whose own text has spaces and parentheses", () => {
+    const { lines } = parseDecklist(
+      "1x Mona Lisa, Science Geek (tmt) 123 ^Fence (flavor),#fa890d^",
+    );
+    expect(lines[0]!.name).toBe("Mona Lisa, Science Geek");
+  });
+
+  it("reads a bracket as the line's category", () => {
+    const { lines } = parseDecklist("1x Gandalf the White (ltr) 305 [Flash Enabler]");
+    expect(lines[0]).toMatchObject({ name: "Gandalf the White", categoryName: "Flash Enabler" });
+  });
+
+  it("takes the first bracket entry and drops its flags", () => {
+    const { lines } = parseDecklist(
+      "1x Lush Portico (mkm) 263 [Land,Maybe (New){noDeck}{noPrice}]",
+    );
+    // The first entry is the pile the card is in; a `{noDeck}` on a *later* entry says only that
+    // the card is also filed in some maybeboard.
+    expect(lines[0]).toMatchObject({ categoryName: "Land", excluded: false });
+  });
+
+  it("marks a line excluded when its first bracket entry says noDeck", () => {
+    const { lines } = parseDecklist(
+      "1x Aerith Gainsborough (fin) 4 [(New) Maybeboard{noDeck}{noPrice},Creature]",
+    );
+    expect(lines[0]).toMatchObject({ categoryName: "(New) Maybeboard", excluded: true });
+  });
+
+  it("reads a bracket naming a known section as that section, not as a category", () => {
+    // `[Commander{top}]` has to reach the command zone through the one mechanism the four seeded
+    // piles already use, not through a second one.
+    const commander = parseDecklist(
+      "1x Serah Farron // Crystallized Serah (fin) 506 [Commander{top}]",
+    );
+    expect(commander.lines[0]).toMatchObject({
+      name: "Serah Farron // Crystallized Serah",
+      section: "commander",
+      categoryName: null,
+    });
+    const maybe = parseDecklist("1x Tataru Taru (fic) 30 [Maybeboard{noDeck}{noPrice},Creature]");
+    expect(maybe.lines[0]).toMatchObject({
+      section: "maybeboard",
+      categoryName: null,
+      excluded: true,
+    });
+  });
+
+  it("treats a finish word in a bracket as decoration and never as a pile", () => {
+    const { lines } = parseDecklist("1 Sol Ring [Foil]");
+    expect(lines[0]).toMatchObject({ name: "Sol Ring", categoryName: null });
+  });
+
+  it("peels a bracket, a foil marker and a tag off one line", () => {
+    const { lines } = parseDecklist(
+      "1x Skrelv, Defector Mite (one) 33 *F* [Protection] ^Keeper,#4aab08^",
+    );
+    expect(lines[0]).toMatchObject({
+      name: "Skrelv, Defector Mite",
+      setCode: "ONE",
+      collectorNumber: "33",
+      categoryName: "Protection",
+    });
+  });
+
+  it("reads the flat Archidekt export whole", () => {
+    const { lines, issues, totalCards } = parseDecklist(ARCHIDEKT_FLAT);
+    expect(issues).toEqual([]);
+    expect(lines).toHaveLength(88);
+    expect(totalCards).toBe(100);
+    // 12 distinct first-bracket names, one of which is `Commander` — a section word, so it sets
+    // the section and leaves this line's name `null`, which is why the count of *names* is 11.
+    expect(new Set(lines.map((l) => l.categoryName).filter((n) => n !== null)).size).toBe(11);
+    // Every line but the commander's names a category; the commander's names a section.
+    expect(lines.filter((l) => l.categoryName === null)).toHaveLength(1);
+    expect(lines.filter((l) => l.section === "commander")).toHaveLength(1);
+    expect(lines.filter((l) => l.excluded)).toHaveLength(0);
+  });
+
+  it("reads the empty-hint export whole", () => {
+    const { lines, issues, totalCards } = parseDecklist(EMPTY_HINT_LIST);
+    expect(issues).toEqual([]);
+    expect(lines).toHaveLength(88);
+    expect(totalCards).toBe(100);
+    expect(lines.filter((l) => l.setCode === null)).toHaveLength(33);
+    expect(lines.every((l) => l.collectorNumber !== null)).toBe(true);
+  });
+
   it("is empty for empty input", () => {
     expect(parseDecklist("")).toEqual({
       lines: [],
