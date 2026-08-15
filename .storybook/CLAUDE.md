@@ -69,6 +69,17 @@ deliberately**: no screenshots are stored.
   decision as `deck_import_read_file` throwing**: the picker there would invent the *decklist*,
   which is the screen's whole subject, while this one invents only a file name over text the
   reader is already looking at.
+- **Undo is a wrapper over `writeHandlers`, not a line in each of them.** `journalled()` snapshots
+  the deck either side of every deck write and files a step under the **last** history row that
+  write produced, so a new deck write is covered by construction rather than by somebody
+  remembering — the fake's version of `every_deck_write_leaves_exactly_one_audit_row`. It stores
+  the deck twice rather than transcribing the crate's four `Op` primitives, deliberately: a step's
+  whole job is "make the deck look like this again", the crate needs ops because SQL has no other
+  way to say it, and a second transcription would be a second implementation to keep in step.
+  **The known gap is the fake's own and predates this**: the five card writes record no history
+  row here, so Storybook's history drawer has never listed a card add and — consistently — Undo
+  does not offer to take one back. Closing it means giving those five a `record(…)` call, which
+  changes what the *history* stories draw and belongs with them.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.

@@ -1076,6 +1076,24 @@ export type DeckAuditKind =
  * Recorded **inside** the caller's transaction, always: an audit row that committed while
  * the change it describes rolled back is a history that lies.
  */
+/**
+ * What the deck editor's two reversal buttons would do — each the history row it would put
+ * back, or `null` when there is nothing there.
+ *
+ * The **entry** rather than a sentence, because a sentence is domain logic: `auditText.ts`
+ * words it, and the button reads "Undo — Removed 2 × Lightning Bolt" by asking that module the
+ * same question every row of the history drawer goes through.
+ *
+ * **The two halves are not symmetrical, and the asymmetry is the design.** `undo` is a fact
+ * about the deck: Rust stamps `deck_undo.undone_at`, so the cursor persists and undo carries on
+ * below where it stopped after a restart. `redo` is answered only for an id this webview hands
+ * *in* — the reader's position in a session, thrown away with the window.
+ */
+export interface DeckUndoState {
+  undo: DeckAuditEntry | null;
+  redo: DeckAuditEntry | null;
+}
+
 export interface DeckAuditEntry {
   id: number;
   deckId: number;
@@ -2605,6 +2623,30 @@ export const ipc = {
    */
   deckAuditList: (deckId: number, limit: number) =>
     invoke<DeckAuditEntry[]>("deck_audit_list", { deckId, limit }),
+  /**
+   * What the deck editor's Undo and Redo buttons would do — see {@link DeckUndoState}.
+   *
+   * **`redoId` is the caller's**, because the redo stack lives in this webview and dies with
+   * the window. Rust stamps `undone_at` so *undo* survives a restart and carries on where it
+   * stopped; which of those undone changes the reader could still put back is their position
+   * in a session, not a fact about the deck, and a database-backed redo would offer to
+   * resurrect a fortnight-old branch of edits they had forgotten making.
+   */
+  deckUndoState: (deckId: number, redoId: number | null) =>
+    invoke<DeckUndoState>("deck_undo_state", { deckId, redoId }),
+  /**
+   * Undo one change. `auditId` must be the deck's cursor — the id `deckUndoState` handed back
+   * — or the call is refused in words rather than undoing something else.
+   *
+   * A deck write like any other: it moves `updated_at`, records its own history row and
+   * reallocates. What it does *not* record is a step of its own, so pressing Ctrl+Z twice goes
+   * back two changes rather than toggling one.
+   */
+  deckUndoApply: (deckId: number, auditId: number) =>
+    invoke<void>("deck_undo_apply", { deckId, auditId }),
+  /** Put back a change that was undone. Refused in words if it was not. */
+  deckRedoApply: (deckId: number, auditId: number) =>
+    invoke<void>("deck_redo_apply", { deckId, auditId }),
   /** What the plan wants and the deck does not have — see {@link TheoryDiffRow}. One
    *  direction only, inactive categories excluded from both sides. `marketplace` prices the
    *  shopping list, which is the whole point of drawing one. */

@@ -1357,6 +1357,92 @@ describe("the plugin commands", () => {
   });
 });
 
+/**
+ * **Driven through the writes that record history, which is not all of them.** The five card
+ * writes record none here — see `journalled`'s doc, and note that Storybook's history drawer has
+ * never listed a card add either, so the two are consistent rather than one being broken. A
+ * category rename is the smallest write that *does*, and it exercises the same wrapper.
+ */
+describe("undo and redo", () => {
+  /** A step is recorded by the wrapper rather than by each handler, so a new deck write is
+   *  covered by construction rather than by somebody remembering. */
+  it("records a step for a deck write and puts the write back", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+    expect(db.deckCategories.find((c) => c.id === made.id)?.name).toBe("Acceleration");
+
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state.undo).not.toBeNull();
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+
+    expect(db.deckCategories.find((c) => c.id === made.id)?.name).toBe("Ramp");
+  });
+
+  /** And forward again — the *after* half of the step, which is what redo is. */
+  it("puts it back again on redo", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+    const undoId = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: undoId });
+
+    // The state command answers the redo half **only for the id the caller hands in**, because
+    // the redo stack lives in the webview and dies with the window.
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).redo).toBeNull();
+    expect(h.deck_undo_state({ deckId: 1, redoId: undoId }).redo).not.toBeNull();
+
+    h.deck_redo_apply({ deckId: 1, auditId: undoId });
+    expect(db.deckCategories.find((c) => c.id === made.id)?.name).toBe("Acceleration");
+  });
+
+  /**
+   * **The stack stays linear**, which is what makes Ctrl+Z twice go back two changes rather
+   * than toggling one: an undo is a deck write and belongs in the history, but it records no
+   * step of its own, so the cursor walks straight past it.
+   */
+  it("writes history for the undo itself and does not make it undoable", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    const first = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+    const second = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    expect(second).not.toBe(first);
+
+    h.deck_undo_apply({ deckId: 1, auditId: second });
+
+    const newest = db.deckAudit[db.deckAudit.length - 1];
+    expect(JSON.parse(newest.payload)).toEqual({ field: "undo", of: second });
+    expect(db.deckUndo.some((s) => s.auditId === newest.id)).toBe(false);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(first);
+  });
+
+  /** The toolbar can be a moment behind the deck, so the id is checked rather than trusted. */
+  it("refuses an id that is not the cursor", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    const stale = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+
+    expect(() => h.deck_undo_apply({ deckId: 1, auditId: stale })).toThrow(/edited since/);
+  });
+
+  /** A write that changed nothing wrote no history row, so it files no step — a Ctrl+Z that
+   *  appears to do nothing is worse than one that says there is nothing left. */
+  it("files no step for a write that recorded no history", () => {
+    const db = makeDeckDb({ decks: [deck({ name: "Burn" })] });
+    const h = allHandlers(db);
+
+    h.deck_update({ id: 1, patch: { name: "Burn" } });
+
+    expect(db.deckUndo).toHaveLength(0);
+  });
+});
+
 describe("card detail", () => {
   it("derives faces the way parse_faces does, blank mana cost and all", () => {
     // Delver of Secrets: the back face is a transform back, whose `mana_cost` is `""` in
