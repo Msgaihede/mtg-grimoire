@@ -920,9 +920,13 @@ function StackedCard({
           {/* **Inside the face, which is what makes it findable in a fanned pile.** The face is
               the one box here that a collapsed card still shows 34px of, so a mark laid over it
               is a lit band and a bright hairline exactly where the reader is scanning. Laid
-              over the marks strip rather than under it — the strip's tag is 11px type on a
-              scrim and a 15 % wash does not touch it, while a mark the tag could cover would be
-              missing on precisely the cards that have one. See {@link LandedMark}.
+              over the marks strip rather than under it — the strip's tag is 11px type on its own
+              scrim, and a wash tints it without touching the contrast between the glyphs and the
+              chip they are printed on, while a mark the tag could cover would be missing on
+              precisely the cards that have one. That trade got louder on 2026-08-15, when the
+              wash went gold at 40 % over this strip with a glow behind it, and it is the one
+              place to look first if the quantity tag ever stops reading during an add. See
+              {@link LandedMark}.
 
               `rounded-[7px]` is the face's own corner, spelled again because the mark cannot
               inherit it — {@link LandedMark} has why. */}
@@ -1009,6 +1013,20 @@ function StackedCard({
           In the right margin, below the marks strip, standing on the art: `top-9` clears the
           27px title bar the tag and the banner are in, and the column runs down from there
           rather than across the foot, where it would cover the data line it now sits beside.
+
+          **The offset is the same 36px it has always been and the column under it is twice as
+          tall as of 2026-08-15** — three 48px boxes and two 4px gaps, 152px, so it ends 188px
+          down a 293px face at 1×. That sum is unscaled chrome on a scaled card, which is fine
+          going up and runs out at the bottom of the ladder: 188 needs a face 188 tall, so the
+          column clears at every stop but **0.5×**. Measured in Storybook over CDP (2026-08-15,
+          `decks-editor--commander-deck`, real Chromium layout): at 1× the column clears the
+          face's foot by **105px**, at 0.67× by **8px** — the last stop that fits — and at 0.5×
+          it overruns it by **42px**, which puts the `−` button **17px below the whole card**,
+          over the reveal strip of the card beneath. Judged worth it, because the column is drawn
+          on the **open** card alone and a reader at 50 % is reading a pile rather than pressing
+          on it; it is the first number to check if this column is ever made bigger again, and
+          the fix if it ever matters is to scale the box with the zoom and floor it at the 24px
+          this used to be.
 
           Revealed by **this card being open** rather than by the pointer being on it, which is
           the one thing `group-hover:` could never get right here — see `revealedWhenOpen`.
