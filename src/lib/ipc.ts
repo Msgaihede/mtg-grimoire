@@ -2691,6 +2691,24 @@ export const ipc = {
       variant,
       quantity,
     }),
+  /**
+   * Empty one category of one variant — a pile's right-click **Clear stack** — and answer the
+   * **copies** it removed.
+   *
+   * One command rather than a `deckSetCardQuantity(…, 0)` per row, and the arithmetic is
+   * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty allocator
+   * runs and forty invalidations. This is one of each.
+   *
+   * **This variant only**, which is the opposite of `deckCategoryDelete` — that takes the live
+   * list and the theory list together, because `deck_cards.category_id` cascades and a category
+   * is not variant-scoped. A clear leaves the pile standing, so what it empties is the list the
+   * reader is looking at, and the confirmation says so.
+   *
+   * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, no
+   * allocator run.
+   */
+  deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
+    invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
   /** Move every copy from one category to another **within one variant**, folding into
    *  whatever the target already holds. The identity travels from the moved row, so an orphan
    *  can be tidied out of the scratchpad like anything else. */

@@ -307,8 +307,8 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   by what the card does"), because under Auto there is no one pile: it is decided per card. The
   `from` side is looked up at the write rather than carried on `DeckBefore`, so a rename or a cover
   change pays no join for a question nobody asked.
-- **The six single-card commands, and what each takes** (the seventh, `deck_import_commit`, is
-  the bulk one and has its own bullet below).\
+- **The six single-card commands, and what each takes** (the two bulk ones,
+  `deck_import_commit` and `deck_category_clear`, have their own bullets below).\
   `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
@@ -320,7 +320,32 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
   variant must be one the schema knows, and the category must belong to _this_ deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
-- **`deck_import_commit(deckId, variant, mode, items)` is the seventh card command, and it
+- **`deck_category_clear(deckId, categoryId, variant)` empties one pile of one list, and exists
+  for `deck_import_commit`'s reason** (added 2026-08-15, behind a category heading's right-click
+  `Clear stack…`). The frontend holds every row of the pile, so a `deck_set_card_quantity(…, 0)`
+  per row would work — and would be a transaction, an `allocate_deck` and a `["decks"]`
+  invalidation **per card**, plus one history line each for a press the reader made once, plus a
+  refusal halfway leaving the pile half-empty with nothing able to say so. One statement, one
+  allocator run, one row.
+  - **Variant-scoped, which is the exact reverse of `deck_category_delete`.** That command
+    cascades through both lists because `deck_cards.category_id` is `ON DELETE CASCADE` and a
+    category is not per-variant; a clear leaves the pile standing, so what it empties is the list
+    the reader is looking at. The two confirmations therefore quote **different numbers** —
+    `cardCountAllVariants` for the delete, `cardCount` for the clear — and swapping them would
+    over- or understate a destructive press.
+  - **It answers the copies it removed**, counted before the `DELETE` and in copies rather than
+    rows, which is what the confirmation quoted and what `delta` means in the history.
+  - **An empty pile writes nothing at all**: no `touch_deck`, no audit row, no allocator run. The
+    same choice `set_card_quantity`'s zero arm makes and states — a `remove` row of zero copies is
+    a history of a change that never happened — and it keeps a menu opened on an empty column from
+    moving the deck's `updated_at`. The UI greys the row in that state; the early return is the
+    fence behind it, since a pile can empty under an open menu.
+  - **The history row is a `remove` naming no card, carrying `{ action: "clear", category, cards }`
+    and a `-cards` delta.** `action` is load-bearing: `auditText.ts` reads a bare `remove` as
+    "Removed 7 × a card", which is a sentence about a card the row has not got. It is
+    `deck_import_commit`'s replace row one shelf over, which carries `{ import: { cleared } }`
+    instead, and the two are deliberately different shapes because they are different events.
+- **`deck_import_commit(deckId, variant, mode, items)` is the other bulk card command, and it
   exists for the allocator.** Looping `deck_add_card` from the frontend would be correct in
   every other respect and would run `allocate_deck` **once per line** — a hundred rebuilds of a
   deck's claims for one import. It runs it once, at the end, over the finished deck. "Once" is

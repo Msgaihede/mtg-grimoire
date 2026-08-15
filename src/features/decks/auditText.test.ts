@@ -52,6 +52,36 @@ describe("auditSentence", () => {
     ).toEqual({ text: "Removed Sol Ring", detail: "from Ramp · banned in Commander" });
   });
 
+  /**
+   * **A cleared pile wears the `remove` kind and names no card**, exactly as a replace import's
+   * first row does — so `action` is the whole of what tells them apart. Without the branch this
+   * pins, `deck_category_clear`'s row renders as `Removed 7 × a card`: a sentence about a card
+   * the row has not got, which reads as a bug in the history rather than in the renderer.
+   *
+   * The wrong-but-plausible answer is asserted too, the way `xGroup`'s spelling is: the `default`
+   * arms in this file are all true sentences, so a drift here fails nothing on its own.
+   */
+  it("words a cleared pile rather than reading it as a card removal", () => {
+    const cleared = auditSentence(
+      entry(
+        "remove",
+        { action: "clear", category: "Ramp", cards: 7 },
+        { cardId: null, cardName: null, delta: -7 },
+      ),
+    );
+
+    expect(cleared).toEqual({ text: "Cleared 7 cards from Ramp", detail: null });
+    expect(cleared.text).not.toContain("a card");
+  });
+
+  it("says one card, not 1 cards, when a pile of one is cleared", () => {
+    expect(
+      auditSentence(
+        entry("remove", { action: "clear", category: "Ramp", cards: 1 }, { cardId: null }),
+      ).text,
+    ).toBe("Cleared 1 card from Ramp");
+  });
+
   it("says both numbers on a quantity change", () => {
     expect(auditSentence(entry("quantity", { category: "Ramp", from: 1, to: 2 }))).toEqual({
       text: "Changed Sol Ring from 1 to 2",

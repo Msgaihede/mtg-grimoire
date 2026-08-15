@@ -248,11 +248,13 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   chooses no format. `deck_last_format` answers the stored string **verbatim or `None`** and
   checks it against `format_specs` not at all: which format a *dialog* starts on is a display
   decision, and TypeScript's `newDeckFormat` is where the fallback to Commander lives.
-- **The allocator runs on seven writes and nothing else** — a card write, the Built toggle,
-  `missing_to_wishlist`, `set_category_active`, `delete_category`, `commit_import` (**once**
-  for a whole decklist, which is the reason that command exists), and the theory list being
-  switched on (which empties `live`, so its claims have to go). Growing the collection does
-  _not_ re-run it, so a deck reads new copies only after its next allocator run.
+- **The allocator runs on this list of writes and nothing else** — a card write, the Built
+  toggle, `missing_to_wishlist`, `set_category_active`, `delete_category`, `clear_category`,
+  `commit_import` (**once** for a whole decklist, which is the reason that command exists), and
+  the theory list being switched on (which empties `live`, so its claims have to go). Read the
+  list rather than a count: it said "seven" until `clear_category` landed on 2026-08-15, and a
+  number here goes stale with nothing going red. Growing the collection does _not_ re-run it, so
+  a deck reads new copies only after its next allocator run.
 - **Writing history is not a command.** `deck_audit::record(tx, …)` is called _inside the
   caller's already-open transaction_, which is what makes a rolled-back write leave no history.
   The only IPC is the read, `deck_audit_list`, whose limit is `clamp(1, 500)` — **the low end is
@@ -385,4 +387,4 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the cover route |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the seven card commands, the allocator, the audit log, the decklist import |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, the allocator, the audit log, the decklist import |

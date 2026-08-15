@@ -2,7 +2,7 @@
 
 **Validation is TypeScript** (spec §3). Rust supplies **facts** (`DeckCardRow`: per-printing
 `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws **every**
-conclusion. The storage side — tables, the seven card commands, the allocator, the audit log —
+conclusion. The storage side — tables, the card commands, the allocator, the audit log —
 is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) and
 [src-tauri/CLAUDE.md](../../../src-tauri/CLAUDE.md).
 
@@ -231,8 +231,26 @@ reader to configure the deck they had just made; it now asks all of them.
   started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
   *different* one from the dialog's — TanStack shares a query's cache between observers and a
   mutation's state with nobody — so this banner speaks only for presses made out here.
-- **There is no remove mutation.** The tray's drop and the stepper's zero are both
-  `setQuantity(…, 0)`, because zero removes a deck row.
+- **There is no remove mutation.** The tray's drop, the stepper's zero **and the card menu's
+  `Remove card`** are all `setQuantity(…, 0)`, because zero removes a deck row. That third caller
+  (2026-08-15) is what makes the rule worth restating: a menu row called "Remove card" is exactly
+  the shape of thing somebody adds a `remove` mutation for, and it needs none — it goes through
+  `DeckEditor`'s `setQuantityAt`, so it inherits the optimistic patch, the rollback and the
+  hand-off of the caret to the pile the card just left. **No confirmation on it**, deliberately:
+  one card is one add to put back, and the reader can see which one it was.
+- **Emptying a whole pile is a command, and that is the one write that is _not_ a loop over
+  `setQuantity`** (`useDeck.clearCategory` → `deck_category_clear`, 2026-08-15, behind a heading's
+  right-click `Clear stack…`). The rows are all in hand, so the loop would compile — and would be
+  a transaction, an allocator run and a `["decks"]` invalidation **per card**, plus a history line
+  each for one press. It is `deck_import_commit`'s argument applied to the reverse operation, and
+  [decks-storage.md](../../../docs/reference/decks-storage.md) carries the rest.
+  **It is scoped to the variant on screen**, which is the exact reverse of `deleteCategory`: that
+  one cascades through both lists, so its confirmation quotes `cardCountAllVariants`, while the
+  clear's quotes `cardCount` and says in words that the other list is untouched. Getting those two
+  numbers the wrong way round in either dialog mis-states a destructive press.
+  **Both destructive rows ask first, and the type is what enforces it**: `CategoryMenuDeps` carries
+  an `askClear` and an `askDelete` and neither mutation, so the menu structurally cannot reach
+  either write — `buildDeckMenu`'s fence around a deck, twice over.
 - **A move has two routes: a drag, and the card's right-click `Move to`** (changed 2026-08-14, and
   again later the same day). Every deck card used to carry a native `Move…` `<select>` beside its
   stepper, listing every other category of the deck; it was removed whole, which left `moveCard`
@@ -1225,12 +1243,15 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   · Deck settings`) and the theory diff from the "N cards differ" control beside the variant tabs
   — and pressing a button takes the focus out of this field, so the root's `onBlur` closes the list
   on the way.
-- **Two of them arrive another way, and the rung this used to say was missing has since been
-  built.** The export dialog and the delete-category confirmation are opened from a category
-  heading's right-click and have no _button_ in the view at all — the first editor surfaces with
-  none, the affordance being the heading itself. (A pile can still be deleted from the Categories
-  dialog, which draws `DeleteCategory` for itself; this layer is the _heading's_ route to the same
-  component.) This entry used to end "**that is the whole
+- **Some of them arrive another way, and the rung this used to say was missing has since been
+  built.** The export dialog, the delete-category confirmation and the clear-stack confirmation
+  are opened from a category heading's right-click and have no _button_ in the view at all — the
+  first editor surfaces with none, the affordance being the heading itself. Read the list rather
+  than a count: it said "two" until `Clear stack…` landed on 2026-08-15. (A pile can still be
+  deleted from the Categories dialog, which draws `DeleteCategory` for itself; that layer is the
+  _heading's_ route to the same component. The clear has no second host — `ClearCategory.tsx` is
+  the heading's alone, because there is no bulk surface that empties a pile.) This entry used to
+  end "**that is the whole
   of what makes a third rung unnecessary**, so a future surface opened without moving the caret
   breaks it, and the fix is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope".
   **That depth exists**: the hook keeps a stack of capture-phase registrations and only the token
