@@ -25,7 +25,7 @@ import {
   type DeckVariant,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
-import { statusLine } from "@/lib/motion";
+import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -110,15 +110,14 @@ const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
  * and a wrapped header costs 44px of deck height at the app's own default window size — the
  * regression {@link NAME_FLOOR} exists to keep out. Height is the axis that had room.
  *
- * The property list is written out because a colour utility and a transform one compile to the
- * same CSS longhand, so tailwind-merge would keep one and silently drop the other; the format
- * select is `disabled` when the specs have not answered and must not appear to depress.
+ * The press is {@link PRESS}, the app's one recipe. The format select is `disabled` when the
+ * specs have not answered and must not appear to depress, which is why the out-of-reach
+ * clause is here and not on the shared string.
  */
 const CONTROL =
   "h-9 rounded-md border border-border bg-surface px-2.5 text-xs text-dim " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "disabled:active:scale-100 motion-reduce:transition-none";
+  `${PRESS} ` +
+  "disabled:active:scale-100";
 
 /**
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives

@@ -1,6 +1,7 @@
 import { LayoutGrid, Rows3 } from "lucide-react";
 import { FOCUS } from "@/lib/focus";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
+import { PRESS } from "@/lib/motion";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -30,28 +31,22 @@ import { cn } from "@/lib/utils";
 export const FILTER_FOCUS = FOCUS;
 
 /**
- * Every control in the row is 36px tall, so the chips and the text controls share a line.
+ * Every control in the row is 36px tall, so the chips and the text controls share a line —
+ * **and the press is {@link PRESS}, the app's one recipe, rather than a copy of it.**
  *
- * **One arbitrary property list, and never a colour utility beside a transform one.** Those two
- * compile to the same CSS longhand, so tailwind-merge keeps whichever it saw last and drops the
- * other — and the one it drops is invisible until someone presses a chip and the scale snaps.
- * The list is spelled out for that reason and is the same string every pressable control in the
- * app carries.
- *
- * (Spelled as a description rather than by naming the two utilities, because `tokens.test.ts`
- * reads a class name in prose exactly as it reads one in code and would ask this paragraph for
- * a reduced-motion opt-out of its own.)
+ * A composition and not a re-point: `h-9 rounded-md border text-sm` is this row's own, and
+ * the press is what it has in common with every other pressable control in the app. The
+ * argument for writing the property list out one longhand at a time now lives on that
+ * constant.
  *
  * `active:scale-[0.97]` is undone for a control that is out of reach: the filter row greys as
  * the reader types, and a chip that dips under the finger and then does nothing tells the same
  * lie {@link filterChipState}'s dropped hover response already refuses to tell. `aria-disabled`
- * rather than `:disabled`, because these chips never leave the tab order.
+ * rather than `:disabled`, because these chips never leave the tab order — which is why the
+ * out-of-reach clause is the caller's and is deliberately not in `PRESS`.
  */
 export const FILTER_CONTROL =
-  "h-9 rounded-md border text-sm " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "aria-disabled:active:scale-100 motion-reduce:transition-none";
+  "h-9 rounded-md border text-sm " + `${PRESS} ` + "aria-disabled:active:scale-100";
 
 /**
  * A control this search cannot reach.

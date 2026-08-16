@@ -26,7 +26,7 @@ import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
-import { dialog } from "@/lib/motion";
+import { dialog, PRESS } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -60,15 +60,13 @@ import { usePrintingGroupBy } from "./usePrintingGroupBy";
  * classes fitted would be a second grouping control in one window that behaved almost like the
  * first. If that constant is ever exported, this should become an import of it.
  *
- * The property list is written out for the reason it is written out there: a colour utility and
- * a transform one compile to the same CSS longhand, so tailwind-merge would keep one and
- * silently drop the other.
+ * The press is {@link PRESS}, the app's one recipe; the box, and the `disabled:` clause for
+ * the grouping select that greys while the specs have not answered, are this pane's own.
  */
 const CONTROL =
   "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "disabled:active:scale-100 motion-reduce:transition-none";
+  `${PRESS} ` +
+  "disabled:active:scale-100";
 
 /**
  * The colour of a legality chip.

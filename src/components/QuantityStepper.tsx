@@ -2,25 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { motion, useAnimationControls } from "motion/react";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { TRANSITION } from "@/lib/motion";
+import { PRESS, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /**
- * The two buttons.
+ * The two buttons — the app's {@link PRESS} recipe on this component's own box.
  *
- * The property list is written out rather than assembled from a colour utility beside a
- * transform one: those two compile to the same CSS longhand, so tailwind-merge keeps one and
- * drops the other, and the press feedback would snap with nothing to show for it. A button at
- * its floor or its ceiling is `disabled` and must not appear to depress — it is the one
- * control here that uses the attribute, because a stepper button with nothing left to do has
- * no reason to hold a tab stop.
+ * A button at its floor or its ceiling is `disabled` and must not appear to depress. It is
+ * the one control here that uses the attribute, because a stepper button with nothing left to
+ * do has no reason to hold a tab stop — and that is why the out-of-reach clause is written
+ * here rather than in the shared recipe.
  */
 const BUTTON =
   "grid place-items-center rounded-md border border-border text-dim hover:text-text " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100 " +
-  "motion-reduce:transition-none";
+  `${PRESS} ` +
+  "disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100";
 
 /**
  * The same buttons drawn **over a card's illustration** rather than on a panel.

@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useId } from "react";
 import { FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { MARKETPLACE_LIST, type Currency, type Marketplace } from "@/lib/marketplace";
-import { statusLine } from "@/lib/motion";
+import { PRESS_SOFT, statusLine } from "@/lib/motion";
 import { ago } from "@/lib/relativeTime";
 import { nowSeconds, type FeedInfo, type FeedState, type MarketplaceState } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
@@ -12,18 +12,18 @@ import { cn } from "@/lib/utils";
  * One row of the picker — the app's existing "on / off / out of reach" control, laid out down
  * the page instead of along a filter row.
  *
- * The property list is spelled out for `FILTER_CONTROL`'s reason: a colour utility and a
- * transform one compile to the same CSS longhand and tailwind-merge would keep only one of
- * them. `scale` is named beside `transform` because Tailwind v4's `scale-*` writes the `scale`
- * longhand, and a transition list that does not name it makes the press snap. `0.99` rather
- * than the chips' `0.97`: this control is the width of the panel, and a full-width row that
- * dips 3% reads as the page moving.
+ * The press is {@link PRESS_SOFT} — the app's recipe at 0.99 rather than the chips' 0.97,
+ * because this control is the width of the panel and a full-width row that dips 3% reads as
+ * the page moving. That argument, and the two reasons the property list is written out one
+ * longhand at a time, now live on the constant in `lib/motion.ts`.
+ *
+ * `aria-disabled:` and not the attribute: a marketplace whose feed is fetching greys as the
+ * reader watches and must not leave the tab order.
  */
 const ROW =
   "flex w-full items-start gap-3 rounded-md border px-3 py-2 text-left text-sm " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.99] " +
-  "aria-disabled:active:scale-100 motion-reduce:transition-none";
+  `${PRESS_SOFT} ` +
+  "aria-disabled:active:scale-100";
 
 /**
  * The currency beside the name, in the app's third type role.

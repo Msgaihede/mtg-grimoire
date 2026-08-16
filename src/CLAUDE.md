@@ -418,7 +418,13 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   on a live media-query change**, so it is the wrong thing to reach for as an app-wide switch.
 - **Tailwind v4's `scale-*` writes the `scale` longhand, not `transform`**, so a
   `transition-[…,transform]` list does not tween it and the press snaps. The shared press recipe
-  names `scale` explicitly; verify it in the built CSS, not in source.
+  names `scale` explicitly; verify it in the built CSS, not in source. **That recipe is `PRESS`
+  in `src/lib/motion.ts`** (and `PRESS_SOFT`, the settings rows' 0.99), where it joined the
+  timings on 2026-08-16 — it had been spelled out at twelve sites with its explanatory paragraph
+  pasted at eight. **What a control does when it is out of reach is not in it**: six sites add
+  `disabled:active:scale-100`, three add the `aria-disabled:` spelling, and the rest never grey,
+  which is three facts about three kinds of control rather than drift. The settings panels'
+  button box is `src/features/settings/controls.ts`.
 - **Under jsdom the animations are real and timing-dependent**, which is why
   `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. Even so, **a
   `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false for

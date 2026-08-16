@@ -19,7 +19,7 @@ import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
-import { statusLine } from "@/lib/motion";
+import { PRESS, statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -66,27 +66,21 @@ const GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4";
 /**
  * Every icon control on a tile, so four of them are one row rather than four sizes.
  *
- * The property list is written out instead of a colour utility beside a transform one: those
- * two compile to the same CSS longhand, tailwind-merge keeps one and drops the other, and what
- * it drops is only visible the moment someone presses the control.
+ * The press is {@link PRESS}, the app's one recipe. Neither of these ever greys, so neither
+ * carries an out-of-reach clause.
  */
 const ICON_BUTTON = cn(
   "grid size-6 place-items-center rounded-md text-dim hover:text-text",
-  "transition-[color,background-color,border-color,opacity,transform,scale]",
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
-  "motion-reduce:transition-none",
+  PRESS,
   FOCUS,
 );
 
 /** The quiet controls in the wall's heading row — everything that is not "New deck". Same
  *  height as it, because a row of controls that disagree about their own size reads as two
- *  rows that happen to be next to each other. One property list, for {@link ICON_BUTTON}'s
- *  reason. */
+ *  rows that happen to be next to each other. Same press, for {@link ICON_BUTTON}'s reason. */
 const HEADING_BUTTON = cn(
   "h-9 rounded-md border border-border bg-surface px-3 text-sm text-dim hover:text-text",
-  "transition-[color,background-color,border-color,opacity,transform,scale]",
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
-  "motion-reduce:transition-none",
+  PRESS,
   FOCUS,
 );
 

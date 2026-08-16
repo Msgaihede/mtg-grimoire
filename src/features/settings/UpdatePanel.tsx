@@ -3,19 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { statusLine } from "@/lib/motion";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
-
-/** The shared shape of the panel's two buttons — the app's existing bordered control, and the
- *  same string `ErrorLogPanel` carries, down to the character. The property list is spelled out
- *  because a colour utility and a transform one compile to the same CSS longhand and
- *  tailwind-merge would keep only one of them; a `disabled` button is held at full size, since
- *  a control that depresses and then refuses is a control that lies. */
-const BUTTON =
-  "inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-1.5 text-sm " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "motion-reduce:transition-none " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
-  "disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
+import { BUTTON } from "./controls";
 
 /**
  * The download bar.

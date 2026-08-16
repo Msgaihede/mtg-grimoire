@@ -77,8 +77,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tween it and the press snaps. Tailwind's own `transition-transform` reads
   `transform,translate,scale,rotate` for exactly this reason. The shared press recipe is
   `transition-[color,background-color,border-color,opacity,transform,scale]` +
-  `duration-[var(--duration-fast)] ease-standard` + `active:scale-[0.97]`, verified in the built
-  CSS rather than in source.
+  `duration-[var(--duration-fast)] ease-standard` + `active:scale-[0.97]` +
+  `motion-reduce:transition-none`, verified in the built CSS rather than in source. **It is
+  `PRESS` in `src/lib/motion.ts` since 2026-08-16** — twelve hand-copied spellings, with the
+  paragraph above pasted at eight of them — beside `PRESS_SOFT`, which is the same string at
+  `0.99` for `MarketplacePanel`'s full-width rows. Re-verified in the built CSS that day: the
+  emitted rule still reads `transition-property:color,background-color,border-color,opacity,
+transform,scale`, and both `active:scale-[0.97]` and `active:scale-[0.99]` are emitted.
+  `ManaChip` keeps a list of its own (`transition-[opacity,box-shadow,transform,scale]`,
+  because its on state is a ring) and is deliberately not a caller.
 - **Cost: +41.4 kB gzip** for the full `motion.*` surface against the app's 176 kB (esbuild
   `--bundle --minify`, `NODE_ENV=production`, gzip -9). `m` + `LazyMotion(domAnimation)` measures
   +29.3 kB and code-splits; it was **not** taken, because the app loads from local disk in a
