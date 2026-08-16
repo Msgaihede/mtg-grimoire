@@ -4,6 +4,7 @@ import { useId } from "react";
 import { FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { MARKETPLACE_LIST, type Currency, type Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
+import { ago } from "@/lib/relativeTime";
 import { nowSeconds, type FeedInfo, type FeedState, type MarketplaceState } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 
@@ -54,22 +55,15 @@ function noFeedNote(marketplace: Marketplace): string {
  * Coarse on purpose: this line is read to answer "are these prices current", and a feed that
  * regenerates once a day cannot be usefully described to the minute. Below a minute it says
  * `just now`, because a fetch that has this moment finished is what the reader is watching.
+ *
+ * That argument is `lib/relativeTime`'s rule now — this was the one of the page's three
+ * relative times that already floored, so the other two were moved onto it rather than the
+ * other way round. **`now` here is in seconds** (`useMarketplace`'s `nowSeconds`), which is
+ * what the conversion below is: `ago` takes milliseconds, like `Date.now()`, and nothing in
+ * the types could tell the two apart while there were three copies of the arithmetic.
  */
 export function agoText(seconds: number, now: number): string {
-  const elapsed = Math.max(0, now - seconds);
-  if (elapsed < 60) return "just now";
-  const units: [number, string][] = [
-    [86_400, "day"],
-    [3_600, "hour"],
-    [60, "minute"],
-  ];
-  for (const [size, name] of units) {
-    if (elapsed >= size) {
-      const n = Math.floor(elapsed / size);
-      return `${n} ${name}${n === 1 ? "" : "s"} ago`;
-    }
-  }
-  return "just now";
+  return ago(seconds, now * 1000);
 }
 
 /**

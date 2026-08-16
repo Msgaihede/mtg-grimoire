@@ -65,9 +65,34 @@ describe("formatChecked", () => {
     expect(formatChecked(String(1_800_000_000 - 172_800), now)).toBe("Checked 2 days ago");
   });
 
+  /**
+   * It floors now, where it used to round (2026-08-16, when the arithmetic moved to
+   * `lib/relativeTime`). Ninety minutes read `Checked 2 hours ago` here while
+   * `ErrorLogPanel`'s already-flooring `formatWhen` called the same span `1 hour ago`, on
+   * one page. None of the cases above moved, because every one of them is an exact multiple.
+   */
+  it("floors rather than rounding, so ninety minutes is one hour", () => {
+    expect(formatChecked(String(1_800_000_000 - 5_400), now)).toBe("Checked 1 hour ago");
+    expect(formatChecked(String(1_800_000_000 - 45), now)).toBe("Checked just now");
+  });
+
   /** Past a week, "9 days ago" stops being easier to read than the day itself. */
   it("becomes a date once it is more than a week old", () => {
-    expect(formatChecked(String(1_800_000_000 - 864_000), now)).toMatch(/^Checked on \d{4}-\d{2}-\d{2}$/);
+    expect(formatChecked(String(1_800_000_000 - 864_000), now)).toMatch(
+      /^Checked on \d{4}-\d{2}-\d{2}$/,
+    );
+  });
+
+  /**
+   * The cut-off moved with the rounding rule: it is `daysSince`'s floored count, so the date
+   * arm begins exactly where the relative arm would have said `8 days ago`. Seven and a half
+   * days used to round to eight and print a date; it reads `7 days ago` now.
+   */
+  it("keeps the whole of the first week relative", () => {
+    expect(formatChecked(String(1_800_000_000 - (7 * 86_400 + 43_200)), now)).toBe(
+      "Checked 7 days ago",
+    );
+    expect(formatChecked(String(1_800_000_000 - 8 * 86_400), now)).toMatch(/^Checked on /);
   });
 
   /**

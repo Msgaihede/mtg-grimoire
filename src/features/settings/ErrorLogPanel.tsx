@@ -2,6 +2,7 @@ import { CircleCheck, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ErrorEntry, ErrorKind, ErrorSource } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { ago } from "@/lib/relativeTime";
 import type { ErrorLog } from "@/lib/useErrorLog";
 import { cn } from "@/lib/utils";
 
@@ -54,17 +55,13 @@ const KIND_LABEL: Record<ErrorKind, string> = {
  * Relative rather than absolute because the question a reader has here is "is this still
  * going on?", and "4 minutes ago" answers it where a timestamp makes them do arithmetic.
  * Exported for its test — the boundaries are where a rounding rule goes wrong.
+ *
+ * The arithmetic is `lib/relativeTime`'s since 2026-08-16, shared with the two other
+ * relative times on this page. It kept its own default `now` for `useMarketplace`'s reason:
+ * a render-time clock read is what makes this line correct on the render it is drawn in.
  */
 export function formatWhen(unixSeconds: number, now: number = Date.now()): string {
-  const seconds = Math.round(now / 1000 - unixSeconds);
-  if (seconds < 0) return "just now"; // A clock that moved. Never "in -3 minutes".
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.floor(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
+  return ago(unixSeconds, now);
 }
 
 /** One fault. The count is the number of times it happened, not the number of rows. */
