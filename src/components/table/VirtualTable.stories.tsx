@@ -17,7 +17,7 @@ import { RarityGem } from "../RarityGem";
  * A shape of their own, not one of `ipc.ts`'s DTOs: this component is generic over `Row` and
  * knows nothing about cards, so a story built on `CollectionRow` would be a story about the
  * collection. The three real callers are `CollectionTable.tsx:296`, `SearchPage.tsx:354` and
- * `WishlistPage.tsx:684` — grepped 2026-08-09, three of three — and each brings its own
+ * `WishlistTable.tsx:319` — grepped 2026-08-09, three of three — and each brings its own
  * columns. `Collection/Table` next door is where the row-level behaviours (`extraHeight`,
  * `onActivate`, `renderRow`) are drawn over real data.
  */
