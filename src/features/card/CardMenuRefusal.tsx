@@ -17,11 +17,34 @@
  * press, a removal. Two banners rather than one because they describe two different things: one
  * is the list's controls, and this is a card the reader filed somewhere from a menu that has
  * already closed.
+ *
+ * **The deck editor drew its own copy of this until 2026-08-16** — the same `AnimatePresence`,
+ * the same `motion.div {...statusLine}`, the same `role="alert"` and a byte-identical `<p>` class
+ * string, differing only in a `shrink-0` on the wrapper. There was no stated opt-out at that
+ * site: the comment there explained what the banner was *for* and never why it was not this
+ * component. `className` is what closed the one real difference, and the rule above holds
+ * unbroken for all five surfaces now.
  */
 import { AnimatePresence, motion } from "motion/react";
 import { statusLine } from "@/lib/motion";
+import { cn } from "@/lib/utils";
 
-export function CardMenuRefusal({ error }: { error: string | null }) {
+export function CardMenuRefusal({
+  error,
+  className,
+}: {
+  error: string | null;
+  /**
+   * What the *host's* layout needs of this box, merged after `overflow-hidden`.
+   *
+   * Four of the five surfaces need nothing and pass nothing; the deck editor's column is a flex
+   * one and passes `shrink-0`. Deliberately **not** hoisted into the string below: whether a
+   * banner may be squeezed is a fact about the box it is drawn in, and hoisting it would be a
+   * layout hypothesis about four other pages that nobody has measured — this repo's standard
+   * being a figure off the shipped window rather than an inference from a class string.
+   */
+  className?: string;
+}) {
   return (
     // It grows into place rather than shoving the list down by its whole height. The animated
     // element is the wrapper and carries only `overflow-hidden`, because `statusLine` takes
@@ -30,7 +53,7 @@ export function CardMenuRefusal({ error }: { error: string | null }) {
     // `role="alert"` stays on the element that holds the sentence.
     <AnimatePresence initial={false}>
       {error && (
-        <motion.div {...statusLine} className="overflow-hidden">
+        <motion.div {...statusLine} className={cn("overflow-hidden", className)}>
           <p
             role="alert"
             className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"

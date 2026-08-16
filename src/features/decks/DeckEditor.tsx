@@ -9,6 +9,7 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { FOCUS } from "@/lib/focus";
@@ -2213,7 +2214,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           has to be a child of the page scroller itself — a sticky box inside the ribbon row below
           would scroll away with that row — and it costs no layout in either state, which is what
           `h-0 -mb-3` is for. Every word of why, and why it owns a monitor of its own rather than
-          reading the `dragging` state the remove tray is drawn from: `QuickZones`. */}
+          reading the `dragging` state the remove tray is drawn from: `QuickZones`. (That state
+          is {@link PriceStrip}'s since 2026-08-16, not this file's — the argument is the same
+          one read at the other end of the gesture, so both ends of a drag now re-render
+          themselves rather than the editor.) */}
       <QuickZones categories={categories} onDrop={applyDrop} onNewCategory={openQuickCategory} />
 
       {/**
@@ -2690,22 +2694,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           cannot draw it: `ctx.run` closes the panel before a row's handler runs, so by the time
           an answer arrives there is no menu left to put a sentence in. The deck add is not here
           and needs nothing from this file — it reaches the app's single `useCardToDeck` through
-          `CardToDeckProvider`, and that one mount draws its own sentence. Grown into place like
-          its neighbour: the animated element is the wrapper and carries only `overflow-hidden`,
-          because `statusLine` takes `height` to 0 and a box with its own padding can never be
-          shorter than that padding. */}
-      <AnimatePresence initial={false}>
-        {menuFailure && (
-          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
-            <p
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            >
-              {menuFailure}
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          `CardToDeckProvider`, and that one mount draws its own sentence.
+
+          **The shared component rather than this file's fifth copy of it** (2026-08-16). Every
+          other surface that mounts `useCardMenuDeps` already drew `CardMenuRefusal`; this one
+          hand-drew the same markup down to the class string, and the only thing that differed
+          was the `shrink-0` this column needs — which is what `className` is for. `shrink-0`
+          stays at the call site rather than in the component: whether a banner may be squeezed
+          is a fact about the box it is drawn in. */}
+      <CardMenuRefusal error={menuFailure} className="shrink-0" />
 
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">
