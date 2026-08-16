@@ -37,7 +37,7 @@
 //! [`payload`]: DeckAuditEntry::payload
 
 use crate::sync::AppState;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -81,7 +81,7 @@ pub const DECK_LEVEL: &str = crate::schema::DECK_VARIANTS[0];
 const MAX_LIMIT: i64 = 500;
 
 /// One recorded change, as the history drawer reads it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckAuditEntry {
     pub id: i64,
@@ -227,6 +227,43 @@ pub fn record(
     Ok(tx.last_insert_rowid())
 }
 
+/// The nine columns a [`DeckAuditEntry`] is, in [`entry_from_row`]'s order.
+///
+/// One constant because two readers want the same row: [`list`], and [`by_id`] for the delta
+/// a reversal negates. A tenth column is one edit here and one in the mapper below.
+const AUDIT_SELECT: &str =
+    "SELECT id, deck_id, at, variant, kind, card_id, card_name, payload, delta FROM deck_audit";
+
+/// One row of [`AUDIT_SELECT`], in its column order.
+fn entry_from_row(r: &rusqlite::Row) -> rusqlite::Result<DeckAuditEntry> {
+    Ok(DeckAuditEntry {
+        id: r.get(0)?,
+        deck_id: r.get(1)?,
+        at: r.get(2)?,
+        variant: r.get(3)?,
+        kind: r.get(4)?,
+        card_id: r.get(5)?,
+        card_name: r.get(6)?,
+        payload: r.get(7)?,
+        delta: r.get(8)?,
+    })
+}
+
+/// One history row by id, or `None` if there is no such row.
+///
+/// [`crate::deck_undo`]'s, for the state command and for the delta a reversal negates. `None`
+/// rather than an error for [`list`]'s reason: the history of something that is not there is
+/// nothing, and `deck_audit.deck_id` CASCADEs.
+pub(crate) fn by_id(conn: &Connection, audit_id: i64) -> Result<Option<DeckAuditEntry>, String> {
+    conn.query_row(
+        &format!("{AUDIT_SELECT} WHERE id = ?1"),
+        params![audit_id],
+        entry_from_row,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// One deck's history, newest first.
 ///
 /// `id DESC` after `at DESC` is not decoration: `unixepoch()` has one-second resolution and a
@@ -241,28 +278,15 @@ pub fn record(
 pub fn list(conn: &Connection, deck_id: i64, limit: i64) -> Result<Vec<DeckAuditEntry>, String> {
     let limit = limit.clamp(1, MAX_LIMIT);
     let mut stmt = conn
-        .prepare(
-            "SELECT id, deck_id, at, variant, kind, card_id, card_name, payload, delta
-               FROM deck_audit
+        .prepare(&format!(
+            "{AUDIT_SELECT}
               WHERE deck_id = ?1
               ORDER BY at DESC, id DESC
-              LIMIT ?2",
-        )
+              LIMIT ?2"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![deck_id, limit], |r| {
-            Ok(DeckAuditEntry {
-                id: r.get(0)?,
-                deck_id: r.get(1)?,
-                at: r.get(2)?,
-                variant: r.get(3)?,
-                kind: r.get(4)?,
-                card_id: r.get(5)?,
-                card_name: r.get(6)?,
-                payload: r.get(7)?,
-                delta: r.get(8)?,
-            })
-        })
+        .query_map(params![deck_id, limit], entry_from_row)
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
@@ -1313,5 +1337,46 @@ mod tests {
 
         assert!(refused.contains("`renamed`"), "{refused}");
         assert!(refused.contains("quantity"), "{refused}");
+    }
+
+    /// `by_id` and `list` read the same row. They were two hand-written copies of one
+    /// nine-column SELECT until 2026-08-16; this is what stops them becoming two again.
+    #[test]
+    fn by_id_answers_the_row_list_answers_and_none_for_an_id_that_is_not_there() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        // `deck()` already left the deck's own creation row; cleared so the assertion below is
+        // about the one row this test writes, not about that one too.
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+
+        let id = record(
+            &conn,
+            d,
+            "live",
+            ADD,
+            Some(("bolt-lea", "Lightning Bolt")),
+            &json!({}),
+            4,
+        )
+        .unwrap();
+
+        let listed = list(&conn, d, 10).unwrap();
+        assert_eq!(
+            listed.len(),
+            1,
+            "the deck has exactly the one row just written"
+        );
+        let fetched = by_id(&conn, id)
+            .unwrap()
+            .expect("the row it just wrote is findable");
+        assert_eq!(
+            fetched, listed[0],
+            "by_id and list must answer the same row"
+        );
+
+        assert!(
+            by_id(&conn, id + 1000).unwrap().is_none(),
+            "an id with no row is None, not an error"
+        );
     }
 }

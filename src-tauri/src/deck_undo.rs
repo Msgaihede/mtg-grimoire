@@ -1027,33 +1027,6 @@ fn record_reversal(
     Ok(())
 }
 
-/// One history row by id, for the state command and for the delta a reversal negates.
-fn audit_entry(
-    conn: &Connection,
-    audit_id: i64,
-) -> Result<Option<crate::deck_audit::DeckAuditEntry>, String> {
-    conn.query_row(
-        "SELECT id, deck_id, at, variant, kind, card_id, card_name, payload, delta
-           FROM deck_audit WHERE id = ?1",
-        params![audit_id],
-        |r| {
-            Ok(crate::deck_audit::DeckAuditEntry {
-                id: r.get(0)?,
-                deck_id: r.get(1)?,
-                at: r.get(2)?,
-                variant: r.get(3)?,
-                kind: r.get(4)?,
-                card_id: r.get(5)?,
-                card_name: r.get(6)?,
-                payload: r.get(7)?,
-                delta: r.get(8)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(|e| e.to_string())
-}
-
 /// Apply one step, in one transaction, and record the history row for having done it.
 ///
 /// `undoing` picks the direction. The id is checked against the cursor rather than trusted:
@@ -1078,7 +1051,7 @@ fn apply_reversal(
     if !undoing && !undone {
         return Err(NOTHING_TO_REDO.to_owned());
     }
-    let entry = audit_entry(&tx, audit_id)?.ok_or(NOTHING_TO_UNDO)?;
+    let entry = crate::deck_audit::by_id(&tx, audit_id)?.ok_or(NOTHING_TO_UNDO)?;
     if entry.deck_id != deck_id {
         return Err(MOVED_ON.to_owned());
     }
@@ -1124,12 +1097,14 @@ pub async fn deck_undo_state(
     tauri::async_runtime::spawn_blocking(move || {
         let conn = crate::sync::lock_db_read(&state);
         let undo = match next_undo(&conn, deck_id)? {
-            Some(id) => audit_entry(&conn, id)?,
+            Some(id) => crate::deck_audit::by_id(&conn, id)?,
             None => None,
         };
         let redo = match redo_id {
             Some(id) => match read_step(&conn, id)? {
-                Some((_, true)) => audit_entry(&conn, id)?.filter(|e| e.deck_id == deck_id),
+                Some((_, true)) => {
+                    crate::deck_audit::by_id(&conn, id)?.filter(|e| e.deck_id == deck_id)
+                }
                 _ => None,
             },
             None => None,
@@ -2033,7 +2008,7 @@ mod tests {
 
         undo(&conn, id).unwrap();
 
-        let entry = audit_entry(&conn, conn.last_insert_rowid())
+        let entry = crate::deck_audit::by_id(&conn, conn.last_insert_rowid())
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -2071,16 +2046,22 @@ mod tests {
         )
         .unwrap();
         let added = next_undo(&conn, id).unwrap().unwrap();
-        assert_eq!(audit_entry(&conn, added).unwrap().unwrap().delta, 2);
+        assert_eq!(
+            crate::deck_audit::by_id(&conn, added)
+                .unwrap()
+                .unwrap()
+                .delta,
+            2
+        );
 
         undo(&conn, id).unwrap();
-        let undone = audit_entry(&conn, conn.last_insert_rowid())
+        let undone = crate::deck_audit::by_id(&conn, conn.last_insert_rowid())
             .unwrap()
             .unwrap();
         assert_eq!(undone.delta, -2);
 
         redo(&conn, id, added).unwrap();
-        let redone = audit_entry(&conn, conn.last_insert_rowid())
+        let redone = crate::deck_audit::by_id(&conn, conn.last_insert_rowid())
             .unwrap()
             .unwrap();
         assert_eq!(redone.delta, 2);
