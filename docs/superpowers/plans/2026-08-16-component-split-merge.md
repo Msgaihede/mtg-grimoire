@@ -54,8 +54,16 @@ Ship these first and separately. They must not wait on the merges that would hav
 - [ ] `DeckCoverPicker.tsx:409` does exactly that with `customCoverKey`. `DecksPage`'s `Cover`
       (`1565-1603`) passes **no key** — while `DecksPage.tsx:1082-1089` mounts the very settings
       dialog that uploads. So the gallery wall behind the dialog keeps painting the previous bytes.
-- [ ] `imageKey={deck.updatedAt}` on `Cover`'s `CardImage`. The value is already in hand at `:1565`.
-- [ ] Needs its own test; ideally a live pass.
+- [ ] **There is no `imageKey` prop** — `CardImage`'s surface is `src` + `alt` + `ImgHTMLAttributes`
+      minus those two (`CardImage.tsx:39-53`), and it keys itself on the URL alone (`:36`). Use
+      **React's own `key`** on the `<CardImage>` element, as `DeckCoverPicker.tsx:409` does.
+- [ ] **Key the custom arm only:** `key={deck.coverKind === "custom" ? deck.updatedAt : undefined}`.
+      `updated_at` moves on every write to the deck (`deck.rs:1394`), and a remounted `<img>` paints
+      nothing until the new bytes decode — so an unconditional key blanks an already-decoded card
+      crop on a rename.
+- [ ] Needs its own test asserting element **identity**; ideally a live pass.
+- [ ] Known limit: `decks.updated_at` is whole seconds, so two uploads inside one second do not
+      re-key. The settings dialog's preview already has this limit.
 
 ---
 
