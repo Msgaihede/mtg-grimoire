@@ -1498,9 +1498,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
   the two of them draw with. Those three and `DeckSettingsDialog` are built on one shell,
   `DeckDialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
-  zones' New category, both destructive confirmations. **The list worth carrying is the
-  exceptions**: Import cards and the theory difference were never drawers, still carry their own
-  copy of that chrome, and are the two to move onto the shell. Anything else here is a count off
+  zones' New category, both destructive confirmations. **There are no exceptions left, as of
+  2026-08-16**: Import cards and the theory difference were never drawers and carried their own
+  copy of that chrome until then, and `CreateDeckDialog` a third copy outside the editor — all
+  three are on the shell now, so a modality change here (a focus restore, a different `trapTab`,
+  when the Escape rung is enabled) was an edit to four files and is one edit to one file. That
+  history is the reason the shell exists and the reason not to start a fourth copy: while they
+  lasted, one editor drew two scrim darknesses, the ✕ at two geometries and two speeds, and the
+  panel at three `max-h` values, none of it decided. Anything else here is a count off
   `Layer` or off the toolbar's `ACTIONS`, not off this page. The
   reason for all of it is the desk row: every one of these is **consulted** — read, or
   edited and shut — and a right-hand drawer took the width it needed out of the deck for as long

@@ -465,14 +465,19 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * it when the header grew `Export deck` — and it is a **behavioural** sweep for a reason worth
  * reading before the next modality edit.
  *
- * **All but two of the overlays are a `DeckDialog`** — where the scrim, the centring,
- * `aria-modal`, the trap, the ✕ and the `"inner"` rung are written once. **`TheoryDiffDialog`
- * and `ImportDeckDialog` are the two that are not**: each still carries
- * its own copy of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of
- * scope when the shell was written rather than exempt from it, and they are the next two to
- * move onto it. `CreateDeckDialog` is a third such copy outside this editor. So a change to how
- * a modal behaves here — a focus restore, a different `trapTab`, a change to when the rung is
- * enabled — is an edit to **four files, not one**, until those three are converted.
+ * **Every overlay here is a `DeckDialog`** — where the scrim, the centring, `aria-modal`, the
+ * trap, the ✕ and the `"inner"` rung are written once, and since 2026-08-16 that shell is the
+ * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDeckDialog` were the
+ * last two here carrying their own copy of that chrome, with `CreateDeckDialog` a third copy
+ * outside this editor; all three moved onto the shell on that date.
+ *
+ * **The cost while the copies lasted is why the shell exists, and is the argument for not
+ * starting a fourth.** A change to how a modal behaves here — a focus restore, a different
+ * `trapTab`, a change to when the rung is enabled — was an edit to **four files, not one**,
+ * until 2026-08-16, and each of those files was free to answer a shared question its own way:
+ * one editor drew two scrim darknesses, the ✕ at two geometries and two speeds, and the panel
+ * at three `max-h` values, none of it decided by anybody. A new modal here is built *on*
+ * `DeckDialog.tsx` rather than beside it.
  */
 type Layer =
   | { kind: "check" }
