@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { count } from "@/lib/counts";
 import { ipc, ipcError, type SyncStatus } from "@/lib/ipc";
 
 /** How often the header re-reads `sync_status` when nothing is happening. */
@@ -55,7 +56,7 @@ export function statusLine(status: SyncStatus | null): string | null {
   if (status.cardCount === 0) return "No card data yet";
 
   const parts: string[] = [];
-  if (status.cardCount !== null) parts.push(`${status.cardCount.toLocaleString("en-US")} cards`);
+  if (status.cardCount !== null) parts.push(`${count(status.cardCount)} cards`);
   const date = status.bulkUpdatedAt?.match(ISO_DATE)?.[0];
   if (date) parts.push(`data from ${date}`);
   return parts.length > 0 ? parts.join(" · ") : null;

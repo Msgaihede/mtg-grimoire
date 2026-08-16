@@ -15,6 +15,7 @@ import {
 import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckFolder } from "@/lib/ipc";
@@ -36,12 +37,6 @@ import { NOT_A_DRAG } from "./dnd";
 /** Pixels of indent per level of nesting, and the padding the root sits at. */
 const INDENT_STEP = 14;
 const INDENT_BASE = 8;
-
-/** One derivation of every plural on this screen, so a count and the sentence quoting it can
- *  never disagree about whether it is "deck" or "decks". */
-export function plural(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? "" : "s"}`;
-}
 
 /**
  * The indent, as an **inline style**.

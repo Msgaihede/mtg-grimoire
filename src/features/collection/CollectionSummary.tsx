@@ -1,4 +1,5 @@
 import { Figure, FigureRow } from "@/components/Figure";
+import { count } from "@/lib/counts";
 import type { CollectionSummary as Summary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -42,24 +43,23 @@ export function CollectionSummaryHeader({
    *  the as-of sentence. The figure itself was summed by the query. */
   marketplace: Marketplace;
 }) {
-  const n = (value: number) => value.toLocaleString("en-US");
   const value = summary ? summary.value : null;
   const unpriced = summary ? summary.unpriced : 0;
   return (
     <FigureRow>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}
-      <Figure label="Cards" value={summary ? n(summary.totalCards) : "—"} />
-      <Figure label="Unique" value={summary ? n(summary.uniqueCards) : "—"} />
+      <Figure label="Cards" value={summary ? count(summary.totalCards) : "—"} />
+      <Figure label="Unique" value={summary ? count(summary.uniqueCards) : "—"} />
       <Figure
         label={`Value (${marketplace.currency.toUpperCase()})`}
         value={summary ? formatPrice(value, marketplace.currency) : "—"}
-        note={unpriced > 0 ? `${n(unpriced)} unpriced` : undefined}
+        note={unpriced > 0 ? `${count(unpriced)} unpriced` : undefined}
         title={pricesAsOf(marketplace)}
       />
       {/* Only when there is one: a permanent "For trade — 0" is a column of chrome that has
           never once been the answer to anything. */}
       {summary && summary.tradelistCards > 0 && (
-        <Figure label="For trade" value={n(summary.tradelistCards)} />
+        <Figure label="For trade" value={count(summary.tradelistCards)} />
       )}
     </FigureRow>
   );

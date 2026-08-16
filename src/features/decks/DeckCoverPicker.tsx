@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { CardImage } from "@/components/CardImage";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { count } from "@/lib/counts";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ART_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardSummary, type DeckCard, type DeckCoverKind } from "@/lib/ipc";
@@ -355,7 +356,7 @@ function SearchResults({
           than a figure, which would not be. */}
       {total > results.length && (
         <p className="mt-1 text-[0.6875rem] text-dim">
-          Showing {results.length} of {total.toLocaleString("en-US")}
+          Showing {results.length} of {count(total)}
           {capped ? "+" : ""} matches — a narrower word reaches the rest.
         </p>
       )}

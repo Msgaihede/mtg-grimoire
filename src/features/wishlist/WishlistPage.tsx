@@ -22,6 +22,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
+import { count } from "@/lib/counts";
 import { finishLabel, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -364,7 +365,7 @@ export function WishlistPage() {
       <h2 className="sr-only">Wishlist</h2>
 
       <FigureRow>
-        <Figure label="Wishes" value={query.isPending ? "—" : total.toLocaleString("en-US")} />
+        <Figure label="Wishes" value={query.isPending ? "—" : count(total)} />
         {/* The one number this view exists for, in the currency the reader picked — spec §7
             says this header mirrors the collection's, and that one now prices in one
             currency too. Spec §5: it says how old the prices are, and whose they are.

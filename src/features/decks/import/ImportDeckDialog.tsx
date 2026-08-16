@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } fr
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
   ipcError,
@@ -17,7 +18,6 @@ import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
-import { plural } from "../FolderTree";
 import { DEFAULT_FORMAT, FormatSelect } from "../FormatSelect";
 import { DEFAULT_VARIANT, useDeck } from "../useDeck";
 import { useFormatSpecs } from "../useFormatSpecs";
@@ -48,12 +48,6 @@ const PRIMARY = cn(
   "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
   "motion-reduce:transition-none",
 );
-
-/** `plural` says "categorys". A pile count is the one figure this surface prints that has an
- *  irregular plural, so it is spelled out rather than the helper being taught English. */
-function categoryCount(n: number): string {
-  return `${n} ${n === 1 ? "category" : "categories"}`;
-}
 
 /**
  * Where an import is going.
@@ -714,7 +708,7 @@ function Headline({
   return (
     <p className="font-mono text-sm tabular-nums">
       {plural(totalCards, "card")}
-      <span className="text-dim"> · {categoryCount(categories.length)}</span>
+      <span className="text-dim"> · {plural(categories.length, "category", "categories")}</span>
     </p>
   );
 }

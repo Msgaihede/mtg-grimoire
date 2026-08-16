@@ -14,6 +14,7 @@ import type {
   SyncProgressEvent,
   UpdateProgressEvent,
 } from "@/lib/ipc";
+import { count } from "@/lib/counts";
 import type { ManaLineSync } from "@/lib/mana";
 import { ORACLE_TAG_PHASE_LABEL } from "@/lib/useOracleTagProgress";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
@@ -175,7 +176,7 @@ export function syncActivity(progress: SyncProgressEvent | null, busy: boolean):
  */
 function syncDetail(phase: SyncPhase, e: SyncProgressEvent): string | null {
   if (phase === "downloading" && e.total > 0) return megabytes(e.done, e.total);
-  if (phase === "ingesting") return `${e.done.toLocaleString("en-US")} cards`;
+  if (phase === "ingesting") return `${count(e.done)} cards`;
   if (phase === "reclaiming" && e.total > 0) {
     return `${Math.min(100, Math.round((e.done / e.total) * 100))}%`;
   }
@@ -221,7 +222,7 @@ function feedDetail(progress: FeedProgressEvent | null): string | null {
   if (progress.phase === "downloading" && progress.total > 0) {
     return megabytes(progress.done, progress.total);
   }
-  if (progress.phase === "ingesting") return `${progress.done.toLocaleString("en-US")} prices`;
+  if (progress.phase === "ingesting") return `${count(progress.done)} prices`;
   return null;
 }
 

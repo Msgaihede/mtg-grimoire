@@ -12,6 +12,7 @@
  * older or newer than the one that wrote it, so every field is read defensively and a
  * sentence degrades to its shortest honest form rather than taking the dialog down.
  */
+import { plural } from "@/lib/counts";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
 
 /** One line of `DeckHistoryDialog`: the sentence, and the quieter half under it. */
@@ -42,6 +43,8 @@ function text(value: unknown): string | null {
   return null;
 }
 
+/** A payload field read as a number — **not `lib/counts`' `count`**, which formats one. This
+ *  file's `count` is one of the defensive readers above and reads a field it may not have. */
 function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -66,12 +69,6 @@ function nested(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-/** `1 card`, `2 cards`. One helper because four sentences now need it and the app must never
- *  print "1 cards"; the irregular plural is passed rather than derived. */
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
 }
 
 /** Joined with the app's own separator, skipping the halves that are not there. */

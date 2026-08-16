@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
+import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
@@ -35,7 +36,6 @@ import {
   FOLDER_ROW_ATTR,
   FolderTree,
   MoveToFolder,
-  plural,
   useDeckDragging,
   useDeckDropTarget,
   type DeckDrag,

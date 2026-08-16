@@ -29,14 +29,10 @@
  * got.
  */
 import { useEffect, useRef } from "react";
+import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-
-/** `1 card`, `2 cards` — the app must never print "1 cards", and this dialog counts twice. */
-function plural(n: number): string {
-  return `${n} ${n === 1 ? "card" : "cards"}`;
-}
 
 /** What each list is called in a sentence. The reader's own words for the two tabs, lowercased
  *  into prose — `DeckEditor`'s tabs read `Theory | Live`. */
@@ -91,12 +87,12 @@ export function ClearCategory({
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the
           reason holds here too: this is the line a reader's eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(here)} in it leave the {listName(variant)} and the pile stays. This cannot be
-        undone.
+        The {plural(here, "card")} in it leave the {listName(variant)} and the pile stays. This
+        cannot be undone.
       </p>
       {elsewhere > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-          The {plural(elsewhere)} filed here in the other list are untouched.
+          The {plural(elsewhere, "card")} filed here in the other list are untouched.
         </p>
       )}
 
@@ -112,7 +108,7 @@ export function ClearCategory({
             FOCUS,
           )}
         >
-          Remove {plural(here)}
+          Remove {plural(here, "card")}
         </button>
         <button
           type="button"

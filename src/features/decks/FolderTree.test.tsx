@@ -6,7 +6,6 @@ import {
   deckDragData,
   flattenFolders,
   folderDescendants,
-  plural,
   readDeckDrag,
 } from "./FolderTree";
 
@@ -163,13 +162,5 @@ describe("readDeckDrag", () => {
 
   it("refuses an unmarked payload from anything else in the window", () => {
     expect(readDeckDrag({ deckId: 4, name: "Burn" })).toBeNull();
-  });
-});
-
-describe("plural", () => {
-  it("is one derivation, so a count and the sentence quoting it cannot disagree", () => {
-    expect(plural(1, "deck")).toBe("1 deck");
-    expect(plural(0, "deck")).toBe("0 decks");
-    expect(plural(2, "folder")).toBe("2 folders");
   });
 });
