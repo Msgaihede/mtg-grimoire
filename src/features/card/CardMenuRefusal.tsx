@@ -47,9 +47,10 @@ export function CardMenuRefusal({
 }) {
   return (
     // It grows into place rather than shoving the list down by its whole height. The animated
-    // element is the wrapper and carries only `overflow-hidden`, because `statusLine` takes
-    // `height` to 0 and — under `box-sizing: border-box` — a box with its own padding and border
-    // can never be shorter than the two of them, so it would bottom out short and jump the rest.
+    // element is the wrapper and carries no padding or border of its own, because `statusLine`
+    // takes `height` to 0 and — under `box-sizing: border-box` — a box with either can never be
+    // shorter than the two of them, so it would bottom out short and jump the rest. (What it does
+    // carry is `overflow-hidden`, which that preset needs, and whatever the host passed.)
     // `role="alert"` stays on the element that holds the sentence.
     <AnimatePresence initial={false}>
       {error && (

@@ -10,7 +10,7 @@ const NOTHING_LANDED: ReadonlyMap<number, number> = new Map();
 
 /** What {@link useRecentAdds} answers with. */
 export interface RecentAdds {
-  /** `deck_cards.id` → the nonce that add was given, for every card still inside its ten
+  /** `deck_cards.id` → the nonce that add was given, for every card still inside its five
    *  seconds. Handed to all four views whole, the way `violations` is. */
   landed: ReadonlyMap<number, number>;
   /** A card just landed in this row. The id is `EntryChange.id` — what the add answered. */

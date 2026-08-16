@@ -1,3 +1,11 @@
+/**
+ * A folder as it is drawn on the gallery wall, beside the deck tiles rather than in the tree.
+ *
+ * Lifted out of `DecksPage.tsx` on 2026-08-16, whole — the card, the strip of member art it is
+ * made of, and the one query the page needs to fill that strip. `FolderTree.tsx` draws the same
+ * folders as *rows* in the sidebar; this is the other drawing of them, and the two share only
+ * the drop target and the tree itself.
+ */
 import { useRef } from "react";
 import { CardImage } from "@/components/CardImage";
 import { plural } from "@/lib/counts";
@@ -13,15 +21,6 @@ import {
   type DeckDrag,
   type FolderNode,
 } from "./FolderTree";
-
-/**
- * A folder as it is drawn on the gallery wall, beside the deck tiles rather than in the tree.
- *
- * Lifted out of `DecksPage.tsx` on 2026-08-16, whole — the card, the strip of member art it is
- * made of, and the one query the page needs to fill that strip. `FolderTree.tsx` draws the same
- * folders as *rows* in the sidebar; this is the other drawing of them, and the two share only
- * the drop target and the tree itself.
- */
 
 /** How many member covers a folder card shows. Three, because the strip is 96px tall and a
  *  fourth crop at that width is a smear rather than a picture. */

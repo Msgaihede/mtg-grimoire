@@ -1,6 +1,3 @@
-import { finishLabel } from "@/lib/finish";
-import type { WishRow } from "@/lib/ipc";
-
 /**
  * How a wish is read out — the three answers both the page and its table need.
  *
@@ -8,6 +5,8 @@ import type { WishRow } from "@/lib/ipc";
  * "Still to buy" is summed over what is missing, and the row that says so is drawn by the table.
  * One definition, so the figure and the rows it is summed from cannot disagree on screen.
  */
+import { finishLabel } from "@/lib/finish";
+import type { WishRow } from "@/lib/ipc";
 
 /**
  * Which printing a wish is for, in the words spec §6 draws the distinction in.

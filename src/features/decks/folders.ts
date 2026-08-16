@@ -8,20 +8,24 @@ import type { DeckFolder } from "@/lib/ipc";
  * `cardMenu.tsx` and `folderMenu.tsx` only want the arithmetic: which folder is under which,
  * how many decks are in it, and what a folder may not be moved into. Reading those out of the
  * component module pulled a whole tree, its drag machinery and everything they import in behind
- * them — and put `AppShell` back in the menu's import graph, which is the cycle
- * `src/lib/dropMarks.ts` was split out to break.
+ * them.
+ *
+ * **The cycle those two menus were in was already broken by then, and this is a different
+ * edge.** `src/lib/dropMarks.ts` was split out earlier in the same wave to keep `AppShell` out of
+ * the menu's import graph. What remained after that was a menu module pulling a 915-line
+ * component for four pure functions — not a cycle, just weight, and weight that could turn back
+ * into one the next time anything in that component grew an import.
  *
  * **Named `folders.ts` rather than `folderTree.ts`, and that is a fact about Windows.** This
  * repo is developed and shipped on a case-insensitive filesystem, where `./FolderTree` resolves
  * to `folderTree.ts` — TypeScript tries `.ts` before `.tsx` and the OS answers yes to both
  * spellings — so the component beside this file would have become unreachable by its own name,
- * silently, everywhere it is imported. Measured: `tsc --noEmit` answered TS1149 plus ten
+ * silently, everywhere it is imported. Measured: `tsc --noEmit` answered TS1149 plus nine
  * "has no exported member" errors against `DecksPage.tsx` the moment the pair existed.
  *
- * **Flat rows, indented — no twisty.** `deck_folders` has no notion of depth and a reader has
- * tens of folders at most, so every folder is always on screen and the indent is the whole of
- * the nesting. A collapsed branch would be somewhere a deck could hide with no number pointing
- * at it, which is the one thing a filing cabinet must never do.
+ * **Flat rows, indented — no twisty**, and the reason is a fact about the *drawing*, so it is
+ * written at the drawing: `FolderTree.tsx`'s own head. What reaches this file is {@link indent},
+ * which both surfaces that draw a folder list share.
  */
 
 /** Pixels of indent per level of nesting, and the padding the root sits at. */

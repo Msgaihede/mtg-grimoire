@@ -33,17 +33,19 @@ export const QUICK_ZONE_ATTR = "data-quick-zone";
  * the top, *take it out* at the bottom. Everything between them is the deck itself, where a drop
  * means the pile it landed on.
  *
- * ## Why this owns its own monitor rather than reading `DeckEditor`'s
+ * ## Why this owns its own monitor rather than reading `PriceStrip`'s
  *
- * `DeckEditor` already tracks a drag — `dragging`, which the tray is drawn from — and it is
+ * `PriceStrip` already tracks a drag — `dragging`, which the tray is drawn from — and it is
  * narrowed by `canMonitor` to the deck's **own** cards, with the reason written at the site: a
- * monitor that answered for the docked panel's tiles would re-render the editor, and with it the
- * panel and the very tile the reader has hold of, in the middle of the drag.
+ * monitor that answered for the docked panel's tiles would re-render the strip — and, while that
+ * monitor lived in `DeckEditor`, the panel and the very tile the reader has hold of — in the
+ * middle of the drag.
  *
  * These zones have to answer for exactly the drags that monitor refuses — a card arriving from
  * the search panel is the whole point of an `Auto` zone — so widening it was not available. A
  * component of its own with a monitor of its own re-renders **itself** when a drag starts and
- * leaves `DeckEditor` untouched, which keeps that rule true rather than working around it.
+ * leaves both the strip and the editor untouched, which keeps that rule true rather than working
+ * around it.
  *
  * ## Layout: zero height, so nothing moves when it appears
  *

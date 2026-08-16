@@ -1,3 +1,12 @@
+/**
+ * One export, {@link MoveToFolder}, and the one thing about it that is a fact about the *file*
+ * rather than about the component.
+ *
+ * **It reads `folders.ts` and never `FolderTree.tsx`.** This is a popup anchored to a tile,
+ * not a sidebar: what it needs is the flattening and the indent, and importing the tree
+ * component to get them would put the whole sidebar — and the deck-drag registrations behind it
+ * — into `folderMenu`'s import graph, which is the cycle that split this file out.
+ */
 import { useEffect, useRef } from "react";
 import { Folder, Layers } from "lucide-react";
 import { FOCUS } from "@/lib/focus";
@@ -5,19 +14,10 @@ import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { flattenFolders, indent, type FolderNode } from "./folders";
 
-/**
- * The destination list a deck or a folder is moved with — **the keyboard's half of the drag.**
- *
- * **It reads `folders.ts` and never `FolderTree.tsx`.** This is a popup anchored to a tile,
- * not a sidebar: what it needs is the flattening and the indent, and importing the tree
- * component to get them would put the whole sidebar — and the deck-drag registrations behind it
- * — into `folderMenu`'s import graph, which is the cycle that split this file out.
- */
-
 const NOTHING_FORBIDDEN: ReadonlySet<number> = new Set();
 
 /**
- * Where a deck or a folder can be moved to — **the keyboard's half of the drag.**
+ * The destination list a deck or a folder is moved with — **the keyboard's half of the drag.**
  *
  * A drag-only affordance is half a feature, and this is the other half: the same two writes
  * (`deck_set_folder`, `deck_folder_move`) reached with the caret. `null` is the top level and

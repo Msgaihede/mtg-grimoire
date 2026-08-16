@@ -277,11 +277,11 @@ reader to configure the deck they had just made; it now asks all of them.
   `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
   means the pile it landed on. Five things about it are decisions rather than details:
   - **It owns its own `monitorForElements`, and that is the point of it being a component.**
-    `DeckEditor`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
-    answered for the docked panel's tiles would re-render the editor — and with it the panel and
-    the very tile the reader has hold of — mid-drag. These zones have to answer for exactly the
-    drags it refuses, so widening it was never available; a component with a monitor of its own
-    re-renders **itself** and leaves that rule true.
+    `PriceStrip`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
+    answered for the docked panel's tiles would re-render the strip — and, while that monitor
+    lived in `DeckEditor`, the panel and the very tile the reader has hold of — mid-drag. These
+    zones have to answer for exactly the drags it refuses, so widening it was never available; a
+    component with a monitor of its own re-renders **itself** and leaves that rule true.
   - **`{ kind: "auto" }` is a `DropTarget`, and it resolves to one of two writes.** An auto add
     names no category — the pile is per card, decided inside `useDeck.addCard` — so it could not
     be spelled as a category id without inventing one. A printing off a wall becomes `auto-add`;
