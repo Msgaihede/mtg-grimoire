@@ -119,13 +119,19 @@ Every one of these has its measurement and its story in
   **`src/features/decks/DeckDialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
   the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
   because the panel outlives the flag by the length of its fade. **A new modal in the deck
-  surface is built _on_ that file rather than beside it** — and it is not yet the only definition
-  of one: `DeckSettingsDialog`, `CategoriesDialog`, `TagsDialog` and `DeckHistoryDialog` are on
-  the shell, while `ImportDeckDialog`, `TheoryDiffDialog` and `CreateDeckDialog` still carry
-  their own copy of the same chrome and are the three to move onto it. So a change to modality
-  here — a focus restore, a different `trapTab`, a change to when the rung is enabled — is an
-  edit to **four files until they are converted**, and `DeckEditor.test.tsx`'s Tab sweep is what
-  holds the copies to the shell's behaviour meanwhile. Only a
+  surface is built _on_ that file rather than beside it, and since 2026-08-16 it is the only
+  definition of one** — `ImportDeckDialog`, `TheoryDiffDialog` and `CreateDeckDialog` were the
+  last three carrying their own copy of that chrome and are on the shell now. A change to
+  modality here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
+  is one edit to one file. **What the copies cost while they lasted is the argument for keeping
+  it that way**: between them one editor drew two scrim darknesses, the ✕ at two geometries and
+  two speeds, and the panel at three `max-h` values, none of which anybody had decided — a
+  resemblance is N independent decisions that happen to agree today. Each of those is settled
+  once in `DeckDialog.tsx` with the reason at its own site, and the shell's three optional
+  header props (`title: ReactNode`, `ariaLabel`, `subtitle`) exist because folding the last
+  three in needed exactly that much and no more. `DeckEditor.test.tsx`'s Tab sweep is still
+  driven per surface rather than pointed at the shell, and it is what would go red if a modality
+  fix reached one dialog and stopped there. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
   column, whose tiles are drag sources into the deck's own category columns, and the card detail
   pane, which is how a reader flips through a card's printings — and both of those are

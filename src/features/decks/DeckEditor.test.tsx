@@ -2225,11 +2225,12 @@ describe("DeckEditor", () => {
    * ones still outside the sweep are the delete-category and clear-stack confirmations and the
    * quick zones' New category, all opened without a button to point it at.
    *
-   * **Most of them are one component now (`DeckDialog`) and one is not**: the theory diff still
-   * carries its own scrim, `aria-modal` and `onKeyDown={trapTab}`, which is why this sweep is
-   * driven per surface rather than pointed at the shell. It is the only thing holding that copy
-   * to the shell's behaviour, and it is what would go red if it were converted badly — or if a
-   * modality fix reached `DeckDialog.tsx` and stopped there.
+   * **Every one of them is `DeckDialog` since 2026-08-16**, and this sweep is still driven per
+   * surface rather than pointed at the shell — deliberately. The claim is that *this overlay*,
+   * opened by *that* button, traps the caret; a sweep aimed at the shell would prove the shell
+   * and say nothing about a host that passed the wrong thing, and it was this sweep that held
+   * the three hand-copies to the shell's behaviour for as long as they existed. It is what would
+   * go red if a modality fix reached `DeckDialog.tsx` and a host stopped using it.
    *
    * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
    * claim about what is behind it: each layer's own test file mounts it alone, where there is
