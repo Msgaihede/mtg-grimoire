@@ -272,6 +272,13 @@ function Panel({
         // grows with the window: at 800px it is 16 + ~115, at 1400px it is 24 + ~206. One rule —
         // the scrim's padding is the inset, and the panel takes what is left — is a constant gap
         // at every size, which is what the four dialogs already on this shell draw.
+        //
+        // **This panel does not clip its content, and nothing on the shell has needed it to**:
+        // two of the three dialogs folded in on 2026-08-16 arrived carrying a clip of their own
+        // and lost nothing by dropping it, because no body here paints a background out to the
+        // rounded corners — the first one that does will square them off on every dialog at
+        // once rather than on its own, which is the kind of thing worth knowing before the
+        // discovery instead of after it.
         className={cn(
           "flex max-h-full max-w-full flex-col rounded-xl border border-border bg-bg shadow-2xl",
           width,

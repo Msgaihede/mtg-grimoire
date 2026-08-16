@@ -266,6 +266,15 @@ const PRESS_BASE =
  * carries, down to the character". So: one string, in the module `src/CLAUDE.md` already
  * names as where timings live.
  *
+ * **The reduced-motion opt-out came along inside it, which moved that guarantee's guard.**
+ * `tokens.test.ts` sweeps source *text* for a tween utility and demands the opt-out within 400
+ * characters of it, so a call site that folded its hand-written list into this constant spells
+ * no such utility any more and is no longer reached by that sweep. Nothing lost its opt-out —
+ * it is pinned once here instead, by `motion.test.ts`'s "compose into whole class names", for
+ * every site at once. What stopped being safe on 2026-08-16 is the obvious inference: a file
+ * naming no tween is no longer a file that runs none, so absence from that sweep says nothing
+ * about a control in it.
+ *
  * **What a control does when it is out of reach is deliberately *not* in here.** Some sites
  * add `disabled:active:scale-100` because they genuinely use the attribute, some add
  * `aria-disabled:active:scale-100` because they grey as the reader types, and the rest never

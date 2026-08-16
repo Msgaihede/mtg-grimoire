@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { FILTER_FOCUS, FILTER_UNAVAILABLE } from "@/components/FilterChips";
+import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { PopupPanel } from "@/components/PopupListbox";
 import { FOCUS } from "@/lib/focus";
 import { ipc, type SetSummary } from "@/lib/ipc";
@@ -462,7 +462,7 @@ export function SetCombobox({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={revealMore}
                   className={cn(
-                    FILTER_FOCUS,
+                    FOCUS,
                     // A quiet footer control, not a primary action: it wears the footer's own
                     // size and colour and is told apart from the sentence by the underline.
                     "mt-1 rounded-md px-1.5 py-0.5 underline underline-offset-2",

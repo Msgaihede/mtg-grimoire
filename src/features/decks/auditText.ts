@@ -43,9 +43,9 @@ function text(value: unknown): string | null {
   return null;
 }
 
-/** A payload field read as a number — **not `lib/counts`' `count`**, which formats one. This
- *  file's `count` is one of the defensive readers above and reads a field it may not have. */
-function count(value: unknown): number {
+/** A payload field read as a number, `0` when the row does not carry one — one of the
+ *  defensive readers above, and never a claim that the field was there. */
+function numberField(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
@@ -114,7 +114,7 @@ export function auditSentence(
 
   switch (entry.kind) {
     case "add": {
-      const quantity = count(p.quantity);
+      const quantity = numberField(p.quantity);
       return {
         text: quantity > 1 ? `Added ${quantity} × ${name}` : `Added ${name}`,
         detail: line(text(p.category) && `to ${text(p.category)}`),
@@ -128,11 +128,11 @@ export function auditSentence(
       // renderer. The word is `deck.rs`'s `clear_category`; copy it, never re-derive it.
       if (text(p.action) === "clear") {
         return {
-          text: `Cleared ${plural(count(p.cards), "card")} from ${text(p.category) ?? "a category"}`,
+          text: `Cleared ${plural(numberField(p.cards), "card")} from ${text(p.category) ?? "a category"}`,
           detail: null,
         };
       }
-      const quantity = count(p.quantity);
+      const quantity = numberField(p.quantity);
       return {
         text: quantity > 1 ? `Removed ${quantity} × ${name}` : `Removed ${name}`,
         detail: line(text(p.category) && `from ${text(p.category)}`, text(p.reason)),
@@ -246,12 +246,12 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
     // Copies, not rows — the quantities the variant held, summed before the delete.
     case "remove":
       return {
-        text: `Cleared ${plural(count(p.cleared), "card")} before importing`,
+        text: `Cleared ${plural(numberField(p.cleared), "card")} before importing`,
         detail: null,
       };
     case "add": {
-      const cards = plural(count(p.cards), "card");
-      const categories = plural(count(p.categories), "category", "categories");
+      const cards = plural(numberField(p.cards), "card");
+      const categories = plural(numberField(p.categories), "category", "categories");
       return { text: `Imported ${cards} into ${categories}`, detail: null };
     }
     default:
@@ -277,7 +277,7 @@ function cardTagLine(p: Record<string, unknown>, name: string): AuditLine {
 function tagLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.tag) ?? text(p.name) ?? "a tag";
   const previous = text(p.previous) ?? text(p.previousName);
-  const cards = count(p.cards);
+  const cards = numberField(p.cards);
   const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
@@ -328,7 +328,7 @@ function folderLine(p: Record<string, unknown>): AuditLine {
  *  a branch — a shared template would read as machine output. */
 function categoryLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.name) ?? "a category";
-  const cards = count(p.cards);
+  const cards = numberField(p.cards);
   const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
@@ -390,7 +390,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       // no `copied`. Reading only the toggle answers a copy as `flag(undefined)` — "Turned
       // the theory list off" — which is a sentence about the opposite of what happened.
       if ("copied" in p) {
-        const copied = count(p.copied);
+        const copied = numberField(p.copied);
         return {
           text: "Copied the live deck into theory",
           detail: copied > 0 ? plural(copied, "card") : null,
