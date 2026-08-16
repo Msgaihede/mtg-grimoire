@@ -22,6 +22,7 @@ import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
@@ -49,17 +50,6 @@ import {
   type DwellRowProps,
 } from "./PrintingPreview";
 import { usePrintingGroupBy } from "./usePrintingGroupBy";
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
- * control's edge, never a ring (see `FilterBar`'s `FOCUS` — outline is focus, border and
- * ring are state).
- *
- * Byte-identical to `FilterChips`' exported `FILTER_FOCUS`, which is what the deck editor's
- * selects carry — so the grouping control below reads as the same control as the deck's own
- * without this file growing a second focus recipe to keep in step with the first.
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
  * A header control that is not a chip — here, the one `<select>` in this pane.

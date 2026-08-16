@@ -3,11 +3,11 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { CardImage } from "@/components/CardImage";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ART_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardSummary, type DeckCard, type DeckCoverKind } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { FOCUS, FOCUS_INSET } from "./cardControl";
 import { CAPTION, FIELD } from "./formFields";
 
 /**

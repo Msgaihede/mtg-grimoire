@@ -6,6 +6,7 @@ import { filterChipState } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { popup } from "@/lib/motion";
@@ -35,8 +36,6 @@ export interface AddTarget {
 export const REVEAL_ON_HOVER =
   "opacity-0 transition-opacity duration-150 group-hover:opacity-100 " +
   "group-focus-within:opacity-100 motion-reduce:transition-none";
-
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
  * Small, quiet, and the same three sizes wherever they appear in the popup.

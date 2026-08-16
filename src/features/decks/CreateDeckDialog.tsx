@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState, type JSX } from "reac
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckInput, type DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
@@ -10,7 +11,6 @@ import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY } from "./autoCategory";
-import { FOCUS } from "./cardControl";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
 import { useDeckFolders } from "./useDeckFolders";

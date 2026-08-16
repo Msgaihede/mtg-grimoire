@@ -1,28 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { motion, useAnimationControls } from "motion/react";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
- * control's edge, never a ring (see `FilterChips`' `FILTER_FOCUS` — outline is focus,
- * border and ring are state).
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
-/**
- * The same outline, drawn **inside** the control's own edge.
- *
- * For a stepper sitting in a box that clips — a deck card's frame, a grid tile — where an
- * outline standing 2px *off* the control is painted entirely in the clipped region and is
- * never seen at all. That is not a smaller ring, it is no focus indicator, WCAG 2.4.7, and it
- * is invisible to anyone testing with a mouse. `cardControl.tsx`'s `FOCUS_INSET` is the same
- * string for the same reason one floor up; this copy exists because this component is
- * `components/` and may not import a feature's.
- */
-const FOCUS_INSET =
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /**
  * The two buttons.

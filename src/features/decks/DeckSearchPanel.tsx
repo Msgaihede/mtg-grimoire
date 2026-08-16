@@ -14,12 +14,12 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
+import { FOCUS } from "@/lib/focus";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
-import { FOCUS } from "./cardControl";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
 

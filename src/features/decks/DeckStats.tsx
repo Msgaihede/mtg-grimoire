@@ -1,13 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
+import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { hasVariableCost, MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
 
 /** The nine **numeric** curve buckets — 0 through 7 exactly, and 8 open-ended, which is the

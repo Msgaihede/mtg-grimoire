@@ -15,6 +15,7 @@ import {
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
@@ -34,7 +35,6 @@ import { newestWrite, writeFailure } from "@/lib/writes";
 import {
   DECK_CARD_VARIANT,
   focusDeckGroup,
-  FOCUS,
   keepsSelection,
   LANDED_MS,
   type DeckCardActions,

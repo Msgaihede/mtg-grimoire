@@ -4,6 +4,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { FILTER_FOCUS, FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { PopupPanel } from "@/components/PopupListbox";
+import { FOCUS } from "@/lib/focus";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { LAYER } from "@/lib/layers";
@@ -353,7 +354,7 @@ export function SetCombobox({
         className={cn(
           "inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-sm",
           "transition-colors duration-150 motion-reduce:transition-none",
-          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+          FOCUS,
           selected.length > 0
             ? "border-accent text-accent"
             : "border-border text-dim hover:text-text",

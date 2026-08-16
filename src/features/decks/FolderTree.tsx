@@ -16,11 +16,11 @@ import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { FOCUS } from "@/lib/focus";
 import type { DeckFolder } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { NOT_A_DRAG } from "./dnd";
 
 /**

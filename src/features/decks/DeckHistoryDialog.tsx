@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 import { ToggleChip } from "@/components/FilterChips";
+import { FOCUS } from "@/lib/focus";
 import type { DeckAuditEntry } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { auditSentence, type AuditDay } from "./auditText";
-import { FOCUS } from "./cardControl";
 import { DeckDialog } from "./DeckDialog";
 import { useDeckAudit } from "./useDeckAudit";
 

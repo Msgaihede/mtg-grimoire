@@ -1,9 +1,9 @@
 import type { JSX } from "react";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCategory, DeckFolder } from "@/lib/ipc";
 import { compareLabels } from "@/lib/options";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, AUTO_CATEGORY_LABEL } from "./autoCategory";
-import { FOCUS } from "./cardControl";
 import { DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 import { CAPTION, FIELD } from "./formFields";
 

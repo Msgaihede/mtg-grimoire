@@ -26,10 +26,10 @@
  * subject, rather than one that has to carry a variant flag.
  */
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { writeFailure, type Write } from "@/lib/writes";
-import { FOCUS } from "./cardControl";
 
 /** A name being typed into a meta row — the add fields in both dialogs and the rename field
  *  below, which is every text box either of them has. `placeholder:` is inert where there is no

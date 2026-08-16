@@ -1,6 +1,6 @@
 import { useMemo } from "react";
+import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 
 /**

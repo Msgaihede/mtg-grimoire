@@ -37,10 +37,10 @@ import { CircleMinus, Crown, FolderInput, Tag, UserRound } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCard, DeckCategory, DeckTag, FormatSpec } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { commanderIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 

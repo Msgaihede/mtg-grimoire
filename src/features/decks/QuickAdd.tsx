@@ -4,11 +4,11 @@ import { AnimatePresence } from "motion/react";
 import { ManaText } from "@/components/ManaText";
 import { PopupPanel } from "@/components/PopupListbox";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 
 /**
  * The most suggestions the dropdown offers at once.

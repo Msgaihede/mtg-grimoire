@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CardImage } from "@/components/CardImage";
 import { Figure } from "@/components/Figure";
+import { FOCUS } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -14,7 +15,6 @@ import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 
 /** Stable identity for "not read yet", so the totals below are not recomputed over a new empty
  *  array on every render of a dialog that is still waiting. */

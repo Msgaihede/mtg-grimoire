@@ -228,7 +228,10 @@ reader to configure the deck they had just made; it now asks all of them.
   a created deck is never lost, and pressing again never makes a second one.
 - **`CAPTION` and `FIELD` live in `formFields.ts`**, not in `cardControl.tsx`: that module's
   subject is a deck card drawn as a control and it pulls in the drag machinery, which a dialog
-  asking for a deck's name has no business importing.
+  asking for a deck's name has no business importing. **`FOCUS` and `FOCUS_INSET` are
+  `src/lib/focus.ts` since 2026-08-16 for that same reason** — they were the rule's own
+  counter-example, imported out of `cardControl.tsx` by 22 modules that wanted nothing else from
+  it — so nothing in this folder defines a focus outline any more.
 
 ## Writes
 

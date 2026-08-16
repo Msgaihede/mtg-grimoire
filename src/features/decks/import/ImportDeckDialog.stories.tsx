@@ -1,9 +1,9 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "../cardControl";
 import { useDeck } from "../useDeck";
 import { REFERENCE_LIST } from "./fixtures";
 import { ImportDeckDialog, type ImportTarget } from "./ImportDeckDialog";

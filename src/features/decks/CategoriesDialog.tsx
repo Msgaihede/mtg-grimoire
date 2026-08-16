@@ -57,12 +57,12 @@ import {
   dropTargetForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { ToggleChip } from "@/components/FilterChips";
+import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
-import { FOCUS } from "./cardControl";
 import { DeckDialog } from "./DeckDialog";
 import type { CardGroup } from "./grouping";
 import { META_FIELD, META_SUBMIT, RenameField, RowAction, sectionFailure } from "./metaRows";

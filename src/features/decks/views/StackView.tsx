@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
@@ -14,7 +15,6 @@ import {
   deckGroupMenuProps,
   deckGroupProps,
   deckGroupRename,
-  FOCUS,
   useCategoryDrop,
   type DeckCardActions,
 } from "../cardControl";

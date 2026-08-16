@@ -6,6 +6,7 @@
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { ManaText } from "@/components/ManaText";
@@ -21,7 +22,6 @@ import {
   deckGroupMenuProps,
   deckGroupProps,
   deckGroupRename,
-  FOCUS,
   LandedMark,
   REVEALED_ON_CARD,
   SELECTED_ROW,

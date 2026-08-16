@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, type JSX, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { dialog as dialogMotion, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 
 export interface DeckDialogProps {
   open: boolean;

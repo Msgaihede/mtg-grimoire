@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } fr
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { FOCUS } from "@/lib/focus";
 import {
   ipcError,
   type DeckVariant,
@@ -16,7 +17,6 @@ import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "../cardControl";
 import { plural } from "../FolderTree";
 import { DEFAULT_FORMAT, FormatSelect } from "../FormatSelect";
 import { DEFAULT_VARIANT, useDeck } from "../useDeck";

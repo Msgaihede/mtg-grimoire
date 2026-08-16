@@ -1,11 +1,9 @@
 import { ArrowUp } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { FOCUS_INSET } from "@/lib/focus";
 import { TRANSITION } from "@/lib/motion";
 import { ariaSortOf, sortRankOf, sortTermOf, type SortSpec } from "@/lib/sort";
 import { cn } from "@/lib/utils";
-
-const FOCUS =
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /**
  * How the second gesture is taught, since nothing on screen can show it.
@@ -94,7 +92,8 @@ export function SortableHeader({
         className={cn(
           "flex w-full min-w-0 items-center gap-1",
           "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-          FOCUS,
+          // Inset: the header fills a sticky band the scroller clips at both ends.
+          FOCUS_INSET,
           // A sorted column is the one the list is answering to, so it stops being dim.
           term && "text-text",
           // The arrow follows the label, so a right-aligned column has to pack to its end

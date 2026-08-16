@@ -29,9 +29,9 @@
  * got.
  */
 import { useEffect, useRef } from "react";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 
 /** `1 card`, `2 cards` — the app must never print "1 cards", and this dialog counts twice. */
 function plural(n: number): string {

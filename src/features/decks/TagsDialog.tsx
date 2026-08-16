@@ -17,9 +17,9 @@
  * deck* rather than sharing anything.
  */
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { FOCUS } from "@/lib/focus";
 import { type DeckTag, type DeckVariant, type TagColor } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { DeckDialog } from "./DeckDialog";
 import { META_FIELD, META_SUBMIT, RenameField, RowAction, sectionFailure } from "./metaRows";
 import { DEFAULT_TAG_COLOR, TAG_COLORS, tagColorCss } from "./tagColors";

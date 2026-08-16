@@ -1,4 +1,5 @@
 import { LayoutGrid, Rows3 } from "lucide-react";
+import { FOCUS } from "@/lib/focus";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -20,9 +21,13 @@ import { cn } from "@/lib/utils";
  * *shape* rather than by hue: focus is always an `outline`, standing off the control's
  * edge; on is always the control's own border or a ring hugging it. A chip that is both
  * shows both, which is the one case where either alone would be a lie.
+ *
+ * It **is** the app's {@link FOCUS} rather than a lookalike — it was written out here and was
+ * byte-identical to it, so this is the name kept and the string deduplicated (2026-08-16).
+ * The row's own exception is {@link ManaChip}'s `outline-offset-[5px]`, which is a variant
+ * with a reason of its own and stays written out.
  */
-export const FILTER_FOCUS =
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+export const FILTER_FOCUS = FOCUS;
 
 /**
  * Every control in the row is 36px tall, so the chips and the text controls share a line.

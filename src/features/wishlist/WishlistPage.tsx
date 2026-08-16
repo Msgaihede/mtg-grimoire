@@ -23,6 +23,7 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
 import { finishLabel, isFinish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
@@ -753,7 +754,7 @@ function columnsFor(
             REVEAL_ON_HOVER,
             "grid size-6 place-items-center rounded-md border border-border text-dim",
             "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
-            "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            FOCUS,
             "motion-reduce:transition-none",
           )}
         >
