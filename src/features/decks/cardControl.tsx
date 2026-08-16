@@ -184,7 +184,7 @@ export const LANDED_MS = 5_000;
  *
  * It was `--color-text` — parchment — until 2026-08-15, on the argument that gold was already
  * taken three times over on this one surface: focus, {@link SELECTED_CARD}, and both halves of
- * the drop affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`). The argument was sound about the
+ * the drop affordance (`lib/dropMarks`' `DROP_RING`/`DROP_OVER`). The argument was sound about the
  * colour and wrong about the outcome. Parchment is the app's *text* colour, which means it is
  * the colour of nearly everything on screen already, so the mark read as a card that had gone
  * slightly pale — and a mark whose whole job is to be found across a deck the reader is not
@@ -625,7 +625,7 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
  * ## Two flags, because a drop target has two things to say
  *
  * `eligible` is "a card is in the air and this pile could take it" and `over` is "and it is
- * this one" — the sidebar's pair (`AppShell`'s `DROP_RING` / `DROP_OVER`) said on the four
+ * this one" — the sidebar's pair (`lib/dropMarks`' `DROP_RING` / `DROP_OVER`) said on the four
  * surfaces a reader actually drags between. Without the first, a card picked up in a fifteen-
  * category deck lights nothing at all until the pointer happens to cross a target, so the
  * reader has to hunt for the gesture's own affordance.

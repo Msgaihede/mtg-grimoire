@@ -3,7 +3,7 @@
  * built around.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { DROP_OVER, DROP_RING } from "@/components/AppShell";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";

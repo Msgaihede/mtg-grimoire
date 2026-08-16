@@ -4,7 +4,7 @@ import {
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { FolderPlus, MoveRight, Plus, Wand2, type LucideIcon } from "lucide-react";
-import { DROP_OVER, DROP_RING } from "@/components/AppShell";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";

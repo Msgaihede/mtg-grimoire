@@ -14,8 +14,8 @@ import {
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DeckFolder } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";

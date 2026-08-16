@@ -3,11 +3,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { cardDraggable } from "@/features/decks/dnd";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { useUpdate } from "@/lib/useUpdate";
 import { emitFake } from "../../.storybook/fake/event";
 import { printing } from "../../.storybook/fake/fixtures";
-import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
+import { AppShell } from "./AppShell";
 
 /**
  * What the app puts inside the shell, reduced to a label.

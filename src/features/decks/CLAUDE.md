@@ -1282,8 +1282,9 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The landed mark is gold with a glow since 2026-08-15, and it was parchment before that — but
   the half that is a _requirement_ is that it is drawn _inside_ the card's face.** The old rule
   read gold as taken four times over on this one surface — focus, the picked ring, and both halves
-  of the drop affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`) — with red the rule break's and
-  green forbidden for anything that is not mana, leaving `--color-text`. The census was right and
+  of the drop affordance (`src/lib/dropMarks.ts`'s `DROP_RING`/`DROP_OVER`) — with red the rule
+  break's and green forbidden for anything that is not mana, leaving `--color-text`. The census
+  was right and
   the answer was wrong: parchment is the app's **text** colour, so the mark was the same value as
   most of what is already on screen, and the reader reported not being able to see it. **What keeps
   the fourth gold apart is shape and place, not hue** — the other three are each a _line around the

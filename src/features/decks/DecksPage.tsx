@@ -10,9 +10,9 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { CardImage } from "@/components/CardImage";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";

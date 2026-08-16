@@ -68,9 +68,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { AppShell, DROP_OVER, DROP_RING } from "./AppShell";
+import { AppShell } from "./AppShell";
 import { REPORT_MS } from "./useSidebarDrops";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";

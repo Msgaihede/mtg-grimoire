@@ -5,10 +5,10 @@
  * deck at once — which is what you want the moment before you cut something.
  */
 import { useRef } from "react";
-import { DROP_OVER, DROP_RING } from "@/components/AppShell";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
 import { scaled } from "@/lib/cardZoom";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { soleFinish } from "@/lib/finish";
 import type { DeckCard } from "@/lib/ipc";
 import type { Currency, Marketplace } from "@/lib/marketplace";
