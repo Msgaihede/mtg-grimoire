@@ -45,6 +45,7 @@ import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
 import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
+import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
@@ -108,7 +109,8 @@ const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
  * the 1017px content box a 1280×800 window leaves once the sidebar, the shell padding and the
  * editor's own scrollbar are taken off. The row is `flex-wrap`, so it does not overflow; it wraps,
  * and a wrapped header costs 44px of deck height at the app's own default window size — the
- * regression {@link NAME_FLOOR} exists to keep out. Height is the axis that had room.
+ * regression `NAME_FLOOR` (see {@link DeckNameField}) exists to keep out. Height is the axis
+ * that had room.
  *
  * The press is {@link PRESS}, the app's one recipe. The format select is `disabled` when the
  * specs have not answered and must not appear to depress, which is why the out-of-reach
@@ -371,27 +373,6 @@ function searchCardTarget(card: CardSummary): CardMenuTarget {
     typeLine: card.typeLine,
   };
 }
-
-/**
- * The narrowest the deck's name field may be squeezed to.
- *
- * 10rem, which at the field's `text-xl` is about thirteen characters — enough to tell two decks
- * apart, and enough that the caret has somewhere to go. Below that the field stops being a
- * field: measured in the shipped window, with nothing holding it, it collapsed to **18px**,
- * which draws as a sliver with no glyph in it at all.
- *
- * A floor rather than a fixed width, because the field is still the row's flexible child: it
- * takes every pixel the chrome beside it does not need, and 10rem is only what it falls back on
- * when there are none. At the app's own 1280×800 it is never reached — the field measures 238px
- * there — which is the point of the number: **10rem is the largest floor that still lets the
- * whole header sit on one line at 1280.** At 12rem the row wrapped even with the Theory switch
- * off, costing 44px of deck height in the common case to protect a width that was never at
- * risk. Measured both ways; see the report.
- *
- * Written out whole rather than built from a constant — Tailwind scans source text for class
- * names, and one assembled at runtime emits no rule at all.
- */
-const NAME_FLOOR = "min-w-40";
 
 /** How a deck is drawn, and what the switch calls each one. */
 type DeckView = "stacks" | "table" | "text" | "grid";
@@ -755,26 +736,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * had honoured a deck it never drew.
    */
   const [honouredView, setHonouredView] = useState<string | null>(null);
-
-  /** What is in the name field while it is being typed in, or `null` when the field is simply
-   *  the deck's name (`QuantityStepper`'s draft, for its reason). */
-  const [nameDraft, setNameDraft] = useState<string | null>(null);
-  /**
-   * The same draft, readable *now*.
-   *
-   * Enter commits and then blurs, and the blur handler commits again — in the same tick, with
-   * `nameDraft` still holding the closure's value, which is one rename written twice. A ref is
-   * cleared where it is read, so the second call has nothing to send.
-   */
-  const draftRef = useRef<string | null>(null);
-  const typeName = useCallback((value: string) => {
-    draftRef.current = value;
-    setNameDraft(value);
-  }, []);
-  const dropDraft = useCallback(() => {
-    draftRef.current = null;
-    setNameDraft(null);
-  }, []);
 
   const editorRef = useRef<HTMLElement>(null);
   /** The row the deck and the panel share, and the only width either of them can be judged
@@ -2018,17 +1979,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     return autoScrollForElements({ element });
   }, [hasRow]);
 
-  /** Whatever is half-typed, the field goes back to standing for the deck's name. A blank is
-   *  not a rename: the backend refuses it in words, and a name is not something a deck can lose
-   *  by tabbing through it. */
-  const commitName = useCallback(() => {
-    const draft = draftRef.current;
-    dropDraft();
-    if (draft === null || row === null) return;
-    const trimmed = draft.trim();
-    if (!trimmed || trimmed === row.name) return;
-    deck.update.mutate({ name: trimmed });
-  }, [deck.update, dropDraft, row]);
+  /** The deck's new name, once {@link DeckNameField} has decided there is one. The field holds
+   *  the draft and refuses a blank or an unchanged name, so there is nothing to re-check here —
+   *  this is the same `deck.update` the format select and the Built switch ride. */
+  const renameDeck = useCallback(
+    (name: string) => {
+      deck.update.mutate({ name });
+    },
+    [deck.update],
+  );
 
   /** The picker, plus the deck's own format when the seed no longer offers it — a select that
    *  cannot show its own value would silently re-format the deck on the first other change.
@@ -2357,56 +2316,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
              * a reader aiming at "0 cards differ" re-formatted their deck.
              *
              * So the narrowest things yield first, which is `DECK_FLOOR`'s rule one row up. The
-             * field keeps {@link NAME_FLOOR}; the switch and the readout drop to a second line
-             * when they no longer fit beside it. Nothing overlaps at any width, because nothing
-             * is squeezed past its own content any more.
+             * field keeps its own floor (`NAME_FLOOR`, in {@link DeckNameField}); the switch and
+             * the readout drop to a second line when they no longer fit beside it. Nothing
+             * overlaps at any width, because nothing is squeezed past its own content any more.
+             *
+             * **The field is the bare `<input>` this box's flex layout expects**, which is why
+             * {@link DeckNameField} draws no wrapper of its own — see it.
              */}
             <div className="flex flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-              <input
-                aria-label="Deck name"
-                // **`size={1}` is load-bearing, and it is not about the drawn width.** A text
-                // input with no `size` defaults to 20 characters, and *that* is what a flex
-                // container reports as its min-content — at this field's `text-xl` it measured
-                // over 240px, which is what pushed the whole row of deck controls onto a second
-                // line at 1280 even with the Theory switch off. With `size={1}` the intrinsic
-                // width is a character and {@link NAME_FLOOR} is the only floor left, which is
-                // the one this file actually chose. The width you see is the flex layout's.
-                size={1}
-                value={nameDraft ?? row.name}
-                onChange={(e) => typeName(e.target.value)}
-                onBlur={commitName}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    commitName();
-                    e.currentTarget.blur();
-                  }
-                  // **Only when there is something to revert.** Escape consumed here is Escape
-                  // the card pane never sees — the pane is an `"outer"` layer listening on
-                  // `window` in the bubble phase, and a handler at the event's own target has
-                  // already run by then. A field nobody has typed in has nothing to undo, so
-                  // the press belongs to whatever is open behind it; a field that has been
-                  // typed in owns exactly one press, and the next one is the pane's again.
-                  // The ref rather than the state, for the reason it exists: two presses inside
-                  // one tick — a key held down, an autorepeat — both read a `nameDraft` React
-                  // has not re-rendered yet, and the second would consume a press it has
-                  // nothing to spend it on. The ref is cleared where it is read.
-                  if (e.key === "Escape" && draftRef.current !== null) {
-                    e.preventDefault();
-                    dropDraft();
-                  }
-                }}
-                // Geist, not the display face, for the reason the card pane gives about a
-                // card's name: this is *content*, and Cinzel is for view titles and hero copy.
-                // Cinzel is also drawn in caps — which in a field you type into means the
-                // letters never match the ones being typed.
-                className={cn(
-                  "flex-1 rounded-md border border-transparent bg-transparent px-2 py-1",
-                  NAME_FLOOR,
-                  "text-xl font-medium leading-tight",
-                  "transition-colors duration-150 hover:border-border motion-reduce:transition-none",
-                  FOCUS,
-                )}
-              />
+              <DeckNameField name={row.name} onRename={renameDeck} />
 
               {/* Only for a deck that keeps a plan. A two-way switch over a deck with one list
                   is a control whose other half is empty by construction — the way to get one is

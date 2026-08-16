@@ -803,55 +803,6 @@ describe("DeckEditor", () => {
     expect(useAppStore.getState().openDeckId).toBeNull();
   });
 
-  /** There is no Save: the row in the database *is* the draft, so a name is committed the
-   *  moment the reader is done with the field. */
-  it("renames the deck when the name field is left", async () => {
-    await open();
-
-    const name = screen.getByLabelText("Deck name");
-    await userEvent.clear(name);
-    await userEvent.type(name, "Sunday burn");
-    await userEvent.tab();
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
-  });
-
-  it("renames the deck on Enter without waiting for the caret to leave", async () => {
-    await open();
-
-    await userEvent.clear(screen.getByLabelText("Deck name"));
-    await userEvent.type(screen.getByLabelText("Deck name"), "Sunday burn{Enter}");
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
-  });
-
-  /**
-   * Enter commits and then blurs, and the blur handler commits too — in the same tick, off a
-   * draft the first call had already decided to send. Two identical `deck_update`s for one
-   * press, which the assertion above cannot see because it matches arguments rather than
-   * counting calls.
-   */
-  it("writes one rename for one press of Enter", async () => {
-    await open();
-
-    await userEvent.clear(screen.getByLabelText("Deck name"));
-    await userEvent.type(screen.getByLabelText("Deck name"), "Sunday burn{Enter}");
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledTimes(1));
-  });
-
-  /** A blank name is not a rename — the backend refuses it in words, and the field should not
-   *  have to be told twice. */
-  it("keeps the old name when the field is emptied", async () => {
-    await open();
-
-    await userEvent.clear(screen.getByLabelText("Deck name"));
-    await userEvent.tab();
-
-    expect(deckUpdate).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
-  });
-
   it("re-formats the deck from the header select", async () => {
     await open();
 
