@@ -546,7 +546,7 @@ pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result
 }
 
 /// Choose how the pane groups printings. Rejects a mode this build does not know, and answers
-/// [`crate::collection::BUSY`] if a sync holds the write connection — the bound every write
+/// [`crate::db::BUSY`] if a sync holds the write connection — the bound every write
 /// command in this crate takes.
 ///
 /// **The lock comes first and the mode is checked inside it**, which is
@@ -563,7 +563,7 @@ pub async fn set_printing_group_by(
     tauri::async_runtime::spawn_blocking(move || {
         match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
             Some(conn) => store_group_by(&conn, &mode),
-            None => Err(crate::collection::BUSY.to_owned()),
+            None => Err(crate::db::BUSY.to_owned()),
         }
     })
     .await

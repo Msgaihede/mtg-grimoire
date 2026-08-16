@@ -492,7 +492,7 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
     Ok(touched)
 }
 
-/// Run `f` with the write connection, or answer [`crate::collection::BUSY`] —
+/// Run `f` with the write connection, or answer [`crate::db::BUSY`] —
 /// [`crate::deck`]'s definition, kept per-module the way every other one in this crate is.
 fn with_write<T>(
     state: &Arc<AppState>,
@@ -500,7 +500,7 @@ fn with_write<T>(
 ) -> Result<T, String> {
     match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         Some(conn) => f(&conn),
-        None => Err(crate::collection::BUSY.to_owned()),
+        None => Err(crate::db::BUSY.to_owned()),
     }
 }
 

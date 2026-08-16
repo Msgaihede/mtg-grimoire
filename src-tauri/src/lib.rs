@@ -130,7 +130,7 @@ async fn error_log_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<usize
             Some(conn) => {
                 errors::clear(&conn).map_err(|e| format!("could not clear the error log: {e}"))
             }
-            None => Err(collection::BUSY.to_owned()),
+            None => Err(db::BUSY.to_owned()),
         }
     })
     .await

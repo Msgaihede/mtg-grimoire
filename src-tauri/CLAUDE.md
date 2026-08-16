@@ -177,8 +177,10 @@ both plus the frontend.
 - `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
   the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
   counted, and asking to be looked at", never "hidden".
-- Writes take `AppState.db` through `db::lock_for(…, WRITE_LOCK_WAIT)` and answer
-  `collection::BUSY` if they cannot — reads go through `db_read` like everything else.
+- Writes take `AppState.db` through the one `sync::with_write`, which is
+  `db::lock_for(…, WRITE_LOCK_WAIT)` and answers `db::BUSY` if it cannot — reads go through
+  `db_read` like everything else. The sentence lives beside the bound that produces it, and
+  the helper beside `AppState`; both were five and eleven copies until 2026-08-16.
 - `cards.oracle_id` is NULLABLE and **no live row is null** — 0 of 116,590, all 81
   reversible printings included, because `card_row` falls back to `card_faces[0]`. Every
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.

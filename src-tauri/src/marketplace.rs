@@ -98,7 +98,7 @@ pub fn get_marketplace(state: tauri::State<'_, Arc<AppState>>) -> String {
     stored(&crate::sync::lock_db_read(state.inner()))
 }
 
-/// Choose a marketplace. Rejects an unknown id, and answers [`crate::collection::BUSY`] if a
+/// Choose a marketplace. Rejects an unknown id, and answers [`crate::db::BUSY`] if a
 /// sync holds the write connection — the bound every write command in this crate takes.
 #[tauri::command]
 pub async fn set_marketplace(
@@ -109,7 +109,7 @@ pub async fn set_marketplace(
     tauri::async_runtime::spawn_blocking(move || {
         match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
             Some(conn) => store(&conn, &id),
-            None => Err(crate::collection::BUSY.to_owned()),
+            None => Err(crate::db::BUSY.to_owned()),
         }
     })
     .await

@@ -647,7 +647,7 @@ pub fn store(db: &Mutex<Connection>, feed: &Feed, fetched_at: i64) -> Result<Ing
         });
     }
     let Some(mut conn) = crate::db::lock_for(db, crate::db::WRITE_LOCK_WAIT) else {
-        return Err(FeedError::Busy(crate::collection::BUSY));
+        return Err(FeedError::Busy(crate::db::BUSY));
     };
     let tx = conn.transaction()?;
     tx.execute(

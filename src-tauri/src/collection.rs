@@ -23,13 +23,6 @@ pub const CONDITIONS: [&str; 5] = ["NM", "LP", "MP", "HP", "DMG"];
 /// What a card is assumed to be when nobody says otherwise.
 pub const DEFAULT_CONDITION: &str = "NM";
 
-/// What a write command says when it could not have the database.
-///
-/// A sentence rather than a lock error, and it names the wait: after the ingest was
-/// chunked (Task 1) the only thing that can hold the connection for five seconds is
-/// something genuinely stuck, and "try again in a moment" is both true and actionable.
-pub const BUSY: &str = "The card database is busy finishing a sync. Try that again in a moment.";
-
 /// What an *adjustment* says when the row it names is not there — an edit that could not be
 /// applied, unlike a delete that finds nothing (see [`remove_entry`]).
 pub const GONE: &str = "That collection entry is not there any more.";
@@ -495,7 +488,7 @@ fn friendly(e: rusqlite::Error) -> String {
     text
 }
 
-/// Run `f` with the write connection, or answer [`BUSY`].
+/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
 ///
 /// Bounded rather than blocking: this runs on a worker thread from a button press, and the
 /// one thing that can hold `AppState.db` for any length of time is a sync — which, since
@@ -506,7 +499,7 @@ fn with_write<T>(
 ) -> Result<T, String> {
     match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         Some(conn) => f(&conn),
-        None => Err(BUSY.to_owned()),
+        None => Err(crate::db::BUSY.to_owned()),
     }
 }
 
@@ -521,8 +514,9 @@ fn with_write<T>(
 /// guard: 10–23 ms of re-read under the write connection is 10–23 ms of every other writer
 /// waiting, for work that reads through a connection of its own and needs no lock at all.
 ///
-/// Only on success. A refusal — [`BUSY`], [`GONE`], a rejected quantity — changed nothing, and
-/// re-reading after one would be a copy of the whole index to arrive at the same answer.
+/// Only on success. A refusal — [`crate::db::BUSY`], [`GONE`], a rejected quantity — changed
+/// nothing, and re-reading after one would be a copy of the whole index to arrive at the same
+/// answer.
 fn with_write_owned<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
@@ -1819,7 +1813,7 @@ mod tests {
         let waited = started.elapsed();
         drop(held);
 
-        assert_eq!(answer.unwrap_err(), BUSY);
+        assert_eq!(answer.unwrap_err(), crate::db::BUSY);
         assert!(
             waited >= crate::db::WRITE_LOCK_WAIT,
             "a lock that frees in a moment must still be taken, but gave up after {waited:?}"
@@ -1847,8 +1841,8 @@ mod tests {
     /// the only visible trace of ~1 MB of index copied to learn nothing. (Measured: with the
     /// `is_ok` guard removed, the count assertion still passes and this one fails.)
     ///
-    /// The refusal is [`GONE`] rather than [`BUSY`]: a busy write would need the lock held
-    /// from another thread, and the point being pinned is the same either way.
+    /// The refusal is [`GONE`] rather than [`crate::db::BUSY`]: a busy write would need the
+    /// lock held from another thread, and the point being pinned is the same either way.
     #[test]
     fn a_write_that_lands_refreshes_the_owned_facet_and_one_that_is_refused_does_not() {
         let state = crate::index::fixtures::state_with_seeded_cards("collection-owned");

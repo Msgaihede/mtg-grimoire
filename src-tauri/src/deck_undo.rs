@@ -1151,7 +1151,7 @@ pub async fn deck_undo_apply(
     tauri::async_runtime::spawn_blocking(move || {
         match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
             Some(conn) => apply_reversal(&conn, deck_id, audit_id, true),
-            None => Err(crate::collection::BUSY.to_owned()),
+            None => Err(crate::db::BUSY.to_owned()),
         }
     })
     .await
@@ -1169,7 +1169,7 @@ pub async fn deck_redo_apply(
     tauri::async_runtime::spawn_blocking(move || {
         match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
             Some(conn) => apply_reversal(&conn, deck_id, audit_id, false),
-            None => Err(crate::collection::BUSY.to_owned()),
+            None => Err(crate::db::BUSY.to_owned()),
         }
     })
     .await

@@ -2,7 +2,7 @@
 //!
 //! Shaped like [`crate::collection`]: pure functions over a `Connection`, testable without a
 //! Tauri app, wrapped in `async` commands that run on the blocking pool. Writes take
-//! `AppState.db` through [`crate::db::lock_for`] and answer [`crate::collection::BUSY`]
+//! `AppState.db` through [`crate::db::lock_for`] and answer [`crate::db::BUSY`]
 //! rather than waiting; the one read goes through `db_read` like every other read.
 //!
 //! Four rules run through the whole module and are worth stating once:
@@ -3166,19 +3166,19 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
         .map_err(|e| e.to_string())
 }
 
-/// Run `f` with the write connection, or answer [`crate::collection::BUSY`].
+/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
 fn with_write<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
     match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         Some(conn) => f(&conn),
-        None => Err(crate::collection::BUSY.to_owned()),
+        None => Err(crate::db::BUSY.to_owned()),
     }
 }
 
 /// What a deck write says when its worker thread died under it. Never a user's problem —
-/// the write itself answers [`crate::collection::BUSY`] when the database is busy.
+/// the write itself answers [`crate::db::BUSY`] when the database is busy.
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
