@@ -11,10 +11,10 @@
 //! state to preserve. A wish for none of something is not a wish, and [`set_wish_quantity`]
 //! takes a zero as the removal it can only be.
 
-use crate::collection::{valid_quantity, EntryChange, BUSY, FINISHES};
+use crate::collection::{valid_quantity, EntryChange};
 use crate::filters::{escape_like, LIKE_ESCAPE};
-use crate::schema::WISHLIST_GRAIN;
-use crate::sync::AppState;
+use crate::schema::{FINISHES, WISHLIST_GRAIN};
+use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -508,19 +508,6 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
     Ok(WishlistPage { items, total })
-}
-
-/// Run `f` with the write connection, or answer [`BUSY`] — the wishlist's copy of the bound
-/// [`crate::collection`] documents: a button press on a worker thread, and the only thing
-/// that can hold `AppState.db` is a sync taking it one batch at a time.
-fn with_write<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
-        None => Err(BUSY.to_owned()),
-    }
 }
 
 #[tauri::command]

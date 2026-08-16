@@ -27,7 +27,7 @@
 //! validates — and for the same two reasons, which are written out on [`stored_group_by`] and
 //! [`store_group_by`].
 
-use crate::sorting::{Marketplace, FINISH_LITERALS};
+use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -77,7 +77,7 @@ pub struct FinishPrices {
 
 /// The three price expressions as a `SELECT` list, for a query whose `cards` is aliased `c`.
 ///
-/// [`crate::sorting::FINISH_LITERALS`] is the finish list and its order, which is
+/// [`crate::sorting::finish_literals`] is the finish list and its order, which is
 /// [`FinishPrices`]' own field order — kept beside the builder that consumes it rather than
 /// here, so that this pane and the deck's chain across the same three cannot come to disagree
 /// about what a finish is called.
@@ -86,8 +86,8 @@ pub struct FinishPrices {
 /// what keeps this pane's etched hole on Cardmarket, and its lookups into `marketplace_prices`,
 /// identical to the ones the collection and the decks already draw.
 fn finish_price_columns(market: Marketplace) -> String {
-    FINISH_LITERALS
-        .map(|finish| crate::sorting::price_expr(market, finish))
+    crate::sorting::finish_literals()
+        .map(|finish| crate::sorting::price_expr(market, &finish))
         .join(", ")
 }
 
@@ -436,24 +436,19 @@ fn card_image_uri_inner(
     if !crate::schema::IMAGE_VARIANTS.contains(&variant) {
         return Err(format!("unknown image variant: {variant}"));
     }
-    // Both columns, in one row, because either may be the one that holds the picture — the
-    // same two `json_extract`s [`crate::images::resolve`] runs. The face index is the literal
-    // `0` rather than a bound parameter: this command takes no face, and face 0 is the whole
+    // The face index is the literal `0`: this command takes no face, and face 0 is the whole
     // of what a printing's picture means here.
-    let row: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT json_extract(image_uris, '$.' || ?2),
-                    json_extract(face_image_uris, '$[0].' || ?2)
-             FROM cards WHERE id = ?1",
-            params![card_id, variant],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    // Face first, top-level second — `resolve`'s
+    let row = crate::images::image_uri_row(conn, card_id, variant, 0)?;
+    // Face first, top-level second — `images::resolve`'s
     // `face.or_else(|| (key.face == 0).then_some(top).flatten())` with the face pinned to 0,
     // so the two cannot answer differently about the front of a card. A `meld` printing
     // carries both, and its top-level image is its front and nothing else.
+    //
+    // **Deliberately without `resolve`'s host fence.** That function answers `NoImage` for a
+    // URI off `cards.scryfall.io` or one with no `?<epoch>` cache-buster, because it is about
+    // to cache the bytes; this command hands a URL back to a caller who is not caching, and
+    // refusing one here would be a policy `resolve` owns and this does not. The query is
+    // shared; the policy is not.
     Ok(row.and_then(|(top, face)| face.or(top)))
 }
 
@@ -546,7 +541,7 @@ pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result
 }
 
 /// Choose how the pane groups printings. Rejects a mode this build does not know, and answers
-/// [`crate::collection::BUSY`] if a sync holds the write connection — the bound every write
+/// [`crate::db::BUSY`] if a sync holds the write connection — the bound every write
 /// command in this crate takes.
 ///
 /// **The lock comes first and the mode is checked inside it**, which is
@@ -561,10 +556,7 @@ pub async fn set_printing_group_by(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-            Some(conn) => store_group_by(&conn, &mode),
-            None => Err(crate::collection::BUSY.to_owned()),
-        }
+        crate::sync::with_write(&state, |conn| store_group_by(conn, &mode))
     })
     .await
     .map_err(|e| format!("the printing grouping could not be saved: {e}"))?

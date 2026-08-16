@@ -244,6 +244,37 @@ fn is_loopback(uri: &str) -> bool {
     uri.starts_with("http://127.0.0.1:") || uri.starts_with("http://localhost:")
 }
 
+/// The two columns a printing's picture can be in, for one variant and one face.
+///
+/// `(top_level, face)` — `image_uris` and `card_faces[face].image_uris`, spec §5's pair.
+/// `None` for a card that is not in the corpus.
+///
+/// One function because two readers want the same row and apply **different policies** to it:
+/// [`resolve`] falls back from face to top-level only for face 0 and then puts the answer
+/// through [`is_fetchable`] and the cache-buster check, while
+/// `card::card_image_uri_inner` pins the face to 0 and deliberately skips both fences. That
+/// difference is real and stays; what may not differ is which two columns the picture lives
+/// in, and this is now the one place that says so.
+///
+/// **Read-only by contract**, like [`resolve`]: every caller passes `db_read`.
+#[allow(clippy::type_complexity)]
+pub(crate) fn image_uri_row(
+    conn: &Connection,
+    card_id: &str,
+    variant: &str,
+    face: i64,
+) -> Result<Option<(Option<String>, Option<String>)>, String> {
+    conn.query_row(
+        "SELECT json_extract(image_uris, '$.' || ?2),
+                json_extract(face_image_uris, '$[' || ?3 || '].' || ?2)
+         FROM cards WHERE id = ?1",
+        params![card_id, variant, face],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// Resolve a key against `cards`, applying spec §5's rule: `image_uris` if present, else
 /// `card_faces[i].image_uris`.
 ///
@@ -251,16 +282,7 @@ fn is_loopback(uri: &str) -> bool {
 /// picture must not queue behind an ingest — ~80 s of writing, in 2 000-row batches —
 /// and it must never be the handle that takes a write lock.
 pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> {
-    let row: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT json_extract(image_uris, '$.' || ?2),
-                    json_extract(face_image_uris, '$[' || ?3 || '].' || ?2)
-             FROM cards WHERE id = ?1",
-            params![key.card_id, key.variant.key(), key.face as i64],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
+    let row = image_uri_row(conn, &key.card_id, key.variant.key(), key.face as i64)?;
 
     let Some((top, face)) = row else {
         return Ok(Resolution::Unknown);
@@ -1816,6 +1838,42 @@ mod tests {
                 "{variant:?} must not resolve to an error page: {r:?}"
             );
         }
+    }
+
+    /// The one row both readers take. `card::card_image_uri_inner` and [`resolve`] each apply
+    /// their own policy to it — the card pane deliberately skips the host fence — but they must
+    /// never disagree about *which two columns* a printing's picture is in.
+    #[test]
+    fn image_uri_row_answers_both_columns_and_none_for_an_unknown_card() {
+        let conn = seeded();
+
+        // The plain printing: a top-level image for every variant, no per-face ones.
+        let (top, face) = image_uri_row(&conn, "0000419b-0bba-4488-8f7a-6194544ce91d", "grid", 0)
+            .unwrap()
+            .expect("a card that is in the corpus answers a row");
+        assert_eq!(
+            top.as_deref(),
+            Some("https://cards.scryfall.io/grid/front/0/0/x.webp?17")
+        );
+        assert_eq!(face, None, "a normal printing carries no per-face images");
+
+        // The transform: per-face images and no top-level one, and face 1 is its own picture.
+        // Which of the two a caller then *uses* is the caller's policy, not this function's.
+        let (top, face) = image_uri_row(&conn, "ab000000-0000-0000-0000-000000000001", "grid", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(top, None, "a transform carries no top-level image");
+        assert_eq!(
+            face.as_deref(),
+            Some("https://cards.scryfall.io/grid/back/a/b/y.webp?9")
+        );
+
+        assert!(
+            image_uri_row(&conn, "not-a-card", "grid", 0)
+                .unwrap()
+                .is_none(),
+            "an unknown card is None, not an error"
+        );
     }
 
     /// The two halves of [`is_fetchable`], separately, because they fail for different

@@ -319,6 +319,22 @@ pub const DECK_TAG_GRAIN: &str = "deck_id, name";
 /// `live` only: a theory list is a plan, and a plan claims nothing.
 pub const DECK_VARIANTS: [&str; 2] = ["live", "theory"];
 
+/// Scryfall's finish enum. Never a boolean — `etched` is a third thing, and collapsing it
+/// into `foil: true` is the single most common way an importer loses data.
+///
+/// CHECK-constrained on `collection_entries.finish`, `wishlist_entries.preferred_finish`
+/// (which is additionally nullable, meaning "any") and `marketplace_prices.finish`. All
+/// three spell the list out in their own DDL for [`CATEGORY_KINDS`]' reason — a step is
+/// history — and `a_finish_is_one_of_the_three_on_every_table_that_checks_it` is what keeps
+/// the copies honest. A fourth finish is a new migration step, never an edit here.
+///
+/// **The order is load-bearing**: it is `nonfoil → foil → etched`, cheapest first, which is
+/// the order [`crate::sorting::finish_literals`] builds a price chain in and the field order
+/// of the card pane's `FinishPrices`. Here rather than in [`crate::collection`], where it
+/// began, because `sorting`, `card` and `marketplace_feed` all need it and none of them owns
+/// a collection — it is a schema vocabulary like the four above it.
+pub const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
+
 /// What a `deck_audit` row can record, CHECK-constrained on `deck_audit.kind`. Rust records
 /// which of these happened and the facts a sentence needs (`payload`, `delta`); TypeScript
 /// owns turning that into the sentence a person reads on the history drawer, because a
@@ -1221,7 +1237,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // card_id, finish)` — which the primary key answers on its own, so no secondary index
         // is created here and none is owed.
         //
-        // `finish` is CHECK-constrained to the same three values [`crate::collection::FINISHES`]
+        // `finish` is CHECK-constrained to the same three values [`crate::schema::FINISHES`]
         // holds, as every other finish column in this schema is: etched is a third finish and
         // not `foil: true`, and a feed that starts spelling it differently must fail loudly
         // rather than file a foil price under a nonfoil key.
@@ -3975,6 +3991,81 @@ pub(crate) mod tests {
             PREDEFINED_CATEGORIES.len(),
             CATEGORY_KINDS.len() - 1,
             "every kind except `main` is predefined"
+        );
+    }
+
+    /// Every table that CHECKs a finish accepts exactly [`FINISHES`] and nothing else.
+    ///
+    /// Three tables spell the list out in their own DDL — frozen, like every migration step —
+    /// so this is what holds the constant and the three literals together. It is
+    /// `a_category_kind_is_one_of_the_five_and_predefined_names_round_trip`'s shape, over the
+    /// one vocabulary that had no such test until 2026-08-16.
+    #[test]
+    fn a_finish_is_one_of_the_three_on_every_table_that_checks_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let is_check_failure = |err: &rusqlite::Error| {
+            matches!(err, rusqlite::Error::SqliteFailure(e, _)
+                     if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK)
+        };
+
+        // `collection_entries.finish` — NOT NULL, so all three and nothing else.
+        let owned = |finish: &str| {
+            conn.execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     created_at,updated_at)
+                 VALUES (?1,'lea','161','en',?2,'NM',1,unixepoch(),unixepoch())",
+                rusqlite::params![format!("owned-{finish}"), finish],
+            )
+        };
+        for finish in FINISHES {
+            owned(finish).unwrap_or_else(|e| panic!("`{finish}` must be a legal finish, but: {e}"));
+        }
+        let err = owned("gilded").expect_err("`gilded` is not a finish the CHECK knows");
+        assert!(
+            is_check_failure(&err),
+            "`gilded` was refused, but not by a CHECK: {err}"
+        );
+
+        // `wishlist_entries.preferred_finish` — nullable, so all three *plus* NULL.
+        let wished = |finish: Option<&str>| {
+            conn.execute(
+                "INSERT INTO wishlist_entries
+                    (oracle_id,name,quantity,preferred_finish,created_at,updated_at)
+                 VALUES (?1,'Black Lotus',1,?2,unixepoch(),unixepoch())",
+                rusqlite::params![format!("wish-{}", finish.unwrap_or("any")), finish],
+            )
+        };
+        for finish in FINISHES {
+            wished(Some(finish)).unwrap_or_else(|e| {
+                panic!("`{finish}` must be a legal preferred finish, but: {e}")
+            });
+        }
+        wished(None).expect("a wish naming no finish is legal — it is filled by any");
+        let err = wished(Some("gilded")).expect_err("`gilded` is not a finish the CHECK knows");
+        assert!(
+            is_check_failure(&err),
+            "`gilded` was refused, but not by a CHECK: {err}"
+        );
+
+        // `marketplace_prices.finish` — NOT NULL, one row per (marketplace, card, finish).
+        let priced = |finish: &str| {
+            conn.execute(
+                "INSERT INTO marketplace_prices (marketplace,card_id,finish,price)
+                 VALUES ('cardkingdom','bolt',?1,1.0)",
+                rusqlite::params![finish],
+            )
+        };
+        for finish in FINISHES {
+            priced(finish)
+                .unwrap_or_else(|e| panic!("`{finish}` must be a priceable finish, but: {e}"));
+        }
+        let err = priced("gilded").expect_err("`gilded` is not a finish the CHECK knows");
+        assert!(
+            is_check_failure(&err),
+            "`gilded` was refused, but not by a CHECK: {err}"
         );
     }
 

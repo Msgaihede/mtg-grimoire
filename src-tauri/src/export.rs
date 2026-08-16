@@ -19,7 +19,7 @@
 /// On the blocking pool, like [`crate::deck_import::deck_import_read_file`] — a path on a
 /// network share or a slow stick is a disk wait, and the async runtime is not where a disk
 /// wait belongs. This command takes no `AppState` at all: it touches no database, so it
-/// needs no connection and cannot be refused as [`crate::collection::BUSY`].
+/// needs no connection and cannot be refused as [`crate::db::BUSY`].
 #[tauri::command]
 pub async fn export_write_file(path: String, contents: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || write_export(&path, &contents))

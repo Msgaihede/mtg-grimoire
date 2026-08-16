@@ -3,7 +3,7 @@
 //!
 //! Shaped like [`crate::deck`] and [`crate::collection`]: pure functions over a `Connection`,
 //! testable without a Tauri app, wrapped in `async` commands that run on the blocking pool.
-//! Writes take `AppState.db` and answer [`crate::collection::BUSY`] rather than waiting.
+//! Writes take `AppState.db` and answer [`crate::db::BUSY`] rather than waiting.
 //!
 //! Three tables, three different relationships to "the deck":
 //!
@@ -37,7 +37,7 @@
 //! before; running the allocator there would be a rebuild of every claim over a write that
 //! changed none of them.
 
-use crate::sync::AppState;
+use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
@@ -1574,21 +1574,8 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 // Commands
 // ---------------------------------------------------------------------------------------
 
-/// Run `f` with the write connection, or answer [`crate::collection::BUSY`] —
-/// [`crate::deck::with_write`]'s definition, kept per-module the way
-/// [`crate::collection`]'s own copy is.
-fn with_write<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
-        None => Err(crate::collection::BUSY.to_owned()),
-    }
-}
-
 /// What a write here says when its worker thread died under it — never a user's problem, the
-/// write itself answers [`crate::collection::BUSY`] when the database is busy.
+/// write itself answers [`crate::db::BUSY`] when the database is busy.
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck's categories, tags or folders could not be written: {e}")
 }

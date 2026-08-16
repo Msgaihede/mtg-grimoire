@@ -27,7 +27,7 @@
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
 //! writes the user makes against it.
 
-use crate::sync::AppState;
+use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -490,18 +490,6 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(touched)
-}
-
-/// Run `f` with the write connection, or answer [`crate::collection::BUSY`] —
-/// [`crate::deck`]'s definition, kept per-module the way every other one in this crate is.
-fn with_write<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
-        None => Err(crate::collection::BUSY.to_owned()),
-    }
 }
 
 /// What a write here says when its worker thread died under it.

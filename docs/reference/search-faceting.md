@@ -152,9 +152,9 @@ using it.
 - **A failed build is recorded in `error_log`, because failing open is otherwise completely
   silent.** The UI's answer to a cold index is to leave every control live, which looks
   exactly like a warm index that greyed nothing — so nothing on screen distinguishes "the
-  index is fine" from "the index has never built". `lifecycle::note_index_failure` is
-  `sync.rs`'s `note_database` pattern (`Source::Database`, `Kind::Io`, operations
-  `index_build` and `index_owned_refresh`) and it keeps the `eprintln!` beside it for a dev
+  index is fine" from "the index has never built". Both call sites record through
+  `sync::note_database` (`Source::Database`, `Kind::Io`, operations `index_build` and
+  `index_owned_refresh`), keeping the `eprintln!` beside it for a dev
   console. It takes the **write** lock, which is only safe because both call sites hold
   nothing: `spawn_build` is on its own thread, and `collection::with_write_owned` releases
   its guard _before_ calling `invalidate_owned`. The "build superseded" message stays an
