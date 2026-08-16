@@ -1586,6 +1586,47 @@ describe("GridView tiles", () => {
     expect(foot().style.fontSize).toBe("9px");
     expect(controls().style.bottom).toBe("20px");
   });
+
+  /**
+   * **The face is `components/CardArt`, the same object the search wall draws** — which is what
+   * this asserts through the two things only that component puts in the tree: the picture's
+   * `alt` is the card's name (the hand-rolled copy this replaced passed `alt=""` and printed the
+   * name itself), and the marks chip carries `data-card-marks`.
+   *
+   * **And the deck's own count is clear of that chip.** `FoilOverlay` owns a tile's top-**right**
+   * corner on every card surface in this app; this view drew its copy count there too, in a
+   * full-width strip, so a foil card in a deck laid the two on top of one another. Nothing went
+   * red — a hit target and an overlap are both invisible to jsdom — and the fixtures had no foil
+   * card in a deck, which is why this case builds one. The count is top-left now, which is the
+   * corner the wall keeps for exactly this kind of mark.
+   */
+  it("draws the search wall's card frame, with the deck's count clear of its chip", () => {
+    render(
+      <GridView
+        groups={buildGroups(
+          [{ ...card({ name: "Sol Ring", quantity: 3 }), finishes: '["foil"]' }],
+          [RAMP],
+          "category",
+          "alphabetical",
+        )}
+        marketplace={TCG}
+      />,
+    );
+
+    // The picture itself, by tag: the tile also holds the chip's `role="img"` glyphs, and this
+    // case deliberately draws one of them.
+    const art = tile().querySelector("img")!;
+    expect(art).toHaveAttribute("alt", "Sol Ring");
+    // The plain scroller's gate — this view mounts every card in the deck at once, unlike the
+    // virtualised wall the same frame is drawn on.
+    expect(art).toHaveAttribute("loading", "lazy");
+
+    const chip = tile().querySelector("[data-card-marks]");
+    expect(chip).not.toBeNull();
+    const count = within(tile()).getByText("3");
+    expect(chip!.contains(count)).toBe(false);
+    expect(count.closest("[data-card-marks]")).toBeNull();
+  });
 });
 
 /**

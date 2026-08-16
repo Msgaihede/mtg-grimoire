@@ -984,6 +984,44 @@ price | type`). An **inactive category stays its own group in all three grouping
   `cardImageUrl(…, DECK_CARD_VARIANT)`, which is `grid`, and which must stay paired with
   `images::prewarm_keys`' `DECK_PREWARM` arm in Rust. **Getting that pairing wrong is invisible**:
   the pre-warm reports success and every tile then fetches cold anyway.
+- **`Grid`'s tile is `components/CardArt` — the search wall's own card — and only the marks around
+  it are this view's** (changed 2026-08-16). It was a hand-rolled copy of that component: its own
+  `useImageRetry` call, its own `aspect-[488/680]` box, its own no-picture fallback, its own
+  `FoilOverlay`, all inside a `rounded-md border bg-surface` slab with the card inset in it. Every
+  one of those had drifted from the wall drawn **beside it in the same editor** — `rounded-md`
+  against `rounded-lg`, a second spelling of the aspect ratio, a 9.5px fallback against 12px, no
+  hover lift — so the deck a reader was building and the column they were building it from were two
+  drawings of one object on one screen. The slab is gone with it: a tile is the card and a caption
+  line under it, which is what a tile is on every other wall in this app. Three consequences worth
+  carrying:
+  - **The copy count moved to the tile's top-left**, because top-right belongs to `FoilOverlay`'s
+    chip everywhere in this app and this view had been drawing both there. The overlap was real and
+    nothing could see it: jsdom has no layout, and no fixture put a foil card in a deck.
+    `views.test.tsx` builds one now.
+  - **The game changer is the crown, not `GameChangerBadge`'s `GC`** — the chip `CardArt` already
+    draws, in the corner the docked search column beside this one has always drawn it in. `GC` is
+    still the table's and the text columns', where there is no art to lay a glyph on; see
+    `GameChangerMark` for the one-fact-three-ways rule.
+  - **A rule break is a `ring-2 ring-destructive` on the card's face**, not a border on the tile.
+    `CardMarks` names the card's own edge as the fourth thing separating a rule break from a game
+    changer, so it had to survive losing the slab; a ring rather than a border because a border
+    would shrink the picture by 2px on exactly the cards that break a rule. It cannot collide with
+    `SELECTED_CARD`, which is a ring on the `<li>` outside it.
+  - **Driven in the shipped window 2026-08-16** (`npm run tauri dev`, a **debug** build at
+    1280×800, against a real synced corpus, with the docked search panel open beside the deck so
+    the two walls were measured in one frame). A deck tile and a panel tile of the **same
+    printing**: both 150px wide, both `border-radius: 10px`, both `aspect-ratio: 5 / 7`, both
+    `background-color: oklch(0.21 0.012 270)`, and both images carrying the identical class string
+    — `size-full object-cover transition-transform duration-150 group-hover:scale-[1.02]
+    motion-reduce:…`. The `<li>` computed `border-width: 0px`, `background-color: rgba(0,0,0,0)`
+    and `box-shadow: none`, so the slab really is gone. A hovered deck tile read
+    **`scale: 1.02`** against an unhovered panel tile's `none` — **probe `scale`, not `transform`**,
+    because Tailwind v4 writes the longhand and the first attempt read `none` on a lift that was
+    working. A rule-broken card's face computed
+    `oklch(0.704 0.191 22.216) 0px 0px 0px 2px`, which is the destructive ring; the game
+    changer's `[data-card-marks]` chip computed `inset: 4px 4px …` (top-right) with the copy count
+    in the opposite corner and no overlap. Every `<img>` kept `loading="lazy"` and an `alt` of the
+    card's own name, where the panel's carries neither by design.
 - **The deck's views are given no height, and the page is the only thing in this editor that
   scrolls** (changed 2026-08-14, later the same day than the two bullets below). Stacks, Grid and
   Text grow to hold their content: piles overflow **down**, the box expands, the desk row expands

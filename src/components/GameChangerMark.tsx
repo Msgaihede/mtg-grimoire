@@ -13,17 +13,19 @@ export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commande
  * **The crown is lifted from `GameChangerBanner`, and only the crown.** The deck stack stamps
  * that ribbon across a card — a gold seal, a 9px crown and `Game Changer` in Cinzel — and it is
  * exactly right there and far too much here: a wall tile is 170px of somebody else's artwork,
- * where a ribbon is a sticker over the picture the reader came to look at. The other three deck
- * views already made the same call in the other direction and abbreviate to `GameChangerBadge`'s
- * gold `GC`.
+ * where a ribbon is a sticker over the picture the reader came to look at. The deck's **table**
+ * and **text** views made the same call in the other direction and abbreviate to
+ * `GameChangerBadge`'s gold `GC` — a row of type has no art to lay a glyph on.
  *
  * So one fact is drawn three ways, and **that is a difference of room, never of meaning**: a
  * banner where a card is 295px tall and a whole row is spare, two letters where a table cell
- * has a column, and this where a tile's art has three corners already spoken for (the owned
- * badge bottom-left, the printing count top-left, the finish chip top-right) and about two
- * glyphs of chip in the fourth. Letters at that size are an abbreviation of an abbreviation,
- * which nobody reads. A crown is read without being read — which is what the banner was
- * already relying on.
+ * has a column, and this wherever a card is drawn as a *face* — the search wall's tiles, the
+ * collection's, the deck editor's docked search column and, since 2026-08-16, the deck's own
+ * Grid view, which draws the same `CardArt` frame as all three. A tile's art has three corners
+ * already spoken for (the owned badge or the deck's copy count bottom- and top-left, the finish
+ * chip top-right) and about two glyphs of chip in the fourth. Letters at that size are an
+ * abbreviation of an abbreviation, which nobody reads. A crown is read without being read —
+ * which is what the banner was already relying on.
  *
  * **Gold, and the same gold.** `text-pie-gold` is what `features/decks/CardMarks.tsx` tints its
  * badge with, and one colour for one fact is the point: a game changer is a *fact about a

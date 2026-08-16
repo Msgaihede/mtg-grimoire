@@ -173,8 +173,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   since the chip is the only thing a crown can be drawn as and the stack has its banner instead.
 - **One game changer, three drawings, and the difference is room rather than meaning.** The deck
   stack stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a
-  card is 295px tall; the other three deck views abbreviate to `GameChangerBadge`'s gold `GC`
-  where a cell has a column; and a search card gets `components/GameChangerMark`, **the banner's
+  card is 295px tall; the deck's table and text views abbreviate to `GameChangerBadge`'s gold `GC`
+  where a cell has a column; and **anything that draws a card as a face** — the search wall, the
+  collection, the deck editor's docked search column and, since 2026-08-16, the deck's own Grid
+  view — gets `components/GameChangerMark`, **the banner's
   crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
   is a sticker over the picture the reader came to look at. `text-pie-gold` in all three: the spec
   is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
