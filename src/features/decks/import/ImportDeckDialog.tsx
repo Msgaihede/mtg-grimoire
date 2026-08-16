@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
-import { X } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -12,12 +11,10 @@ import {
   type ImportOutcome,
   type ImportResolveLine,
 } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
-import { dialog, scrim, statusLine } from "@/lib/motion";
-import { trapTab } from "@/lib/trapTab";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { statusLine } from "@/lib/motion";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
+import { DeckDialog } from "../DeckDialog";
 import { DEFAULT_FORMAT, FormatSelect } from "../FormatSelect";
 import { DEFAULT_VARIANT, useDeck } from "../useDeck";
 import { useFormatSpecs } from "../useFormatSpecs";
@@ -102,10 +99,12 @@ export interface ImportDeckDialogProps {
    */
   forcedCategoryName?: string;
   /**
-   * **A mount, not a class**, exactly as `CreateDeckDialog`'s and `TheoryDiffDialog`'s are:
+   * **A mount, not a class**, and it is {@link DeckDialog}'s guarantee rather than this file's:
    * everything with state — the pasted text, the step, the commander picked, the caret — lives
-   * one component down, so closing unmounts all of it and reopening starts a genuinely new
-   * question rather than one somebody has to remember to clear.
+   * in {@link ImportBody}, which the shell renders only while this is true. Closing unmounts all
+   * of it and reopening starts a genuinely new question rather than one somebody has to remember
+   * to clear — which is the property the two-step flow rests on, since Preview crosses to step
+   * two inside a `mutationFn`'s `onSuccess` and nothing here resets it.
    */
   open: boolean;
   /** Escape, the header's ✕ and the trigger pressed again: close and hand the caret back. */
@@ -149,16 +148,22 @@ type Step = "source" | "preview";
  * `buildImportPlan`, whose trailing argument is where a named pile beats the filer. This file
  * draws the difference (the header line says which pile) and decides none of it.
  *
+ * **The chrome is {@link DeckDialog}'s and no longer this file's** (2026-08-16). The scrim, the
+ * `LAYER.overlay` rung, `aria-modal`, `trapTab`, the Escape registration on the *flag* and the
+ * titled header with its ✕ were a hand-copy of that shell — a copy that had drifted to a second
+ * scrim darkness over the same editor and a third `max-h`. What is left here is the two steps
+ * and everything that decides them.
+ *
  * **Not portalled, and `fixed` — so where it is mounted matters.** Nothing in this app is
  * portalled (the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects
  * a runtime `<style>`). A `fixed` element is positioned against the viewport *unless* an
  * ancestor carries a `transform`, `filter` or `contain`, so this belongs at its host's top
- * level rather than inside a column or a row.
+ * level rather than inside a column or a row. The shell's panel is `fixed` for the same reason
+ * and inherits the same condition.
  *
- * **The Escape rung is registered up here, on the flag.** With an exit animation the panel
- * outlives `open` by the length of its fade, so a rung that came up with the *element* would
- * still be consuming Escape while the next layer was opening — and two `"inner"` peers are not
- * ordered by that protocol at all.
+ * **The Escape rung is registered on the flag**, which is the shell's own guarantee: with an
+ * exit animation the panel outlives `open` by the length of its fade, so a rung that came up
+ * with the *element* would still be consuming Escape while the next layer was opening.
  */
 export function ImportDeckDialog({
   target,
@@ -169,45 +174,86 @@ export function ImportDeckDialog({
   onClose,
   onImported,
 }: ImportDeckDialogProps): JSX.Element {
-  // `useCallback`, because `onDismiss` is a dependency of the hook's effect and an unstable one
-  // re-registers the window listener on every render of the host view.
-  const dismiss = useCallback(() => onDismiss(), [onDismiss]);
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
-
   return (
-    <AnimatePresence>
-      {open && (
-        <Panel
-          key="import-deck"
-          target={target}
-          defaultFormatKey={defaultFormatKey}
-          forcedCategoryName={forcedCategoryName}
-          onDismiss={onDismiss}
-          onClose={onClose}
-          onImported={onImported}
-        />
-      )}
-    </AnimatePresence>
+    <DeckDialog
+      open={open}
+      title="Import a decklist"
+      // An *element*, not a call, for {@link ImportSubtitle}'s reason: it reads the deck, and a
+      // dialog nobody opened must not.
+      subtitle={<ImportSubtitle target={target} forcedCategoryName={forcedCategoryName} />}
+      closeLabel="Close"
+      // `max-w-2xl` written as the width it is (42rem), because the shell already carries
+      // `max-w-full` and two `max-width` utilities on one element is whichever Tailwind emitted
+      // last winning silently. `w-[42rem] max-w-full` computes to what `w-full max-w-2xl` did.
+      width="w-[42rem]"
+      onDismiss={onDismiss}
+      onClose={onClose}
+    >
+      <ImportBody
+        target={target}
+        defaultFormatKey={defaultFormatKey}
+        forcedCategoryName={forcedCategoryName}
+        onImported={onImported}
+      />
+    </DeckDialog>
   );
 }
 
 /**
- * The dialog itself, mounted only while it is open — see {@link ImportDeckDialog}.
+ * Where the cards are going, on the step the reader is still pasting into — the tally on step two
+ * says it again, but by then they have committed to a preview.
+ *
+ * **A component and not a string, because it reads the deck.** The name comes from `useDeck`, and
+ * a subtitle computed in the wrapper above would mount that read for a dialog nobody has opened —
+ * the exact property {@link DeckDialog} exists to give. Rendered as an element, the shell mounts
+ * it inside its own `open &&` and it costs a `deck_get` only while the dialog is up; with the
+ * editor open behind it that is no round trip at all, since TanStack shares a query's cache
+ * between observers and {@link ImportBody} is already reading the same key.
+ *
+ * A forced pile leads the line because it is the new fact: this is the importer aimed at one
+ * column rather than at the deck.
+ */
+function ImportSubtitle({
+  target,
+  forcedCategoryName,
+}: Pick<ImportDeckDialogProps, "target" | "forcedCategoryName">) {
+  const into = useDeck(
+    target.kind === "deck" ? target.deckId : null,
+    target.kind === "deck" ? target.variant : DEFAULT_VARIANT,
+  );
+
+  if (target.kind === "new")
+    return "Paste a list or choose a file, and it becomes a deck of its own.";
+
+  const deckName = into.deck?.name ?? "this deck";
+  return [
+    forcedCategoryName === undefined
+      ? `Into ${deckName}`
+      : `Into ${forcedCategoryName} · ${deckName}`,
+    variantName(target.variant),
+  ].join(" · ");
+}
+
+/**
+ * The two steps and everything that decides them — mounted only while the dialog is open, which
+ * is {@link DeckDialog}'s guarantee and what makes the step, the pasted text and the commander
+ * choice a session rather than something an effect has to clear.
+ *
+ * It is the shell's `children` and a flex item of the panel, so the `<form>` it returns brings
+ * its own `min-h-0 flex-1` and owns the scroller and the footer inside it.
  *
  * `defaultFormatKey` is **not** optional in here: the wrapper above applies the fallback, so the
  * default is written in one place and this half is handed a key it can seed state with.
  */
-function Panel({
+function ImportBody({
   target,
   defaultFormatKey,
   forcedCategoryName,
-  onDismiss,
-  onClose,
   onImported,
-}: Omit<ImportDeckDialogProps, "open" | "defaultFormatKey"> & { defaultFormatKey: string }) {
+}: Omit<ImportDeckDialogProps, "open" | "defaultFormatKey" | "onDismiss" | "onClose"> & {
+  defaultFormatKey: string;
+}) {
   const id = useId();
-  /** False from the render that starts the fade out. */
-  const present = useIsPresent();
   const listRef = useRef<HTMLTextAreaElement>(null);
 
   const [text, setText] = useState("");
@@ -256,9 +302,7 @@ function Panel({
   // The format the plan is judged by — see {@link ImportTarget}. A key the seeded table has no
   // row for answers `null`, which `buildImportPlan` reads as "no command zone": the same answer
   // as a format that has none, and the only honest one when there are no rules to apply.
-  const spec = formatSpecFor(
-    target.kind === "new" ? formatKey : (into.deck?.formatKey ?? ""),
-  );
+  const spec = formatSpecFor(target.kind === "new" ? formatKey : (into.deck?.formatKey ?? ""));
 
   /**
    * The printings the list resolved to and what they do, from the one press that asked.
@@ -407,282 +451,192 @@ function Panel({
 
   const nameMissing = target.kind === "new" && trimmedName === "";
 
-  return (
-    // Scrim and panel in one presence: the ground darkens first and the panel scales up over it,
-    // and the dialog is unmounted only once the later of the two tweens has finished.
-    //
-    // `LAYER.overlay` is the rung every full-window surface in this app shares. The number is
-    // deliberately not written out here, in prose or anywhere else: Tailwind's scanner reads a
-    // comment as eagerly as it reads code, so naming the class in a sentence emits a rule for it
-    // — and `layers.test.ts`' sweep counts that as a second place the scale is written.
-    <motion.div
-      {...scrim}
-      className={cn(
-        "fixed inset-0 flex items-center justify-center bg-bg/70 p-4",
-        !present && "pointer-events-none",
-        LAYER.overlay,
-      )}
-      // On the way out it is a picture: nothing to press, and nothing in the accessibility tree.
-      // Focus left with the flag.
-      aria-hidden={present ? undefined : true}
-      // A press on the scrim and nowhere else. `onMouseDown` rather than `onClick`, because a
-      // click fires on the nearest common ancestor of press and release — so a drag that starts
-      // in the textarea and ends past the panel's edge is a "click" on the scrim, and the dialog
-      // would vanish under a reader who was selecting the list they had just pasted.
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+  return step === "source" ? (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (parsed.lines.length > 0) preview();
       }}
+      className="flex min-h-0 flex-1 flex-col"
     >
-      <motion.div
-        {...dialog}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        // Labelled **by the heading**, not by an `aria-label` beside it: the words are on screen,
-        // so there is nothing for a second copy to drift from.
-        aria-labelledby={`${id}-title`}
-        // The caret stays inside, which is what makes the `aria-modal` above true rather than
-        // merely claimed — see {@link trapTab}.
-        onKeyDown={trapTab}
-        className={cn(
-          "flex max-h-[85%] w-full max-w-2xl flex-col overflow-hidden rounded-xl border",
-          "border-border bg-bg shadow-2xl",
-          FOCUS,
-        )}
-      >
-        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
-          <div className="min-w-0 flex-1">
-            <h2 id={`${id}-title`} className="font-heading text-xl leading-none">
-              Import a decklist
-            </h2>
-            {/* Where the cards are going, said on the step the reader is still pasting into —
-                the tally on step two says it again, but by then they have committed to a
-                preview. A forced pile leads the line because it is the new fact: this is the
-                importer aimed at one column rather than at the deck. */}
-            <p className="mt-1 truncate text-xs text-dim">
-              {target.kind === "new"
-                ? "Paste a list or choose a file, and it becomes a deck of its own."
-                : [
-                    forcedCategoryName === undefined
-                      ? `Into ${into.deck?.name ?? "this deck"}`
-                      : `Into ${forcedCategoryName} · ${into.deck?.name ?? "this deck"}`,
-                    variantName(target.variant),
-                  ].join(" · ")}
-            </p>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+        <div>
+          <div className="mb-1 flex items-baseline gap-3">
+            <label htmlFor={`${id}-list`} className="flex-1 text-xs text-dim">
+              Decklist
+            </label>
+            <button
+              type="button"
+              onClick={() => void choose()}
+              // Both halves of the round trip — the picker being up and the file being
+              // read — because a second press does nothing useful in either. The label
+              // does not change: an action keeps its name through the whole flow.
+              disabled={picking || readFile.isPending}
+              className={cn(
+                "rounded-md border border-border px-2 py-0.5 text-[0.6875rem] text-dim",
+                "transition-colors duration-[var(--duration-fast)] ease-standard",
+                "hover:border-accent hover:text-accent",
+                "disabled:opacity-50 disabled:hover:border-border disabled:hover:text-dim",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              Choose file…
+            </button>
           </div>
-          <button
-            type="button"
-            // The ✕ is the reader saying "put me back", exactly as Escape is — so it hands the
-            // caret over rather than dropping it where the dialog used to be.
-            onClick={onDismiss}
-            aria-label="Close"
+          <textarea
+            id={`${id}-list`}
+            ref={listRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={14}
+            spellCheck={false}
             className={cn(
-              "-mr-1 grid size-7 shrink-0 place-items-center rounded-md text-dim",
-              "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
-              "motion-reduce:transition-none",
-              FOCUS,
+              "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
+              "font-mono text-xs leading-relaxed",
+              "focus:border-accent focus:outline-none",
             )}
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </header>
-
-        {step === "source" ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (parsed.lines.length > 0) preview();
-            }}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
-              <div>
-                <div className="mb-1 flex items-baseline gap-3">
-                  <label htmlFor={`${id}-list`} className="flex-1 text-xs text-dim">
-                    Decklist
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => void choose()}
-                    // Both halves of the round trip — the picker being up and the file being
-                    // read — because a second press does nothing useful in either. The label
-                    // does not change: an action keeps its name through the whole flow.
-                    disabled={picking || readFile.isPending}
-                    className={cn(
-                      "rounded-md border border-border px-2 py-0.5 text-[0.6875rem] text-dim",
-                      "transition-colors duration-[var(--duration-fast)] ease-standard",
-                      "hover:border-accent hover:text-accent",
-                      "disabled:opacity-50 disabled:hover:border-border disabled:hover:text-dim",
-                      "motion-reduce:transition-none",
-                      FOCUS,
-                    )}
-                  >
-                    Choose file…
-                  </button>
-                </div>
-                <textarea
-                  id={`${id}-list`}
-                  ref={listRef}
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  rows={14}
-                  spellCheck={false}
-                  className={cn(
-                    "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
-                    "font-mono text-xs leading-relaxed",
-                    "focus:border-accent focus:outline-none",
-                  )}
-                />
-                <p className="mt-1 text-[0.6875rem] text-dim">
-                  One card a line, count first — <span className="font-mono">4 Lightning Bolt</span>
-                  . Arena, Moxfield and MTGO exports read as they come, headings and all.
-                </p>
-                {/* The counts as they are typed, so the box says what it has read before the
+          />
+          <p className="mt-1 text-[0.6875rem] text-dim">
+            One card a line, count first — <span className="font-mono">4 Lightning Bolt</span>.
+            Arena, Moxfield and MTGO exports read as they come, headings and all.
+          </p>
+          {/* The counts as they are typed, so the box says what it has read before the
                     reader commits to a preview. */}
-                {text.trim() !== "" && (
-                  <p className="mt-1 font-mono text-[0.6875rem] tabular-nums text-dim">
-                    {plural(parsed.lines.length, "line")} · {plural(parsed.totalCards, "card")}
-                    {parsed.issues.length > 0 && ` · ${plural(parsed.issues.length, "unreadable line")}`}
-                  </p>
-                )}
-                <AnimatePresence initial={false}>
-                  {fileFailure !== null && (
-                    <motion.p
-                      {...statusLine}
-                      role="alert"
-                      className="overflow-hidden text-[0.6875rem] text-destructive"
-                    >
-                      {fileFailure}
-                    </motion.p>
-                  )}
-                </AnimatePresence>
-              </div>
+          {text.trim() !== "" && (
+            <p className="mt-1 font-mono text-[0.6875rem] tabular-nums text-dim">
+              {plural(parsed.lines.length, "line")} · {plural(parsed.totalCards, "card")}
+              {parsed.issues.length > 0 && ` · ${plural(parsed.issues.length, "unreadable line")}`}
+            </p>
+          )}
+          <AnimatePresence initial={false}>
+            {fileFailure !== null && (
+              <motion.p
+                {...statusLine}
+                role="alert"
+                className="overflow-hidden text-[0.6875rem] text-destructive"
+              >
+                {fileFailure}
+              </motion.p>
+            )}
+          </AnimatePresence>
+        </div>
 
-              {/* The two fields a new deck needs, under the box rather than over it: a list
+        {/* The two fields a new deck needs, under the box rather than over it: a list
                   exported from Arena names the deck, so the name is worth asking for *after*
                   there is something to read it out of. */}
-              {target.kind === "new" && (
-                <div className="flex flex-wrap gap-3">
-                  <div className="min-w-40 flex-1">
-                    <label htmlFor={`${id}-name`} className="mb-1 block text-xs text-dim">
-                      Name
-                    </label>
-                    <input
-                      id={`${id}-name`}
-                      value={name}
-                      onChange={(e) => setTypedName(e.target.value)}
-                      className={cn(
-                        "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-                        "focus:border-accent focus:outline-none",
-                      )}
-                    />
-                  </div>
-                  <div className="w-48">
-                    <FormatSelect id={`${id}-format`} value={formatKey} onChange={setFormatKey} />
-                  </div>
-                </div>
-              )}
-
-              <AnimatePresence initial={false}>
-                {resolve.isError && (
-                  <motion.p
-                    {...statusLine}
-                    role="alert"
-                    className="overflow-hidden text-xs text-destructive"
-                  >
-                    Could not look those cards up — {ipcError(resolve.error)}
-                  </motion.p>
+        {target.kind === "new" && (
+          <div className="flex flex-wrap gap-3">
+            <div className="min-w-40 flex-1">
+              <label htmlFor={`${id}-name`} className="mb-1 block text-xs text-dim">
+                Name
+              </label>
+              <input
+                id={`${id}-name`}
+                value={name}
+                onChange={(e) => setTypedName(e.target.value)}
+                className={cn(
+                  "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
+                  "focus:border-accent focus:outline-none",
                 )}
-              </AnimatePresence>
+              />
             </div>
+            <div className="w-48">
+              <FormatSelect id={`${id}-format`} value={formatKey} onChange={setFormatKey} />
+            </div>
+          </div>
+        )}
 
-            <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3.5">
-              <button
-                type="submit"
-                disabled={parsed.lines.length === 0 || resolve.isPending}
-                className={cn(PRIMARY, FOCUS)}
-              >
-                {resolve.isPending ? "Reading…" : "Preview"}
-              </button>
-            </footer>
-          </form>
-        ) : (
-          plan !== null && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                runImport();
-              }}
-              className="flex min-h-0 flex-1 flex-col"
+        <AnimatePresence initial={false}>
+          {resolve.isError && (
+            <motion.p
+              {...statusLine}
+              role="alert"
+              className="overflow-hidden text-xs text-destructive"
             >
-              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-                <Headline totalCards={plan.totalCards} categories={categories} />
-                <Tally categories={categories} />
-                <Commander
-                  plan={plan}
-                  picked={picked}
-                  onPick={setPicked}
-                  labelId={`${id}-commander`}
-                />
-                <Problems plan={plan} blameSync={blameSync} />
-                {target.kind === "deck" && (
-                  <Mode
-                    value={mode}
-                    onChange={setMode}
-                    name={`${id}-mode`}
-                    variant={target.variant}
-                    cardsInVariant={target.cardsInVariant}
-                  />
-                )}
-              </div>
+              Could not look those cards up — {ipcError(resolve.error)}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
 
-              <footer className="flex items-center gap-3 border-t border-border px-5 py-3.5">
-                <button
-                  type="button"
-                  onClick={toSource}
-                  className={cn(
-                    "h-9 shrink-0 rounded-md border border-border px-3 text-sm text-dim",
-                    "transition-colors duration-[var(--duration-fast)] ease-standard",
-                    "hover:text-text motion-reduce:transition-none",
-                    FOCUS,
-                  )}
-                >
-                  Back
-                </button>
+      <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3.5">
+        <button
+          type="submit"
+          disabled={parsed.lines.length === 0 || resolve.isPending}
+          className={cn(PRIMARY, FOCUS)}
+        >
+          {resolve.isPending ? "Reading…" : "Preview"}
+        </button>
+      </footer>
+    </form>
+  ) : plan === null ? null : (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        runImport();
+      }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <Headline totalCards={plan.totalCards} categories={categories} />
+        <Tally categories={categories} />
+        <Commander plan={plan} picked={picked} onPick={setPicked} labelId={`${id}-commander`} />
+        <Problems plan={plan} blameSync={blameSync} />
+        {target.kind === "deck" && (
+          <Mode
+            value={mode}
+            onChange={setMode}
+            name={`${id}-mode`}
+            variant={target.variant}
+            cardsInVariant={target.cardsInVariant}
+          />
+        )}
+      </div>
 
-                {/* One live region for every answer this step gives — the refusal, and the one
+      <footer className="flex items-center gap-3 border-t border-border px-5 py-3.5">
+        <button
+          type="button"
+          onClick={toSource}
+          className={cn(
+            "h-9 shrink-0 rounded-md border border-border px-3 text-sm text-dim",
+            "transition-colors duration-[var(--duration-fast)] ease-standard",
+            "hover:text-text motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Back
+        </button>
+
+        {/* One live region for every answer this step gives — the refusal, and the one
                     reason the button can be dark that the reader cannot see from here. Rendered
                     always, so the region is in the tree before it has anything to say: a live
                     region mounted together with its own text announces nothing. `status` and
                     not `alert`, which is `TheoryDiffDialog`'s arrangement for the same slot. */}
-                <p
-                  role="status"
-                  aria-live="polite"
-                  className={cn(
-                    "min-w-0 flex-1 text-right text-xs",
-                    failure !== null ? "text-destructive" : "text-dim",
-                  )}
-                >
-                  {failure !== null
-                    ? `Could not import the list — ${ipcError(failure)}`
-                    : nameMissing
-                      ? "Go back and name the deck first."
-                      : ""}
-                </p>
+        <p
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "min-w-0 flex-1 text-right text-xs",
+            failure !== null ? "text-destructive" : "text-dim",
+          )}
+        >
+          {failure !== null
+            ? `Could not import the list — ${ipcError(failure)}`
+            : nameMissing
+              ? "Go back and name the deck first."
+              : ""}
+        </p>
 
-                <button
-                  type="submit"
-                  disabled={pending || items.length === 0 || nameMissing}
-                  className={cn(PRIMARY, FOCUS)}
-                >
-                  {pending ? "Importing…" : "Import"}
-                </button>
-              </footer>
-            </form>
-          )
-        )}
-      </motion.div>
-    </motion.div>
+        <button
+          type="submit"
+          disabled={pending || items.length === 0 || nameMissing}
+          className={cn(PRIMARY, FOCUS)}
+        >
+          {pending ? "Importing…" : "Import"}
+        </button>
+      </footer>
+    </form>
   );
 }
 
@@ -733,7 +687,9 @@ function Tally({ categories }: { categories: readonly CategoryTally[] }) {
         <div key={category.name} className="flex items-baseline gap-3 px-3 py-1.5">
           <dt className="min-w-0 flex-1 truncate text-sm">
             {category.name}
-            {category.inactive && <span className="ml-2 text-[0.6875rem] text-dim">(inactive)</span>}
+            {category.inactive && (
+              <span className="ml-2 text-[0.6875rem] text-dim">(inactive)</span>
+            )}
           </dt>
           <dd className="shrink-0 font-mono text-xs tabular-nums text-dim">{category.cards}</dd>
         </div>
@@ -784,9 +740,7 @@ function Commander({
 
   const candidates = plan.commander.candidates;
   const toggle = (cardId: string) =>
-    onPick(
-      picked.includes(cardId) ? picked.filter((id) => id !== cardId) : [...picked, cardId],
-    );
+    onPick(picked.includes(cardId) ? picked.filter((id) => id !== cardId) : [...picked, cardId]);
 
   return (
     <section aria-labelledby={labelId} className="space-y-1.5">
@@ -800,8 +754,8 @@ function Commander({
       ) : (
         <>
           <p className="text-[0.6875rem] text-dim">
-            {plural(candidates.length, "card")} here could be the commander. Pick one — or two,
-            for a partner pair — or leave it for later.
+            {plural(candidates.length, "card")} here could be the commander. Pick one — or two, for
+            a partner pair — or leave it for later.
           </p>
           {/* Scrolled rather than wrapped: the reference list offers dozens of legendary
               creatures, and a cloud of chips at that count is a wall no name can be found in. */}
@@ -890,8 +844,8 @@ function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boolean })
       // A plain paragraph and not a live region: it is drawn together with the step it belongs
       // to, and a live region mounted with its own text inside it announces nothing anyway.
       <p className="text-sm text-dim">
-        Card data is still syncing, so nothing in this list can be matched yet. Wait for the sync
-        to finish and preview again.
+        Card data is still syncing, so nothing in this list can be matched yet. Wait for the sync to
+        finish and preview again.
       </p>
     );
   }
@@ -905,9 +859,7 @@ function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boolean })
       {plan.unmatched.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unmatched.length, "line")} named a card this app has not got`}
-          lines={plan.unmatched.map(
-            (line) => `line ${line.lineNumber} · "${line.raw.trim()}"`,
-          )}
+          lines={plan.unmatched.map((line) => `line ${line.lineNumber} · "${line.raw.trim()}"`)}
         />
       )}
       {plan.hintMisses.length > 0 && (

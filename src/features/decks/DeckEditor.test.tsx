@@ -2225,12 +2225,11 @@ describe("DeckEditor", () => {
    * ones still outside the sweep are the delete-category and clear-stack confirmations and the
    * quick zones' New category, all opened without a button to point it at.
    *
-   * **Most of them are one component now (`DeckDialog`) and two are not**: the import dialog
-   * and the theory diff still carry their own scrim, `aria-modal` and `onKeyDown={trapTab}`,
-   * which is why this sweep is driven per surface rather than pointed at the shell. It is the
-   * only thing holding the two copies to the shell's behaviour, and it is what would go red if
-   * one of them were converted badly — or if a modality fix reached `DeckDialog.tsx` and stopped
-   * there.
+   * **Most of them are one component now (`DeckDialog`) and one is not**: the theory diff still
+   * carries its own scrim, `aria-modal` and `onKeyDown={trapTab}`, which is why this sweep is
+   * driven per surface rather than pointed at the shell. It is the only thing holding that copy
+   * to the shell's behaviour, and it is what would go red if it were converted badly — or if a
+   * modality fix reached `DeckDialog.tsx` and stopped there.
    *
    * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
    * claim about what is behind it: each layer's own test file mounts it alone, where there is
