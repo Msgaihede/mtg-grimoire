@@ -13,13 +13,13 @@ import { DeckNameField } from "./DeckNameField";
  */
 function mount(name = "Burn") {
   const onRename = vi.fn();
-  render(
+  const { container } = render(
     <>
       <DeckNameField name={name} onRename={onRename} />
       <button type="button">Elsewhere</button>
     </>,
   );
-  return { onRename, field: screen.getByLabelText("Deck name") };
+  return { onRename, container, field: screen.getByLabelText("Deck name") };
 }
 
 describe("DeckNameField", () => {
@@ -34,14 +34,18 @@ describe("DeckNameField", () => {
    * floor only govern anything while the `<input>` *is* that flex item. A wrapper `<div>` here
    * would take the item's place and both classes would stop applying, on a row that has already
    * collapsed to 18px once in the shipped window. jsdom lays nothing out, so what a test can see
-   * is that the rendered root is the input itself and that it carries the two classes — the same
-   * bargain `DeckEditor.test.tsx`'s title-row test strikes, and it is that test which walks
+   * is **where the input sits**: it is the direct child of what was rendered, so any wrapper at
+   * all pushes it a level down and fails this. Asserting only `tagName` would not — the query
+   * below finds the `<input>` through a wrapper as happily as without one, which is precisely the
+   * change this has to catch, because `DeckEditor.test.tsx`'s title-row test walks
    * `name.parentElement` and would silently start asserting about a different element.
    */
   it("renders the bare input, with the floor and the intrinsic width on it", () => {
-    const { field } = mount();
+    const { container, field } = mount();
 
     expect(field.tagName).toBe("INPUT");
+    // The render root's own child, with nothing between — see the note above.
+    expect(field.parentElement).toBe(container);
     // A floor, and not `min-w-0` — the class Tailwind emits is the whole of the fix.
     expect(field.className).toContain("min-w-40");
     expect(field.className).not.toContain("min-w-0");

@@ -28,10 +28,9 @@
  * condition, and a deck with one list would otherwise read a sentence about a list it has not
  * got.
  */
-import { useEffect, useRef } from "react";
 import { plural } from "@/lib/counts";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
-import { CONFIRM_BOX, CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE } from "./metaRows";
+import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 
 /** What each list is called in a sentence. The reader's own words for the two tabs, lowercased
  *  into prose — `DeckEditor`'s tabs read `Theory | Live`. */
@@ -57,15 +56,12 @@ export function ClearCategory({
    *  drawn above, exactly as the delete confirmation does. */
   onCleared: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-
   // The caret moves into the question, as it does for every other layer in this app. **The
   // question's own box and not a button in it**: the reader has not decided yet, and a stray
   // Enter must not decide for them — `DeleteCategory` makes the same choice for the same reason,
-  // and here the default answer would be the destructive one.
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
+  // and here the default answer would be the destructive one. The mechanism is the hook's; this
+  // is why this site wants it.
+  const confirm = useConfirmFocus(`Clear ${category.name}`);
 
   const here = category.cardCount;
   /** Copies in the list the reader is **not** looking at, and the whole of what the second
@@ -74,13 +70,7 @@ export function ClearCategory({
   const elsewhere = category.cardCountAllVariants - here;
 
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      role="group"
-      aria-label={`Clear ${category.name}`}
-      className={CONFIRM_BOX}
-    >
+    <div {...confirm}>
       <p className="text-xs">Clear “{category.name}”?</p>
 
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the

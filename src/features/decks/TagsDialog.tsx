@@ -22,7 +22,6 @@ import { type DeckTag, type DeckVariant, type TagColor } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { DeckDialog } from "./DeckDialog";
 import {
-  CONFIRM_BOX,
   CONFIRM_CANCEL,
   CONFIRM_DESTRUCTIVE,
   META_FIELD,
@@ -30,6 +29,7 @@ import {
   RenameField,
   RowAction,
   sectionFailure,
+  useConfirmFocus,
 } from "./metaRows";
 import { DEFAULT_TAG_COLOR, TAG_COLORS, tagColorCss } from "./tagColors";
 import { useDeckMeta, type DeckMeta } from "./useDeckMeta";
@@ -336,11 +336,8 @@ function DeleteTag({
   onCancel: () => void;
   onDeleted: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
   // The caret comes into the question, for `DeleteCategory`'s reason.
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
+  const confirm = useConfirmFocus(`Delete ${tag.name}`);
 
   /** Copies in the list the reader is **not** looking at. `> 0` is exactly the condition for
    *  mentioning the other list: a deck whose theory list wears this label nowhere has one list
@@ -354,13 +351,7 @@ function DeleteTag({
       : `Its ${cardsAllVariants} cards stay in the deck and lose the label`;
 
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      role="group"
-      aria-label={`Delete ${tag.name}`}
-      className={CONFIRM_BOX}
-    >
+    <div {...confirm}>
       <p className="text-xs">Delete “{tag.name}”?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
         {cardsAllVariants === null

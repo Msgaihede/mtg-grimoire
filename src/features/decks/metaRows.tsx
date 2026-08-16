@@ -70,13 +70,50 @@ export const META_SUBMIT = cn(
  * `losing` as the reader works its picker. So the words, the numbers and the colour decision stay
  * at each site and only the chrome is here.
  *
- * The three call sites each keep the rest of the pairing themselves: `tabIndex={-1}`,
- * `role="group"`, an `aria-label` naming the thing, and a mount effect that puts the caret on the
- * box. **That effect is the one duplicate this file cannot absorb** — it is the fix from commit
- * `10761c1`, which this repo has independently got wrong twice (see `RenameField` below for the
- * FolderTree repeat), and a class recipe has nowhere to keep an effect.
+ * The rest of the pairing — `tabIndex={-1}`, `role="group"`, the `aria-label` and the mount
+ * effect that puts the caret on the box — is {@link useConfirmFocus}'s, because a class recipe
+ * has nowhere to keep an effect and that effect is the fix from commit `10761c1`, which this repo
+ * has independently got wrong twice (see `RenameField` below for the FolderTree repeat). So a
+ * site that spreads the hook takes this class with it and cannot take one without the other.
  */
 export const CONFIRM_BOX = cn("mt-2 border-t border-border pt-2", FOCUS);
+
+/**
+ * The caret in the question, and the four attributes that make that possible — as **one
+ * spreadable**, so a site cannot take half of it.
+ *
+ * `focus()` on a node with no `tabIndex` is a **silent** no-op: nothing throws, nothing logs, and
+ * the caret is simply on `<body>` with the next Tab restarting at the top of the document. That is
+ * the failure `src/CLAUDE.md` records shipping more than once, and it is why this answers a props
+ * object rather than a bare ref — a ref would close the *effect* and leave the *pairing* open, so
+ * a fourth site could call this, forget `tabIndex`, and get the same dead caret with the fix
+ * present. It carries `className` for the same reason: the box a caret is put into is the box that
+ * is ruled off as a question.
+ *
+ * **Prose had been tried at this exact site and observed to fail.** The rule was written out at
+ * three sites and a fourth statement of it sat on {@link CONFIRM_BOX}; the duplicate happened
+ * anyway. What each site keeps is its own *reason* — Chromium blurring the `disabled` Delete
+ * trigger is `DeleteCategory`'s alone — since those are three different facts and merging them
+ * would lose two.
+ *
+ * All three questions are `<div>`s, so one ref type serves. Lifts no state and takes no prop but
+ * the label.
+ */
+export function useConfirmFocus(ariaLabel: string) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  return {
+    ref,
+    tabIndex: -1,
+    role: "group",
+    "aria-label": ariaLabel,
+    className: CONFIRM_BOX,
+  } as const;
+}
 
 /**
  * The button that carries a destructive press through — outlined in the destructive colour,
@@ -95,8 +132,9 @@ export const CONFIRM_DESTRUCTIVE = cn(
 
 /**
  * The way out, beside it: quiet, bordered in the ordinary edge colour, and the one button in the
- * pair that never greys — all three sites draw it with no `disabled` at all, because declining is
- * not a thing a busy database can refuse.
+ * pair with **no greyed state to draw** — the recipe carries no `disabled:` clause, because
+ * declining is not a thing a busy database can refuse, so a site that greyed this would be greying
+ * it against the recipe rather than with it.
  *
  * The word is each site's — "Keep them" over a pile being emptied, "Keep it" over the thing
  * itself — since what is being kept is the sentence's subject and not this button's business.

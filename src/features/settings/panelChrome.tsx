@@ -1,8 +1,3 @@
-import { AnimatePresence, motion } from "motion/react";
-import type { ReactNode } from "react";
-import { statusLine } from "@/lib/motion";
-import { cn } from "@/lib/utils";
-
 /**
  * The chrome the Settings page's panels are drawn in — `controls.ts` beside it holds the class
  * recipes they are built from.
@@ -19,6 +14,10 @@ import { cn } from "@/lib/utils";
  * Preventive rather than corrective, and worth saying plainly: none of the three panels had
  * drifted when this was written.
  */
+import { AnimatePresence, motion } from "motion/react";
+import type { ReactNode } from "react";
+import { statusLine } from "@/lib/motion";
+import { cn } from "@/lib/utils";
 
 /**
  * One panel: a named region, its heading, and the box the panel's content sits in.
@@ -81,9 +80,13 @@ const TONE: Record<Tone, string> = {
  * that panel's whole argument is that a failed image fetch is not an alarm, and a page that lists
  * faults quietly has no business turning red about the listing itself.
  *
- * Nothing is rendered while `children` is empty, so a caller passes its `error` straight in.
+ * Nothing is rendered while `children` is empty, so a caller passes its `error` straight in —
+ * which is why the prop is the sentence itself rather than a `ReactNode`. All three panels hold a
+ * refused write as `string | null`, and a truthiness test is only honest over a type where
+ * "empty" and "falsy" are the same thing: `0` and an empty fragment are both nodes that render
+ * nothing here while reading as something to say.
  */
-export function PanelAlert({ tone, children }: { tone: Tone; children: ReactNode }) {
+export function PanelAlert({ tone, children }: { tone: Tone; children: string | null }) {
   return (
     <AnimatePresence initial={false}>
       {children ? (
