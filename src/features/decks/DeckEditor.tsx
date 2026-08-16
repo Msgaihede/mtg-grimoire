@@ -2807,7 +2807,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           column's — one box further in and the number would be measuring nothing. It owns its
           own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
           this file any more: see {@link PriceStrip}. */}
-      <PriceStrip marketplace={marketplace} onDrop={applyDrop} />
+      <PriceStrip marketplace={marketplace} onRemove={applyDrop} />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last thing under the deck.

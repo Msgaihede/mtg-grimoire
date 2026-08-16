@@ -31,6 +31,7 @@ import {
   type FolderRowMenu,
 } from "./FolderTree";
 import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
+import type { Panel } from "./panels";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
 import { useNewDeckFormat } from "./useNewDeckFormat";
@@ -65,63 +66,6 @@ const HEADING_BUTTON = cn(
  * gallery is one whether or not a deck has picked a cover yet.
  */
 const CREDIT = "Card images © Wizards of the Coast · Data © Scryfall";
-
-/**
- * The one dismissible layer this view can have open, and there is deliberately only ever one.
- *
- * **At most one of these is ever meant to be open**, and modelling every panel on this screen as
- * *one* piece of state is what makes "never two" structural rather than remembered — a half-typed
- * new deck beside a half-answered delete question is not a state this view draws, and separate
- * flags can express it. The tree's create field is in here for that reason even though it is
- * drawn inline rather than floating.
- *
- * This used to be argued from Escape — "`useDismissOnEscape` orders exactly two rungs, so two
- * `"inner"` peers open at once are not ordered at all and would both close on a single press" —
- * and that is no longer true: the hook keeps a stack of capture-phase registrations and only the
- * token on top acts, so peers *are* ordered, by mount depth. (It was not true of the old hook
- * either: the capture rung checks `defaultPrevented`, so the first-registered peer took the press
- * and the newer one was starved rather than both closing.) The union stands on the sentence above,
- * which never depended on any of it.
- *
- * **Exported for `DeckTile.tsx` and for nothing else.** Three of these arms are a tile's own
- * layers — its delete question, its move popup, its rename field — and the tile is handed the
- * whole union rather than three booleans precisely so that "never two" stays a fact about one
- * value. A type-only import, so nothing crosses at runtime and the cycle it reads as is erased.
- */
-export type Panel =
-  /** Where the deck being made will be filed — `null` is the top level, which is what the
-   *  heading's own "New deck" has always meant. A folder row's menu passes its folder, because
-   *  "New deck **here**" has to be true. */
-  | { kind: "createDeck"; folderId: number | null }
-  | { kind: "importDeck" }
-  | { kind: "deleteDeck"; deckId: number }
-  | { kind: "moveDeck"; deckId: number }
-  | { kind: "renameDeck"; deckId: number }
-  /**
-   * The hosted {@link DeckSettingsDialog}, which carries no deck id: the id outlives the flag by
-   * the length of the panel's fade, so it is held in `settingsDeckId` beside this. The *flag* is
-   * in here for the union's own reason — one layer at a time, structurally, so opening settings
-   * over a half-answered delete question replaces it rather than making two Escape peers.
-   */
-  | { kind: "deckSettings" }
-  | { kind: "newFolder"; parentId: number | null }
-  | { kind: "renameFolder"; folderId: number }
-  | { kind: "moveFolder"; folderId: number }
-  /**
-   * The delete question, which carries **no folder id — and must not**.
-   *
-   * It used to, and nothing ever read it: {@link DeleteFolderConfirm} both names and deletes
-   * `openNode.folder.id`, because it is anchored to the heading row's own "Delete folder…"
-   * control and that control exists only for the folder the reader is standing in. A second id
-   * in here would be a second source of truth that no code consults — and the day one did, the
-   * two could disagree about which folder a delete was aimed at.
-   *
-   * Both routes into it therefore make that folder the open one: the heading's control is
-   * already about it, and the folder row's menu opens the drawer on its way (see
-   * {@link folderMenuDeps}).
-   */
-  | { kind: "deleteFolder" }
-  | null;
 
 /**
  * The decks, filed.

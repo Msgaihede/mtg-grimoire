@@ -35,24 +35,28 @@ import { flattenFolders, indent, type FolderNode } from "./folders";
  */
 
 /**
- * The three modules this one was split out of, re-exported for `DecksPage.tsx` alone.
+ * The three modules this one was split out of, re-exported for the three files that still reach
+ * them through this path.
  *
- * **A shim with one consumer and a date on it.** The gallery imports thirteen names from this
- * path, and it is owned by another task in the same wave — so re-pointing it here would be two
- * agents writing one file. It is the *page* that wants all three modules, not this component:
- * `folders.ts` for the tree it builds, `deckDrag.ts` for the tile it makes draggable, and
- * `MoveToFolder` for the popup it anchors to that tile. Every other consumer already imports
- * the module it means. Delete this block with the import in `DecksPage.tsx` that needs it.
+ * **A bridge, not an API, and it has three consumers rather than one.** `DecksPage.tsx` takes
+ * eleven names from this path — seven of them the re-exports below — while `DeckTile.tsx` takes
+ * three and `FolderCard.tsx` four, and every one of those imports was written while this file was
+ * the only address those exports had. It is the *page* in particular that wants all three modules,
+ * not this component: `folders.ts` for the tree it builds, `deckDrag.ts` for the tile it makes
+ * draggable, and `MoveToFolder` for the popup it anchors to that tile. Everything outside those
+ * three already imports the module it means — `folderMenu.tsx` and `cardMenu.tsx` read
+ * `folders.ts`, and `MoveToFolder.tsx` says at its own head why it must.
+ *
+ * **So deleting it is four edits and not one**: re-point those three files at `./folders`,
+ * `./deckDrag` and `./MoveToFolder`, and take this block with them. In the other order it takes
+ * two of them red.
+ *
+ * It carries only what those three import — a one-file bridge that re-exported more would be
+ * inviting a fourth consumer through it. `deckDragData` and `readDeckDrag` are the two that left:
+ * `FolderTree.test.tsx` takes both, and takes them from `./deckDrag` directly.
  */
 export { buildFolderTree, flattenFolders, folderDescendants, type FolderNode } from "./folders";
-export {
-  deckDragData,
-  deckDraggable,
-  readDeckDrag,
-  useDeckDragging,
-  useDeckDropTarget,
-  type DeckDrag,
-} from "./deckDrag";
+export { deckDraggable, useDeckDragging, useDeckDropTarget, type DeckDrag } from "./deckDrag";
 export { MoveToFolder } from "./MoveToFolder";
 
 /**
@@ -109,11 +113,13 @@ export interface FolderTreeProps {
    * One folder row's right-click, built by the page.
    *
    * **The menu is data and the page is what has the writes**, so this tree draws rows and never
-   * decides what a row offers — the same split `DeckEditor` uses for a deck card's menu. It is
-   * also what keeps the import graph acyclic: `folderMenu.tsx` reads `folderDescendants` — out of
-   * `folders.ts` since the split, out of *this file* before it — so a `buildFolderMenu` call in
-   * here would be a cycle either way. The split narrowed that edge rather than removing the
-   * reason for this prop.
+   * decides what a row offers — the same split `DeckEditor` uses for a deck card's menu. That
+   * sentence is now the whole of the reason. It used to carry a second one: `folderMenu.tsx`
+   * reads `folderDescendants`, which was *this file's*, so a `buildFolderMenu` call in here was a
+   * cycle. **The split removed that edge** — `folderMenu.tsx`'s import list has no path back to
+   * this file, and `folders.ts` imports nothing local — so calling the builder here would type-
+   * check today. It stays a prop because the writes are the page's, which never depended on the
+   * graph.
    *
    * Not offered for "All decks", which is the tree's root and not a folder — there is nothing to
    * rename, move or delete.

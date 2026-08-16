@@ -1,3 +1,17 @@
+/**
+ * One deck on the gallery wall, and the three things drawn inside it: the cover frame, the
+ * badge that says which of a deck's two lists exist, and the question the trash icon asks.
+ *
+ * Lifted out of `DecksPage.tsx` on 2026-08-16, whole. **The tile's own menu handlers stay on
+ * the tile's own `<button>`** — `src/CLAUDE.md`'s rule, and the reason this component is the one
+ * that calls `useContextMenu` rather than being handed an opener: a menu opener has to be able
+ * to take focus, and `focus()` on a node with no `tabIndex` is a no-op, so a handler tidied onto
+ * the `<li>` would drop the caret on `<body>` every time Escape closed the panel.
+ *
+ * `Panel` comes from `panels.ts` and not from the page: the page holds it and hands it here, so
+ * reading it out of `DecksPage.tsx` would have been an import back into the file this was lifted
+ * out of — erased at runtime, and a cycle to a reader and to `import/no-cycle` all the same.
+ */
 import { useEffect, useRef, type RefObject } from "react";
 import { Archive, ArchiveRestore, Copy, FolderInput, Trash2 } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
@@ -11,23 +25,10 @@ import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
-import type { Panel } from "./DecksPage";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import { RenameField } from "./metaRows";
+import type { Panel } from "./panels";
 import type { Decks } from "./useDecks";
-
-/**
- * One deck on the gallery wall, and the three things drawn inside it: the cover frame, the
- * badge that says which of a deck's two lists exist, and the question the trash icon asks.
- *
- * Lifted out of `DecksPage.tsx` on 2026-08-16, whole. **The tile's own menu handlers stay on
- * the tile's own `<button>`** — `src/CLAUDE.md`'s rule, and the reason this component is the one
- * that calls `useContextMenu` rather than being handed an opener: a menu opener has to be able
- * to take focus, and `focus()` on a node with no `tabIndex` is a no-op, so a handler tidied onto
- * the `<li>` would drop the caret on `<body>` every time Escape closed the panel.
- *
- * `Panel` is a type-only import from the page, so nothing crosses at runtime.
- */
 
 /**
  * Every icon control on a tile, so four of them are one row rather than four sizes.

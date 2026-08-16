@@ -50,15 +50,23 @@ import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd
  */
 export function PriceStrip({
   marketplace,
-  onDrop,
+  onRemove,
 }: {
   /** Whose prices the deck was read at — its label and whether it is a feed, which is the whole
    *  of what {@link pricesAsOf} needs. The editor's, so the strip and the stats band under it
    *  can never name two marketplaces. */
   marketplace: Marketplace;
-  /** What a drop writes. `DeckEditor`'s `applyDrop`, which is stable — see it. The tray's own
-   *  write is always the zero the stepper's last press writes; there is no remove mutation. */
-  onDrop: (write: DeckWrite) => void;
+  /**
+   * What a drop on the tray writes. `DeckEditor`'s `applyDrop`, which is stable — see it. The
+   * tray's own write is always the zero the stepper's last press writes; there is no remove
+   * mutation.
+   *
+   * Named for what the tray *does* rather than for the event it is wired to: the drop target
+   * below has an `onDrop` key of its own, and a prop of the same name beside it is correct —
+   * an object-literal key creates no binding — but only after a reader has proved it to
+   * themselves.
+   */
+  onRemove: (write: DeckWrite) => void;
 }): ReactElement {
   /**
    * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
@@ -112,10 +120,10 @@ export function PriceStrip({
       onDrop: ({ source }) => {
         setOverTray(false);
         const write = writeFor(source.data);
-        if (write) onDrop(write);
+        if (write) onRemove(write);
       },
     });
-  }, [trayShown, onDrop]);
+  }, [trayShown, onRemove]);
 
   return (
     /* **`sticky bottom-0` while a card is in the air, and only then** (2026-08-14). The deck
