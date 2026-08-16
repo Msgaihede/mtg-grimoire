@@ -830,15 +830,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const { landed, markLanded } = useRecentAdds();
 
   /**
-   * The remembered triple this editor has already put on screen, so the restore below honours a
-   * *value* rather than a deck — see it for why that is the difference that matters.
+   * The deck-and-switch this editor has already put the remembered controls on screen for, so
+   * the restore below runs once per *question* rather than once per answer — see it for why
+   * that difference is the whole of a crash this file used to have.
    *
    * State rather than a ref, and not a stylistic choice: this is React's own "adjusting state
    * when a prop changes" pattern, where the previous value is held in state precisely so the
    * comparison and the update are both part of the render the new value arrived in. A ref read
    * during render is the thing `react-hooks/refs` forbids, and for the reason that would bite
    * here — a ref written in a render React then discards would leave the editor believing it
-   * had honoured a triple it never drew.
+   * had honoured a deck it never drew.
    */
   const [honouredView, setHonouredView] = useState<string | null>(null);
 
@@ -1189,20 +1190,28 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // prop, and the pattern this file already uses twice (the `targetCategoryId` clamp above and
   // the `variant` clamp below).
   //
-  // **Honoured once per *triple*, not once per deck**, which is the whole of what makes it
-  // co-operate with the reader rather than fight them: `honouredView` holds the triple that was
-  // applied, so a row answering the same one again changes nothing, while a row answering a
-  // *new* one — the deck being opened, or `theoryEnabled` being switched on, which leaves
-  // `lastVariant` at `"theory"` because the cards moved there — moves the controls.
+  // **Honoured once per deck and switch — never once per stored value, which is what this used
+  // to do and what crashed the app** (fixed 2026-08-16). `honouredView` was
+  // `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`, so the marker held a
+  // value the restore's own `setVariant` could change: the variant decides which query's row
+  // `row` is, each list caches its **own snapshot of the one deck row**, and two snapshots that
+  // name each other's tab are a restore that moves the variant, which moves the snapshot, which
+  // asks for the move back. React counts the nested renders and throws **"Too many
+  // re-renders"** — and there is no error boundary above this component, so the window goes
+  // blank. Measured in the shipped window: ~40 ms between tab presses took it down in three.
   //
-  // **It cannot loop, and the reason is that `rememberView` does not invalidate.** A press
-  // writes the columns without re-reading the deck, so the triple on this row changes only when
-  // the deck is genuinely read again — opening it, or any card write's `["decks"]`
-  // invalidation — and by then it is the reader's own stored choice, which the three `!==`
-  // guards make a no-op. Restoring writes nothing back, deliberately: this is a read of what is
-  // already stored.
-  const remembered =
-    row === null ? null : `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`;
+  // The two snapshots really do disagree, and no amount of care at the write end fixes it:
+  // `rememberView` deliberately does not invalidate, so `last_variant` is written without either
+  // cached row hearing about it, and one `["decks"]` invalidation later the two rows are read by
+  // **two** round trips — a press committing between them leaves one row on each side. That is a
+  // fact about the cache; what this line owes is a marker the restore cannot move.
+  //
+  // So the key is the two things that are genuinely a *new question about where the reader
+  // should be*, and neither of them is state this block writes: **the deck** being opened, and
+  // **the switch** being turned on, which leaves `lastVariant` at `"theory"` because that write
+  // moves the cards there. Everything else is the reader's own press, which set the state and
+  // wrote the column in the same act — there is nothing to restore them to but where they are.
+  const remembered = row === null ? null : `${deckId}:${theoryEnabled}`;
   if (row !== null && honouredView !== remembered) {
     setHonouredView(remembered);
     // Narrowed rather than cast: a word a future build stops offering must land the editor on
