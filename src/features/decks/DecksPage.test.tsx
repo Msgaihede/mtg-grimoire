@@ -395,6 +395,59 @@ describe("DecksPage", () => {
     expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
   });
 
+  /**
+   * **A replaced cover is new bytes behind a URL that did not change, so the frame has to
+   * become a new element or the reader goes on looking at the old picture.**
+   *
+   * `/cover/<deckId>` names the deck rather than the picture and `images.ts` forbids a
+   * cache-buster on it, so `CardImage`'s own key — the `src` — cannot notice an upload, and the
+   * route's `no-store` never gets a say, because no request is made. This screen is where it
+   * bit: `DeckSettingsDialog` is mounted here, so the wall behind the scrim kept painting the
+   * file the reader had just replaced. `deck_set_cover_image` moves `updated_at` in the same
+   * statement that writes the path, so the deck row is what says a new file has landed.
+   *
+   * **Asserted as element identity and not as an attribute.** Every attribute of this `<img>`
+   * is identical before and after — that is the entire shape of the defect — so a `src`
+   * assertion passes against the broken code. `src/CLAUDE.md` states the rule: a stale frame is
+   * invisible to the DOM, so assert identity.
+   *
+   * The card-art tile beside it is the control, and it is a decision rather than an omission:
+   * its URL names a printing, so it must **not** be thrown away and re-decoded every time some
+   * other field of its deck is written.
+   */
+  it("replaces a custom cover's element on a deck write, at an unchanged URL", async () => {
+    const CUSTOM: DeckRow = { ...BURN, coverKind: "custom" };
+    const ART: DeckRow = { ...BURN, id: 5, name: "Sunday burn" };
+    deckList.mockResolvedValue([CUSTOM, ART]);
+
+    wrap(<DecksPage />);
+
+    // The tiles themselves are keyed by deck id and outlive a refetch — it is what is *inside*
+    // them that this case is about.
+    const customTile = (await tileFor("Burn")).closest("li")!;
+    const artTile = (await tileFor("Sunday burn")).closest("li")!;
+    const before = customTile.querySelector("img");
+    const artBefore = artTile.querySelector("img");
+    const url = `${imageOrigin(navigator.userAgent)}/cover/4`;
+    expect(before).toHaveAttribute("src", url);
+
+    // The upload itself opens a native picker no test can reach, so what is driven here is what
+    // reaches the gallery from it: every deck write invalidates `["decks"]`, and the list comes
+    // back with a later `updatedAt` on the row that was written.
+    deckList.mockResolvedValue([
+      { ...CUSTOM, updatedAt: CUSTOM.updatedAt + 1 },
+      { ...ART, updatedAt: ART.updatedAt + 1 },
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Duplicate Burn" }));
+
+    await waitFor(() => expect(customTile.querySelector("img")).not.toBe(before));
+    // A new element asking for the same thing: the URL is what `no-store` is attached to, and
+    // re-requesting it is the whole point.
+    expect(customTile.querySelector("img")).toHaveAttribute("src", url);
+    // And the crop is untouched, on a row whose `updatedAt` moved by exactly as much.
+    expect(artTile.querySelector("img")).toBe(artBefore);
+  });
+
   /** And the card-art arm keeps the rule: the credit rides the picture it is about. */
   it("still credits the illustrator when the deck is showing card art", async () => {
     // Two decks, identical but for which cover they wear — so the only thing that can explain

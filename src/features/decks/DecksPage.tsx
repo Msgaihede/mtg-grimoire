@@ -1551,11 +1551,29 @@ function DeckTile({
  * tile falls back to the card's own name inside the frame, while a deck tile already has its
  * name in the caption underneath and needs the frame to say what happened instead — and it has
  * a third thing to say, "No cover", which is not a failure at all. What is shared is
- * {@link useImageRetry}: the schedule, and the reason for it. A deck that changes its cover
- * hands this component a different id without remounting it, which is exactly the reset the
- * hook does — and that reset is what lets one frame serve **both** kinds of cover
- * ({@link coverUrl}), because switching a deck from card art to its own picture changes the URL
- * and nothing else.
+ * {@link useImageRetry}: the schedule, and the reason for it.
+ *
+ * **Two things change what this frame should be painting, and only one of them changes the
+ * URL.** Picking a different card, or switching between card art and the reader's own picture,
+ * hands this component a different {@link coverUrl} — which is the reset the retry hook does
+ * and the key `CardImage` puts on its own `<img>`, and it is the whole of what lets one frame
+ * serve both kinds of cover with nothing written here. **Replacing the custom file changes no
+ * URL at all**: `/cover/<deckId>` names the deck rather than the picture, `images.ts` forbids a
+ * cache-buster on it, and the `no-store` that route is served with never gets a say — a header
+ * decides what happens to a *request*, and a browser with no reason to make one goes on
+ * painting the frame it already decoded. So the custom arm is keyed on `deck.updatedAt`, which
+ * the upload moves because setting a cover is a write to the deck; a moved key is a new
+ * element, and an element that has never decoded anything paints nothing.
+ *
+ * **This screen is where that bites**: {@link DeckSettingsDialog}, the surface that uploads a
+ * cover, is mounted right here over this wall, so the tile behind the scrim was the one still
+ * showing the replaced file. `DeckCoverPicker`'s `CoverPreview` makes the same move with the
+ * same number under the name `customCoverKey` — one picture, on both sides of that scrim.
+ *
+ * **The card-art arm deliberately takes no key.** `updatedAt` moves for every write to the
+ * deck, so keying it too would throw away a crop the browser has already decoded and leave the
+ * tile blank while it came back — for a rename. There is nothing there to notice: a printing's
+ * URL names its own picture.
  *
  * A missing custom file is a **404**, never a placeholder — `images.rs` chose that deliberately
  * so the fault is visible rather than hidden behind a grey rectangle that looks like a picture.
@@ -1576,10 +1594,11 @@ function Cover({ deck }: { deck: DeckRow }) {
           // Decorative: the deck's name is in the caption two lines down, and an `alt` here
           // would announce the tile twice.
           alt=""
-          // Keyed on the `src` inside {@link CardImage}, which is what makes the note above
-          // this component true rather than merely intended: a deck that changes its cover is
-          // handed a different id without remounting, and the frame would otherwise keep
-          // painting the old cover until the new crop arrived.
+          // `CardImage` keys itself on the `src`, which is the whole answer for a card cover:
+          // a different printing is a different URL. A custom cover's URL names the *deck*, so
+          // nothing keyed on it can notice an upload — this key is the number that moves when
+          // the file behind that unchanged URL is replaced. See the note above the component.
+          key={deck.coverKind === "custom" ? deck.updatedAt : undefined}
           src={image.src}
           loading="lazy"
           decoding="async"
