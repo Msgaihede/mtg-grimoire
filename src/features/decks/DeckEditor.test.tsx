@@ -811,6 +811,28 @@ describe("DeckEditor", () => {
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
   });
 
+  /**
+   * The third header write, and it is here for the same reason the two around it are: this file
+   * owns the **wiring** — that the field's decision reaches `deck.update` with the field the
+   * backend renames on.
+   *
+   * `DeckNameField.test.tsx` pins the field's own half (the draft, the blank and unchanged
+   * refusals, blur and Enter both committing) against an `onRename` spy, which is a claim about
+   * a prop and says nothing about what this editor hands it. Extracting the field moved the four
+   * assertions that had covered `renameDeck` into that file, and for a moment nothing here
+   * asserted a `name` at all: `deck.update.mutate({ name })` could be deleted outright, or sent
+   * as `{ title: name }`, and the whole suite stayed green. Proved by doing it, 2026-08-16.
+   */
+  it("renames the deck from the name field", async () => {
+    await open();
+
+    const name = screen.getByLabelText("Deck name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Sunday burn{Enter}");
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
+  });
+
   /** Built is the one switch with a consequence outside this deck, so it says what it does. */
   it("marks the deck built", async () => {
     await open();
