@@ -1,11 +1,10 @@
 import { CircleCheck, Trash2 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
 import type { ErrorEntry, ErrorKind, ErrorSource } from "@/lib/ipc";
-import { statusLine } from "@/lib/motion";
 import { ago } from "@/lib/relativeTime";
 import type { ErrorLog } from "@/lib/useErrorLog";
 import { cn } from "@/lib/utils";
 import { BUTTON } from "./controls";
+import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
  * What each `source` is called on screen.
@@ -95,61 +94,47 @@ export function ErrorLogPanel({ log }: { log: ErrorLog }) {
   const { entries, loading, error, clear, clearing } = log;
 
   return (
-    <section aria-labelledby="errors-heading" className="space-y-4">
-      <h2 id="errors-heading" className="font-heading text-lg leading-none">
-        Errors
-      </h2>
-
-      <div className="space-y-4 rounded-lg border border-border bg-surface p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 text-sm text-dim">
-            Anything the app could not do — a card update, an image, a check for a new version.
-            Repeats are counted, not repeated.
-          </p>
-          <button
-            type="button"
-            onClick={clear}
-            disabled={clearing || entries.length === 0}
-            aria-busy={clearing || undefined}
-            className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
-          >
-            <Trash2 className="size-4" aria-hidden="true" />
-            Clear
-          </button>
-        </div>
-
-        {/* Grown into place rather than shoving the log down by its height. Its own animated
-            element, since it carries no padding and no border — `overflow-hidden` is still
-            owed, because the sentence is laid out at full size whatever the box is doing. The
-            panel is a `space-y-4` stack, so the 16px between it and the list still arrives at
-            once; the sentence itself is what grows. */}
-        <AnimatePresence initial={false}>
-          {error && (
-            <motion.p {...statusLine} role="alert" className="overflow-hidden text-sm text-text">
-              {error}
-            </motion.p>
-          )}
-        </AnimatePresence>
-
-        {loading ? (
-          <p className="text-sm text-dim">Reading the log…</p>
-        ) : entries.length === 0 ? (
-          // An empty screen states the good news and what would fill it. Not "No errors
-          // found", which reads as a search that came back empty.
-          <p className="flex items-center gap-2 text-sm text-dim">
-            <CircleCheck className="size-4 text-accent" aria-hidden="true" />
-            Nothing has failed.
-          </p>
-        ) : (
-          // Capped and scrolled: fifty faults is more than a panel can hold, and a settings
-          // page that grows to the length of a bad week is one nobody can reach the bottom of.
-          <ul className="max-h-96 overflow-y-auto">
-            {entries.map((entry) => (
-              <Row key={entry.id} entry={entry} />
-            ))}
-          </ul>
-        )}
+    <SettingsSection id="errors" title="Errors">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 text-sm text-dim">
+          Anything the app could not do — a card update, an image, a check for a new version.
+          Repeats are counted, not repeated.
+        </p>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={clearing || entries.length === 0}
+          aria-busy={clearing || undefined}
+          className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+        >
+          <Trash2 className="size-4" aria-hidden="true" />
+          Clear
+        </button>
       </div>
-    </section>
+
+      {/* `plain` and not the red its two neighbours use: this panel's whole argument is that a
+          fault is news rather than an alarm, and it would be a strange page that listed six
+          hundred of them in grey and then shouted about failing to read them. */}
+      <PanelAlert tone="plain">{error}</PanelAlert>
+
+      {loading ? (
+        <p className="text-sm text-dim">Reading the log…</p>
+      ) : entries.length === 0 ? (
+        // An empty screen states the good news and what would fill it. Not "No errors
+        // found", which reads as a search that came back empty.
+        <p className="flex items-center gap-2 text-sm text-dim">
+          <CircleCheck className="size-4 text-accent" aria-hidden="true" />
+          Nothing has failed.
+        </p>
+      ) : (
+        // Capped and scrolled: fifty faults is more than a panel can hold, and a settings
+        // page that grows to the length of a bad week is one nobody can reach the bottom of.
+        <ul className="max-h-96 overflow-y-auto">
+          {entries.map((entry) => (
+            <Row key={entry.id} entry={entry} />
+          ))}
+        </ul>
+      )}
+    </SettingsSection>
   );
 }

@@ -1,12 +1,12 @@
 import { Check, RefreshCw } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
 import { useId } from "react";
 import { FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { MARKETPLACE_LIST, type Currency, type Marketplace } from "@/lib/marketplace";
-import { PRESS_SOFT, statusLine } from "@/lib/motion";
+import { PRESS_SOFT } from "@/lib/motion";
 import { ago } from "@/lib/relativeTime";
 import { nowSeconds, type FeedInfo, type FeedState, type MarketplaceState } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
  * One row of the picker — the app's existing "on / off / out of reach" control, laid out down
@@ -269,52 +269,33 @@ export function MarketplacePanel({ marketplace }: { marketplace: MarketplaceStat
   const feedError = feeds.find((f) => f.error !== null)?.error ?? null;
 
   return (
-    <section aria-labelledby="prices-heading" className="space-y-4">
-      <h2 id="prices-heading" className="font-heading text-lg leading-none">
-        Prices
-      </h2>
+    <SettingsSection id="prices" title="Prices">
+      <p className="text-sm text-dim">
+        Every price this app shows — in search, the collection, decks and the wishlist — is quoted
+        from one marketplace, in that marketplace&rsquo;s currency. Switching re-reads the lists you
+        are looking at; nothing re-syncs. A card a marketplace does not list shows an em dash there
+        rather than another marketplace&rsquo;s number.
+      </p>
 
-      <div className="space-y-4 rounded-lg border border-border bg-surface p-4">
-        <p className="text-sm text-dim">
-          Every price this app shows — in search, the collection, decks and the wishlist — is quoted
-          from one marketplace, in that marketplace&rsquo;s currency. Switching re-reads the lists
-          you are looking at; nothing re-syncs. A card a marketplace does not list shows an em dash
-          there rather than another marketplace&rsquo;s number.
-        </p>
+      {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row
+          long and a list that emptied its own tab order for the length of it would move the
+          caret out from under a keyboard reader mid-press. */}
+      <ul aria-busy={selecting || undefined} className="space-y-2">
+        {MARKETPLACE_LIST.map((entry) => (
+          <Option
+            key={entry.id}
+            marketplace={entry}
+            chosen={entry.id === chosen.id}
+            feed={feedOf(entry.id)}
+            now={now}
+            onChoose={() => select(entry.id)}
+            onRefresh={() => refresh(entry.id)}
+          />
+        ))}
+      </ul>
 
-        {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row
-            long and a list that emptied its own tab order for the length of it would move the
-            caret out from under a keyboard reader mid-press. */}
-        <ul aria-busy={selecting || undefined} className="space-y-2">
-          {MARKETPLACE_LIST.map((entry) => (
-            <Option
-              key={entry.id}
-              marketplace={entry}
-              chosen={entry.id === chosen.id}
-              feed={feedOf(entry.id)}
-              now={now}
-              onChoose={() => select(entry.id)}
-              onRefresh={() => refresh(entry.id)}
-            />
-          ))}
-        </ul>
-
-        {/* Grown into place rather than shoving the list up by its height — both neighbouring
-            panels' line, and the same reasoning: its own animated element because it carries no
-            padding and no border, `overflow-hidden` because the sentence is laid out at full
-            size whatever the box is doing. */}
-        <AnimatePresence initial={false}>
-          {(error ?? feedError) && (
-            <motion.p
-              {...statusLine}
-              role="alert"
-              className="overflow-hidden text-sm text-destructive"
-            >
-              {error ?? feedError}
-            </motion.p>
-          )}
-        </AnimatePresence>
-      </div>
-    </section>
+      {/* A refusal to switch, or the first feed that would not download. */}
+      <PanelAlert tone="problem">{error ?? feedError}</PanelAlert>
+    </SettingsSection>
   );
 }
