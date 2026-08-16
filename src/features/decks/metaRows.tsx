@@ -24,6 +24,13 @@
  * 32px row — `h-8`, 13px, sharing a line with a colour picker and a submit — and the two
  * recipes agreed on nothing but the corner radius. Two small vocabularies, each with one
  * subject, rather than one that has to carry a variant flag.
+ *
+ * **The `CONFIRM_*` recipes below have a third consumer and it is not a meta dialog.**
+ * `ClearCategory.tsx` is the deck editor's, opened from a category heading's right-click, and it
+ * draws the same ruled-off box and the same two buttons as `DeleteCategory` and `DeleteTag`. The
+ * three questions stay three components on purpose — see {@link CONFIRM_BOX} — so what is shared
+ * is the chrome and nothing else, which is exactly what a class recipe carries and a shell
+ * component would not.
  */
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { FOCUS } from "@/lib/focus";
@@ -46,6 +53,57 @@ export const META_SUBMIT = cn(
   "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
   "disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-accent",
   "motion-reduce:transition-none",
+  FOCUS,
+);
+
+/**
+ * The box a destructive question is asked inside: ruled off from the row it opened under, and
+ * focusable, because the caret comes into the **question** rather than onto a button in it — the
+ * reader has not decided yet and a stray Enter must not decide for them.
+ *
+ * It is a recipe rather than a component, and the reason is what the three questions say rather
+ * than how they look. **A clear is scoped to the list on screen and quotes `cardCount`; a delete
+ * cascades through both lists and quotes `cardCountAllVariants`** — `ClearCategory.tsx`'s doc and
+ * this folder's `CLAUDE.md` both say that getting the two the wrong way round mis-states a
+ * destructive press, and a shared shell taking a `count` prop is precisely the shape that lets it
+ * happen. `DeleteCategory`'s colouring is not even constant across one render: it follows
+ * `losing` as the reader works its picker. So the words, the numbers and the colour decision stay
+ * at each site and only the chrome is here.
+ *
+ * The three call sites each keep the rest of the pairing themselves: `tabIndex={-1}`,
+ * `role="group"`, an `aria-label` naming the thing, and a mount effect that puts the caret on the
+ * box. **That effect is the one duplicate this file cannot absorb** — it is the fix from commit
+ * `10761c1`, which this repo has independently got wrong twice (see `RenameField` below for the
+ * FolderTree repeat), and a class recipe has nowhere to keep an effect.
+ */
+export const CONFIRM_BOX = cn("mt-2 border-t border-border pt-2", FOCUS);
+
+/**
+ * The button that carries a destructive press through — outlined in the destructive colour,
+ * filling with it under the pointer, and greyed while the write is in flight.
+ *
+ * `DeleteCategory` draws this on the arm that **loses** cards only. Its other arm moves them
+ * somewhere and destroys nothing, so it is an ordinary affirmative and keeps its own spelling at
+ * its own site: one site's two-state control, not a fourth copy of this one.
+ */
+export const CONFIRM_DESTRUCTIVE = cn(
+  "rounded-md border px-2 py-1 text-xs",
+  "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
+  "border-destructive text-destructive hover:bg-destructive hover:text-bg",
+  FOCUS,
+);
+
+/**
+ * The way out, beside it: quiet, bordered in the ordinary edge colour, and the one button in the
+ * pair that never greys — all three sites draw it with no `disabled` at all, because declining is
+ * not a thing a busy database can refuse.
+ *
+ * The word is each site's — "Keep them" over a pile being emptied, "Keep it" over the thing
+ * itself — since what is being kept is the sentence's subject and not this button's business.
+ */
+export const CONFIRM_CANCEL = cn(
+  "rounded-md border border-border px-2 py-1 text-xs text-dim",
+  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
   FOCUS,
 );
 

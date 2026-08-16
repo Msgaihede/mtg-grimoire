@@ -30,9 +30,8 @@
  */
 import { useEffect, useRef } from "react";
 import { plural } from "@/lib/counts";
-import { FOCUS } from "@/lib/focus";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
+import { CONFIRM_BOX, CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE } from "./metaRows";
 
 /** What each list is called in a sentence. The reader's own words for the two tabs, lowercased
  *  into prose — `DeckEditor`'s tabs read `Theory | Live`. */
@@ -80,7 +79,7 @@ export function ClearCategory({
       tabIndex={-1}
       role="group"
       aria-label={`Clear ${category.name}`}
-      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
+      className={CONFIRM_BOX}
     >
       <p className="text-xs">Clear “{category.name}”?</p>
 
@@ -101,24 +100,11 @@ export function ClearCategory({
           type="button"
           disabled={pending}
           onClick={onCleared}
-          className={cn(
-            "rounded-md border px-2 py-1 text-xs",
-            "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
-            "border-destructive text-destructive hover:bg-destructive hover:text-bg",
-            FOCUS,
-          )}
+          className={CONFIRM_DESTRUCTIVE}
         >
           Remove {plural(here, "card")}
         </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "rounded-md border border-border px-2 py-1 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
           Keep them
         </button>
       </div>

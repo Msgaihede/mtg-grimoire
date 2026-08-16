@@ -65,7 +65,16 @@ import { cn } from "@/lib/utils";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
 import { DeckDialog } from "./DeckDialog";
 import type { CardGroup } from "./grouping";
-import { META_FIELD, META_SUBMIT, RenameField, RowAction, sectionFailure } from "./metaRows";
+import {
+  CONFIRM_BOX,
+  CONFIRM_CANCEL,
+  CONFIRM_DESTRUCTIVE,
+  META_FIELD,
+  META_SUBMIT,
+  RenameField,
+  RowAction,
+  sectionFailure,
+} from "./metaRows";
 import { useDeck } from "./useDeck";
 import { useDeckMeta, type DeckMeta } from "./useDeckMeta";
 import { GroupHeader } from "./views/GroupHeader";
@@ -573,6 +582,23 @@ function CategoryRow({
  * move 2 cards and moved 7. When copies exist in the list that is *not* on screen, the sentence
  * says so in words: the reader can see one list and cannot be asked to infer the other.
  */
+/**
+ * `DeleteCategory`'s confirm button on the arm that **moves** the cards somewhere: an ordinary
+ * affirmative, because that press destroys nothing.
+ *
+ * It stays in this file rather than joining {@link CONFIRM_DESTRUCTIVE} in `metaRows.tsx` for two
+ * reasons, and the second is the stronger. It is one control's second state rather than a shape
+ * three sites share — the clear and the tag delete have no such arm. And the state is **live**:
+ * the reader flips between the two by working the picker above it, so this is not a variant a
+ * site picks once at build time.
+ */
+const CONFIRM_MOVING = cn(
+  "rounded-md border px-2 py-1 text-xs",
+  "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
+  "border-border text-text hover:border-accent hover:text-accent",
+  FOCUS,
+);
+
 export function DeleteCategory({
   category,
   others,
@@ -632,7 +658,7 @@ export function DeleteCategory({
       tabIndex={-1}
       role="group"
       aria-label={`Delete ${category.name}`}
-      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
+      className={CONFIRM_BOX}
     >
       <p className="text-xs">Delete “{category.name}”?</p>
 
@@ -692,26 +718,11 @@ export function DeleteCategory({
               { onSuccess: onDeleted },
             )
           }
-          className={cn(
-            "rounded-md border px-2 py-1 text-xs",
-            "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
-            losing
-              ? "border-destructive text-destructive hover:bg-destructive hover:text-bg"
-              : "border-border text-text hover:border-accent hover:text-accent",
-            FOCUS,
-          )}
+          className={losing ? CONFIRM_DESTRUCTIVE : CONFIRM_MOVING}
         >
           {moveTo === null ? `Delete “${category.name}”` : `Move ${count} and delete`}
         </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "rounded-md border border-border px-2 py-1 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
           Keep it
         </button>
       </div>
