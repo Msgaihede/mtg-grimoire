@@ -45,6 +45,15 @@ const FOIL_SHEEN =
  * about everything else, which is how a foil marking would otherwise have come to exist in
  * five slightly different versions.
  *
+ * **The deck editor's Grid view is a caller since 2026-08-16**, and it is the case that shows
+ * what "one definition" is worth: it had opted out and kept a copy of this file inline, which
+ * had drifted to `rounded-md`, a second spelling of the aspect ratio (`488/680` against
+ * {@link CARD_ASPECT}), a smaller no-picture fallback and no hover lift at all — so the deck a
+ * reader was building and the wall docked beside it drew the same card two ways, on one screen.
+ * The surfaces that still draw their own frame each say why at their own site
+ * (`CardStack`, `CardDetailPane`, `PrintingPreview`, the two cover pickers); none of them is
+ * 5:7 with an aspect-driven height, which is the whole of what this owns.
+ *
  * `CardImage` stays underneath and does the one thing it has always done — key the `<img>`
  * on its URL, so a slot handed a new card paints nothing rather than the previous card's
  * art. This component is the frame around it and the state machine beside it.
@@ -62,6 +71,7 @@ export function CardArt({
   hoverZoom = false,
   finish = null,
   gameChanger = false,
+  loading,
   className,
 }: {
   /**
@@ -112,6 +122,18 @@ export function CardArt({
    * column (a deck row is one, an orphan is another) must draw nothing rather than guess.
    */
   gameChanger?: boolean;
+  /**
+   * The browser's own intersection gate on this frame's `<img>`. **Absent by default, which
+   * emits no attribute at all** — the argued position, not an omission; see where it is passed
+   * below, and `CardGrid.test.tsx`, which asserts the attribute's absence rather than its value.
+   *
+   * `"lazy"` is for a wall that is **not** virtualised, which is the app's standing rule (see
+   * `src/CLAUDE.md`): the deck editor's Grid view mounts every card in the deck at once, so the
+   * browser's gate is the only thing bounding what a hundred tiles ask for. A virtualised wall
+   * has already made that count small and pays only the gate's extra wait, which is why the
+   * search wall passes nothing.
+   */
+  loading?: "eager" | "lazy";
   className?: string;
 }) {
   // The self-healing half of the rate limit, and the reset that goes with it: this component
@@ -135,13 +157,15 @@ export function CardArt({
           // what shows when a fetch fails, and both readers want the card.
           alt={name}
           src={image.src}
-          // No `loading="lazy"`. It was on the wall's tiles against "117 k results is 117 k
-          // requests if every mounted tile fetches eagerly", and that is not what happens:
-          // the virtualizer bounds the mounted tiles to the rows on screen plus two, so
-          // eager is already bounded at about two dozen images. What the browser's own
-          // intersection gate added on top was a second wait — and a lazy image is fetched
-          // at low priority, after layout, outside the preload scanner — on exactly the two
-          // dozen pictures the reader is about to look at.
+          // **Nothing unless the caller says otherwise**, and that default is the argument the
+          // wall's tiles settled: "117 k results is 117 k requests if every mounted tile
+          // fetches eagerly" is not what happens, because the virtualizer bounds the mounted
+          // tiles to the rows on screen plus two — so eager is already bounded at about two
+          // dozen images. What the browser's own intersection gate added on top was a second
+          // wait — and a lazy image is fetched at low priority, after layout, outside the
+          // preload scanner — on exactly the two dozen pictures the reader is about to look
+          // at. A wall with **no** virtualiser has no such bound and passes `"lazy"`.
+          loading={loading}
           decoding="async"
           // An `<img>` is draggable by default, and the browser picks the *nearest*
           // draggable ancestor as a drag's source — so the art would start a drag of itself
@@ -189,7 +213,7 @@ export function CardArt({
  * beside it would start a row of stickers.
  *
  * The crown is the same glyph the deck stack's `GameChangerBanner` stamps on its ribbon, and the
- * same fact the other three deck views abbreviate as `GameChangerBadge`'s gold `GC`; see
+ * same fact the deck's table and text views abbreviate as `GameChangerBadge`'s gold `GC`; see
  * `GameChangerMark` for why one fact is drawn three ways.
  *
  * The enclosing element needs `relative` and `overflow-hidden`; `CardArt` has both.
@@ -201,10 +225,12 @@ export function FoilOverlay({
 }: {
   finish: Finish | null;
   /**
-   * Optional, and it has to stay optional: three callers outside `CardArt` draw this overlay
-   * (the pane's main art, the deck stack's card, the deck grid's tile) and none of them says
-   * anything about the bracket. The deck's surfaces have their own drawings of it —
-   * `GameChangerBanner` on the stack, `GameChangerBadge` on the other three views.
+   * Optional, and it has to stay optional: two callers outside `CardArt` draw this overlay
+   * (the card detail pane's main art and the deck stack's card) and neither says anything about
+   * the bracket. Those surfaces have their own drawings of it — `GameChangerBanner` on the
+   * stack, `GameChangerBadge` on the deck's table and text views. The deck's **Grid** view was
+   * a third such caller until 2026-08-16 and is now a `CardArt` like the search wall, so it gets
+   * the crown through this prop rather than a `GC` of its own.
    */
   gameChanger?: boolean;
   /**
@@ -283,9 +309,10 @@ export function FoilOverlay({
           pointer *hits*, and nothing here was ever hit. Re-enabling it on the chip alone
           leaves the full-bleed sheen untouchable, which is what the wrapper's `none` was for.
           Nothing is swallowed by giving one chip's worth of hit target back: it sits **inside**
-          the enclosing button on every surface that has one — `CardGrid` renders `<CardArt>` as
-          that button's only child, `CardStack` and `GridView` put this overlay inside theirs —
-          so a click on the chip bubbles and opens the card exactly as a click on the art does.
+          the enclosing button on every surface that has one — `CardGrid` and the deck's
+          `GridView` both render `<CardArt>` inside theirs, and `CardStack` puts this overlay
+          inside its own — so a click on the chip bubbles and opens the card exactly as a click
+          on the art does.
           `data-card-marks` is the handle a test finds it by; a hit target is otherwise
           invisible to the DOM. */}
       {chip && (

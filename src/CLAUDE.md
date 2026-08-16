@@ -36,14 +36,26 @@ Every one of these has its measurement and its story in
   key the picture lags the caption by the length of the fetch. **This is invisible to the DOM
   and therefore to a test in the obvious place**; assert element _identity_.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
-  no-art fallback and the foil marking, in one place.
+  no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
+  search's, the collection's, the deck editor's docked search column and — since 2026-08-16 —
+  the deck's own Grid view, which had kept an inline copy and drifted from it in four ways at
+  once (`rounded-md`, `aspect-[488/680]` rather than `CARD_ASPECT`, a smaller no-picture
+  fallback, no hover lift), so the deck and the wall docked beside it drew one card two ways on
+  one screen. A surface that draws its own frame instead says why at its own site, and each
+  reason is that it is not a 5:7 box with an aspect-driven height — the stack's card (a computed
+  pixel height its whole geometry rests on), the pane's main art (a flip fade), `PrintingPreview`
+  (672×936), the two cover pickers (`ART_ASPECT`).
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
   printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph
-  without its ribbon — one fact drawn three ways (the stack's banner, the other deck views' `GC`,
-  this), differing only in the room each has. One gold (`text-pie-gold`) everywhere, never the
-  destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns the whole
-  chip off, crown included, for a frame that names these somewhere else.
+  without its ribbon — one fact drawn three ways (the stack's banner, the deck's table and text
+  views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
+  never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
+  the whole chip off, crown included, for a frame that names these somewhere else.
+  **Top-right is that chip's and no other mark's**, on every surface that draws a card as a face.
+  The deck's Grid view put its copy count there too, in a full-width strip, and the two overlapped
+  on any foil card in a deck — invisible to jsdom, invisible to a fixture set with no foil in it.
+  A surface's own marks go in the corners the chip leaves: top-left, bottom-left.
 - **A bare number laid _on_ a card is `components/CountTag`, and it draws that number with no
   `×`** — filled and cut off at a slant, since a square chip on art reads as something to press;
   **grey unless something colours it**, so gold stays a thing a deck _tag_ means. It is
