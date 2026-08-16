@@ -230,45 +230,61 @@ export function statusLineGap(marginTop: number): EnterExit {
 }
 
 /**
- * The press recipe, as **CSS classes** — what a pressable control that is not a `motion`
- * element wears. {@link press} below is the same feedback for one that is.
+ * Everything a press recipe is except the dip itself — the property list, the tier, the curve
+ * and the reduced-motion opt-out.
  *
- * It was spelled out at twelve sites with its explanatory paragraph pasted at eight, and
- * `UpdatePanel` said in writing that its copy was "the same string `ErrorLogPanel` carries,
- * down to the character". So: one string, in the module `src/CLAUDE.md` already names as
- * where timings live.
+ * **Module-private, and it exists so that the property list is written once.** {@link PRESS}
+ * and {@link PRESS_SOFT} differ by one utility and nothing else; spelling the other eleven
+ * out twice, twelve lines apart, would be the same duplication this pair was extracted to
+ * end — one file down from the twelve call sites instead of across them.
  *
  * **The property list is written out one longhand at a time, and `scale` is named
  * explicitly.** Two reasons, and both have shipped as bugs. A colour utility beside a
  * transform one compiles to the same CSS longhand, so tailwind-merge keeps whichever it saw
  * last and silently drops the other — invisible until somebody presses the control. And
  * Tailwind v4's `scale-*` writes the `scale` longhand rather than `transform`, so a list
- * naming only `transform` does not tween the press at all and it snaps. Verify that one in
- * the built CSS, never in source.
+ * naming only `transform` does not tween the press at all and it snaps.
  *
- * **What a control does when it is out of reach is deliberately *not* in here.** Six sites
- * add `disabled:active:scale-100` because they genuinely use the attribute, three add
- * `aria-disabled:active:scale-100` because they grey as the reader types, and the rest never
- * grey at all. Those are three different facts about three kinds of control, not drift, and
- * folding them together would put a `disabled:` variant on chips that must never leave the
- * tab order.
+ * **Verify both in the built CSS, never in source** — and that goes double now the two
+ * exports are template literals. A join that breaks a class name in half emits no rule at
+ * all, and nothing goes red: source still reads correctly, `dist/` simply has no
+ * `active:scale-[0.97]` in it. Every class name here is written out whole for Tailwind's
+ * scanner, which reads text and knows nothing about the concatenation.
  */
-export const PRESS =
+const PRESS_BASE =
   "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
+  "duration-[var(--duration-fast)] ease-standard " +
   "motion-reduce:transition-none";
+
+/**
+ * The press recipe, as **CSS classes** — what a pressable control that is not a `motion`
+ * element wears. {@link press} below is the same feedback for one that is.
+ *
+ * It was hand-copied onto every pressable control in the app, with the paragraph on
+ * {@link PRESS_BASE} pasted beside almost all of them, until commit `b0a49aa` — and
+ * `UpdatePanel` had said in writing that its copy was "the same string `ErrorLogPanel`
+ * carries, down to the character". So: one string, in the module `src/CLAUDE.md` already
+ * names as where timings live.
+ *
+ * **What a control does when it is out of reach is deliberately *not* in here.** Some sites
+ * add `disabled:active:scale-100` because they genuinely use the attribute, some add
+ * `aria-disabled:active:scale-100` because they grey as the reader types, and the rest never
+ * grey at all — grep `active:scale-100` for the current split. Those are three different
+ * facts about three kinds of control, not drift, and folding them together would put a
+ * `disabled:` variant on chips that must never leave the tab order.
+ */
+export const PRESS = `${PRESS_BASE} active:scale-[0.97]`;
 
 /**
  * {@link PRESS} at 0.99 rather than 0.97, for a control as wide as its panel.
  *
  * `MarketplacePanel`'s marketplace rows are the whole width of the settings column, and a
  * full-width row that dips 3% reads as the page moving rather than as a button going down.
- * A second number with a reason of its own, which is the bar for adding one here.
+ * A second number with a reason of its own, which is the bar for adding one here — and the
+ * number is the *whole* of the difference, which is why both are built from
+ * {@link PRESS_BASE}.
  */
-export const PRESS_SOFT =
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.99] " +
-  "motion-reduce:transition-none";
+export const PRESS_SOFT = `${PRESS_BASE} active:scale-[0.99]`;
 
 /** {@link press}'s shape: the two gesture props plus the one transition they share. */
 export interface PressFeedback {

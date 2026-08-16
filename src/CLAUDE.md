@@ -420,11 +420,16 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   `transition-[…,transform]` list does not tween it and the press snaps. The shared press recipe
   names `scale` explicitly; verify it in the built CSS, not in source. **That recipe is `PRESS`
   in `src/lib/motion.ts`** (and `PRESS_SOFT`, the settings rows' 0.99), where it joined the
-  timings on 2026-08-16 — it had been spelled out at twelve sites with its explanatory paragraph
-  pasted at eight. **What a control does when it is out of reach is not in it**: six sites add
-  `disabled:active:scale-100`, three add the `aria-disabled:` spelling, and the rest never grey,
-  which is three facts about three kinds of control rather than drift. The settings panels'
-  button box is `src/features/settings/controls.ts`.
+  timings on 2026-08-16 — until then it was hand-copied onto every pressable control in the
+  app, with the paragraph explaining why pasted beside almost all of them (`b0a49aa`). Both are
+  built from one private `PRESS_BASE`, because they differ by a single utility and the property
+  list must be written once. **Both are template literals now, which is a second reason the
+  check belongs in `dist/`**: a join that breaks a class name in half emits no rule at all and
+  source still reads correctly. **What a control does when it is out of reach is not in the
+  recipe** — some sites add `disabled:active:scale-100`, some the `aria-disabled:` spelling, and
+  the rest never grey; that is three facts about three kinds of control rather than drift, and
+  `grep active:scale-100` is the census. The settings panels' button box is
+  `src/features/settings/controls.ts`.
 - **Under jsdom the animations are real and timing-dependent**, which is why
   `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. Even so, **a
   `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false for

@@ -39,6 +39,22 @@ describe("ago", () => {
     expect(at(-500)).toBe("just now");
     expect(at(-90_000)).toBe("just now");
   });
+
+  /**
+   * The half-second window `formatWhen` used to round across, and the one thing about this
+   * move that no pre-existing test could see. It converted to seconds with `Math.round`, so
+   * an elapsed 3 599.6s became 3 600 and read `1 hour ago`; `ErrorLogPanel.test.tsx` passes
+   * whole-second boundaries only, where round and floor agree, so it stayed green either way.
+   *
+   * A fractional elapsed is the normal case, not the exotic one — `Date.now()` is a
+   * millisecond clock and the stamps are whole seconds.
+   */
+  it("floors a fractional elapsed rather than rounding it to the next rung", () => {
+    expect(ago(AT - 3_600, NOW - 400)).toBe("59 minutes ago");
+    expect(ago(AT - 3_600, NOW)).toBe("1 hour ago");
+    expect(ago(AT - 60, NOW - 500)).toBe("just now");
+    expect(ago(AT - 86_400, NOW - 1)).toBe("23 hours ago");
+  });
 });
 
 describe("daysSince", () => {

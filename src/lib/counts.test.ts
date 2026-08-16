@@ -31,9 +31,17 @@ describe("count", () => {
     expect(count(116703)).toBe("116,703");
   });
 
-  /** Pinned to `en-US` rather than the host locale, so one screen cannot separate its figures
-   *  differently from the next. */
-  it("does not follow the machine's locale", () => {
+  /**
+   * **This cannot observe the host locale and does not claim to.** `count` pins `"en-US"`
+   * internally, so what is checkable from inside the process is the *shape* that pin buys:
+   * a comma every three digits, where `de-DE` would group with dots and `fr-FR` with a
+   * narrow no-break space. On an en-US machine — every machine this has been run on — an
+   * unpinned `toLocaleString()` would pass this too, which is precisely why the case is
+   * named for the grouping rather than for the locale.
+   */
+  it("groups by threes with a comma, which is what the en-US pin buys", () => {
     expect(count(1234567)).toBe("1,234,567");
+    expect(count(1000)).toBe("1,000");
+    expect(count(-4321)).toBe("-4,321");
   });
 });
