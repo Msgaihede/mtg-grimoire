@@ -36,7 +36,7 @@
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
 use crate::deck_meta::{DeckCategoryRow, DeckTagRow};
-use crate::sync::AppState;
+use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -3164,17 +3164,6 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
-}
-
-/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
-fn with_write<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
-        None => Err(crate::db::BUSY.to_owned()),
-    }
 }
 
 /// What a deck write says when its worker thread died under it. Never a user's problem —

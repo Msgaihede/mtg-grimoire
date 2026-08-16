@@ -967,10 +967,8 @@ pub fn commit_import(
 
 /// A decklist into a deck: one transaction, one allocation, one or two history rows.
 ///
-/// The **write** connection through `db::lock_for`, answering [`crate::db::BUSY`] if it
-/// cannot take it — inlined rather than borrowing a `with_write` helper the way `deck.rs` and
-/// `deck_meta.rs` do, because this module has exactly one write and a helper for one call site
-/// is a second place to read.
+/// The **write** connection through [`crate::sync::with_write`], answering
+/// [`crate::db::BUSY`] if it cannot be had.
 #[tauri::command]
 pub async fn deck_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -981,10 +979,9 @@ pub async fn deck_import_commit(
 ) -> Result<ImportOutcome, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-            Some(conn) => commit_import(&conn, deck_id, &variant, &mode, &items),
-            None => Err(crate::db::BUSY.to_owned()),
-        }
+        crate::sync::with_write(&state, |conn| {
+            commit_import(conn, deck_id, &variant, &mode, &items)
+        })
     })
     .await
     .map_err(|e| format!("the decklist could not be imported: {e}"))?

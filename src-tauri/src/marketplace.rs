@@ -107,10 +107,7 @@ pub async fn set_marketplace(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-            Some(conn) => store(&conn, &id),
-            None => Err(crate::db::BUSY.to_owned()),
-        }
+        crate::sync::with_write(&state, |conn| store(conn, &id))
     })
     .await
     .map_err(|e| format!("the marketplace could not be saved: {e}"))?

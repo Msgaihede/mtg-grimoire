@@ -488,21 +488,6 @@ fn friendly(e: rusqlite::Error) -> String {
     text
 }
 
-/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
-///
-/// Bounded rather than blocking: this runs on a worker thread from a button press, and the
-/// one thing that can hold `AppState.db` for any length of time is a sync — which, since
-/// the ingest was chunked, holds it for one batch at a time.
-fn with_write<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
-        None => Err(crate::db::BUSY.to_owned()),
-    }
-}
-
 /// [`with_write`], plus the facet index's `owned` dimension re-read afterwards.
 ///
 /// Every command in this module that changes what the user owns goes through here, because
@@ -521,7 +506,7 @@ fn with_write_owned<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
-    let answer = with_write(state, f);
+    let answer = crate::sync::with_write(state, f);
     if answer.is_ok() {
         crate::index::lifecycle::invalidate_owned(state);
     }
@@ -1033,6 +1018,7 @@ pub async fn collection_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync::with_write;
 
     /// One sort term, in the shape the UI sends.
     fn term(key: &str, dir: &str) -> crate::sorting::SortTerm {

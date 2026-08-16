@@ -126,12 +126,9 @@ async fn error_log_list(
 async fn error_log_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match db::lock_for(&state.db, db::WRITE_LOCK_WAIT) {
-            Some(conn) => {
-                errors::clear(&conn).map_err(|e| format!("could not clear the error log: {e}"))
-            }
-            None => Err(db::BUSY.to_owned()),
-        }
+        sync::with_write(&state, |conn| {
+            errors::clear(conn).map_err(|e| format!("could not clear the error log: {e}"))
+        })
     })
     .await
     .map_err(|e| format!("could not clear the error log: {e}"))?

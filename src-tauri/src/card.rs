@@ -561,10 +561,7 @@ pub async fn set_printing_group_by(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-            Some(conn) => store_group_by(&conn, &mode),
-            None => Err(crate::db::BUSY.to_owned()),
-        }
+        crate::sync::with_write(&state, |conn| store_group_by(conn, &mode))
     })
     .await
     .map_err(|e| format!("the printing grouping could not be saved: {e}"))?

@@ -393,6 +393,36 @@ pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
     lock_conn(&state.db_read)
 }
 
+/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
+///
+/// Bounded rather than blocking: every caller is a button press on a worker thread, and the
+/// one thing that can hold `AppState.db` for any length of time is a sync — which, since the
+/// ingest was chunked, holds it for one batch at a time.
+///
+/// **This is the one definition of that rule**, the way [`crate::db::lock_plain`] is the one
+/// definition of poison recovery. It was five identical private copies (`collection`, `deck`,
+/// `deck_meta`, `deck_theory`, `wishlist`) plus six sites that inlined the same four lines,
+/// each documented as "kept per-module the way every other one in this crate is" — which was
+/// true, and was the problem.
+///
+/// Here rather than in [`crate::db`] because the parameter is [`AppState`]: `db` is the layer
+/// below and must not learn about the app's state. `&AppState` rather than `&Arc<AppState>`
+/// so that both shapes of caller fit — a command holding an `Arc` gets deref coercion for
+/// free, and [`crate::index::lifecycle`], which holds a bare reference, needs no clone.
+///
+/// **Never call this while holding a guard on `state.db`** — it would deadlock on itself.
+/// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
+/// connection down instead.
+pub(crate) fn with_write<T>(
+    state: &AppState,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        Some(conn) => f(&conn),
+        None => Err(crate::db::BUSY.to_owned()),
+    }
+}
+
 /// Upsert `sets`, returning how many rows were written.
 ///
 /// Rows with a blank `code` are skipped: `code` is the primary key, and SQLite would
@@ -1600,5 +1630,40 @@ mod tests {
         drop(fresh);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&fresh_dir);
+    }
+
+    /// A write that cannot have the connection answers the one sentence, after spending the one
+    /// bound — and runs `f` when it can. Five copies of this helper agreed on that by accident
+    /// until 2026-08-16; now there is one and this is what holds it.
+    #[test]
+    fn with_write_answers_busy_rather_than_queueing_when_the_connection_is_held() {
+        let (state, dir) = file_state("with-write-busy", false);
+        let held = crate::db::lock_blocking(&state.db);
+
+        let start = std::time::Instant::now();
+        let answer: Result<(), String> = with_write(&state, |_| Ok(()));
+        let waited = start.elapsed();
+
+        assert_eq!(
+            answer.unwrap_err(),
+            crate::db::BUSY,
+            "a write that cannot have the connection answers the one sentence"
+        );
+        // It spent the bound rather than failing instantly or queueing forever.
+        assert!(
+            waited >= crate::db::WRITE_LOCK_WAIT,
+            "with_write must spend the whole bound before giving up, waited {waited:?}"
+        );
+        drop(held);
+
+        // And with the connection free it runs `f` and hands back its answer.
+        let answer = with_write(&state, |c| {
+            c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())
+        });
+        assert_eq!(answer.unwrap(), 1);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
