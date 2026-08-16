@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.9.0...v0.9.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* **decks:** draw the deck grid's tiles with the search wall's CardArt ([23d15d5](https://github.com/Msgaihede/mtg-grimoire/commit/23d15d5d88eeca3ff733c01d255e76c62b4c5734))
+* **decks:** draw the deck grid's tiles with the search wall's CardArt ([2f2af37](https://github.com/Msgaihede/mtg-grimoire/commit/2f2af3787c1e4913ac8267edb43826f79b461603))
+* **decks:** key the view restore on the deck, not on what it restores ([b707a73](https://github.com/Msgaihede/mtg-grimoire/commit/b707a735cc1c98e60cd7a0d49093b8625c8c0040))
+* **decks:** key the view restore on the deck, not on what it restores ([c3038b7](https://github.com/Msgaihede/mtg-grimoire/commit/c3038b7939fdca9be8289ffffc0b8d9169a37c97))
+
 ## [0.9.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.8.0...v0.9.0) (2026-08-15)
 
 
