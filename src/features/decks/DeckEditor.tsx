@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, Redo2, Trash2, Undo2 } from "lucide-react";
+import { ChevronLeft, Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
@@ -24,10 +20,8 @@ import {
   type DeckCategory,
   type DeckVariant,
 } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
-import { pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -50,7 +44,7 @@ import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { useDeckUndo } from "./useDeckUndo";
-import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
+import { dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "./export/ExportDialog";
 import {
   asGroupBy,
@@ -61,6 +55,7 @@ import {
 } from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { RenameField } from "./metaRows";
+import { PriceStrip } from "./PriceStrip";
 import { QuickAdd } from "./QuickAdd";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
@@ -696,20 +691,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const [renamingCategoryId, setRenamingCategoryId] = useState<number | null>(null);
 
-  /**
-   * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
-   * deck.
-   *
-   * Only ever a `deck-card` — `canMonitor` says so — and that is the whole reason this state
-   * exists: the remove tray is drawn from it, and a card being dragged *in* from the search
-   * panel has nothing to remove. It also keeps a panel drag from re-rendering this editor at
-   * all, which is what keeps the tiles' `draggable` registrations still under the reader's
-   * pointer while they drag one.
-   */
-  const [dragging, setDragging] = useState<DragPayload | null>(null);
-  /** Whether the card being dragged is over the tray, so the tray can say what letting go
-   *  would do. */
-  const [overTray, setOverTray] = useState(false);
+  /* There is no `dragging` state here any more, and its absence is the 2026-08-16 change stated
+     in one line: the editor used to run a `monitorForElements` of its own so the remove tray
+     could be drawn from it, which re-rendered this component — and with it all four views,
+     `DeckStats`, `ValidationPanel` and the docked panel — on every deck-card `dragstart` and
+     `drop`. {@link PriceStrip} owns that monitor now and re-renders itself instead, which is
+     `QuickZones`' argument applied to the other end of the same gesture. */
 
   /**
    * Which cards have just arrived, so the deck can point at them for five seconds.
@@ -748,7 +735,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
      any ref here could reach. */
   /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
   const dockRef = useRef<HTMLDivElement>(null);
-  const trayRef = useRef<HTMLDivElement>(null);
   /**
    * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
    * (2026-08-14).
@@ -1918,48 +1904,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [selectedCardId, setSelectedCardId],
   );
 
-  // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
-  // the deck's own cards: a tile dragged in from the panel is not something the tray can take,
-  // and a monitor that answered for it would re-render the panel — and with it the tile the
-  // reader has hold of — in the middle of the drag.
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => readDragData(source.data)?.kind === "deck-card",
-        onDragStart: ({ source }) => setDragging(readDragData(source.data)),
-        // Dropped, or cancelled with Escape: the platform's own way out of a drag ends in the
-        // same event, so the tray goes away either way without this view hearing a keypress.
-        onDrop: () => {
-          setDragging(null);
-          setOverTray(false);
-        },
-      }),
-    [],
-  );
-
-  // The tray, while it exists. Registered from an effect that re-runs when it mounts, because
-  // it only exists during a drag — a drop target added mid-drag is picked up on the next
-  // `dragover`, which is how a tray that appears on `dragstart` can be dropped on at all.
-  const trayShown = dragging !== null;
-  useEffect(() => {
-    const element = trayRef.current;
-    if (!element) return;
-    const writeFor = (data: Record<string, unknown>) => {
-      const payload = readDragData(data);
-      return payload && dropWrite(payload, { kind: "remove" });
-    };
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => writeFor(source.data) !== null,
-      onDragEnter: () => setOverTray(true),
-      onDragLeave: () => setOverTray(false),
-      onDrop: ({ source }) => {
-        setOverTray(false);
-        const write = writeFor(source.data);
-        if (write) applyDrop(write);
-      },
-    });
-  }, [trayShown, applyDrop]);
+  // The drag's two monitors and the remove tray's drop target are not here: `QuickZones` owns
+  // the one that answers for every drag and {@link PriceStrip} owns the one narrowed to the
+  // deck's own cards, each so that a `dragstart` re-renders that component rather than this one.
+  // What is left in this file is `applyDrop`, which is what a drop *writes* — one place a drag
+  // becomes a command, for all three of them.
 
   // A pile can be off the bottom of the window while a card is in the air over it — the stack's
   // piles wrap down rather than running off the right-hand edge, and the grid runs down too, so
@@ -2852,64 +2801,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* The strip under the deck. Spec §5: a price is never shown without saying how old it
-          is — once, here, rather than as a tooltip on every one of sixty cards. And, while a
-          card is in the air, the way out of the deck, drawn over it.
+      {/* The strip under the deck: how old these prices are (spec §5, said once here rather
+          than as a tooltip on every one of sixty cards) and, while a card is in the air, the
+          way out of the deck drawn over it.
 
-          **`sticky bottom-0` while a card is in the air, and only then** (2026-08-14). The deck
-          grows down the page now, so this strip — and the remove tray drawn on it — is at the
-          foot of however tall the deck is, which for a large one is a long way below the window.
-          The drag auto-scroll would carry the reader there eventually; a drop target that has to
-          be *travelled to* is not the same affordance as one that is simply there. Stuck to the
-          bottom of the page for the length of the drag, it is, and the tray keeps its exact
-          `-top-3` relationship to the strip because the strip is what moved. Out of a drag the
-          class is gone and the strip sits in the flow under the deck, which is where a line
-          saying how old the prices are belongs. */}
-      <div className={cn("relative shrink-0", dragging && "sticky bottom-0")}>
-        <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
-
-        {dragging && (
-          // The way out of a deck, for a hand that is already holding the card. It exists only
-          // while a card is in the air, and it takes the place of the price line rather than a
-          // place of its own: appearing in the flow would push every pile up by its own height
-          // at the exact moment the reader is aiming at one.
-          //
-          // **Exactly the strip and not a pixel more.** `-top-3` is the `gap-3` above this
-          // line, which is empty; the height is whatever the price line is. A tray taller than
-          // that overhangs the deck, and an overhang here is a drop aimed at a pile's last card
-          // that removes the card instead — the one mistake in this view with nothing to undo
-          // it.
-          //
-          // No transition on either state — it appears instantly and it answers instantly. An
-          // affordance that fades in during a drag is an affordance that is still arriving when
-          // the reader has let go.
-          //
-          // Destructive rather than gold: gold is where a card is *going*, and this is the one
-          // drop that takes something away. It names the card once it has it, because by then
-          // the platform's drag preview is the only other thing saying which card this is.
-          //
-          // `aria-hidden` like the drop line: this is chrome for a gesture only a pointer can
-          // make, and the click path it shortcuts — the stepper's zero — is the one a screen
-          // reader is given.
-          <div
-            ref={trayRef}
-            aria-hidden="true"
-            className={cn(
-              "absolute inset-x-0 -top-3 bottom-0 flex items-center justify-center gap-1.5",
-              "rounded-md border border-dashed text-xs",
-              // Above the popups rather than among them: a drag can start while a select is
-              // open, and this is the target the pointer is being carried to.
-              LAYER.dragTray,
-              overTray
-                ? "border-destructive/60 bg-destructive/10 text-destructive"
-                : "border-border bg-surface text-dim",
-            )}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            {overTray ? `Remove ${dragging.name} from deck` : "Remove from deck"}
-          </div>
-        )}
-      </div>
+          **A direct child of this column, and it has to be.** The tray inside it is `-top-3`
+          over the empty `gap-3` above this line, so the gap it reaches back into is this
+          column's — one box further in and the number would be measuring nothing. It owns its
+          own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
+          this file any more: see {@link PriceStrip}. */}
+      <PriceStrip marketplace={marketplace} onDrop={applyDrop} />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last thing under the deck.
