@@ -21,7 +21,7 @@ import type { MenuItem } from "@/components/menu/types";
 import { ipcError, type DeckFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { folderPaths } from "./DeckSettingsForm";
-import { folderDescendants } from "./FolderTree";
+import { folderDescendants } from "./folders";
 import { useDeckFolders } from "./useDeckFolders";
 
 /**

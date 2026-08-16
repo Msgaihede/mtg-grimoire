@@ -38,7 +38,7 @@ import {
 } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
-import { buildFolderTree, type FolderNode } from "@/features/decks/FolderTree";
+import { buildFolderTree, type FolderNode } from "@/features/decks/folders";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
