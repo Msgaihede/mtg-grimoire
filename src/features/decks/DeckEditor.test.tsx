@@ -2820,6 +2820,42 @@ describe("DeckEditor", () => {
     expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
   });
 
+  /**
+   * **The two cached rows can name each other's tab, and the restore must not chase that.**
+   *
+   * Each list is its own query key, so each holds its *own* snapshot of the one deck row — and
+   * `rememberView` writes `last_variant` without invalidating either, so a `deck_get` that
+   * raced the write comes back carrying the tab the reader has just left. Two snapshots that
+   * each name the other tab used to be an editor that could not settle: the restore moved the
+   * variant, the variant moved which snapshot the restore read, and that snapshot asked for the
+   * move back. React counts nested renders and throws **"Too many re-renders"**, and there is no
+   * error boundary above this component — so the whole window went blank.
+   *
+   * Reproduced in the shipped window on 2026-08-16 (`npm run tauri dev`, a **debug** build):
+   * pressing the two tabs at ~40 ms intervals took the app down in three presses, with
+   * `Uncaught Error: Too many re-renders` naming `<DeckEditor>` in the console, and a patched
+   * `ipc.deckGet` caught a `live` read answering `lastVariant: "theory"` 20 ms after the
+   * `deck_set_view_state` that had just asked for `live`. Feeding the crossed pair in
+   * deliberately — this test — took it down on the way in, with no press at all.
+   */
+  it("survives two cached rows that name each other's tab", async () => {
+    const live = detail({ theoryEnabled: true, lastVariant: "theory" }, [bolt({ quantity: 4 })]);
+    const theory = detail({ theoryEnabled: true, lastVariant: "live" }, [
+      bolt({ quantity: 2, variant: "theory" }),
+    ]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+
+    await open();
+
+    await screen.findByRole("group", { name: "Deck list" });
+    // It settles, and on the tab the row it opened with asked for. The other row's answer is
+    // read by nothing: a restore is honoured once per deck and switch, never once per value.
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+    expect(tab("Live")).toHaveAttribute("aria-pressed", "false");
+  });
+
   /** The one write on the stats aside, end to end: what the deck is short of becomes wishes,
    *  and the aside says how many in words. */
   it("sends what the deck is missing to the wishlist", async () => {

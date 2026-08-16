@@ -825,6 +825,20 @@ price | type`). An **inactive category stays its own group in all three grouping
   are this layer's words, so `asGroupBy` (`grouping.ts`) and `asSortBy` (`sorting.ts`) narrow
   them on read and fall back to the default — a stored word nothing offers reopens the editor on
   `category`/`alphabetical` rather than in a state no control can draw.
+- **The restore is honoured once per _deck and switch_ — never once per stored value, and the
+  difference is a crash** (fixed 2026-08-16). `DeckEditor`'s render-phase restore keys on
+  `${deckId}:${theoryEnabled}`, which is the pair of things that genuinely ask _where should the
+  reader be_: the deck being opened, and the theory switch being turned on, which leaves
+  `last_variant` at `theory` because that write moves the cards there. It used to key on the
+  stored **triple**, and that marker held a value the restore's own `setVariant` could change —
+  the variant decides which query's row `row` is, **each list caches its own snapshot of the one
+  deck row**, and two snapshots naming each other's tab are `setVariant` → different row →
+  `setVariant` back until React throws **"Too many re-renders"**. There is no error boundary
+  anywhere in this app, so that is the window going blank; switching the tabs at 40 ms intervals
+  did it in three presses. **The two snapshots really do disagree and nothing at the write end
+  fixes that** — see the bullet below for why `rememberView` must not invalidate, and
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) for the read caught
+  answering the old tab mid-write. A marker the restore cannot move is the whole fix.
 - **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
   interesting part.** The editor is already showing what the reader picked; this write only makes
   it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
