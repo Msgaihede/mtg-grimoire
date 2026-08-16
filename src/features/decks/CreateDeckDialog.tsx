@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useState, type JSX } from "react";
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckInput, type DeckRow } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
-import { dialog as dialogMotion, scrim } from "@/lib/motion";
-import { trapTab } from "@/lib/trapTab";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY } from "./autoCategory";
+import { DeckDialog } from "./DeckDialog";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
 import { useDeckFolders } from "./useDeckFolders";
@@ -23,9 +18,9 @@ import type { Decks } from "./useDecks";
  *
  * `formatKey` is {@link DEFAULT_FORMAT} so the constant is honest read on its own: it is
  * `decks.format_key`'s own DDL default, and a deck that has been given no format really is
- * Casual. But it is the *fallback* rather than the answer — {@link Panel} always overwrites it
- * with the `defaultFormatKey` its host resolved, which is the format the reader last created a
- * deck in. Nothing in this file leaves the value as it is written here.
+ * Casual. But it is the *fallback* rather than the answer — {@link CreateDeckBody} always
+ * overwrites it with the `defaultFormatKey` its host resolved, which is the format the reader
+ * last created a deck in. Nothing in this file leaves the value as it is written here.
  */
 const BLANK: DeckSettingsValue = {
   name: "",
@@ -96,12 +91,12 @@ export interface CreateDeckDialogProps {
    * The format the draft starts on — the one the reader last created a deck in, else Commander.
    *
    * **Required, and resolved by the host rather than here.** The gallery is mounted long before
-   * this dialog is opened, so its answer is a real value by the time {@link Panel} mounts and
-   * can be read straight into the draft's initial state. A read of this component's own would
-   * arrive a beat *after* the first paint, which means overwriting a select the reader may
-   * already have used — and no `useEffect` can tell "the answer landed" from "the reader has
-   * not touched it yet". Making it required is what keeps that guarantee: a host that has not
-   * thought about the question cannot quietly get Casual.
+   * this dialog is opened, so its answer is a real value by the time {@link CreateDeckBody}
+   * mounts and can be read straight into the draft's initial state. A read of this component's
+   * own would arrive a beat *after* the first paint, which means overwriting a select the
+   * reader may already have used — and no `useEffect` can tell "the answer landed" from "the
+   * reader has not touched it yet". Making it required is what keeps that guarantee: a host that
+   * has not thought about the question cannot quietly get Casual.
    */
   defaultFormatKey: string;
   /**
@@ -121,10 +116,11 @@ export interface CreateDeckDialogProps {
    */
   defaultFolderId?: number | null;
   /**
-   * **A mount, not a class**, exactly as `TheoryDiffDialog`'s is: everything with state — the
-   * half-typed name, the picked format, the chosen cover, the caret — lives one component down,
-   * so closing unmounts all of it and reopening starts a genuinely new question rather than one
-   * somebody has to remember to clear.
+   * **A mount, not a class**, and it is {@link DeckDialog}'s guarantee rather than this file's:
+   * everything with state — the half-typed name, the picked format, the chosen cover, the caret
+   * — lives in {@link CreateDeckBody}, which the shell renders only while this is true. Closing
+   * unmounts all of it and reopening starts a genuinely new question rather than one somebody
+   * has to remember to clear.
    */
   open: boolean;
   /** The deck the write answered with. The gallery opens it — nobody makes a deck in order to
@@ -132,15 +128,15 @@ export interface CreateDeckDialogProps {
   onCreated: (deck: DeckRow) => void;
   /**
    * Escape, the header's ✕ and the trigger pressed again: close, and hand the caret back to
-   * whatever opened this.
+   * whatever opened this. Handed straight to {@link DeckDialog}, which owns both rungs.
    *
-   * **Stability is a courtesy here now, not a requirement.** This said "{@link
-   * useDismissOnEscape} takes it as a dependency, so a function rebuilt on every render of the
-   * opener re-registers the window listener just as often" — the hook latches it in a ref and
-   * depends only on `enabled` and `layer`. It made that change for a correctness reason worth
-   * knowing: once the hook kept a stack, a re-registration popped this layer's token and pushed a
-   * new one **on top** of whatever had been opened over it, so the next Escape closed the wrong
-   * window. An unstable one now costs a re-render and nothing else.
+   * **Stability is a courtesy here now, not a requirement.** This said "`useDismissOnEscape`
+   * takes it as a dependency, so a function rebuilt on every render of the opener re-registers
+   * the window listener just as often" — the hook latches it in a ref and depends only on
+   * `enabled` and `layer`. It made that change for a correctness reason worth knowing: once the
+   * hook kept a stack, a re-registration popped this layer's token and pushed a new one **on
+   * top** of whatever had been opened over it, so the next Escape closed the wrong window. An
+   * unstable one now costs a re-render and nothing else.
    */
   onDismiss: () => void;
   /**
@@ -172,19 +168,26 @@ export interface CreateDeckDialogProps {
  * so Tab cannot walk out into a gallery the reader is not looking at; and the surface is
  * `fixed` rather than `absolute`, so it cannot hang off the right of the window.
  *
+ * **The chrome is {@link DeckDialog}'s and no longer this file's** (2026-08-16). The scrim, the
+ * `LAYER.overlay` rung, `aria-modal`, `trapTab`, the Escape registration on the *flag* and the
+ * titled header with its ✕ were a hand-copy of that shell, and a copy is a second decision that
+ * happens to agree today: this file's scrim and the shell's were already byte-identical, while
+ * the ✕ underneath them had drifted to a second geometry and a second speed. What is left here
+ * is the question the dialog asks — see {@link CreateDeckBody}.
+ *
  * **Not portalled, and `fixed` — so where it is mounted matters.** Nothing in this app is
  * portalled (the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects
  * a runtime `<style>`). A `fixed` element is positioned against the viewport *unless* an
  * ancestor carries a `transform`, `filter` or `contain`, any of which makes that ancestor the
  * containing block instead — the gallery's heading row carries none, which is what lets this
  * stay inside `NewDeck` beside the button it belongs to, at 55rem as it did at 24rem. The
- * `Import deck` dialog is mounted in the same row and is the standing proof.
+ * `Import deck` dialog is mounted in the same row and is the standing proof. The shell's panel
+ * is `fixed` for the same reason and inherits the same condition.
  *
- * **The Escape rung is registered up here, on the flag.** With an exit animation the panel
- * outlives `open` by the length of its fade, so a rung that came up with the *element* would
- * still be consuming Escape while the next layer was opening — and two `"inner"` peers are not
- * ordered by that protocol at all. For the same reason `DecksPage`'s own rung excludes this
- * panel: one layer, one rung.
+ * **The Escape rung is registered on the flag**, which is the shell's own guarantee: with an
+ * exit animation the panel outlives `open` by the length of its fade, so a rung that came up
+ * with the *element* would still be consuming Escape while the next layer was opening. For the
+ * same reason `DecksPage`'s own rung excludes this panel: one layer, one rung.
  */
 export function CreateDeckDialog({
   create,
@@ -195,30 +198,37 @@ export function CreateDeckDialog({
   onDismiss,
   onClose,
 }: CreateDeckDialogProps): JSX.Element {
-  // `useCallback`, because `onDismiss` is a dependency of the hook's effect and an unstable one
-  // re-registers the window listener on every render of the gallery.
-  const dismiss = useCallback(() => onDismiss(), [onDismiss]);
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
-
+  // `<CreateDeckBody/>` here is an *element*, not a call: React renders it only where the shell
+  // puts it in the tree, which is inside the shell's `open &&`. So a closed dialog costs no
+  // draft, no folder read and no format read — `DeckSettingsDialog`'s arrangement, for
+  // `DeckSettingsDialog`'s reason.
   return (
-    <AnimatePresence>
-      {open && (
-        <Panel
-          key="create-deck"
-          create={create}
-          defaultFormatKey={defaultFormatKey}
-          defaultFolderId={defaultFolderId}
-          onCreated={onCreated}
-          onDismiss={onDismiss}
-          onClose={onClose}
-        />
-      )}
-    </AnimatePresence>
+    <DeckDialog
+      open={open}
+      title="New deck"
+      closeLabel="Close"
+      width="w-[55rem]"
+      onDismiss={onDismiss}
+      onClose={onClose}
+    >
+      <CreateDeckBody
+        create={create}
+        defaultFormatKey={defaultFormatKey}
+        defaultFolderId={defaultFolderId}
+        onCreated={onCreated}
+      />
+    </DeckDialog>
   );
 }
 
 /**
- * The dialog itself, mounted only while it is open — see {@link CreateDeckDialog}.
+ * The question the dialog asks — mounted only while it is open, which is
+ * {@link DeckDialog}'s guarantee and what makes every draft below a session rather than
+ * something an effect has to clear.
+ *
+ * It is the shell's `children`, so it renders inside the same `AnimatePresence` child the panel
+ * does and is a flex item of the panel: the scroller and the footer below are the two boxes
+ * under the shell's header.
  *
  * ## One draft, and nothing written until **Create deck**
  *
@@ -245,7 +255,7 @@ export function CreateDeckDialog({
  * created must be neither lost nor duplicated**: losing it would mean a refused *picture*
  * silently discarding a deck the database really has, and duplicating it is what a second press
  * of a button still saying "Create deck" would do. So the deck is held, the control is renamed
- * to what pressing it now does, and {@link Panel}'s submit opens it instead of writing again.
+ * to what pressing it now does, and {@link CreateDeckBody}'s submit opens it instead of writing again.
  * `made` is set **only** on the upload's refusal, which is what keeps the label honest while
  * the upload is still in flight.
  *
@@ -256,7 +266,7 @@ export function CreateDeckDialog({
  * is shown — `DeckRow.coverArtist`'s own ruling, which the gallery tile makes too. That name is
  * a `LEFT JOIN cards` the backend does on the way out of a deck read, and there is no deck here
  * to read; `CardSummary` carries no `artist` either, and widening `search.rs` for a picker's
- * thumbnails is ruled out. So **this host asks for the card** — see {@link Panel}'s `artist`
+ * thumbnails is ruled out. So **this host asks for the card** — see {@link CreateDeckBody}'s `artist`
  * query — because it is the surface that knows it has no row to read the name off.
  *
  * The refusal itself is not weakened anywhere. While the read is in flight the preview says
@@ -264,21 +274,19 @@ export function CreateDeckDialog({
  * feedback, and a printing whose artist genuinely cannot be found is still drawn as nothing.
  * The credit arrives **with** the picture and never before it.
  */
-function Panel({
+function CreateDeckBody({
   create,
   defaultFormatKey,
   defaultFolderId = null,
   onCreated,
-  onDismiss,
-  onClose,
-}: Omit<CreateDeckDialogProps, "open">) {
+}: Omit<CreateDeckDialogProps, "open" | "onDismiss" | "onClose">) {
   /**
    * The draft, seeded with the format the host resolved.
    *
    * **A lazy initializer, and mount-only by construction.** There is no effect anywhere here
    * that could land on top of a format the reader has already picked — the question is asked
-   * once, when the panel mounts, and the answer is theirs from that moment. That is safe
-   * *because* {@link CreateDeckDialog} renders this only while it is open: closing unmounts the
+   * once, when the body mounts, and the answer is theirs from that moment. That is safe
+   * *because* {@link DeckDialog} renders this only while it is open: closing unmounts the
    * whole draft, so every reopen asks again and gets the freshly invalidated answer rather than
    * a value cached from the last deck the reader started and abandoned.
    */
@@ -297,15 +305,14 @@ function Panel({
   const [coverCardId, setCoverCardId] = useState<string | null>(null);
   /** A path the file picker answered with, held until there is a deck id to upload it against. */
   const [file, setFile] = useState<string | null>(null);
-  /** The deck, once it exists **and its picture did not save**. See {@link Panel}'s doc. */
+  /** The deck, once it exists **and its picture did not save**. See {@link CreateDeckBody}'s
+   *  doc. */
   const [made, setMade] = useState<DeckRow | null>(null);
 
   const { specs } = useFormatSpecs();
   const folders = useDeckFolders();
   const queryClient = useQueryClient();
   const id = useId();
-  /** False from the render that starts the fade out. */
-  const present = useIsPresent();
 
   /**
    * The follow-up write, and the only one this component owns.
@@ -408,7 +415,7 @@ function Panel({
         // The row the *upload* answered with, not the one the create did: it is the deck as the
         // gallery would now read it, `coverKind` already `custom`.
         onSuccess: (withCover) => onCreated(withCover),
-        // Hold the deck. This is the state {@link Panel}'s doc is about, and setting `made`
+        // Hold the deck. This is the state {@link CreateDeckBody}'s doc is about, and setting `made`
         // here — on the refusal alone — is what keeps the control saying "Create deck" while
         // the upload is still running.
         onError: () => setMade(deck),
@@ -451,165 +458,103 @@ function Panel({
   };
 
   return (
-    // Scrim and panel in one presence: the ground darkens first and the panel scales up over
-    // it, and the dialog is unmounted only once the later of the two tweens has finished.
-    //
-    // `LAYER.overlay` is the rung every full-window surface in this app shares. The number is
-    // deliberately not written out here, in prose or anywhere else: Tailwind's scanner reads a
-    // comment as eagerly as it reads code, so naming the class in a sentence emits a rule for
-    // it — and `layers.test.ts`' sweep counts that as a second place the scale is written.
-    <motion.div
-      {...scrim}
-      className={cn(
-        "fixed inset-0 grid place-items-center bg-bg/75 p-4 sm:p-6",
-        !present && "pointer-events-none",
-        LAYER.overlay,
-      )}
-      // On the way out it is a picture: nothing to press, and nothing in the accessibility
-      // tree. Focus left with the flag.
-      aria-hidden={present ? undefined : true}
-      // A press on the scrim and nowhere else. `onMouseDown` rather than `onClick`, because a
-      // click fires on the nearest common ancestor of press and release — so a drag that starts
-      // on the notes textarea and ends past the panel's edge is a "click" on the scrim, and the
-      // dialog would vanish under a reader who was selecting the words they had just typed.
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <motion.div
-        {...dialogMotion}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        // Labelled **by the heading**, not by an `aria-label` beside it: the words are on
-        // screen, so there is nothing for a second copy to drift from.
-        aria-labelledby={`${id}-title`}
-        // The caret stays inside, which is what makes the `aria-modal` above true rather than
-        // merely claimed — see {@link trapTab}. Registered on the panel, which is where that
-        // helper reads it from.
-        onKeyDown={trapTab}
-        className={cn(
-          "flex max-h-full w-[55rem] max-w-full flex-col rounded-xl border border-border",
-          "bg-bg shadow-2xl",
-          FOCUS,
-        )}
-      >
-        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
-          <h2 id={`${id}-title`} className="min-w-0 flex-1 font-heading text-xl leading-none">
-            New deck
-          </h2>
-          <button
-            type="button"
-            // The ✕ is the reader saying "put me back", exactly as Escape is — so it hands the
-            // caret over rather than dropping it where the dialog used to be.
-            onClick={onDismiss}
-            aria-label="Close"
-            className={cn(
-              "-mr-1 grid size-7 shrink-0 place-items-center rounded-md text-dim",
-              "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
-              "motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </header>
+    // The shell's header sits above these two, and the panel around them is the `flex flex-col`
+    // that makes the scroller work — see {@link DeckDialog}.
+    <>
+      {/* Not a `<form>`, and that is a decision rather than an omission — but Enter still
+          makes the deck. Implicit submission fires from *any* single-line input in a form,
+          and this panel holds two of them: the name, where Enter means "that is the answer",
+          and the cover picker's search box, where it means "I have finished typing a card
+          name" and must never mean "make the deck". A form cannot tell those apart, so the
+          key is decided per field instead: `DeckSettingsForm` calls `onSubmit` from the name
+          and the picker prevents it in the search box. Enter or Space on the focused button
+          reaches the same `submit`, which is where the blank-name refusal lives. */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <DeckSettingsForm
+          value={value}
+          onChange={onChange}
+          // Enter in the Name field, and the same function the button calls — so the three
+          // guards below (a write in flight, a deck already made, a blank name) refuse a
+          // keyboard press exactly as they refuse a pointer's.
+          onSubmit={submit}
+          formats={formats}
+          folders={{
+            paths,
+            unread: folders.query.isError ? ipcError(folders.query.error) : null,
+            loading: folders.query.isPending,
+            // Nothing is filing anything: a deck that does not exist cannot be moved, so the
+            // select is only ever waiting on the *read*.
+            pending: false,
+          }}
+          cover={{
+            coverCardId,
+            // The DDL default, and not settable at create — a picked card *is* card art, and
+            // a custom picture becomes `custom` through the upload below.
+            coverKind: "card_art",
+            // Fetched, because there is no `DeckRow` to read it off — see the `artist` query
+            // above. `null` until it lands, and `null` if it cannot be found, which is the
+            // preview's own ruling either way: an `art` crop this app cannot credit is not
+            // drawn at all.
+            coverArtist: artist.data?.artist ?? null,
+            // No deck id, so no `/cover/<deckId>` route for a custom picture to be served at.
+            customCoverUrl: null,
+            // A deck being made has none. The picker's own empty state says exactly that, and
+            // its search box is what does the work here.
+            deckCards: [],
+            onPickCard: setCoverCardId,
+            onPickFile: setFile,
+            pendingFileName: file === null ? null : basename(file),
+            // The re-encode running — and one state more, which that button's own doc already
+            // covers: "a second press does nothing useful". Once the deck exists this surface
+            // is finished writing, so a file chosen now would never be applied by it.
+            uploading: setCover.isPending || made !== null,
+            idPrefix: id,
+          }}
+          idPrefix={id}
+        />
+      </div>
 
-        {/* Not a `<form>`, and that is a decision rather than an omission — but Enter still
-            makes the deck. Implicit submission fires from *any* single-line input in a form,
-            and this panel holds two of them: the name, where Enter means "that is the answer",
-            and the cover picker's search box, where it means "I have finished typing a card
-            name" and must never mean "make the deck". A form cannot tell those apart, so the
-            key is decided per field instead: `DeckSettingsForm` calls `onSubmit` from the name
-            and the picker prevents it in the search box. Enter or Space on the focused button
-            reaches the same `submit`, which is where the blank-name refusal lives. */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <DeckSettingsForm
-            value={value}
-            onChange={onChange}
-            // Enter in the Name field, and the same function the button calls — so the three
-            // guards below (a write in flight, a deck already made, a blank name) refuse a
-            // keyboard press exactly as they refuse a pointer's.
-            onSubmit={submit}
-            formats={formats}
-            folders={{
-              paths,
-              unread: folders.query.isError ? ipcError(folders.query.error) : null,
-              loading: folders.query.isPending,
-              // Nothing is filing anything: a deck that does not exist cannot be moved, so the
-              // select is only ever waiting on the *read*.
-              pending: false,
-            }}
-            cover={{
-              coverCardId,
-              // The DDL default, and not settable at create — a picked card *is* card art, and
-              // a custom picture becomes `custom` through the upload below.
-              coverKind: "card_art",
-              // Fetched, because there is no `DeckRow` to read it off — see the `artist` query
-              // above. `null` until it lands, and `null` if it cannot be found, which is the
-              // preview's own ruling either way: an `art` crop this app cannot credit is not
-              // drawn at all.
-              coverArtist: artist.data?.artist ?? null,
-              // No deck id, so no `/cover/<deckId>` route for a custom picture to be served at.
-              customCoverUrl: null,
-              // A deck being made has none. The picker's own empty state says exactly that, and
-              // its search box is what does the work here.
-              deckCards: [],
-              onPickCard: setCoverCardId,
-              onPickFile: setFile,
-              pendingFileName: file === null ? null : basename(file),
-              // The re-encode running — and one state more, which that button's own doc already
-              // covers: "a second press does nothing useful". Once the deck exists this surface
-              // is finished writing, so a file chosen now would never be applied by it.
-              uploading: setCover.isPending || made !== null,
-              idPrefix: id,
-            }}
-            idPrefix={id}
-          />
-        </div>
-
-        <footer className="flex items-center gap-4 border-t border-border px-5 py-4">
-          {/* One line, and at most one of the two can be true: a refused create leaves no deck
+      <footer className="flex items-center gap-4 border-t border-border px-5 py-4">
+        {/* One line, and at most one of the two can be true: a refused create leaves no deck
               to have failed to picture. It sits in a row that already has the button's height,
               so it grows nothing when it appears and needs no tween. */}
-          {createFailure !== null && (
-            <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
-              Could not create the deck — {createFailure}
-            </p>
-          )}
-          {coverFailure !== null && (
-            <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
-              The deck was made, but its picture could not be saved — {coverFailure}
-            </p>
-          )}
+        {createFailure !== null && (
+          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
+            Could not create the deck — {createFailure}
+          </p>
+        )}
+        {coverFailure !== null && (
+          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
+            The deck was made, but its picture could not be saved — {coverFailure}
+          </p>
+        )}
 
-          <button
-            type="button"
-            // `aria-disabled`, never the attribute: a control that greys as the reader types
-            // must stay in the tab order, and the caret it would have thrown away on the press
-            // that started a write has to have somewhere to come back to. It also keeps the
-            // trap's cycle the same length whatever the name field holds. The refusal itself is
-            // `submit`'s, which is what makes the two halves one rule.
-            aria-disabled={made === null && (!trimmed || busy) ? true : undefined}
-            onClick={submit}
-            className={cn(
-              "ml-auto h-9 shrink-0 rounded-md border border-accent px-4 text-sm text-accent",
-              "transition-colors duration-[var(--duration-fast)] ease-standard",
-              "hover:bg-accent hover:text-accent-foreground",
-              "aria-disabled:opacity-40 aria-disabled:hover:bg-transparent",
-              "aria-disabled:hover:text-accent",
-              "motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            {/* The verb keeps its name through the flow, so the control that says "Create
+        <button
+          type="button"
+          // `aria-disabled`, never the attribute: a control that greys as the reader types
+          // must stay in the tab order, and the caret it would have thrown away on the press
+          // that started a write has to have somewhere to come back to. It also keeps the
+          // trap's cycle the same length whatever the name field holds. The refusal itself is
+          // `submit`'s, which is what makes the two halves one rule.
+          aria-disabled={made === null && (!trimmed || busy) ? true : undefined}
+          onClick={submit}
+          className={cn(
+            "ml-auto h-9 shrink-0 rounded-md border border-accent px-4 text-sm text-accent",
+            "transition-colors duration-[var(--duration-fast)] ease-standard",
+            "hover:bg-accent hover:text-accent-foreground",
+            "aria-disabled:opacity-40 aria-disabled:hover:bg-transparent",
+            "aria-disabled:hover:text-accent",
+            "motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          {/* The verb keeps its name through the flow, so the control that says "Create
                 deck" is the one whose press opens the deck it created — except in the one state
                 where the deck already exists, where saying "Create deck" would be an offer to
                 make a second one. */}
-            {made === null ? "Create deck" : "Open deck"}
-          </button>
-        </footer>
-      </motion.div>
-    </motion.div>
+          {made === null ? "Create deck" : "Open deck"}
+        </button>
+      </footer>
+    </>
   );
 }
