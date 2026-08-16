@@ -473,3 +473,39 @@ Six radios in `EXPORT_FORMATS` order — `Plain text · MTGO · Arena · Moxfiel
   categories, and read **`cardCount` 100 over 105 rows** with both maybeboards off — every number
   identical to the original import. `decklists.test.ts` pins the same trip as a fixed point; this
   is that claim made against the real corpus and the real database.
+
+## Switching Live and Theory took the app down — 2026-08-16, `npm run tauri dev` (debug), 1280×800
+
+Driven from `d0bd45b` on a real deck with a plan (6 live rows, 1 theory row), reported by the
+reader as "it doesn't always happen, but switching back and forth a few times in a row will
+usually cause it". It is the first crash in this file, and it is the one shape of defect the
+suite structurally could not see: **there is no error boundary anywhere in this app**, so a throw
+in a render is the whole window going blank, and jsdom never assembled the state that throws.
+
+- **Reproduced in three presses.** Alternating the two tabs at **40 ms** intervals killed the tree
+  on the fourth click; the same loop at **120 ms** survived 16 presses, and hand-paced clicks
+  through `cdp.mjs` (~500 ms apart) survived 12. `document.getElementById('root').childElementCount`
+  is the cheap tell — **0** where a living app reads 1.
+- **The console named it exactly**: `Uncaught Error: Too many re-renders. React limits the number
+  of renders to prevent an infinite loop.`, followed by React's own
+  _"An error occurred in the `<DeckEditor>` component. Consider adding an error boundary…"_.
+- **The cause is two cached snapshots of one row.** Each list is its own query key, so `deck_get`
+  is cached per variant and each answer carries its own copy of the deck row — including
+  `lastVariant`. `rememberView` writes that column **without invalidating**, so the two copies
+  drift, and a `["decks"]` invalidation re-reads them over **two** round trips: a
+  `deck_set_view_state` committing between the two leaves one snapshot on each side.
+  `ipc.deckGet` patched in the running window caught the drift directly — a **`live`** read
+  answering `lastVariant: "theory"` while the `set` for `live` was still in flight, the two reads
+  issued in the same millisecond with the write between them.
+- **The restore then chased itself.** `DeckEditor`'s render-phase restore was honoured once per
+  stored *triple* — a marker built from `row.lastVariant` — and the variant decides which
+  snapshot `row` is. Two snapshots naming each other's tab is `setVariant` → different row →
+  `setVariant` back, forever.
+- **Proved by forcing it.** With `ipc.deckGet` patched to answer `lastVariant: "theory"` for the
+  `live` read and `"live"` for the `theory` read, merely **opening** the deck took the window
+  down — no press at all. That is the state `DeckEditor.test.tsx`'s "survives two cached rows that
+  name each other's tab" feeds in, and it fails on the old code with the same React error.
+- **After the fix** (the restore keyed on the deck and the theory switch, never on a stored
+  value): the forced crossed pair opens alive and settles on Theory in one move; **320 presses at
+  35 ms** across eight bursts, plus 16 real Chromium clicks, left `root` at 1, the pressed tab
+  `aria-pressed="true"` every time, and **zero** console errors.
