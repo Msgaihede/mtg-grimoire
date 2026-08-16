@@ -57,15 +57,24 @@ import {
   dropTargetForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { ToggleChip } from "@/components/FilterChips";
+import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
-import { FOCUS } from "./cardControl";
 import { DeckDialog } from "./DeckDialog";
 import type { CardGroup } from "./grouping";
-import { META_FIELD, META_SUBMIT, RenameField, RowAction, sectionFailure } from "./metaRows";
+import {
+  CONFIRM_CANCEL,
+  CONFIRM_DESTRUCTIVE,
+  META_FIELD,
+  META_SUBMIT,
+  RenameField,
+  RowAction,
+  sectionFailure,
+  useConfirmFocus,
+} from "./metaRows";
 import { useDeck } from "./useDeck";
 import { useDeckMeta, type DeckMeta } from "./useDeckMeta";
 import { GroupHeader } from "./views/GroupHeader";
@@ -546,6 +555,28 @@ function CategoryRow({
 }
 
 /**
+ * `DeleteCategory`'s confirm button on the arm that **moves** the cards somewhere: an ordinary
+ * affirmative, because that press destroys nothing.
+ *
+ * It stays in this file rather than joining {@link CONFIRM_DESTRUCTIVE} in `metaRows.tsx` for two
+ * reasons, and the second is the stronger. It is one control's second state rather than a shape
+ * three sites share — the clear and the tag delete have no such arm. And the state is **live**:
+ * the reader flips between the two by working the picker above it, so this is not a variant a
+ * site picks once at build time.
+ *
+ * **Above `DeleteCategory`'s own doc rather than between it and the component.** TSDoc attaches a
+ * block to the nearest declaration *after* it, so slipping a `const` in between orphaned the
+ * component's 27 lines — hovering `DeleteCategory` showed nothing at all — and the sentence that
+ * went dark was the `cardCountAllVariants` rule this file's one prohibition exists to protect.
+ */
+const CONFIRM_MOVING = cn(
+  "rounded-md border px-2 py-1 text-xs",
+  "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
+  "border-border text-text hover:border-accent hover:text-accent",
+  FOCUS,
+);
+
+/**
  * Delete a pile, and say which of the two things is about to happen.
  *
  * **This is the one destructive control on this dialog, and the destruction is optional** —
@@ -593,7 +624,6 @@ export function DeleteCategory({
     // cards. Reaching the destructive one takes a deliberate pick.
     others.length > 0 ? String(others[0].id) : "delete",
   );
-  const ref = useRef<HTMLDivElement>(null);
 
   // The caret moves into the question, as it does for every other layer in this app
   // (`DecksPage`'s `DeleteConfirm`, `FolderTree`'s, both of the deck's meta dialogs). **The
@@ -601,10 +631,9 @@ export function DeleteCategory({
   // disables — so without this the caret is on `<body>` and the next Tab restarts at the top of
   // the document, which is the bug commit `10761c1` fixed for `RenameField`, now in
   // `metaRows.tsx`. The question's own box and not a button in it: the reader has not decided
-  // yet, and a stray Enter must not decide for them.
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
+  // yet, and a stray Enter must not decide for them. That reason is this site's own — the hook
+  // carries the mechanism, each site carries why it needs it.
+  const confirm = useConfirmFocus(`Delete ${category.name}`);
   // Both lists, because both go. See this component's doc.
   const cards = category.cardCountAllVariants;
   const count = `${cards} ${cards === 1 ? "card" : "cards"}`;
@@ -627,13 +656,7 @@ export function DeleteCategory({
   const losing = cards > 0 && moveTo === null;
 
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      role="group"
-      aria-label={`Delete ${category.name}`}
-      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
-    >
+    <div {...confirm}>
       <p className="text-xs">Delete “{category.name}”?</p>
 
       {choosing && (
@@ -692,26 +715,11 @@ export function DeleteCategory({
               { onSuccess: onDeleted },
             )
           }
-          className={cn(
-            "rounded-md border px-2 py-1 text-xs",
-            "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
-            losing
-              ? "border-destructive text-destructive hover:bg-destructive hover:text-bg"
-              : "border-border text-text hover:border-accent hover:text-accent",
-            FOCUS,
-          )}
+          className={losing ? CONFIRM_DESTRUCTIVE : CONFIRM_MOVING}
         >
           {moveTo === null ? `Delete “${category.name}”` : `Move ${count} and delete`}
         </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "rounded-md border border-border px-2 py-1 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
           Keep it
         </button>
       </div>

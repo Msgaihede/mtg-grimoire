@@ -1,28 +1,29 @@
 import { Check, RefreshCw } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
 import { useId } from "react";
 import { FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { MARKETPLACE_LIST, type Currency, type Marketplace } from "@/lib/marketplace";
-import { statusLine } from "@/lib/motion";
+import { PRESS_SOFT } from "@/lib/motion";
+import { ago } from "@/lib/relativeTime";
 import { nowSeconds, type FeedInfo, type FeedState, type MarketplaceState } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
  * One row of the picker — the app's existing "on / off / out of reach" control, laid out down
  * the page instead of along a filter row.
  *
- * The property list is spelled out for `FILTER_CONTROL`'s reason: a colour utility and a
- * transform one compile to the same CSS longhand and tailwind-merge would keep only one of
- * them. `scale` is named beside `transform` because Tailwind v4's `scale-*` writes the `scale`
- * longhand, and a transition list that does not name it makes the press snap. `0.99` rather
- * than the chips' `0.97`: this control is the width of the panel, and a full-width row that
- * dips 3% reads as the page moving.
+ * The press is {@link PRESS_SOFT} — the app's recipe at 0.99 rather than the chips' 0.97,
+ * because this control is the width of the panel and a full-width row that dips 3% reads as
+ * the page moving. That argument, and the two reasons the property list is written out one
+ * longhand at a time, now live on the constant in `lib/motion.ts`.
+ *
+ * `aria-disabled:` and not the attribute: a marketplace whose feed is fetching greys as the
+ * reader watches and must not leave the tab order.
  */
 const ROW =
   "flex w-full items-start gap-3 rounded-md border px-3 py-2 text-left text-sm " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.99] " +
-  "aria-disabled:active:scale-100 motion-reduce:transition-none";
+  `${PRESS_SOFT} ` +
+  "aria-disabled:active:scale-100";
 
 /**
  * The currency beside the name, in the app's third type role.
@@ -54,22 +55,15 @@ function noFeedNote(marketplace: Marketplace): string {
  * Coarse on purpose: this line is read to answer "are these prices current", and a feed that
  * regenerates once a day cannot be usefully described to the minute. Below a minute it says
  * `just now`, because a fetch that has this moment finished is what the reader is watching.
+ *
+ * That argument is `lib/relativeTime`'s rule now — this was the one of the page's three
+ * relative times that already floored, so the other two were moved onto it rather than the
+ * other way round. **`now` here is in seconds** (`useMarketplace`'s `nowSeconds`), which is
+ * what the conversion below is: `ago` takes milliseconds, like `Date.now()`, and nothing in
+ * the types could tell the two apart while there were three copies of the arithmetic.
  */
 export function agoText(seconds: number, now: number): string {
-  const elapsed = Math.max(0, now - seconds);
-  if (elapsed < 60) return "just now";
-  const units: [number, string][] = [
-    [86_400, "day"],
-    [3_600, "hour"],
-    [60, "minute"],
-  ];
-  for (const [size, name] of units) {
-    if (elapsed >= size) {
-      const n = Math.floor(elapsed / size);
-      return `${n} ${name}${n === 1 ? "" : "s"} ago`;
-    }
-  }
-  return "just now";
+  return ago(seconds, now * 1000);
 }
 
 /**
@@ -275,52 +269,33 @@ export function MarketplacePanel({ marketplace }: { marketplace: MarketplaceStat
   const feedError = feeds.find((f) => f.error !== null)?.error ?? null;
 
   return (
-    <section aria-labelledby="prices-heading" className="space-y-4">
-      <h2 id="prices-heading" className="font-heading text-lg leading-none">
-        Prices
-      </h2>
+    <SettingsSection id="prices" title="Prices">
+      <p className="text-sm text-dim">
+        Every price this app shows — in search, the collection, decks and the wishlist — is quoted
+        from one marketplace, in that marketplace&rsquo;s currency. Switching re-reads the lists you
+        are looking at; nothing re-syncs. A card a marketplace does not list shows an em dash there
+        rather than another marketplace&rsquo;s number.
+      </p>
 
-      <div className="space-y-4 rounded-lg border border-border bg-surface p-4">
-        <p className="text-sm text-dim">
-          Every price this app shows — in search, the collection, decks and the wishlist — is quoted
-          from one marketplace, in that marketplace&rsquo;s currency. Switching re-reads the lists
-          you are looking at; nothing re-syncs. A card a marketplace does not list shows an em dash
-          there rather than another marketplace&rsquo;s number.
-        </p>
+      {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row
+          long and a list that emptied its own tab order for the length of it would move the
+          caret out from under a keyboard reader mid-press. */}
+      <ul aria-busy={selecting || undefined} className="space-y-2">
+        {MARKETPLACE_LIST.map((entry) => (
+          <Option
+            key={entry.id}
+            marketplace={entry}
+            chosen={entry.id === chosen.id}
+            feed={feedOf(entry.id)}
+            now={now}
+            onChoose={() => select(entry.id)}
+            onRefresh={() => refresh(entry.id)}
+          />
+        ))}
+      </ul>
 
-        {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row
-            long and a list that emptied its own tab order for the length of it would move the
-            caret out from under a keyboard reader mid-press. */}
-        <ul aria-busy={selecting || undefined} className="space-y-2">
-          {MARKETPLACE_LIST.map((entry) => (
-            <Option
-              key={entry.id}
-              marketplace={entry}
-              chosen={entry.id === chosen.id}
-              feed={feedOf(entry.id)}
-              now={now}
-              onChoose={() => select(entry.id)}
-              onRefresh={() => refresh(entry.id)}
-            />
-          ))}
-        </ul>
-
-        {/* Grown into place rather than shoving the list up by its height — both neighbouring
-            panels' line, and the same reasoning: its own animated element because it carries no
-            padding and no border, `overflow-hidden` because the sentence is laid out at full
-            size whatever the box is doing. */}
-        <AnimatePresence initial={false}>
-          {(error ?? feedError) && (
-            <motion.p
-              {...statusLine}
-              role="alert"
-              className="overflow-hidden text-sm text-destructive"
-            >
-              {error ?? feedError}
-            </motion.p>
-          )}
-        </AnimatePresence>
-      </div>
-    </section>
+      {/* A refusal to switch, or the first feed that would not download. */}
+      <PanelAlert tone="problem">{error ?? feedError}</PanelAlert>
+    </SettingsSection>
   );
 }

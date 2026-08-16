@@ -63,10 +63,18 @@ export function cardImageUrl(cardId: string, face: number, variant: ImageVariant
  * (`images.rs`'s `COVER_ROUTE`).
  *
  * **It names the deck, not the picture.** The bytes behind it change when the reader uploads
- * again while the URL does not, which is exactly why `images.rs` serves it `no-store` — so
- * never add a cache-buster here. The header is the mechanism, and a `?v=` would be a second one
- * for a solved problem. A caller that must force a *re-decode* (a preview watching for its own
- * upload to land) changes the element's React `key`, not the URL.
+ * again while the URL does not, which is why `images.rs` serves it `no-store` — and **never add
+ * a cache-buster here**: a `?v=` would be a second URL for one deck's cover, which is the thing
+ * this function exists to prevent.
+ *
+ * **`no-store` is not on its own enough, and believing it was is how a replaced cover shipped
+ * still showing the old file.** A header governs what happens to a *request*; a browser holding
+ * a decoded `<img>` whose `src` has not changed has no reason to make one, so it goes on
+ * painting what it already has and the header never gets a say. So the header is half of it, and
+ * the other half is at the caller: anything that must notice a *replacement* — the gallery tile,
+ * a preview watching for its own upload to land — changes the element's React `key`, which
+ * throws the decoded frame away and makes the request `no-store` then answers freshly. Neither
+ * half works alone.
  *
  * A deck with no file on disk answers **404**, never a placeholder, chosen so the fault is
  * visible rather than hidden behind a grey rectangle that looks like a picture. It reaches a

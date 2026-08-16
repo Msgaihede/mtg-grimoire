@@ -12,6 +12,7 @@
  * older or newer than the one that wrote it, so every field is read defensively and a
  * sentence degrades to its shortest honest form rather than taking the dialog down.
  */
+import { plural } from "@/lib/counts";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
 
 /** One line of `DeckHistoryDialog`: the sentence, and the quieter half under it. */
@@ -42,7 +43,9 @@ function text(value: unknown): string | null {
   return null;
 }
 
-function count(value: unknown): number {
+/** A payload field read as a number, `0` when the row does not carry one — one of the
+ *  defensive readers above, and never a claim that the field was there. */
+function numberField(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
@@ -66,12 +69,6 @@ function nested(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-/** `1 card`, `2 cards`. One helper because four sentences now need it and the app must never
- *  print "1 cards"; the irregular plural is passed rather than derived. */
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
 }
 
 /** Joined with the app's own separator, skipping the halves that are not there. */
@@ -117,7 +114,7 @@ export function auditSentence(
 
   switch (entry.kind) {
     case "add": {
-      const quantity = count(p.quantity);
+      const quantity = numberField(p.quantity);
       return {
         text: quantity > 1 ? `Added ${quantity} × ${name}` : `Added ${name}`,
         detail: line(text(p.category) && `to ${text(p.category)}`),
@@ -131,11 +128,11 @@ export function auditSentence(
       // renderer. The word is `deck.rs`'s `clear_category`; copy it, never re-derive it.
       if (text(p.action) === "clear") {
         return {
-          text: `Cleared ${plural(count(p.cards), "card")} from ${text(p.category) ?? "a category"}`,
+          text: `Cleared ${plural(numberField(p.cards), "card")} from ${text(p.category) ?? "a category"}`,
           detail: null,
         };
       }
-      const quantity = count(p.quantity);
+      const quantity = numberField(p.quantity);
       return {
         text: quantity > 1 ? `Removed ${quantity} × ${name}` : `Removed ${name}`,
         detail: line(text(p.category) && `from ${text(p.category)}`, text(p.reason)),
@@ -249,12 +246,12 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
     // Copies, not rows — the quantities the variant held, summed before the delete.
     case "remove":
       return {
-        text: `Cleared ${plural(count(p.cleared), "card")} before importing`,
+        text: `Cleared ${plural(numberField(p.cleared), "card")} before importing`,
         detail: null,
       };
     case "add": {
-      const cards = plural(count(p.cards), "card");
-      const categories = plural(count(p.categories), "category", "categories");
+      const cards = plural(numberField(p.cards), "card");
+      const categories = plural(numberField(p.categories), "category", "categories");
       return { text: `Imported ${cards} into ${categories}`, detail: null };
     }
     default:
@@ -280,7 +277,7 @@ function cardTagLine(p: Record<string, unknown>, name: string): AuditLine {
 function tagLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.tag) ?? text(p.name) ?? "a tag";
   const previous = text(p.previous) ?? text(p.previousName);
-  const cards = count(p.cards);
+  const cards = numberField(p.cards);
   const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
@@ -331,7 +328,7 @@ function folderLine(p: Record<string, unknown>): AuditLine {
  *  a branch — a shared template would read as machine output. */
 function categoryLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.name) ?? "a category";
-  const cards = count(p.cards);
+  const cards = numberField(p.cards);
   const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
@@ -393,7 +390,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       // no `copied`. Reading only the toggle answers a copy as `flag(undefined)` — "Turned
       // the theory list off" — which is a sentence about the opposite of what happened.
       if ("copied" in p) {
-        const copied = count(p.copied);
+        const copied = numberField(p.copied);
         return {
           text: "Copied the live deck into theory",
           detail: copied > 0 ? plural(copied, "card") : null,

@@ -14,6 +14,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { finishLabel } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import type { CollectionRow, CollectionSortKey } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -192,9 +193,13 @@ function columnsFor(
           <>
             {formatPrice(unit === null ? null : unit * row.quantity, currency)}
             {/* What one of them is worth, under what all of them are worth — and only where the
-              two are different numbers. On the single-copy rows that are most of a collection
-              it would be the same price written twice. */}
-            {unit !== null && row.quantity !== 1 && (
+              two are different numbers *and there is something to be worth it*. On the
+              single-copy rows that are most of a collection it would be the same price written
+              twice; on a zero-copy row — a state the Copies stepper reaches at `min={0}` and the
+              Actions column exists to clear — it was a unit price under a total of nothing,
+              quoting $105.18 each for cards that are not there. Hence `> 1` rather than `!== 1`,
+              which is what the wishlist's twin cell already guards on. */}
+            {unit !== null && row.quantity > 1 && (
               <span className="block text-[0.7rem] leading-tight text-dim">
                 {formatPrice(unit, currency)} ea
               </span>
@@ -227,7 +232,7 @@ function columnsFor(
               REVEAL_ON_HOVER,
               "grid size-6 place-items-center rounded-md border border-border text-dim",
               "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
-              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+              FOCUS,
               "motion-reduce:transition-none",
             )}
           >

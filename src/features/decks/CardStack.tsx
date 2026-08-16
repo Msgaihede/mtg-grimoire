@@ -7,6 +7,7 @@ import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { soleFinish } from "@/lib/finish";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -24,8 +25,6 @@ import {
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
-  FOCUS,
-  FOCUS_INSET,
   LandedMark,
   revealedWhenOpen,
   SELECTED_CARD,

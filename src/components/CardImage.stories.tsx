@@ -1,7 +1,9 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
+import { FOCUS } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
+import { cn } from "@/lib/utils";
 import { printing } from "../../.storybook/fake/fixtures";
 import { CardImage } from "./CardImage";
 
@@ -100,7 +102,10 @@ function SwapDemo() {
       <button
         type="button"
         onClick={() => setSwaps((n) => n + 1)}
-        className="rounded-md border border-border px-3 py-1 text-sm text-dim hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className={cn(
+          "rounded-md border border-border px-3 py-1 text-sm text-dim hover:text-text",
+          FOCUS,
+        )}
       >
         Swap card
       </button>

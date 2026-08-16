@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { ToggleChip } from "@/components/FilterChips";
+import { plural } from "@/lib/counts";
+import { FOCUS } from "@/lib/focus";
 import type { DeckAuditEntry } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { auditSentence, type AuditDay } from "./auditText";
-import { FOCUS } from "./cardControl";
 import { DeckDialog } from "./DeckDialog";
 import { useDeckAudit } from "./useDeckAudit";
 
@@ -119,8 +120,6 @@ const DAY = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" });
 const STAMP = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" });
 
 const at = (entry: DeckAuditEntry) => new Date(entry.at * 1000);
-
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** One day, after the chips have had their say. */
 interface ShownDay {

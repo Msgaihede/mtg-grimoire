@@ -12,6 +12,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
+import { count } from "@/lib/counts";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -309,7 +310,9 @@ export function SearchPage() {
  * instead of `5,000 cards`, which would not be.
  */
 function countOf(total: number, capped: boolean): string {
-  const n = `${total.toLocaleString("en-US")}${capped ? "+" : ""}`;
+  const n = `${count(total)}${capped ? "+" : ""}`;
+  // **Not `plural`.** The condition is `total === 1 && !capped`, because a capped count of one
+  // is `5,000+`, and `5,000+ card` must never print. Only the numeral is shared.
   return `${n} ${total === 1 && !capped ? "card" : "cards"}`;
 }
 

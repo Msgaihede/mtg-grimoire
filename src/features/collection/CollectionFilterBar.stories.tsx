@@ -15,7 +15,7 @@ type Preset = (collection: Collection) => void;
  * scrollbar, which `main`'s `overflow-auto` may add. `tauri.conf.json:16` opens the window at
  * 1280, which is 1032 here; `tauri.conf.json:18` will not let it below 1024, which is 776.
  *
- * There is no narrow home to add to that pair, unlike the search's row: `CollectionPage.tsx:260`
+ * There is no narrow home to add to that pair, unlike the search's row: `CollectionPage.tsx:410`
  * draws this above the split that the card detail pane docks into, so the pane takes width from
  * the table below and never from this.
  */

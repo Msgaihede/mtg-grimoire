@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DeckFolder } from "@/lib/ipc";
+import { deckDragData, readDeckDrag } from "./deckDrag";
 import { dragData, readDragData } from "./dnd";
-import {
-  buildFolderTree,
-  deckDragData,
-  flattenFolders,
-  folderDescendants,
-  plural,
-  readDeckDrag,
-} from "./FolderTree";
+import { buildFolderTree, flattenFolders, folderDescendants } from "./folders";
 
 const folder = (id: number, parentId: number | null, name: string, sortOrder = 0): DeckFolder => ({
   id,
@@ -163,13 +157,5 @@ describe("readDeckDrag", () => {
 
   it("refuses an unmarked payload from anything else in the window", () => {
     expect(readDeckDrag({ deckId: 4, name: "Burn" })).toBeNull();
-  });
-});
-
-describe("plural", () => {
-  it("is one derivation, so a count and the sentence quoting it cannot disagree", () => {
-    expect(plural(1, "deck")).toBe("1 deck");
-    expect(plural(0, "deck")).toBe("0 decks");
-    expect(plural(2, "folder")).toBe("2 folders");
   });
 });

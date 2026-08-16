@@ -17,11 +17,20 @@
  * deck* rather than sharing anything.
  */
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { FOCUS } from "@/lib/focus";
 import { type DeckTag, type DeckVariant, type TagColor } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { DeckDialog } from "./DeckDialog";
-import { META_FIELD, META_SUBMIT, RenameField, RowAction, sectionFailure } from "./metaRows";
+import {
+  CONFIRM_CANCEL,
+  CONFIRM_DESTRUCTIVE,
+  META_FIELD,
+  META_SUBMIT,
+  RenameField,
+  RowAction,
+  sectionFailure,
+  useConfirmFocus,
+} from "./metaRows";
 import { DEFAULT_TAG_COLOR, TAG_COLORS, tagColorCss } from "./tagColors";
 import { useDeckMeta, type DeckMeta } from "./useDeckMeta";
 
@@ -327,11 +336,8 @@ function DeleteTag({
   onCancel: () => void;
   onDeleted: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
   // The caret comes into the question, for `DeleteCategory`'s reason.
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
+  const confirm = useConfirmFocus(`Delete ${tag.name}`);
 
   /** Copies in the list the reader is **not** looking at. `> 0` is exactly the condition for
    *  mentioning the other list: a deck whose theory list wears this label nowhere has one list
@@ -345,13 +351,7 @@ function DeleteTag({
       : `Its ${cardsAllVariants} cards stay in the deck and lose the label`;
 
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      role="group"
-      aria-label={`Delete ${tag.name}`}
-      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
-    >
+    <div {...confirm}>
       <p className="text-xs">Delete “{tag.name}”?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
         {cardsAllVariants === null
@@ -365,24 +365,11 @@ function DeleteTag({
           type="button"
           disabled={meta.deleteTag.isPending}
           onClick={() => meta.deleteTag.mutate(tag.id, { onSuccess: onDeleted })}
-          className={cn(
-            "rounded-md border border-destructive px-2 py-1 text-xs text-destructive",
-            "transition-colors duration-150 hover:bg-destructive hover:text-bg",
-            "disabled:opacity-50 motion-reduce:transition-none",
-            FOCUS,
-          )}
+          className={CONFIRM_DESTRUCTIVE}
         >
           Delete tag
         </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "rounded-md border border-border px-2 py-1 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
           Keep it
         </button>
       </div>

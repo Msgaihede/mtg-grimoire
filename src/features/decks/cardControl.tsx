@@ -54,13 +54,6 @@ import {
 } from "./dnd";
 
 /**
- * Keyboard focus, in the shape the rest of the app uses: a gold outline standing off the
- * control's edge, never a ring — a ring means "state" everywhere else here.
- *
- * For a control with room around it. A control that **fills** a clipped box wants
- * {@link FOCUS_INSET} instead.
- */
-/**
  * The image variant a deck card draws: **the whole card**, not the art crop.
  *
  * One constant because two surfaces draw one object — `CardStack` and `views/GridView` — and
@@ -78,24 +71,6 @@ import {
  * the two kinds are interchangeable in one tile.
  */
 export const DECK_CARD_VARIANT: ImageVariant = "grid";
-
-export const FOCUS =
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
-/**
- * The same outline, drawn **inside** the control's own edge.
- *
- * The offset is negative for exactly `VirtualTable`'s reason, one floor down: an outline
- * standing 2px *off* a control that fills an `overflow-hidden` box is painted entirely in the
- * clipped region and is never seen at all. A card in the stack and a tile in the grid are both
- * that shape — the button is the whole card, and the card clips its own corners — so a
- * positive offset there is not a smaller ring, it is **no focus indicator**, which is a WCAG
- * 2.4.7 failure and invisible to anyone testing with a mouse.
- *
- * `deck cards keep their focus outline inside the box that clips them` sweeps for it.
- */
-export const FOCUS_INSET =
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /**
  * **Picked**: this is the card the detail pane is open on.
@@ -184,7 +159,7 @@ export const LANDED_MS = 5_000;
  *
  * It was `--color-text` — parchment — until 2026-08-15, on the argument that gold was already
  * taken three times over on this one surface: focus, {@link SELECTED_CARD}, and both halves of
- * the drop affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`). The argument was sound about the
+ * the drop affordance (`lib/dropMarks`' `DROP_RING`/`DROP_OVER`). The argument was sound about the
  * colour and wrong about the outcome. Parchment is the app's *text* colour, which means it is
  * the colour of nearly everything on screen already, so the mark read as a card that had gone
  * slightly pale — and a mark whose whole job is to be found across a deck the reader is not
@@ -625,7 +600,7 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
  * ## Two flags, because a drop target has two things to say
  *
  * `eligible` is "a card is in the air and this pile could take it" and `over` is "and it is
- * this one" — the sidebar's pair (`AppShell`'s `DROP_RING` / `DROP_OVER`) said on the four
+ * this one" — the sidebar's pair (`lib/dropMarks`' `DROP_RING` / `DROP_OVER`) said on the four
  * surfaces a reader actually drags between. Without the first, a card picked up in a fifteen-
  * category deck lights nothing at all until the pointer happens to cross a target, so the
  * reader has to hunt for the gesture's own affordance.

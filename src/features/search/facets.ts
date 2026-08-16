@@ -1,3 +1,5 @@
+// Aliased: this module's own `count` is a facet's number, and the parameter is named for it.
+import { count as numeral } from "@/lib/counts";
 import type { FacetResponse } from "@/lib/ipc";
 
 /**
@@ -88,7 +90,10 @@ export function colorDisabled(
 export function facetTitle(label: string, count: number | undefined): string | undefined {
   if (count === undefined) return undefined;
   if (count === 0) return `${label} — nothing in this search`;
-  return `${label} — ${count.toLocaleString("en-US")} printing${count === 1 ? "" : "s"}`;
+  // The unit is spelled here rather than through `plural`, which writes its number plainly:
+  // a facet count is the one figure in this app that genuinely reaches five digits, so it
+  // wants its separators. Only the numeral is shared.
+  return `${label} — ${numeral(count)} printing${count === 1 ? "" : "s"}`;
 }
 
 /**

@@ -22,10 +22,11 @@ import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
 import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
-import { dialog } from "@/lib/motion";
+import { dialog, PRESS } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -51,17 +52,6 @@ import {
 import { usePrintingGroupBy } from "./usePrintingGroupBy";
 
 /**
- * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
- * control's edge, never a ring (see `FilterBar`'s `FOCUS` — outline is focus, border and
- * ring are state).
- *
- * Byte-identical to `FilterChips`' exported `FILTER_FOCUS`, which is what the deck editor's
- * selects carry — so the grouping control below reads as the same control as the deck's own
- * without this file growing a second focus recipe to keep in step with the first.
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
-/**
  * A header control that is not a chip — here, the one `<select>` in this pane.
  *
  * **Copied from `DeckEditor.tsx`'s `CONTROL`**, which is not exported, because the printings
@@ -70,15 +60,13 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
  * classes fitted would be a second grouping control in one window that behaved almost like the
  * first. If that constant is ever exported, this should become an import of it.
  *
- * The property list is written out for the reason it is written out there: a colour utility and
- * a transform one compile to the same CSS longhand, so tailwind-merge would keep one and
- * silently drop the other.
+ * The press is {@link PRESS}, the app's one recipe; the box, and the `disabled:` clause for
+ * the grouping select that greys while the specs have not answered, are this pane's own.
  */
 const CONTROL =
   "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "disabled:active:scale-100 motion-reduce:transition-none";
+  `${PRESS} ` +
+  "disabled:active:scale-100";
 
 /**
  * The colour of a legality chip.

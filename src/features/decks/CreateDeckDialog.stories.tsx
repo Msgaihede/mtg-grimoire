@@ -2,10 +2,10 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { registerCommands } from "../../../.storybook/fake/core";
+import { FOCUS } from "@/lib/focus";
 import type { DeckRow } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { CreateDeckDialog } from "./CreateDeckDialog";
-import { FOCUS } from "./cardControl";
 import { useDecks } from "./useDecks";
 import { useNewDeckFormat } from "./useNewDeckFormat";
 

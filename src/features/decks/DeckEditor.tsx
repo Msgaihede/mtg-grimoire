@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { ChevronLeft, Redo2, Trash2, Undo2 } from "lucide-react";
+import { ChevronLeft, Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
@@ -13,8 +9,10 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
@@ -23,10 +21,8 @@ import {
   type DeckCategory,
   type DeckVariant,
 } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
-import { statusLine } from "@/lib/motion";
+import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
-import { pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -34,9 +30,7 @@ import { newestWrite, writeFailure } from "@/lib/writes";
 import {
   DECK_CARD_VARIANT,
   focusDeckGroup,
-  FOCUS,
   keepsSelection,
-  LANDED_MS,
   type DeckCardActions,
 } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
@@ -46,11 +40,12 @@ import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
 import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
+import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { useDeckUndo } from "./useDeckUndo";
-import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
+import { dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "./export/ExportDialog";
 import {
   asGroupBy,
@@ -61,6 +56,7 @@ import {
 } from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { RenameField } from "./metaRows";
+import { PriceStrip } from "./PriceStrip";
 import { QuickAdd } from "./QuickAdd";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
@@ -70,6 +66,7 @@ import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateDeck } from "./validation/engine";
 import { violationsByCard } from "./violations";
@@ -108,17 +105,17 @@ const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
  * the 1017px content box a 1280×800 window leaves once the sidebar, the shell padding and the
  * editor's own scrollbar are taken off. The row is `flex-wrap`, so it does not overflow; it wraps,
  * and a wrapped header costs 44px of deck height at the app's own default window size — the
- * regression {@link NAME_FLOOR} exists to keep out. Height is the axis that had room.
+ * regression `NAME_FLOOR` (see {@link DeckNameField}) exists to keep out. Height is the axis
+ * that had room.
  *
- * The property list is written out because a colour utility and a transform one compile to the
- * same CSS longhand, so tailwind-merge would keep one and silently drop the other; the format
- * select is `disabled` when the specs have not answered and must not appear to depress.
+ * The press is {@link PRESS}, the app's one recipe. The format select is `disabled` when the
+ * specs have not answered and must not appear to depress, which is why the out-of-reach
+ * clause is here and not on the shared string.
  */
 const CONTROL =
   "h-9 rounded-md border border-border bg-surface px-2.5 text-xs text-dim " +
-  "transition-[color,background-color,border-color,opacity,transform,scale] " +
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97] " +
-  "disabled:active:scale-100 motion-reduce:transition-none";
+  `${PRESS} ` +
+  "disabled:active:scale-100";
 
 /**
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
@@ -373,27 +370,6 @@ function searchCardTarget(card: CardSummary): CardMenuTarget {
   };
 }
 
-/**
- * The narrowest the deck's name field may be squeezed to.
- *
- * 10rem, which at the field's `text-xl` is about thirteen characters — enough to tell two decks
- * apart, and enough that the caret has somewhere to go. Below that the field stops being a
- * field: measured in the shipped window, with nothing holding it, it collapsed to **18px**,
- * which draws as a sliver with no glyph in it at all.
- *
- * A floor rather than a fixed width, because the field is still the row's flexible child: it
- * takes every pixel the chrome beside it does not need, and 10rem is only what it falls back on
- * when there are none. At the app's own 1280×800 it is never reached — the field measures 238px
- * there — which is the point of the number: **10rem is the largest floor that still lets the
- * whole header sit on one line at 1280.** At 12rem the row wrapped even with the Theory switch
- * off, costing 44px of deck height in the common case to protect a width that was never at
- * risk. Measured both ways; see the report.
- *
- * Written out whole rather than built from a constant — Tailwind scans source text for class
- * names, and one assembled at runtime emits no rule at all.
- */
-const NAME_FLOOR = "min-w-40";
-
 /** How a deck is drawn, and what the switch calls each one. */
 type DeckView = "stacks" | "table" | "text" | "grid";
 const VIEWS: readonly { id: DeckView; label: string }[] = [
@@ -489,14 +465,19 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * it when the header grew `Export deck` — and it is a **behavioural** sweep for a reason worth
  * reading before the next modality edit.
  *
- * **All but two of the overlays are a `DeckDialog`** — where the scrim, the centring,
- * `aria-modal`, the trap, the ✕ and the `"inner"` rung are written once. **`TheoryDiffDialog`
- * and `ImportDeckDialog` are the two that are not**: each still carries
- * its own copy of that chrome (`TheoryDiffDialog.tsx`, `import/ImportDeckDialog.tsx`), out of
- * scope when the shell was written rather than exempt from it, and they are the next two to
- * move onto it. `CreateDeckDialog` is a third such copy outside this editor. So a change to how
- * a modal behaves here — a focus restore, a different `trapTab`, a change to when the rung is
- * enabled — is an edit to **four files, not one**, until those three are converted.
+ * **Every overlay here is a `DeckDialog`** — where the scrim, the centring, `aria-modal`, the
+ * trap, the ✕ and the `"inner"` rung are written once, and since 2026-08-16 that shell is the
+ * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDeckDialog` were the
+ * last two here carrying their own copy of that chrome, with `CreateDeckDialog` a third copy
+ * outside this editor; all three moved onto the shell on that date.
+ *
+ * **The cost while the copies lasted is why the shell exists, and is the argument for not
+ * starting a fourth.** A change to how a modal behaves here — a focus restore, a different
+ * `trapTab`, a change to when the rung is enabled — was an edit to **four files, not one**,
+ * until 2026-08-16, and each of those files was free to answer a shared question its own way:
+ * one editor drew two scrim darknesses, the ✕ at two geometries and two speeds, and the panel
+ * at three `max-h` values, none of it decided by anybody. A new modal here is built *on*
+ * `DeckDialog.tsx` rather than beside it.
  */
 type Layer =
   | { kind: "check" }
@@ -621,92 +602,6 @@ const ACTIONS: readonly { layer: NonNullable<Layer>; label: string }[] = [
  */
 const REFILE_NOTE_MS = 6000;
 
-/** A `setTimeout` handle, as this project's DOM-only lib types one. */
-type Timer = ReturnType<typeof setTimeout>;
-
-/** Nothing has landed — one stable identity, so a view's memo does not see a new empty map on
- *  every render of the editor. `CardStack`'s `NONE_LANDED` is the same idea one floor down. */
-const NOTHING_LANDED: ReadonlyMap<number, number> = new Map();
-
-/** What {@link useRecentAdds} answers with. */
-interface RecentAdds {
-  /** `deck_cards.id` → the nonce that add was given, for every card still inside its ten
-   *  seconds. Handed to all four views whole, the way `violations` is. */
-  landed: ReadonlyMap<number, number>;
-  /** A card just landed in this row. The id is `EntryChange.id` — what the add answered. */
-  markLanded: (entryId: number) => void;
-}
-
-/**
- * Which cards have just been added, and for how much longer they say so.
- *
- * ## Why the row id, and not the printing
- *
- * `deck_add_card` **folds**: adding a card the deck already holds does not make a second row, it
- * increments the one that is there. `EntryChange.id` is the row either way — the one it created
- * or the one it folded into — which is exactly the thing the reader wants pointed at, and it is
- * what every view already keys its cards by (`DeckCard.id`). A `cardId` would light the same
- * printing in *every* pile that holds it, which is wrong for the one question this answers:
- * where did **this** copy go.
- *
- * ## Why there is a nonce as well as a timer
- *
- * The fade is a CSS animation (`--animate-card-landed`), and a CSS animation runs once per
- * element. So a second add of a card that is still glowing has to hand the mark a new React key
- * or nothing happens on screen — the reader presses Add, the deck's number goes up, and the card
- * they were told to look at does not so much as blink. The value in the map is that key. It is a
- * counter rather than a timestamp because `Date.now()` twice in one tick is one number.
- *
- * ## Why a timer at all, when the animation ends by itself
- *
- * Two reasons, and neither is the fade. The mark has to **leave the DOM**, or a session's worth
- * of adds is a session's worth of invisible overlays sitting on cards; and the map has to empty,
- * or nothing above ever goes back to `NOTHING_LANDED`. {@link LANDED_MS} is the same five seconds
- * the stylesheet fades over — see it for why the number is in two places and what holds them
- * together.
- */
-function useRecentAdds(): RecentAdds {
-  const [landed, setLanded] = useState<ReadonlyMap<number, number>>(NOTHING_LANDED);
-  // Neither is a thing to draw, and writing one must never schedule a render of its own —
-  // `CardStack`'s `useFlipThrough` keeps its two timers in a ref for the same reason.
-  const nonce = useRef(0);
-  const timers = useRef(new Map<number, Timer>());
-
-  // Read out of the ref here rather than in the cleanup, which is what the hooks lint asks for
-  // and is honest besides: the map is created by this hook and never replaced.
-  useEffect(() => {
-    const running = timers.current;
-    return () => {
-      for (const timer of running.values()) clearTimeout(timer);
-      running.clear();
-    };
-  }, []);
-
-  const markLanded = useCallback((entryId: number) => {
-    nonce.current += 1;
-    const stamp = nonce.current;
-    const running = timers.current;
-    // At most one timer per row: a card added three times in quick succession glows once, for
-    // five seconds from the last press, rather than going dark while the reader is still pressing.
-    const pending = running.get(entryId);
-    if (pending !== undefined) clearTimeout(pending);
-    running.set(
-      entryId,
-      setTimeout(() => {
-        running.delete(entryId);
-        setLanded((was) => {
-          const next = new Map(was);
-          next.delete(entryId);
-          return next.size === 0 ? NOTHING_LANDED : next;
-        });
-      }, LANDED_MS),
-    );
-    setLanded((was) => new Map(was).set(entryId, stamp));
-  }, []);
-
-  return { landed, markLanded };
-}
-
 /**
  * One deck, open for editing.
  *
@@ -802,20 +697,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const [renamingCategoryId, setRenamingCategoryId] = useState<number | null>(null);
 
-  /**
-   * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
-   * deck.
-   *
-   * Only ever a `deck-card` — `canMonitor` says so — and that is the whole reason this state
-   * exists: the remove tray is drawn from it, and a card being dragged *in* from the search
-   * panel has nothing to remove. It also keeps a panel drag from re-rendering this editor at
-   * all, which is what keeps the tiles' `draggable` registrations still under the reader's
-   * pointer while they drag one.
-   */
-  const [dragging, setDragging] = useState<DragPayload | null>(null);
-  /** Whether the card being dragged is over the tray, so the tray can say what letting go
-   *  would do. */
-  const [overTray, setOverTray] = useState(false);
+  /* There is no `dragging` state here any more, and its absence is the 2026-08-16 change stated
+     in one line: the editor used to run a `monitorForElements` of its own so the remove tray
+     could be drawn from it, which re-rendered this component — and with it all four views,
+     `DeckStats`, `ValidationPanel` and the docked panel — on every deck-card `dragstart` and
+     `drop`. {@link PriceStrip} owns that monitor now and re-renders itself instead, which is
+     `QuickZones`' argument applied to the other end of the same gesture. */
 
   /**
    * Which cards have just arrived, so the deck can point at them for five seconds.
@@ -843,26 +730,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const [honouredView, setHonouredView] = useState<string | null>(null);
 
-  /** What is in the name field while it is being typed in, or `null` when the field is simply
-   *  the deck's name (`QuantityStepper`'s draft, for its reason). */
-  const [nameDraft, setNameDraft] = useState<string | null>(null);
-  /**
-   * The same draft, readable *now*.
-   *
-   * Enter commits and then blurs, and the blur handler commits again — in the same tick, with
-   * `nameDraft` still holding the closure's value, which is one rename written twice. A ref is
-   * cleared where it is read, so the second call has nothing to send.
-   */
-  const draftRef = useRef<string | null>(null);
-  const typeName = useCallback((value: string) => {
-    draftRef.current = value;
-    setNameDraft(value);
-  }, []);
-  const dropDraft = useCallback(() => {
-    draftRef.current = null;
-    setNameDraft(null);
-  }, []);
-
   const editorRef = useRef<HTMLElement>(null);
   /** The row the deck and the panel share, and the only width either of them can be judged
    *  against — the window's own is three layouts away from it. */
@@ -874,7 +741,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
      any ref here could reach. */
   /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
   const dockRef = useRef<HTMLDivElement>(null);
-  const trayRef = useRef<HTMLDivElement>(null);
   /**
    * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
    * (2026-08-14).
@@ -2044,48 +1910,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [selectedCardId, setSelectedCardId],
   );
 
-  // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
-  // the deck's own cards: a tile dragged in from the panel is not something the tray can take,
-  // and a monitor that answered for it would re-render the panel — and with it the tile the
-  // reader has hold of — in the middle of the drag.
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => readDragData(source.data)?.kind === "deck-card",
-        onDragStart: ({ source }) => setDragging(readDragData(source.data)),
-        // Dropped, or cancelled with Escape: the platform's own way out of a drag ends in the
-        // same event, so the tray goes away either way without this view hearing a keypress.
-        onDrop: () => {
-          setDragging(null);
-          setOverTray(false);
-        },
-      }),
-    [],
-  );
-
-  // The tray, while it exists. Registered from an effect that re-runs when it mounts, because
-  // it only exists during a drag — a drop target added mid-drag is picked up on the next
-  // `dragover`, which is how a tray that appears on `dragstart` can be dropped on at all.
-  const trayShown = dragging !== null;
-  useEffect(() => {
-    const element = trayRef.current;
-    if (!element) return;
-    const writeFor = (data: Record<string, unknown>) => {
-      const payload = readDragData(data);
-      return payload && dropWrite(payload, { kind: "remove" });
-    };
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => writeFor(source.data) !== null,
-      onDragEnter: () => setOverTray(true),
-      onDragLeave: () => setOverTray(false),
-      onDrop: ({ source }) => {
-        setOverTray(false);
-        const write = writeFor(source.data);
-        if (write) applyDrop(write);
-      },
-    });
-  }, [trayShown, applyDrop]);
+  // The drag's two monitors and the remove tray's drop target are not here: `QuickZones` owns
+  // the one that answers for every drag and {@link PriceStrip} owns the one narrowed to the
+  // deck's own cards, each so that a `dragstart` re-renders that component rather than this one.
+  // What is left in this file is `applyDrop`, which is what a drop *writes* — one place a drag
+  // becomes a command, for all three of them.
 
   // A pile can be off the bottom of the window while a card is in the air over it — the stack's
   // piles wrap down rather than running off the right-hand edge, and the grid runs down too, so
@@ -2105,17 +1934,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     return autoScrollForElements({ element });
   }, [hasRow]);
 
-  /** Whatever is half-typed, the field goes back to standing for the deck's name. A blank is
-   *  not a rename: the backend refuses it in words, and a name is not something a deck can lose
-   *  by tabbing through it. */
-  const commitName = useCallback(() => {
-    const draft = draftRef.current;
-    dropDraft();
-    if (draft === null || row === null) return;
-    const trimmed = draft.trim();
-    if (!trimmed || trimmed === row.name) return;
-    deck.update.mutate({ name: trimmed });
-  }, [deck.update, dropDraft, row]);
+  /** The deck's new name, once {@link DeckNameField} has decided there is one. The field holds
+   *  the draft and refuses a blank or an unchanged name, so there is nothing to re-check here —
+   *  this is the same `deck.update` the format select and the Built switch ride. */
+  const renameDeck = useCallback(
+    (name: string) => {
+      deck.update.mutate({ name });
+    },
+    [deck.update],
+  );
 
   /** The picker, plus the deck's own format when the seed no longer offers it — a select that
    *  cannot show its own value would silently re-format the deck on the first other change.
@@ -2392,7 +2219,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           has to be a child of the page scroller itself — a sticky box inside the ribbon row below
           would scroll away with that row — and it costs no layout in either state, which is what
           `h-0 -mb-3` is for. Every word of why, and why it owns a monitor of its own rather than
-          reading the `dragging` state the remove tray is drawn from: `QuickZones`. */}
+          reading the `dragging` state the remove tray is drawn from: `QuickZones`. (That state
+          is {@link PriceStrip}'s since 2026-08-16, not this file's — the argument is the same
+          one read at the other end of the gesture, so both ends of a drag now re-render
+          themselves rather than the editor.) */}
       <QuickZones categories={categories} onDrop={applyDrop} onNewCategory={openQuickCategory} />
 
       {/**
@@ -2444,56 +2274,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
              * a reader aiming at "0 cards differ" re-formatted their deck.
              *
              * So the narrowest things yield first, which is `DECK_FLOOR`'s rule one row up. The
-             * field keeps {@link NAME_FLOOR}; the switch and the readout drop to a second line
-             * when they no longer fit beside it. Nothing overlaps at any width, because nothing
-             * is squeezed past its own content any more.
+             * field keeps its own floor (`NAME_FLOOR`, in {@link DeckNameField}); the switch and
+             * the readout drop to a second line when they no longer fit beside it. Nothing
+             * overlaps at any width, because nothing is squeezed past its own content any more.
+             *
+             * **The field is the bare `<input>` this box's flex layout expects**, which is why
+             * {@link DeckNameField} draws no wrapper of its own — see it.
              */}
             <div className="flex flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-              <input
-                aria-label="Deck name"
-                // **`size={1}` is load-bearing, and it is not about the drawn width.** A text
-                // input with no `size` defaults to 20 characters, and *that* is what a flex
-                // container reports as its min-content — at this field's `text-xl` it measured
-                // over 240px, which is what pushed the whole row of deck controls onto a second
-                // line at 1280 even with the Theory switch off. With `size={1}` the intrinsic
-                // width is a character and {@link NAME_FLOOR} is the only floor left, which is
-                // the one this file actually chose. The width you see is the flex layout's.
-                size={1}
-                value={nameDraft ?? row.name}
-                onChange={(e) => typeName(e.target.value)}
-                onBlur={commitName}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    commitName();
-                    e.currentTarget.blur();
-                  }
-                  // **Only when there is something to revert.** Escape consumed here is Escape
-                  // the card pane never sees — the pane is an `"outer"` layer listening on
-                  // `window` in the bubble phase, and a handler at the event's own target has
-                  // already run by then. A field nobody has typed in has nothing to undo, so
-                  // the press belongs to whatever is open behind it; a field that has been
-                  // typed in owns exactly one press, and the next one is the pane's again.
-                  // The ref rather than the state, for the reason it exists: two presses inside
-                  // one tick — a key held down, an autorepeat — both read a `nameDraft` React
-                  // has not re-rendered yet, and the second would consume a press it has
-                  // nothing to spend it on. The ref is cleared where it is read.
-                  if (e.key === "Escape" && draftRef.current !== null) {
-                    e.preventDefault();
-                    dropDraft();
-                  }
-                }}
-                // Geist, not the display face, for the reason the card pane gives about a
-                // card's name: this is *content*, and Cinzel is for view titles and hero copy.
-                // Cinzel is also drawn in caps — which in a field you type into means the
-                // letters never match the ones being typed.
-                className={cn(
-                  "flex-1 rounded-md border border-transparent bg-transparent px-2 py-1",
-                  NAME_FLOOR,
-                  "text-xl font-medium leading-tight",
-                  "transition-colors duration-150 hover:border-border motion-reduce:transition-none",
-                  FOCUS,
-                )}
-              />
+              <DeckNameField name={row.name} onRename={renameDeck} />
 
               {/* Only for a deck that keeps a plan. A two-way switch over a deck with one list
                   is a control whose other half is empty by construction — the way to get one is
@@ -2910,22 +2699,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           cannot draw it: `ctx.run` closes the panel before a row's handler runs, so by the time
           an answer arrives there is no menu left to put a sentence in. The deck add is not here
           and needs nothing from this file — it reaches the app's single `useCardToDeck` through
-          `CardToDeckProvider`, and that one mount draws its own sentence. Grown into place like
-          its neighbour: the animated element is the wrapper and carries only `overflow-hidden`,
-          because `statusLine` takes `height` to 0 and a box with its own padding can never be
-          shorter than that padding. */}
-      <AnimatePresence initial={false}>
-        {menuFailure && (
-          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
-            <p
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            >
-              {menuFailure}
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          `CardToDeckProvider`, and that one mount draws its own sentence.
+
+          **The shared component rather than this file's fifth copy of it** (2026-08-16). Every
+          other surface that mounts `useCardMenuDeps` already drew `CardMenuRefusal`; this one
+          hand-drew the same markup down to the class string, and the only thing that differed
+          was the `shrink-0` this column needs — which is what `className` is for. `shrink-0`
+          stays at the call site rather than in the component: whether a banner may be squeezed
+          is a fact about the box it is drawn in. */}
+      <CardMenuRefusal error={menuFailure} className="shrink-0" />
 
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">
@@ -3021,64 +2803,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* The strip under the deck. Spec §5: a price is never shown without saying how old it
-          is — once, here, rather than as a tooltip on every one of sixty cards. And, while a
-          card is in the air, the way out of the deck, drawn over it.
+      {/* The strip under the deck: how old these prices are (spec §5, said once here rather
+          than as a tooltip on every one of sixty cards) and, while a card is in the air, the
+          way out of the deck drawn over it.
 
-          **`sticky bottom-0` while a card is in the air, and only then** (2026-08-14). The deck
-          grows down the page now, so this strip — and the remove tray drawn on it — is at the
-          foot of however tall the deck is, which for a large one is a long way below the window.
-          The drag auto-scroll would carry the reader there eventually; a drop target that has to
-          be *travelled to* is not the same affordance as one that is simply there. Stuck to the
-          bottom of the page for the length of the drag, it is, and the tray keeps its exact
-          `-top-3` relationship to the strip because the strip is what moved. Out of a drag the
-          class is gone and the strip sits in the flow under the deck, which is where a line
-          saying how old the prices are belongs. */}
-      <div className={cn("relative shrink-0", dragging && "sticky bottom-0")}>
-        <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
-
-        {dragging && (
-          // The way out of a deck, for a hand that is already holding the card. It exists only
-          // while a card is in the air, and it takes the place of the price line rather than a
-          // place of its own: appearing in the flow would push every pile up by its own height
-          // at the exact moment the reader is aiming at one.
-          //
-          // **Exactly the strip and not a pixel more.** `-top-3` is the `gap-3` above this
-          // line, which is empty; the height is whatever the price line is. A tray taller than
-          // that overhangs the deck, and an overhang here is a drop aimed at a pile's last card
-          // that removes the card instead — the one mistake in this view with nothing to undo
-          // it.
-          //
-          // No transition on either state — it appears instantly and it answers instantly. An
-          // affordance that fades in during a drag is an affordance that is still arriving when
-          // the reader has let go.
-          //
-          // Destructive rather than gold: gold is where a card is *going*, and this is the one
-          // drop that takes something away. It names the card once it has it, because by then
-          // the platform's drag preview is the only other thing saying which card this is.
-          //
-          // `aria-hidden` like the drop line: this is chrome for a gesture only a pointer can
-          // make, and the click path it shortcuts — the stepper's zero — is the one a screen
-          // reader is given.
-          <div
-            ref={trayRef}
-            aria-hidden="true"
-            className={cn(
-              "absolute inset-x-0 -top-3 bottom-0 flex items-center justify-center gap-1.5",
-              "rounded-md border border-dashed text-xs",
-              // Above the popups rather than among them: a drag can start while a select is
-              // open, and this is the target the pointer is being carried to.
-              LAYER.dragTray,
-              overTray
-                ? "border-destructive/60 bg-destructive/10 text-destructive"
-                : "border-border bg-surface text-dim",
-            )}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            {overTray ? `Remove ${dragging.name} from deck` : "Remove from deck"}
-          </div>
-        )}
-      </div>
+          **A direct child of this column, and it has to be.** The tray inside it is `-top-3`
+          over the empty `gap-3` above this line, so the gap it reaches back into is this
+          column's — one box further in and the number would be measuring nothing. It owns its
+          own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
+          this file any more: see {@link PriceStrip}. */}
+      <PriceStrip marketplace={marketplace} onRemove={applyDrop} />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last thing under the deck.

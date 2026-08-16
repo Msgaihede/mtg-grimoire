@@ -36,7 +36,7 @@ const meta = {
           "**Zero deletes here, and the collection's zero does not.** `wishlist_set_quantity(0)` " +
           "removes the row (`db.ts:1968-1977`, mirroring the table's `CHECK (quantity > 0)`) " +
           "because a wish for none of something is not a wish. **But the stepper cannot reach " +
-          "zero**: it is `min={1}` (`WishlistPage.tsx:572`), because a stepper that deleted a row " +
+          "zero**: it is `min={1}` (`WishlistTable.tsx:146`), because a stepper that deleted a row " +
           "when held down would be a one-way door with no undo. Removal is its own control, and " +
           "{@link Removed} is the story of it — there is no story of a wish stepped to zero, " +
           "because the UI does not offer one.\n\n" +
@@ -90,8 +90,8 @@ export const Default: Story = {
       "6",
     );
     // **The Needs review chip is not drawn**, and its absence is the rule rather than an
-    // oversight: `WishlistPage.tsx:358` offers it only where there is something to filter, so a
-    // list nothing flagged does not carry a control that would spend its whole life saying
+    // oversight: `WishlistFilterBar.tsx:21` offers it only where there is something to filter, so
+    // a list nothing flagged does not carry a control that would spend its whole life saying
     // nothing. {@link NeedsReview} is the same page with the chip.
     await expect(canvas.queryByRole("button", { name: "Needs review" })).toBeNull();
   },
@@ -266,7 +266,7 @@ export const Busy: Story = {
  * Crossing a line off the list.
  *
  * **Removal is offered on every row here, where the collection offers it only on an emptied one**
- * (`WishlistPage.tsx:624-627`). The two lists mean opposite things by deletion: losing a
+ * (`WishlistTable.tsx:203-206`). The two lists mean opposite things by deletion: losing a
  * collection entry loses the record of something owned — its condition, its price, the story of
  * where it came from — while crossing a line off a shopping list is what a shopping list is for.
  *

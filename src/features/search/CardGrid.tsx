@@ -14,6 +14,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { scaled, type ZoomSection } from "@/lib/cardZoom";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
@@ -77,12 +78,6 @@ const GAP = 12;
  * zoom grows it and never shrinks it. See where it is scaled.
  */
 const CAPTION_HEIGHT = 28;
-
-/**
- * Keyboard focus, in the shape the rest of the app uses: an outline standing off the
- * control's edge (see `FilterBar`'s `FOCUS`). A ring would sit on the art.
- */
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 /**
  * How many tiles of `tileWidth` fit across `width`, counting the gap between them.

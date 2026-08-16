@@ -756,6 +756,24 @@ describe("CollectionPage", () => {
   });
 
   /**
+   * **A zero-copy row is a shipped state, not a corner case**, and it is the other end of the
+   * same rule. The stepper is `min={0}` and the Actions column exists solely to offer a delete
+   * on the row that reaches it, so the reader who empties a row sits looking at it — and a
+   * `$350.00 ea` under a total of `$0.00` quotes a price for cards that are not there. The
+   * wishlist's twin cell guards on `> 1` for exactly this, and was seen live before it did.
+   */
+  it("draws no unit price under a zero-copy row", async () => {
+    collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 0, unitPrice: 350 }]));
+    wrap(<CollectionPage />);
+
+    // Scoped to the row: an empty collection's summary quotes `$0.00` too, and the assertion
+    // that matters is which of the two cells drew it.
+    const row = (await screen.findByText(/LEA · 161/)).closest('[role="row"]') as HTMLElement;
+    await waitFor(() => expect(within(row).getByText("$0.00")).toBeInTheDocument());
+    expect(within(row).queryByText(/ea$/)).not.toBeInTheDocument();
+  });
+
+  /**
    * **The marketplace crosses the wire on every read, not only a money-sorted one.**
    *
    * It used to be a `currency` sent only while a money column was deciding the order, because

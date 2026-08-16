@@ -8,6 +8,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
 import { FINISHES, isFinish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionPage as Page, type CollectionRow } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
@@ -396,7 +397,7 @@ export function CollectionPage() {
               className={cn(
                 "ml-auto shrink-0 rounded-md border border-accent px-2 py-1 text-accent",
                 "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                FOCUS,
                 "motion-reduce:transition-none",
               )}
             >

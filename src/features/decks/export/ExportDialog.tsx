@@ -51,10 +51,10 @@ import { useCallback, useMemo, useState, type JSX } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "motion/react";
 import { copyText } from "@/lib/clipboard";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "../cardControl";
 import { DeckDialog } from "../DeckDialog";
 import {
   EXPORT_FORMATS,

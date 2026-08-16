@@ -6,9 +6,10 @@ import { filterChipState } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
-import { popup } from "@/lib/motion";
+import { popup, PRESS } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
@@ -36,24 +37,15 @@ export const REVEAL_ON_HOVER =
   "opacity-0 transition-opacity duration-150 group-hover:opacity-100 " +
   "group-focus-within:opacity-100 motion-reduce:transition-none";
 
-const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
 /**
  * Small, quiet, and the same three sizes wherever they appear in the popup.
  *
- * The transition names its properties one by one rather than taking the colour shorthand,
- * because the press feedback is a **transform** and a colour-only rule would leave the scale to
- * snap. Same recipe as every other shared button constant in the app, verbatim, so a chip in
- * here and a chip anywhere else are pressed with the same weight. (The shorthand is not spelled
- * out in this sentence on purpose: `tokens.test.ts` sweeps prose as eagerly as code, and it
- * caught this very line.)
+ * It carries {@link PRESS} rather than a copy of it, which is what "same recipe as every
+ * other shared button constant in the app, verbatim" now means literally: a chip in here and
+ * a chip anywhere else are pressed with the same weight because they are pressed with the
+ * same string. These chips never grey, so they add no out-of-reach clause.
  */
-const CHIP = cn(
-  "rounded-md border px-2 py-1 text-xs",
-  "transition-[color,background-color,border-color,opacity,transform,scale]",
-  "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
-  "motion-reduce:transition-none",
-);
+const CHIP = cn("rounded-md border px-2 py-1 text-xs", PRESS);
 
 const MODES = ["collection", "wishlist"] as const;
 type Mode = (typeof MODES)[number];

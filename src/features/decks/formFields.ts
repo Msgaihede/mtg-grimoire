@@ -8,12 +8,17 @@
  * as a rendering bug rather than as an edit somebody made.
  *
  * **Its own file rather than `cardControl.tsx`**, which is the other module here holding shared
- * class recipes (`FOCUS`, `FOCUS_INSET`). That one's subject is *a deck card drawn as a control*
+ * class recipes. That one's subject is *a deck card drawn as a control*
  * — its doc says so, and it carries the drag registration, the drop target, the stepper and the
  * accessible-name contract with it, pulling in `@atlaskit/pragmatic-drag-and-drop` and
  * `QuantityStepper`. A caption over a text box is not a deck card, and a dialog that asks for a
  * deck's *name* should not import the drag-and-drop machinery to find out how to draw the label.
  * Two small modules with one subject each, rather than one with two.
+ *
+ * **`FOCUS` and `FOCUS_INSET` were the counter-example this paragraph never applied itself to,
+ * and they left on 2026-08-16**: 22 modules imported those two strings out of `cardControl.tsx`
+ * and nothing else, dragging the whole drag-and-drop graph in behind them. They are
+ * `src/lib/focus.ts` now, which imports nothing at all.
  */
 import { cn } from "@/lib/utils";
 

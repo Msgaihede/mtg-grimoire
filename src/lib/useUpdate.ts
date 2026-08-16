@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ipc, ipcError, type UpdateProgressEvent, type UpdateStatus } from "@/lib/ipc";
+import { ago, daysSince } from "@/lib/relativeTime";
 
 /**
  * How often the status is re-read when nothing is happening.
@@ -27,20 +28,23 @@ export function formatBytes(n: number): string {
  * recent enough to trust?", and a reader should not have to subtract two dates to find out.
  * Past a week it becomes the date, where "9 days ago" stops being easier to read than the
  * day itself.
+ *
+ * **The two arms that stay here are the two that are this line's own**: the null/unreadable
+ * arm, whose sentence is a claim about freshness printed under a version number, and the
+ * week cut-off. Everything between is `lib/relativeTime`'s `ago`.
+ *
+ * **It floors now, where it used to round, and that is a real change** (2026-08-16). Ninety
+ * minutes read `2 hours ago` here while `ErrorLogPanel`'s already-flooring `formatWhen`
+ * called the same span `1 hour ago`, on one page. The cut-off moved with it: `daysSince` is
+ * the same floored count `ago` prints, so the date arm now begins exactly where the relative
+ * arm would have said `8 days ago`, instead of at the rounded seven-and-a-half days.
  */
 export function formatChecked(unixSeconds: string | null, now: number = Date.now()): string {
   const at = Number(unixSeconds);
   if (!unixSeconds || !Number.isFinite(at) || at <= 0) return "Not checked yet";
-  const seconds = Math.round(now / 1000 - at);
-  // A clock that moved backwards, or a value from the future: "in -3 hours" helps nobody.
-  if (seconds < 60) return "Checked just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `Checked ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `Checked ${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
-  if (days <= 7) return `Checked ${days} day${days === 1 ? "" : "s"} ago`;
-  return `Checked on ${new Date(at * 1000).toISOString().slice(0, 10)}`;
+  if (daysSince(at, now) > 7) return `Checked on ${new Date(at * 1000).toISOString().slice(0, 10)}`;
+  // A clock that moved backwards, or a value from the future, reaches `ago`'s "just now".
+  return `Checked ${ago(at, now)}`;
 }
 
 /**

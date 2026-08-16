@@ -16,10 +16,13 @@ import { RarityGem } from "../RarityGem";
  *
  * A shape of their own, not one of `ipc.ts`'s DTOs: this component is generic over `Row` and
  * knows nothing about cards, so a story built on `CollectionRow` would be a story about the
- * collection. The three real callers are `CollectionTable.tsx:296`, `SearchPage.tsx:354` and
- * `WishlistPage.tsx:684` — grepped 2026-08-09, three of three — and each brings its own
- * columns. `Collection/Table` next door is where the row-level behaviours (`extraHeight`,
- * `onActivate`, `renderRow`) are drawn over real data.
+ * collection. The real callers are `CollectionTable.tsx`, `SearchPage.tsx`, `WishlistTable.tsx`
+ * and the deck editor's `views/TableView.tsx`, and each brings its own columns — **grep
+ * `<VirtualTable` for that list rather than reading it here**, which is what this sentence used
+ * to invite: it named three of them with line numbers, two of the numbers had moved and the
+ * fourth caller had arrived, none of which anything could go red about.
+ * `Collection/Table` next door is where the row-level behaviours (`extraHeight`, `onActivate`,
+ * `renderRow`) are drawn over real data.
  */
 interface Row {
   id: string;

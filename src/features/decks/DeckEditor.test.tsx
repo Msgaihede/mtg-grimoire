@@ -803,61 +803,34 @@ describe("DeckEditor", () => {
     expect(useAppStore.getState().openDeckId).toBeNull();
   });
 
-  /** There is no Save: the row in the database *is* the draft, so a name is committed the
-   *  moment the reader is done with the field. */
-  it("renames the deck when the name field is left", async () => {
-    await open();
-
-    const name = screen.getByLabelText("Deck name");
-    await userEvent.clear(name);
-    await userEvent.type(name, "Sunday burn");
-    await userEvent.tab();
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
-  });
-
-  it("renames the deck on Enter without waiting for the caret to leave", async () => {
-    await open();
-
-    await userEvent.clear(screen.getByLabelText("Deck name"));
-    await userEvent.type(screen.getByLabelText("Deck name"), "Sunday burn{Enter}");
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
-  });
-
-  /**
-   * Enter commits and then blurs, and the blur handler commits too — in the same tick, off a
-   * draft the first call had already decided to send. Two identical `deck_update`s for one
-   * press, which the assertion above cannot see because it matches arguments rather than
-   * counting calls.
-   */
-  it("writes one rename for one press of Enter", async () => {
-    await open();
-
-    await userEvent.clear(screen.getByLabelText("Deck name"));
-    await userEvent.type(screen.getByLabelText("Deck name"), "Sunday burn{Enter}");
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledTimes(1));
-  });
-
-  /** A blank name is not a rename — the backend refuses it in words, and the field should not
-   *  have to be told twice. */
-  it("keeps the old name when the field is emptied", async () => {
-    await open();
-
-    await userEvent.clear(screen.getByLabelText("Deck name"));
-    await userEvent.tab();
-
-    expect(deckUpdate).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
-  });
-
   it("re-formats the deck from the header select", async () => {
     await open();
 
     await userEvent.selectOptions(screen.getByLabelText("Deck format"), "commander");
 
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
+  });
+
+  /**
+   * The third header write, and it is here for the same reason the two around it are: this file
+   * owns the **wiring** — that the field's decision reaches `deck.update` with the field the
+   * backend renames on.
+   *
+   * `DeckNameField.test.tsx` pins the field's own half (the draft, the blank and unchanged
+   * refusals, blur and Enter both committing) against an `onRename` spy, which is a claim about
+   * a prop and says nothing about what this editor hands it. Extracting the field moved the four
+   * assertions that had covered `renameDeck` into that file, and for a moment nothing here
+   * asserted a `name` at all: `deck.update.mutate({ name })` could be deleted outright, or sent
+   * as `{ title: name }`, and the whole suite stayed green. Proved by doing it, 2026-08-16.
+   */
+  it("renames the deck from the name field", async () => {
+    await open();
+
+    const name = screen.getByLabelText("Deck name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Sunday burn{Enter}");
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
   });
 
   /** Built is the one switch with a consequence outside this deck, so it says what it does. */
@@ -2274,12 +2247,12 @@ describe("DeckEditor", () => {
    * ones still outside the sweep are the delete-category and clear-stack confirmations and the
    * quick zones' New category, all opened without a button to point it at.
    *
-   * **Most of them are one component now (`DeckDialog`) and two are not**: the import dialog
-   * and the theory diff still carry their own scrim, `aria-modal` and `onKeyDown={trapTab}`,
-   * which is why this sweep is driven per surface rather than pointed at the shell. It is the
-   * only thing holding the two copies to the shell's behaviour, and it is what would go red if
-   * one of them were converted badly — or if a modality fix reached `DeckDialog.tsx` and stopped
-   * there.
+   * **Every one of them is `DeckDialog` since 2026-08-16**, and this sweep is still driven per
+   * surface rather than pointed at the shell — deliberately. The claim is that *this overlay*,
+   * opened by *that* button, traps the caret; a sweep aimed at the shell would prove the shell
+   * and say nothing about a host that passed the wrong thing, and it was this sweep that held
+   * the three hand-copies to the shell's behaviour for as long as they existed. It is what would
+   * go red if a modality fix reached `DeckDialog.tsx` and a host stopped using it.
    *
    * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
    * claim about what is behind it: each layer's own test file mounts it alone, where there is

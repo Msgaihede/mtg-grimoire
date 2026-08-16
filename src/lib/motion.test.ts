@@ -111,6 +111,46 @@ describe("the CSS tokens", () => {
   });
 });
 
+describe("the press recipes", () => {
+  /**
+   * `PRESS` and `PRESS_SOFT` are template literals over a private `PRESS_BASE`, which is what
+   * keeps the twelve-utility property list written once. The join is the risk that buys:
+   * **a missing space would fuse `motion-reduce:transition-none` to `active:scale-[0.97]`,
+   * Tailwind would extract neither, and the built CSS would carry no rule at all** — with
+   * source still reading correctly and nothing else going red. `0.99` is the sharp end,
+   * because `PRESS_SOFT` is the only place in `src/` that spells it.
+   */
+  it("compose into whole class names, so Tailwind can extract them", () => {
+    for (const [name, recipe] of [
+      ["PRESS", MOTION.PRESS],
+      ["PRESS_SOFT", MOTION.PRESS_SOFT],
+    ] as const) {
+      const classes = recipe.split(" ").filter(Boolean);
+      expect(classes, `${name} lost a class to a bad join`).toContain(
+        "transition-[color,background-color,border-color,opacity,transform,scale]",
+      );
+      expect(classes, `${name} lost its duration`).toContain("duration-[var(--duration-fast)]");
+      expect(classes, `${name} lost its curve`).toContain("ease-standard");
+      // The opt-out `tokens.test.ts` sweeps for, and the reason it can be absent from the
+      // twelve call sites: it travels inside the recipe rather than beside it.
+      expect(classes, `${name} lost its reduced-motion opt-out`).toContain(
+        "motion-reduce:transition-none",
+      );
+    }
+
+    expect(MOTION.PRESS.split(" ")).toContain("active:scale-[0.97]");
+    expect(MOTION.PRESS_SOFT.split(" ")).toContain("active:scale-[0.99]");
+  });
+
+  /** The dip is the whole of the difference — that is the claim `PRESS_BASE` rests on. */
+  it("differ by exactly one utility", () => {
+    const press = MOTION.PRESS.split(" ").filter(Boolean);
+    const soft = MOTION.PRESS_SOFT.split(" ").filter(Boolean);
+    expect(press.filter((c) => !soft.includes(c))).toEqual(["active:scale-[0.97]"]);
+    expect(soft.filter((c) => !press.includes(c))).toEqual(["active:scale-[0.99]"]);
+  });
+});
+
 describe("the test environment", () => {
   /**
    * `src/test-setup.ts` set this, and this test file can see it.

@@ -1,13 +1,14 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
+import { count } from "@/lib/counts";
+import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { hasVariableCost, MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
 import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
 
 /** The nine **numeric** curve buckets — 0 through 7 exactly, and 8 open-ended, which is the
@@ -603,7 +604,6 @@ export function DeckStats({
     wasPending.current = pending;
   }, [pending]);
 
-  const n = (value: number) => value.toLocaleString("en-US");
   // Only while the answer is still about the shortfall on screen: a sentence that outlives its
   // own question is a sentence the reader reads as being about the deck they have now.
   const added = spent && send.isSuccess ? (send.data ?? 0) : null;
@@ -616,7 +616,7 @@ export function DeckStats({
   // second reading of the size rule here: the figure above the note counts the others.
   // Lower-cased, because the note is the tail of a sentence rather than a heading of its own.
   const elsewhere = stats.elsewhere
-    .map((category) => `${n(category.quantity)} ${category.name.toLowerCase()}`)
+    .map((category) => `${count(category.quantity)} ${category.name.toLowerCase()}`)
     .join(" + ");
 
   return (
@@ -633,11 +633,11 @@ export function DeckStats({
             60-card deck" means, and the chip beside this says so in a sentence. */}
         <Figure
           label="Cards"
-          value={n(stats.sized)}
+          value={count(stats.sized)}
           note={elsewhere ? `+ ${elsewhere}` : undefined}
           title="The cards a format's size rule counts — every switched-on pile except the sideboard."
         />
-        <Figure label="Lands" value={n(stats.lands)} />
+        <Figure label="Lands" value={count(stats.lands)} />
         <Figure
           label="Avg. mana value"
           value={stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
@@ -650,7 +650,7 @@ export function DeckStats({
         <Figure
           label={`Price (${marketplace.currency.toUpperCase()})`}
           value={formatPrice(stats.price, marketplace.currency)}
-          note={stats.unpriced > 0 ? `${n(stats.unpriced)} unpriced` : undefined}
+          note={stats.unpriced > 0 ? `${count(stats.unpriced)} unpriced` : undefined}
           title={pricesAsOf(marketplace)}
         />
       </FigureRow>
@@ -668,7 +668,6 @@ export function DeckStats({
           sendRef={sendRef}
           added={added}
           failure={failure}
-          n={n}
         />
       </div>
 
@@ -744,7 +743,6 @@ function Missing({
   sendRef,
   added,
   failure,
-  n,
 }: {
   stats: DeckStatsSummary;
   pending: boolean;
@@ -755,7 +753,6 @@ function Missing({
   sendRef: RefObject<HTMLButtonElement | null>;
   added: number | null;
   failure: string | null;
-  n: (value: number) => string;
 }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -765,7 +762,7 @@ function Missing({
               splitting it across styled spans would make it a sentence no matcher — screen
               reader, test or reader skimming — reads as one. */}
           <p className="font-mono tabular-nums text-destructive">
-            {n(stats.missing)} of {n(stats.copies)} missing
+            {count(stats.missing)} of {count(stats.copies)} missing
           </p>
           <button
             ref={sendRef}
@@ -796,7 +793,7 @@ function Missing({
         </>
       ) : (
         stats.copies > 0 && (
-          <p className="font-mono tabular-nums text-dim">All {n(stats.copies)} owned.</p>
+          <p className="font-mono tabular-nums text-dim">All {count(stats.copies)} owned.</p>
         )
       )}
 
@@ -819,7 +816,7 @@ function Missing({
           ? ""
           : added === 0
             ? "Nothing to add — a recount covered the shortfall, or what is short has left the card database."
-            : `Added ${n(added)} ${added === 1 ? "wish" : "wishes"} — one per card, for every copy you are short.`}
+            : `Added ${count(added)} ${added === 1 ? "wish" : "wishes"} — one per card, for every copy you are short.`}
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner: that one speaks for

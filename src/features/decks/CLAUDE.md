@@ -228,7 +228,10 @@ reader to configure the deck they had just made; it now asks all of them.
   a created deck is never lost, and pressing again never makes a second one.
 - **`CAPTION` and `FIELD` live in `formFields.ts`**, not in `cardControl.tsx`: that module's
   subject is a deck card drawn as a control and it pulls in the drag machinery, which a dialog
-  asking for a deck's name has no business importing.
+  asking for a deck's name has no business importing. **`FOCUS` and `FOCUS_INSET` are
+  `src/lib/focus.ts` since 2026-08-16 for that same reason** — they were the rule's own
+  counter-example, imported out of `cardControl.tsx` by 22 modules that wanted nothing else from
+  it — so nothing in this folder defines a focus outline any more.
 
 ## Writes
 
@@ -274,11 +277,11 @@ reader to configure the deck they had just made; it now asks all of them.
   `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
   means the pile it landed on. Five things about it are decisions rather than details:
   - **It owns its own `monitorForElements`, and that is the point of it being a component.**
-    `DeckEditor`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
-    answered for the docked panel's tiles would re-render the editor — and with it the panel and
-    the very tile the reader has hold of — mid-drag. These zones have to answer for exactly the
-    drags it refuses, so widening it was never available; a component with a monitor of its own
-    re-renders **itself** and leaves that rule true.
+    `PriceStrip`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
+    answered for the docked panel's tiles would re-render the strip — and, while that monitor
+    lived in `DeckEditor`, the panel and the very tile the reader has hold of — mid-drag. These
+    zones have to answer for exactly the drags it refuses, so widening it was never available; a
+    component with a monitor of its own re-renders **itself** and leaves that rule true.
   - **`{ kind: "auto" }` is a `DropTarget`, and it resolves to one of two writes.** An auto add
     names no category — the pile is per card, decided inside `useDeck.addCard` — so it could not
     be spelled as a category id without inventing one. A printing off a wall becomes `auto-add`;
@@ -1282,8 +1285,9 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The landed mark is gold with a glow since 2026-08-15, and it was parchment before that — but
   the half that is a _requirement_ is that it is drawn _inside_ the card's face.** The old rule
   read gold as taken four times over on this one surface — focus, the picked ring, and both halves
-  of the drop affordance (`AppShell`'s `DROP_RING`/`DROP_OVER`) — with red the rule break's and
-  green forbidden for anything that is not mana, leaving `--color-text`. The census was right and
+  of the drop affordance (`src/lib/dropMarks.ts`'s `DROP_RING`/`DROP_OVER`) — with red the rule
+  break's and green forbidden for anything that is not mana, leaving `--color-text`. The census
+  was right and
   the answer was wrong: parchment is the app's **text** colour, so the mark was the same value as
   most of what is already on screen, and the reader reported not being able to see it. **What keeps
   the fourth gold apart is shape and place, not hue** — the other three are each a _line around the
@@ -1494,9 +1498,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
   the two of them draw with. Those three and `DeckSettingsDialog` are built on one shell,
   `DeckDialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
-  zones' New category, both destructive confirmations. **The list worth carrying is the
-  exceptions**: Import cards and the theory difference were never drawers, still carry their own
-  copy of that chrome, and are the two to move onto the shell. Anything else here is a count off
+  zones' New category, both destructive confirmations. **There are no exceptions left, as of
+  2026-08-16**: Import cards and the theory difference were never drawers and carried their own
+  copy of that chrome until then, and `CreateDeckDialog` a third copy outside the editor — all
+  three are on the shell now, so a modality change here (a focus restore, a different `trapTab`,
+  when the Escape rung is enabled) was an edit to four files and is one edit to one file. That
+  history is the reason the shell exists and the reason not to start a fourth copy: while they
+  lasted, one editor drew two scrim darknesses, the ✕ at two geometries and two speeds, and the
+  panel at three `max-h` values, none of it decided. Anything else here is a count off
   `Layer` or off the toolbar's `ACTIONS`, not off this page. The
   reason for all of it is the desk row: every one of these is **consulted** — read, or
   edited and shut — and a right-hand drawer took the width it needed out of the deck for as long

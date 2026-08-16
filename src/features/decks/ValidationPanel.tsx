@@ -2,12 +2,12 @@ import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "
 import { ChevronRight } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 import { estimateBracket } from "./validation/bracket";
 import { validateDeck } from "./validation/engine";
 import type { ValidationIssue } from "./validation/types";

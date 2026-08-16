@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { needsNextPage } from "@/features/search/useCardSearch";
+import { FOCUS_INSET } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import type { SortDir, SortSpec } from "@/lib/sort";
 import { stopRowActivationKeys } from "@/lib/useDismissOnEscape";
@@ -12,14 +13,6 @@ export const TABLE_ROW_HEIGHT = 44;
 
 /** Height of the sticky header row, which the virtualiser has to account for. */
 export const TABLE_HEADER_HEIGHT = 36;
-
-/**
- * Keyboard focus on a row: an outline, never a ring. The offset is *negative* because rows
- * are stacked flush inside a scroller, and an outline standing 2px off one would be drawn
- * over its neighbours and clipped at the ends of the list.
- */
-const ROW_FOCUS =
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 export interface TableColumn<Row> {
   /** Stable id. Also the sort key sent to the backend when `sortable`. */
@@ -261,7 +254,9 @@ export function VirtualTable<Row>({
               // is a layer up, because a row lifted to its level would scroll over it.
               LAYER.raisedWhenPopupOpen,
               "text-sm transition-colors duration-150 motion-reduce:transition-none",
-              ROW_FOCUS,
+              // Inset: rows are stacked flush inside a scroller, so an outline standing 2px
+              // off one would be drawn over its neighbours and clipped at the ends of the list.
+              FOCUS_INSET,
               onActivate && "cursor-pointer",
               // Which row the open pane is about. A quiet surface rather than gold: forty
               // rows are on screen and the one being read is already beside the pane.

@@ -2,7 +2,7 @@ import { CircleArrowUp, RefreshCw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { ManaLine } from "@/components/ManaLine";
 import type { Activity } from "@/lib/activity";
-import { TRANSITION } from "@/lib/motion";
+import { PRESS, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 export interface RibbonProps {
@@ -133,12 +133,7 @@ export function Ribbon({
               className={cn(
                 "inline-flex shrink-0 items-center gap-2 rounded-md border border-accent/60 px-3.5 py-2",
                 "text-base text-accent hover:bg-accent/10",
-                // One arbitrary property list rather than a colour utility beside a transform
-                // one: those two compile to the same CSS longhand, so tailwind-merge keeps
-                // whichever it saw last and the press feedback snaps with nothing to show.
-                "transition-[color,background-color,border-color,opacity,transform,scale]",
-                "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
-                "motion-reduce:transition-none",
+                PRESS,
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               )}
             >
@@ -203,9 +198,7 @@ export function Ribbon({
             className={cn(
               "inline-flex shrink-0 items-center gap-2 rounded-md border border-border px-3.5 py-2 text-base",
               "hover:bg-bg",
-              "transition-[color,background-color,border-color,opacity,transform,scale]",
-              "duration-[var(--duration-fast)] ease-standard active:scale-[0.97]",
-              "motion-reduce:transition-none",
+              PRESS,
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               // Held at full size while a sync is running: the button is already `disabled` and
               // `aria-busy`, and a press that dips and does nothing would be a third answer

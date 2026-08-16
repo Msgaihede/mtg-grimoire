@@ -28,15 +28,9 @@
  * condition, and a deck with one list would otherwise read a sentence about a list it has not
  * got.
  */
-import { useEffect, useRef } from "react";
+import { plural } from "@/lib/counts";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
-
-/** `1 card`, `2 cards` — the app must never print "1 cards", and this dialog counts twice. */
-function plural(n: number): string {
-  return `${n} ${n === 1 ? "card" : "cards"}`;
-}
+import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 
 /** What each list is called in a sentence. The reader's own words for the two tabs, lowercased
  *  into prose — `DeckEditor`'s tabs read `Theory | Live`. */
@@ -62,15 +56,12 @@ export function ClearCategory({
    *  drawn above, exactly as the delete confirmation does. */
   onCleared: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-
   // The caret moves into the question, as it does for every other layer in this app. **The
   // question's own box and not a button in it**: the reader has not decided yet, and a stray
   // Enter must not decide for them — `DeleteCategory` makes the same choice for the same reason,
-  // and here the default answer would be the destructive one.
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
+  // and here the default answer would be the destructive one. The mechanism is the hook's; this
+  // is why this site wants it.
+  const confirm = useConfirmFocus(`Clear ${category.name}`);
 
   const here = category.cardCount;
   /** Copies in the list the reader is **not** looking at, and the whole of what the second
@@ -79,24 +70,18 @@ export function ClearCategory({
   const elsewhere = category.cardCountAllVariants - here;
 
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      role="group"
-      aria-label={`Clear ${category.name}`}
-      className={cn("mt-2 border-t border-border pt-2", FOCUS)}
-    >
+    <div {...confirm}>
       <p className="text-xs">Clear “{category.name}”?</p>
 
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the
           reason holds here too: this is the line a reader's eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(here)} in it leave the {listName(variant)} and the pile stays. This cannot be
-        undone.
+        The {plural(here, "card")} in it leave the {listName(variant)} and the pile stays. This
+        cannot be undone.
       </p>
       {elsewhere > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-          The {plural(elsewhere)} filed here in the other list are untouched.
+          The {plural(elsewhere, "card")} filed here in the other list are untouched.
         </p>
       )}
 
@@ -105,24 +90,11 @@ export function ClearCategory({
           type="button"
           disabled={pending}
           onClick={onCleared}
-          className={cn(
-            "rounded-md border px-2 py-1 text-xs",
-            "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
-            "border-destructive text-destructive hover:bg-destructive hover:text-bg",
-            FOCUS,
-          )}
+          className={CONFIRM_DESTRUCTIVE}
         >
-          Remove {plural(here)}
+          Remove {plural(here, "card")}
         </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "rounded-md border border-border px-2 py-1 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
           Keep them
         </button>
       </div>

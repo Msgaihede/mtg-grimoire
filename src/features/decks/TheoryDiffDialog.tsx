@@ -1,20 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CardImage } from "@/components/CardImage";
 import { Figure } from "@/components/Figure";
+import { FOCUS } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
-import { dialog, scrim } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
-import { trapTab } from "@/lib/trapTab";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
+import { DeckDialog } from "./DeckDialog";
 
 /** Stable identity for "not read yet", so the totals below are not recomputed over a new empty
  *  array on every render of a dialog that is still waiting. */
@@ -48,8 +43,8 @@ const ONE_DIRECTION =
  * two questions and nothing else in the app asks them.
  *
  * **No `enabled` gate and no nullable deck**, unlike every other hook in this folder — and that is
- * the whole benefit of {@link TheoryDiffDialog} returning `null` before this is ever called. A
- * closed dialog does not mount the panel, so this hook does not exist, so nothing is read. The
+ * the whole benefit of {@link DeckDialog} mounting nothing while it is closed. A closed dialog
+ * does not mount {@link TheoryDiffBody}, so this hook does not exist, so nothing is read. The
  * query is a full pass over both of a deck's lists plus an allocation roll-up per oracle card; a
  * button nobody has pressed should not pay for it, and unmounting says that more plainly than a
  * flag does.
@@ -200,16 +195,24 @@ export interface TheoryDiffDialogProps {
  * **A real modal, like every other surface that paints a scrim.** The card pane, the validation
  * panel and the set picker are anchored, non-`aria-modal` layers over a page that stays live,
  * because they are things a reader consults *while* editing and nothing covers what is behind
- * them. The editor's four full-window overlays are the other kind — this one, the settings
- * dialog, the categories drawer and the history drawer — and all four now agree: a scrim is a
- * statement that what is behind it is not available, a pointer already cannot cross one, so the
- * caret does not either. Trapped, `aria-modal`, and handed back on the way out — and still an
- * `"inner"` Escape rung, so one press closes it and the card pane behind the view keeps its own.
+ * them. The editor's full-window overlays are the other kind, and they agree because they are
+ * one component: a scrim is a statement that what is behind it is not available, a pointer
+ * already cannot cross one, so the caret does not either. Trapped, `aria-modal`, and handed back
+ * on the way out — and an `"inner"` Escape rung, so one press closes it and the card pane behind
+ * the view keeps its own.
+ *
+ * **The chrome is {@link DeckDialog}'s and no longer this file's** (2026-08-16) — the last of the
+ * three copies to be folded in, and the one whose header needed the shell to grow. Its heading
+ * is `Theory <span aria-hidden>→</span><span class="sr-only">to</span> Live`, because an arrow is
+ * not a word: the shell's `title` is a `ReactNode` for this, and `ariaLabel` exists because a
+ * heading spelled half in a hidden glyph is not a *name* anything can be addressed by.
+ * `DeckEditor.test.tsx`'s Tab sweep addresses this overlay by that string, and it is the only
+ * thing that was holding this copy to the shell's behaviour.
  *
  * Escape and an outside click are deliberately different: Escape is the reader saying "put me
  * back", so `onDismiss` returns the caret to whatever opened this; a click on the scrim is the
  * reader already being somewhere else, so `onClose` moves nothing. That is the rule
- * `useDismissOnEscape` states for every layer here, and this one has a scrim to hang the second
+ * `useDismissOnEscape` states for every layer here, and the shell has a scrim to hang the second
  * half on.
  *
  * **Not portalled, and `fixed` — so where it is mounted matters.** Nothing in this app is
@@ -219,19 +222,20 @@ export interface TheoryDiffDialogProps {
  * that ancestor the containing block instead — the deck editor has transformed elements in it,
  * so this belongs at the editor's top level rather than inside a column or a row.
  *
- * **`open` is a mount, not a class.** Everything with state — the query, the two mutations, the
- * caret, the record of which rows have been sent — lives one component down, so closing the dialog
- * unmounts all of it and reopening starts a genuinely new question. The alternative, one component
- * that renders `null` late, keeps every one of those alive behind a flag and has to remember to
- * clear each: the first version of this file did, and its reset was an effect that called
- * `setState` — a cascading render, and the thing React's own lint rule exists to stop.
+ * **`open` is a mount, not a class**, and it is the shell's guarantee rather than this file's.
+ * Everything with state — the query, the two mutations, the caret, the record of which rows have
+ * been sent — lives in {@link TheoryDiffBody}, so closing the dialog unmounts all of it and
+ * reopening starts a genuinely new question. The alternative, one component that renders `null`
+ * late, keeps every one of those alive behind a flag and has to remember to clear each: the first
+ * version of this file did, and its reset was an effect that called `setState` — a cascading
+ * render, and the thing React's own lint rule exists to stop.
  *
- * **The Escape rung is registered up here, on the flag, and the panel below no longer owns it.**
- * With an exit animation the panel outlives `open` by the length of its fade, so a rung that
- * came up with the *element* would still be consuming Escape while the next overlay is opening
- * — and two `"inner"` peers are not ordered by this protocol at all. `enabled: open` makes the
- * rung die on the render that starts the exit, which is what the editor's `Layer` union has
- * always assumed and used to get for free from a synchronous unmount.
+ * **The Escape rung is registered on the flag rather than on the panel's mount**, which the shell
+ * owns. With an exit animation the panel outlives `open` by the length of its fade, so a rung
+ * that came up with the *element* would still be consuming Escape while the next overlay is
+ * opening. `enabled: open` makes the rung die on the render that starts the exit, which is what
+ * the editor's `Layer` union has always assumed and used to get for free from a synchronous
+ * unmount.
  */
 export function TheoryDiffDialog({
   deckId,
@@ -239,21 +243,34 @@ export function TheoryDiffDialog({
   onDismiss,
   onClose,
 }: TheoryDiffDialogProps): React.JSX.Element {
-  // `useCallback`, because `onDismiss` is a dependency of the hook's effect and an unstable one
-  // re-registers the window listener on every render of the editor.
-  const dismiss = useCallback(() => onDismiss(), [onDismiss]);
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
-
   return (
-    <AnimatePresence>
-      {open && <Panel key="theory-diff" deckId={deckId} onDismiss={onDismiss} onClose={onClose} />}
-    </AnimatePresence>
+    <DeckDialog
+      open={open}
+      title={
+        <>
+          Theory <span aria-hidden="true">→</span>
+          <span className="sr-only">to</span> Live
+        </>
+      }
+      // The heading draws the arrow; the name says it in words. What a screen reader makes of
+      // "→" ranges from "right arrow" to silence, so the panel cannot be labelled by a heading
+      // that is half an `aria-hidden` glyph — see {@link DeckDialogProps.ariaLabel}.
+      ariaLabel="Theory to Live difference"
+      subtitle="What you would need to buy or pull to build the theory list"
+      closeLabel="Close the difference list"
+      width="w-[47.5rem]"
+      onDismiss={onDismiss}
+      onClose={onClose}
+    >
+      <TheoryDiffBody deckId={deckId} />
+    </DeckDialog>
   );
 }
 
-/** The dialog itself, mounted only while it is open — see {@link TheoryDiffDialog}. */
-function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open">) {
-  const panelRef = useRef<HTMLDivElement>(null);
+/** The shopping list itself — the query, the two writes and the body's own scroller. Mounted only
+ *  while the dialog is open, which is {@link DeckDialog}'s guarantee and what makes the record of
+ *  sent rows below a session rather than something an effect has to clear. */
+function TheoryDiffBody({ deckId }: { deckId: number }) {
   // Read here rather than threaded from the editor: this dialog is mounted only while it is
   // open, already holds a query client of its own, and a shopping list is exactly the surface
   // a reader would open *because* they have just changed which shop they are pricing against.
@@ -269,16 +286,6 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
    * variables and a reader presses several.
    */
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
-  /** False from the render that starts the fade out. */
-  const present = useIsPresent();
-
-  // The caret moves into the layer on the way in, as it does for every other one in the app: the
-  // dialog's own controls are then the next thing Tab reaches, and Escape has something to hand
-  // back. The panel itself and not a control — the reader has not decided anything yet, and a
-  // stray Enter should not send nine cards to the wishlist for them.
-  useEffect(() => {
-    panelRef.current?.focus({ preventScroll: true });
-  }, []);
 
   const bulkLabel = `Send all ${rows.length} to wishlist`;
   // The **writes'** refusals, and deliberately not the read's: a failed read already has a place
@@ -287,169 +294,94 @@ function Panel({ deckId, onDismiss, onClose }: Omit<TheoryDiffDialogProps, "open
   const failure = wishAll.error ?? wishRow.error ?? null;
 
   return (
-    // The scrim. `fixed`, not the canvas's `absolute`: the canvas's inset-0 is relative to its own
-    // artboard, and a modal in the shipped window covers the window rather than whichever
-    // positioned ancestor it happens to be mounted inside.
-    //
-    // `LAYER.overlay` is the rung the editor's six full-window surfaces share — above every
-    // popup, below `SyncProgress`'s takeover, which really does outrank a shopping list.
-    //
-    // The number is deliberately not written out here, in prose or anywhere else: Tailwind's
-    // scanner reads a comment as eagerly as it reads code, so naming the class in a sentence
-    // emits a rule for it — and `layers.test.ts`'s sweep counts that as a second place the scale
-    // is written. It caught this very line.
-    //
-    // Scrim and panel in one presence: the ground fades first and the panel scales up over it,
-    // and the dialog is unmounted only once the later of the two tweens has finished.
-    <motion.div
-      {...scrim}
-      className={cn(
-        "fixed inset-0 flex items-center justify-center bg-bg/70 p-4",
-        !present && "pointer-events-none",
-        LAYER.overlay,
-      )}
-      // On the way out it is a picture: nothing to press, and nothing in the accessibility tree
-      // — a second `role="dialog"` beside whichever overlay the reader opened next would be a
-      // shopping list they have already dismissed. Focus left with the flag.
-      aria-hidden={present ? undefined : true}
-      // A press on the scrim and nowhere else. `onMouseDown` rather than `onClick`, because a
-      // click fires on the nearest common ancestor of press and release — so a drag that starts
-      // on a row's name and ends past the panel's edge is a "click" on the scrim, and the dialog
-      // would vanish under a reader who was selecting a card name.
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <motion.div
-        {...dialog}
-        ref={panelRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        // The heading is "Theory → Live", and an arrow is not a word: what a screen reader makes
-        // of "→" ranges from "right arrow" to silence. The name says it in words; the heading
-        // draws it.
-        aria-label="Theory to Live difference"
-        // The caret stays inside, which is what makes the `aria-modal` above true rather than
-        // merely claimed — see {@link trapTab}. Registered on the panel, which is where that
-        // helper reads it from.
-        onKeyDown={trapTab}
-        className={cn(
-          "flex max-h-[80%] w-full max-w-[47.5rem] flex-col overflow-hidden rounded-xl border",
-          "border-border bg-bg shadow-2xl",
-          FOCUS,
-        )}
-      >
-        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
-          <h2 className="font-heading text-xl leading-none">
-            Theory <span aria-hidden="true">→</span>
-            <span className="sr-only">to</span> Live
-          </h2>
-          <p className="min-w-0 flex-1 truncate text-xs text-dim">
-            What you would need to buy or pull to build the theory list
+    // The shell's header sits above these three, and the panel around them is the `flex flex-col`
+    // that makes the scroller work — see {@link DeckDialog}.
+    <>
+      <FigureStrip
+        totals={totals}
+        cards={rows.length}
+        marketplace={marketplace}
+        pending={query.isPending}
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {query.isPending ? (
+          <p className="px-2 py-6 text-center text-xs text-dim">Reading the plan…</p>
+        ) : query.isError ? (
+          // The read's own refusal, in the backend's words. Not a retry button: the query
+          // refetches itself the next time the dialog opens, and every write in the app already
+          // invalidates the key it sits under.
+          <p className="px-2 py-6 text-center text-xs text-dim">{ipcError(query.error)}</p>
+        ) : rows.length === 0 ? (
+          <p className="px-2 py-6 text-center text-xs text-dim">
+            The two lists agree. Everything the plan asks for is already in the deck.
           </p>
-          <button
-            type="button"
-            // The header's ✕ is the reader saying "put me back", exactly as Escape is — so it
-            // hands the caret over rather than dropping it where the dialog used to be.
-            onClick={onDismiss}
-            aria-label="Close the difference list"
-            className={cn(
-              "-mr-1 grid size-7 shrink-0 place-items-center rounded-md text-dim",
-              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </header>
+        ) : (
+          <ul>
+            {rows.map((row) => (
+              <Row
+                key={row.cardId}
+                row={row}
+                currency={marketplace.currency}
+                sent={sent.has(row.cardId)}
+                pending={wishRow.isPending && wishRow.variables?.cardId === row.cardId}
+                onWishlist={() =>
+                  wishRow.mutate(row, {
+                    onSuccess: () => setSent((was) => new Set(was).add(row.cardId)),
+                  })
+                }
+              />
+            ))}
+          </ul>
+        )}
+      </div>
 
-        <FigureStrip
-          totals={totals}
-          cards={rows.length}
-          marketplace={marketplace}
-          pending={query.isPending}
-        />
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-          {query.isPending ? (
-            <p className="px-2 py-6 text-center text-xs text-dim">Reading the plan…</p>
-          ) : query.isError ? (
-            // The read's own refusal, in the backend's words. Not a retry button: the query
-            // refetches itself the next time the dialog opens, and every write in the app already
-            // invalidates the key it sits under.
-            <p className="px-2 py-6 text-center text-xs text-dim">{ipcError(query.error)}</p>
-          ) : rows.length === 0 ? (
-            <p className="px-2 py-6 text-center text-xs text-dim">
-              The two lists agree. Everything the plan asks for is already in the deck.
-            </p>
-          ) : (
-            <ul>
-              {rows.map((row) => (
-                <Row
-                  key={row.cardId}
-                  row={row}
-                  currency={marketplace.currency}
-                  sent={sent.has(row.cardId)}
-                  pending={wishRow.isPending && wishRow.variables?.cardId === row.cardId}
-                  onWishlist={() =>
-                    wishRow.mutate(row, {
-                      onSuccess: () => setSent((was) => new Set(was).add(row.cardId)),
-                    })
-                  }
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <footer className="flex items-center gap-4 border-t border-border px-5 py-3.5">
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="text-[0.7rem] leading-snug text-dim">{ONE_DIRECTION}</p>
-            {/* Spec §5: a price is never shown without it, and this surface is nothing but
+      <footer className="flex items-center gap-4 border-t border-border px-5 py-3.5">
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-[0.7rem] leading-snug text-dim">{ONE_DIRECTION}</p>
+          {/* Spec §5: a price is never shown without it, and this surface is nothing but
                 prices. Drawn rather than hung on a `title`, which is the choice `DeckEditor` and
                 the card pane both made for the same reason — a hover is not a reader. It names
                 the marketplace too, because with five in the picker a bare "as of the last
                 sync" leaves the reader guessing whose shopping list this is. */}
-            <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
-          </div>
+          <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+        </div>
 
-          {/* One live region for every answer this dialog gives, so a reader who cannot see the
+        {/* One live region for every answer this dialog gives, so a reader who cannot see the
               buttons change still hears what the press did. Rendered always, so the region is in
               the tree before it has anything to say — a live region mounted with its own text is
               a region that announces nothing. */}
-          <p
-            role="status"
-            aria-live="polite"
-            className="min-w-0 shrink text-right text-[0.7rem] text-dim"
-          >
-            {failure !== null
-              ? ipcError(failure)
-              : wishAll.isSuccess
-                ? `Sent. ${wishAll.data} ${wishAll.data === 1 ? "wish" : "wishes"} updated.`
-                : ""}
-          </p>
+        <p
+          role="status"
+          aria-live="polite"
+          className="min-w-0 shrink text-right text-[0.7rem] text-dim"
+        >
+          {failure !== null
+            ? ipcError(failure)
+            : wishAll.isSuccess
+              ? `Sent. ${wishAll.data} ${wishAll.data === 1 ? "wish" : "wishes"} updated.`
+              : ""}
+        </p>
 
-          <button
-            type="button"
-            onClick={() => wishAll.mutate()}
-            // Nothing to send, and nothing sent twice while the write is in flight. A second
-            // press would fold rather than duplicate — `add_wish` upserts on the grain — so this
-            // is about the reader not being told twice, rather than about the data.
-            disabled={rows.length === 0 || wishAll.isPending}
-            className={cn(
-              "h-8 shrink-0 rounded-md border border-accent px-3 text-xs text-accent",
-              "transition-colors duration-150 hover:bg-accent hover:text-bg",
-              "disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-accent",
-              "motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            {wishAll.isPending ? "Sending…" : bulkLabel}
-          </button>
-        </footer>
-      </motion.div>
-    </motion.div>
+        <button
+          type="button"
+          onClick={() => wishAll.mutate()}
+          // Nothing to send, and nothing sent twice while the write is in flight. A second
+          // press would fold rather than duplicate — `add_wish` upserts on the grain — so this
+          // is about the reader not being told twice, rather than about the data.
+          disabled={rows.length === 0 || wishAll.isPending}
+          className={cn(
+            "h-8 shrink-0 rounded-md border border-accent px-3 text-xs text-accent",
+            "transition-colors duration-150 hover:bg-accent hover:text-bg",
+            "disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-accent",
+            "motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          {wishAll.isPending ? "Sending…" : bulkLabel}
+        </button>
+      </footer>
+    </>
   );
 }
 

@@ -1,17 +1,50 @@
 import { useEffect, useId, useRef, type JSX, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { dialog as dialogMotion, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { FOCUS } from "./cardControl";
 
 export interface DeckDialogProps {
   open: boolean;
-  /** The `<h2>` in the header. The panel is `aria-labelledby` this. */
-  title: string;
+  /**
+   * The `<h2>` in the header. The panel is `aria-labelledby` this, unless {@link ariaLabel}
+   * overrides it.
+   *
+   * **A `ReactNode` rather than a string, and one heading needed it**: `TheoryDiffDialog` draws
+   * `Theory <span aria-hidden>→</span><span class="sr-only">to</span> Live`, because an arrow is
+   * not a word and what a screen reader makes of "→" ranges from "right arrow" to silence. A
+   * heading that has to say one thing to the eye and another to a reader cannot be a string.
+   */
+  title: ReactNode;
+  /**
+   * The panel's accessible name, for the one heading that cannot serve as one.
+   *
+   * **Absent is the rule and this is the exception.** Labelling by the heading is what keeps the
+   * name and the words on screen from drifting apart, so every host that can leaves this alone.
+   * The one that cannot is {@link title}'s example: a heading spelled half in an `aria-hidden`
+   * glyph and half in an `sr-only` twin reads correctly aloud but is not a *name* anything can be
+   * addressed by, and `DeckEditor.test.tsx`'s Tab sweep addresses that overlay by exactly this
+   * string.
+   *
+   * When it is given, `aria-labelledby` is **not** also set — two names on one element is one
+   * name silently winning, and it would be the wrong one.
+   */
+  ariaLabel?: string;
+  /**
+   * A line under the heading, in the header's own band: where the cards are going, what the list
+   * is for. Optional, and most dialogs have nothing to put here.
+   *
+   * **Under the heading rather than beside it**, which is one of the two shapes this replaced.
+   * Beside it, a subtitle and a 20px Cinzel heading compete for one line and the *heading* is
+   * what truncates; under it, the heading is never squeezed and the subtitle can be as long as
+   * the data makes it — `Into Removal · Burn · Live` is assembled from a pile name and a deck
+   * name and has no length anybody controls.
+   */
+  subtitle?: ReactNode;
   /**
    * The close button's accessible name, e.g. "Close deck settings".
    *
@@ -56,6 +89,13 @@ export interface DeckDialogProps {
  * whole out of `DeckSettingsDialog`, which is why every class string and every comment below
  * reads as that file's: it is that file's.
  *
+ * **The last three copies were folded in on 2026-08-16** — `CreateDeckDialog`,
+ * `ImportDeckDialog` and `TheoryDiffDialog` — and what they brought with them is the argument
+ * for this file restated. Between the three of them one editor drew **two scrim darknesses**,
+ * the ✕ at **two geometries and two speeds**, and the panel at **three** `max-h` values, none of
+ * which anybody decided: they are what four independent copies of one design look like after a
+ * year. Every one of those is settled once, below, with the reason at the site.
+ *
  * ## What it guarantees to every host
  *
  * * **Closed is nothing mounted.** `children` render only while `open`, so a dialog nobody
@@ -92,6 +132,8 @@ export interface DeckDialogProps {
 export function DeckDialog({
   open,
   title,
+  ariaLabel,
+  subtitle,
   closeLabel,
   width,
   onDismiss,
@@ -122,6 +164,8 @@ export function DeckDialog({
         <Panel
           key="panel"
           title={title}
+          ariaLabel={ariaLabel}
+          subtitle={subtitle}
           closeLabel={closeLabel}
           width={width}
           onDismiss={onDismiss}
@@ -138,6 +182,8 @@ export function DeckDialog({
  *  session rather than something an effect has to clear. */
 function Panel({
   title,
+  ariaLabel,
+  subtitle,
   closeLabel,
   width,
   onDismiss,
@@ -203,7 +249,11 @@ function Panel({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={`${id}-title`}
+        // Labelled **by the heading** wherever the heading can carry it: the words are on screen,
+        // so there is nothing for a second copy to drift from. `ariaLabel` is the carve-out and
+        // takes the element instead of joining it — see the prop.
+        aria-labelledby={ariaLabel === undefined ? `${id}-title` : undefined}
+        aria-label={ariaLabel}
         // **`aria-modal` here where `SyncProgress` refuses it, and the difference is the
         // scrim.** That component is a full-window takeover with nothing over the app behind
         // it: the ribbon and every view stay reachable by keyboard, so claiming modality there
@@ -213,6 +263,22 @@ function Panel({
         // both input methods, which is the only condition under which it may be made — and if
         // either half is ever removed, this attribute goes with it.
         onKeyDown={trapTab}
+        // **`max-h-full` is the one height rule, settled 2026-08-16.** The three dialogs folded
+        // into this shell arrived carrying `max-h-[85%]` and `max-h-[80%]` against this
+        // `max-h-full`, which is three answers to one question — and the percentages are the
+        // weaker two, because the scrim above already states the inset as padding
+        // (`p-4 sm:p-6`). A percentage of the *padded* box is a second, smaller inset stacked on
+        // the first, so the gap a reader sees is the padding plus a fraction of the window and
+        // grows with the window: at 800px it is 16 + ~115, at 1400px it is 24 + ~206. One rule —
+        // the scrim's padding is the inset, and the panel takes what is left — is a constant gap
+        // at every size, which is what the four dialogs already on this shell draw.
+        //
+        // **This panel does not clip its content, and nothing on the shell has needed it to**:
+        // two of the three dialogs folded in on 2026-08-16 arrived carrying a clip of their own
+        // and lost nothing by dropping it, because no body here paints a background out to the
+        // rounded corners — the first one that does will square them off on every dialog at
+        // once rather than on its own, which is the kind of thing worth knowing before the
+        // discovery instead of after it.
         className={cn(
           "flex max-h-full max-w-full flex-col rounded-xl border border-border bg-bg shadow-2xl",
           width,
@@ -220,18 +286,29 @@ function Panel({
         )}
       >
         <header className="flex items-center gap-3 border-b border-border px-5 py-4">
-          {/* Cinzel at 20px — the display face's own rule in this app: view titles and hero
-              copy, never below 18px. */}
-          <h2 id={`${id}-title`} className="font-heading text-xl leading-none">
-            {title}
-          </h2>
+          <div className="min-w-0 flex-1">
+            {/* Cinzel at 20px — the display face's own rule in this app: view titles and hero
+                copy, never below 18px. */}
+            <h2 id={`${id}-title`} className="font-heading text-xl leading-none">
+              {title}
+            </h2>
+            {subtitle !== undefined && <p className="mt-1 truncate text-xs text-dim">{subtitle}</p>}
+          </div>
           <button
             type="button"
             onClick={onDismiss}
             aria-label={closeLabel}
+            // **The one speed, settled 2026-08-16 with the height above.** The three dialogs
+            // folded in here spelled this fade with the app's own token and this shell spelled it
+            // as a bare 150 — which is not on the scale at all (`src/index.css` has 120 / 180 /
+            // 260), so the shell's was the drift rather than theirs. The token is what
+            // `src/index.css` exists for: one scale, so a CSS-only fade and a JS one cannot part
+            // company. `shrink-0` because the heading block beside it is `flex-1` now and a long
+            // subtitle must not squeeze the way out.
             className={cn(
-              "ml-auto rounded-md p-1 text-dim",
-              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+              "shrink-0 rounded-md p-1 text-dim",
+              "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
+              "motion-reduce:transition-none",
               FOCUS,
             )}
           >
