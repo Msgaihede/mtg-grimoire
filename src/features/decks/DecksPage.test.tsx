@@ -416,29 +416,37 @@ describe("DecksPage", () => {
    * other field of its deck is written.
    */
   it("replaces a custom cover's element on a deck write, at an unchanged URL", async () => {
-    const CUSTOM: DeckRow = { ...BURN, coverKind: "custom" };
-    const ART: DeckRow = { ...BURN, id: 5, name: "Sunday burn" };
+    // Named for the cover each one wears rather than reusing `Burn`/`Sunday burn`: the case
+    // below hands those same two names the opposite roles, and two adjacent cases where "Burn"
+    // means card art in one and an uploaded file in the other is how a reader comes to read one
+    // of them backwards.
+    const CUSTOM: DeckRow = { ...BURN, name: "Uploaded burn", coverKind: "custom" };
+    const ART: DeckRow = { ...BURN, id: 5, name: "Card-art burn" };
     deckList.mockResolvedValue([CUSTOM, ART]);
 
     wrap(<DecksPage />);
 
     // The tiles themselves are keyed by deck id and outlive a refetch — it is what is *inside*
     // them that this case is about.
-    const customTile = (await tileFor("Burn")).closest("li")!;
-    const artTile = (await tileFor("Sunday burn")).closest("li")!;
+    const customTile = (await tileFor("Uploaded burn")).closest("li")!;
+    const artTile = (await tileFor("Card-art burn")).closest("li")!;
     const before = customTile.querySelector("img");
     const artBefore = artTile.querySelector("img");
     const url = `${imageOrigin(navigator.userAgent)}/cover/4`;
     expect(before).toHaveAttribute("src", url);
 
     // The upload itself opens a native picker no test can reach, so what is driven here is what
-    // reaches the gallery from it: every deck write invalidates `["decks"]`, and the list comes
-    // back with a later `updatedAt` on the row that was written.
+    // reaches the gallery from it: a deck write invalidates `["decks"]` and the gallery refetches.
+    // **The list below is hand-authored and bumps `updatedAt` on _both_ rows** — the deck the
+    // click actually writes (the duplicate) is never in it, and `deckDuplicate`'s own answer is
+    // never read back into this list. That is the control the case depends on rather than an
+    // approximation of the real flow: both tiles are handed a moved `updatedAt`, so the only
+    // thing that can explain one element being replaced and the other surviving is `coverKind`.
     deckList.mockResolvedValue([
       { ...CUSTOM, updatedAt: CUSTOM.updatedAt + 1 },
       { ...ART, updatedAt: ART.updatedAt + 1 },
     ]);
-    await userEvent.click(screen.getByRole("button", { name: "Duplicate Burn" }));
+    await userEvent.click(screen.getByRole("button", { name: "Duplicate Uploaded burn" }));
 
     await waitFor(() => expect(customTile.querySelector("img")).not.toBe(before));
     // A new element asking for the same thing: the URL is what `no-store` is attached to, and
@@ -478,7 +486,7 @@ describe("DecksPage", () => {
    *
    * **This case asserted the exact opposite until 2026-08-11** — that the `<img>` was present
    * with only the credit line suppressed — and it was wrong from the day it was written, not
-   * made wrong by later code. `DeckSettingsDialog`'s `CoverPreview` had the policy right on the
+   * made wrong by later code. `DeckCoverPicker`'s `CoverPreview` had the policy right on the
    * same picture, so the gallery and the dialog disagreed about one deck row. Corrected on a
    * ruling, deliberately, and recorded here so the old assertion is never restored as a "fix":
    * a tile drawing an uncreditable crop is a policy violation, not a feature.

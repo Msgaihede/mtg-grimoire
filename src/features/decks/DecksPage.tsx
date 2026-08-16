@@ -1110,7 +1110,7 @@ export function DecksPage() {
  * Scryfall artist, and needs no credit — so a `coverArtist === null` test on that arm would
  * hide every custom cover, and it would read like a missing guard rather than the bug it is.
  *
- * `DeckSettingsDialog`'s `CoverPreview` makes the same two decisions in the same words, which is
+ * `DeckCoverPicker`'s `CoverPreview` makes the same two decisions in the same words, which is
  * the point: the gallery and the dialog draw one picture and used to disagree about this exact
  * case. If a third surface ever draws a cover, these four lines want a shared home rather than
  * a third copy.
@@ -1420,7 +1420,7 @@ function DeckTile({
           does not know or care which cover is showing. A deck carrying both (the ordinary case
           after an upload) therefore answers an artist while wearing the reader's own picture,
           and crediting an illustrator whose work is *not on screen* is the one thing this line
-          must never do. `DeckSettingsDialog`'s `CoverPreview` guards the same way. */}
+          must never do. `DeckCoverPicker`'s `CoverPreview` guards the same way. */}
       {deck.coverKind === "card_art" && deck.coverArtist && (
         <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={deck.coverArtist}>
           Art by {deck.coverArtist}
@@ -1559,15 +1559,24 @@ function DeckTile({
  * the upload moves because setting a cover is a write to the deck; a moved key is a new
  * element, and an element that has never decoded anything paints nothing.
  *
- * **This screen is where that bites**: {@link DeckSettingsDialog}, the surface that uploads a
+ * **A moved key is a new element only when the key actually moved, and the floor on that is a
+ * whole second.** `decks.updated_at` is `unixepoch()` — an integer count of seconds — so two
+ * uploads inside one clock second leave the number where it was, the element is not replaced,
+ * and the second picture waits for the next write to the deck. It is the narrowest case there
+ * is and it is not repaired here: a cache-buster is what `images.ts` forbids, and a monotonic
+ * counter would be a second answer to "has this deck changed". `DeckCoverPicker`'s
+ * `CoverPreview` keys on the same number, so it shares the floor exactly.
+ *
+ * **This screen is where that bites**: `DeckSettingsDialog`, the surface that uploads a
  * cover, is mounted right here over this wall, so the tile behind the scrim was the one still
  * showing the replaced file. `DeckCoverPicker`'s `CoverPreview` makes the same move with the
  * same number under the name `customCoverKey` — one picture, on both sides of that scrim.
  *
- * **The card-art arm deliberately takes no key.** `updatedAt` moves for every write to the
- * deck, so keying it too would throw away a crop the browser has already decoded and leave the
- * tile blank while it came back — for a rename. There is nothing there to notice: a printing's
- * URL names its own picture.
+ * **The card-art arm deliberately takes no key.** `updatedAt` moves for very nearly every write
+ * to the deck — a rename does, and `deck_set_view_state` is the one that deliberately does not,
+ * because reading a deck is not editing it — so keying it too would throw away a crop the
+ * browser has already decoded and leave the tile blank while it came back, for a rename. There
+ * is nothing there to notice: a printing's URL names its own picture.
  *
  * A missing custom file is a **404**, never a placeholder — `images.rs` chose that deliberately
  * so the fault is visible rather than hidden behind a grey rectangle that looks like a picture.
