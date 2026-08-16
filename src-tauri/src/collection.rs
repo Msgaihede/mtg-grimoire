@@ -5,15 +5,11 @@
 //! which connection — these *write*, so they take `AppState.db` with a bound rather than
 //! `db_read`, and a lock they cannot get is an answer rather than a wait.
 
-use crate::schema::COLLECTION_GRAIN;
+use crate::schema::{COLLECTION_GRAIN, FINISHES};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-/// Scryfall's finish enum. Never a boolean — `etched` is a third thing, and collapsing it
-/// into `foil: true` is the single most common way an importer loses data.
-pub const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
 
 /// The NA condition scale, in descending order. The EU scale (`M/NM/EX/GD/LP/PL/PO`) is
 /// normalised into this one at the edge — see `src/lib/conditions.ts` — and the string it

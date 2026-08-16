@@ -27,7 +27,7 @@
 //! validates — and for the same two reasons, which are written out on [`stored_group_by`] and
 //! [`store_group_by`].
 
-use crate::sorting::{Marketplace, FINISH_LITERALS};
+use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -77,7 +77,7 @@ pub struct FinishPrices {
 
 /// The three price expressions as a `SELECT` list, for a query whose `cards` is aliased `c`.
 ///
-/// [`crate::sorting::FINISH_LITERALS`] is the finish list and its order, which is
+/// [`crate::sorting::finish_literals`] is the finish list and its order, which is
 /// [`FinishPrices`]' own field order — kept beside the builder that consumes it rather than
 /// here, so that this pane and the deck's chain across the same three cannot come to disagree
 /// about what a finish is called.
@@ -86,8 +86,8 @@ pub struct FinishPrices {
 /// what keeps this pane's etched hole on Cardmarket, and its lookups into `marketplace_prices`,
 /// identical to the ones the collection and the decks already draw.
 fn finish_price_columns(market: Marketplace) -> String {
-    FINISH_LITERALS
-        .map(|finish| crate::sorting::price_expr(market, finish))
+    crate::sorting::finish_literals()
+        .map(|finish| crate::sorting::price_expr(market, &finish))
         .join(", ")
 }
 

@@ -11,9 +11,9 @@
 //! state to preserve. A wish for none of something is not a wish, and [`set_wish_quantity`]
 //! takes a zero as the removal it can only be.
 
-use crate::collection::{valid_quantity, EntryChange, FINISHES};
+use crate::collection::{valid_quantity, EntryChange};
 use crate::filters::{escape_like, LIKE_ESCAPE};
-use crate::schema::WISHLIST_GRAIN;
+use crate::schema::{FINISHES, WISHLIST_GRAIN};
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

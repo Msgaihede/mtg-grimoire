@@ -109,6 +109,13 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// line, and a `timeout()` would kill it partway every time — [`crate::scryfall`]'s rule.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
+// The three finish names, read by index off the one vocabulary rather than respelled —
+// `deck_audit::ADD = schema::AUDIT_KINDS[0]`'s shape. Both feeds file rows under these and
+// `marketplace_prices.finish` CHECKs them.
+const NONFOIL: &str = crate::schema::FINISHES[0];
+const FOIL: &str = crate::schema::FINISHES[1];
+const ETCHED: &str = crate::schema::FINISHES[2];
+
 // ---------------------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------------------
@@ -120,7 +127,7 @@ pub struct FeedRow {
     /// 832 of Card Kingdom's 149 989 are unjoinable, which is a fact about their catalogue
     /// and not an error.
     pub card_id: String,
-    /// One of [`crate::collection::FINISHES`].
+    /// One of [`crate::schema::FINISHES`].
     pub finish: &'static str,
     /// Near Mint, in the marketplace's currency (USD for both feeds today).
     pub price: f64,
@@ -331,12 +338,12 @@ impl FeedProvider for CardKingdom {
 /// "true"` — reversing the two would file every etched card as an ordinary foil.
 fn ck_finish(variation: Option<&str>, is_foil: Option<&serde_json::Value>) -> &'static str {
     if variation.is_some_and(|v| v.to_ascii_lowercase().contains("etched")) {
-        return "etched";
+        return ETCHED;
     }
     if is_foil.is_some_and(is_true) {
-        return "foil";
+        return FOIL;
     }
-    "nonfoil"
+    NONFOIL
 }
 
 /// `"true"` and `true`, and nothing else. The string is what the feed sends today; the
@@ -413,9 +420,9 @@ impl FeedProvider for ManaPool {
                 return;
             };
             let quoted = [
-                ("nonfoil", row.price_cents_nm),
-                ("foil", row.price_cents_nm_foil),
-                ("etched", row.price_cents_nm_etched),
+                (NONFOIL, row.price_cents_nm),
+                (FOIL, row.price_cents_nm_foil),
+                (ETCHED, row.price_cents_nm_etched),
             ];
             let mut priced = false;
             for (finish, cents) in quoted {
@@ -1330,6 +1337,36 @@ mod tests {
         assert_eq!(
             feed.feed_built_at, None,
             "this feed publishes no build stamp, and none may be invented"
+        );
+    }
+
+    /// A Mana Pool row quoting all three finishes files them under exactly
+    /// [`crate::schema::FINISHES`] and nothing else.
+    ///
+    /// `ck_finish` needs no such test — indexing off the constant binds it at compile time. This
+    /// tuple cannot be built that way, because it pairs each finish with a *different column* of
+    /// the feed's row, so a test is what holds it to the vocabulary.
+    #[test]
+    fn a_mana_pool_row_quoting_every_finish_files_all_three_under_the_schema_names() {
+        let body = r#"{"data": [
+            {"scryfall_id": "a",
+             "price_cents_nm": 100, "price_cents_nm_foil": 200, "price_cents_nm_etched": 300}
+        ]}"#;
+
+        let feed = collect(&ManaPool, body).unwrap();
+
+        // `priced` sorts, so compare as sets — the order the tuple lists its three columns in is
+        // this test's business only insofar as all three arrive.
+        let mut written: Vec<&str> = priced(&feed)
+            .into_iter()
+            .map(|(_, finish, _)| finish)
+            .collect();
+        written.sort_unstable();
+        let mut expected = crate::schema::FINISHES.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            written, expected,
+            "every finish the feed quotes must be filed under the one vocabulary"
         );
     }
 

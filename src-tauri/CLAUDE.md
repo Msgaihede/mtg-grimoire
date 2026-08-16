@@ -128,6 +128,11 @@ both plus the frontend.
 - Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
   are CHECK-constrained in SQL _and_ validated in Rust, and the imported string is kept in
   `condition_original`.
+- **`schema::FINISHES` is the one finish vocabulary and is read by index, never respelled.**
+  `sorting::finish_literals` quotes it for SQL, `marketplace_feed`'s `NONFOIL`/`FOIL`/`ETCHED`
+  index it, and the three DDL `CHECK`s spell it out because a migration step is history —
+  `a_finish_is_one_of_the_three_on_every_table_that_checks_it` is what holds those three
+  literals to the constant. A fourth finish is a new migration step.
 - **A finish's price is a lookup in the `prices` blob** (`usd`/`usd_foil`/`usd_etched`;
   `eur_etched` does not exist, so etched is unpriced in EUR). `cards.price_usd` is a
   sort/display fallback chain and must never be summed. `tix` is never summed with fiat.
@@ -155,12 +160,13 @@ both plus the frontend.
   ever have answered em dashes for the other two.
 - **Every price in the crate is built by `sorting::price_expr` / `printing_price_expr` /
   `printing_price_by_finish_expr`**, never by hand. The third is the **deck's**, and it is the
-  first two composed rather than a fourth rule: `price_expr` once per `FINISH_LITERALS` entry,
-  coalesced, so a printing sold only in foil is quoted at its foil rate instead of reading as
-  unpriced — which is what the flat `'nonfoil'` literal a deck row used to pass did to **13 515
-  foil-only and 892 etched-only printings**. It answers what `printing_price_expr` answers; a
-  deck reads it because a deck total is a `sum()` and `cards.price_usd` is the column that must
-  not be summed, while the search reads the column because it is the one an index covers.
+  first two composed rather than a fourth rule: `price_expr` once per `schema::FINISHES` entry
+  (through `sorting::finish_literals`), coalesced, so a printing sold only in foil is quoted at
+  its foil rate instead of reading as unpriced — which is what the flat `'nonfoil'` literal a
+  deck row used to pass did to **13 515 foil-only and 892 etched-only printings**. It answers
+  what `printing_price_expr` answers; a deck reads it because a deck total is a `sum()` and
+  `cards.price_usd` is the column that must not be summed, while the search reads the column
+  because it is the one an index covers.
   Blob-backed marketplaces keep the `json_extract` text verbatim — **including the
   etched hole**, `CASE finish WHEN 'etched' THEN NULL` — and feed-backed ones emit a correlated
   scalar subquery on `(marketplace, card_id, finish)` rather than a `LEFT JOIN`, so a per-finish
