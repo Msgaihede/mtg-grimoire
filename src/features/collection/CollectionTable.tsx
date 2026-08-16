@@ -192,9 +192,13 @@ function columnsFor(
           <>
             {formatPrice(unit === null ? null : unit * row.quantity, currency)}
             {/* What one of them is worth, under what all of them are worth — and only where the
-              two are different numbers. On the single-copy rows that are most of a collection
-              it would be the same price written twice. */}
-            {unit !== null && row.quantity !== 1 && (
+              two are different numbers *and there is something to be worth it*. On the
+              single-copy rows that are most of a collection it would be the same price written
+              twice; on a zero-copy row — a state the Copies stepper reaches at `min={0}` and the
+              Actions column exists to clear — it was a unit price under a total of nothing,
+              quoting $105.18 each for cards that are not there. Hence `> 1` rather than `!== 1`,
+              which is what the wishlist's twin cell already guards on. */}
+            {unit !== null && row.quantity > 1 && (
               <span className="block text-[0.7rem] leading-tight text-dim">
                 {formatPrice(unit, currency)} ea
               </span>
