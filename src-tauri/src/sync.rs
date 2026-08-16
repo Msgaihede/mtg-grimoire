@@ -410,7 +410,10 @@ pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
 /// so that both shapes of caller fit — a command holding an `Arc` gets deref coercion for
 /// free, and [`crate::index::lifecycle`], which holds a bare reference, needs no clone.
 ///
-/// **Never call this while holding a guard on `state.db`** — it would deadlock on itself.
+/// **Never call this while holding a guard on `state.db`** — it does not deadlock, because
+/// [`crate::db::lock_for`] is a `try_lock`-plus-sleep loop rather than a blocking one, but a
+/// same-thread reentrant call spends the whole [`crate::db::WRITE_LOCK_WAIT`] failing to
+/// take a lock its own thread already holds, then answers [`crate::db::BUSY`] against itself.
 /// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
 /// connection down instead.
 pub(crate) fn with_write<T>(
@@ -585,11 +588,15 @@ fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::Scryfal
 /// describes a failure that has already happened, on a path that is already returning an
 /// error, and no part of it is worth blocking on.
 ///
-/// **Take the write lock here only if you are not already holding it.** `do_sync`'s
-/// orphan-sweep arm is the site that has to remember: it has the connection in hand and calls
-/// [`crate::errors::record`] directly, because coming through here would deadlock on a lock
-/// that scope holds. `spawn_build` holds nothing, and `collection::with_write_owned` releases
-/// its guard before calling `invalidate_owned` — which its own doc names as the house rule.
+/// **Take the write lock here only if you are not already holding it.** A same-thread
+/// reentrant call does not deadlock — [`crate::db::lock_for`] is a `try_lock`-plus-sleep loop,
+/// not a blocking one — but it spends the whole [`crate::db::WRITE_LOCK_WAIT`] failing to take
+/// a lock its own thread already holds, then gives up and silently drops the `error_log` row
+/// it was trying to write. `do_sync`'s orphan-sweep arm is the site that has to remember: it
+/// has the connection in hand and calls [`crate::errors::record`] directly, because coming
+/// through here would waste that whole wait against a lock that scope already holds.
+/// `spawn_build` holds nothing, and `collection::with_write_owned` releases its guard before
+/// calling `invalidate_owned` — which its own doc names as the house rule.
 pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         crate::errors::record(
@@ -1668,6 +1675,10 @@ mod tests {
         assert!(
             waited >= crate::db::WRITE_LOCK_WAIT,
             "with_write must spend the whole bound before giving up, waited {waited:?}"
+        );
+        assert!(
+            waited < crate::db::WRITE_LOCK_WAIT * 2,
+            "the wait is bounded, and took {waited:?}"
         );
         drop(held);
 

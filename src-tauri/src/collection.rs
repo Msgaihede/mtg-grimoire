@@ -484,13 +484,13 @@ fn friendly(e: rusqlite::Error) -> String {
     text
 }
 
-/// [`with_write`], plus the facet index's `owned` dimension re-read afterwards.
+/// [`crate::sync::with_write`], plus the facet index's `owned` dimension re-read afterwards.
 ///
 /// Every command in this module that changes what the user owns goes through here, because
 /// `owned` is the one index dimension a user moves without a sync — and an index that
 /// disagrees with the collection greys out "Owned" for a card they have just added.
 ///
-/// **After the write lock is gone, never inside it.** [`with_write`] returns before this runs,
+/// **After the write lock is gone, never inside it.** [`crate::sync::with_write`] returns before this runs,
 /// which is the house rule that a command must not do its remaining work while holding its own
 /// guard: 10–23 ms of re-read under the write connection is 10–23 ms of every other writer
 /// waiting, for work that reads through a connection of its own and needs no lock at all.
@@ -1014,7 +1014,6 @@ pub async fn collection_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::with_write;
 
     /// One sort term, in the shape the UI sends.
     fn term(key: &str, dir: &str) -> crate::sorting::SortTerm {
@@ -1770,46 +1769,6 @@ mod tests {
         assert_eq!(grading, r#"{"company":"PSA","grade":"10"}"#);
         assert_eq!(tags, r#"["cube"]"#);
         assert_eq!(notes, "the good one");
-    }
-
-    /// The bound is the whole point: a write that cannot have the database answers a
-    /// sentence rather than holding a button down until a sync finishes. It waits its full
-    /// [`crate::db::WRITE_LOCK_WAIT`] first — a lock that frees in 200 ms should be taken,
-    /// not refused — and then stops.
-    #[test]
-    fn a_write_that_cannot_have_the_database_says_so_rather_than_waiting_forever() {
-        let state = std::sync::Arc::new(AppState {
-            db: std::sync::Mutex::new(Connection::open_in_memory().unwrap()),
-            db_read: std::sync::Mutex::new(Connection::open_in_memory().unwrap()),
-            data_dir: std::path::PathBuf::from("D:\\app\\data"),
-            syncing: std::sync::atomic::AtomicBool::new(true),
-            // Neither is ever touched: this test stops at the lock.
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-            images: crate::images::Cache::new(std::path::PathBuf::from("D:\\app\\data\\images")),
-            index: std::sync::RwLock::default(),
-        });
-
-        let held = crate::db::lock_blocking(&state.db);
-        let started = std::time::Instant::now();
-        let answer = with_write(&state, |_| Ok::<_, String>("never runs"));
-        let waited = started.elapsed();
-        drop(held);
-
-        assert_eq!(answer.unwrap_err(), crate::db::BUSY);
-        assert!(
-            waited >= crate::db::WRITE_LOCK_WAIT,
-            "a lock that frees in a moment must still be taken, but gave up after {waited:?}"
-        );
-        assert!(
-            waited < crate::db::WRITE_LOCK_WAIT * 2,
-            "the wait is bounded, and took {waited:?}"
-        );
-        // And the connection is usable the moment it is free again.
-        assert!(
-            with_write(&state, |c| add_entry(c, &input("nope", "foil", 1))
-                .map(|_| ()))
-            .is_err()
-        );
     }
 
     /// Every write in this module goes through [`with_write_owned`], and this is what that

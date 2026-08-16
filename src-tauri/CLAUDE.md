@@ -186,7 +186,7 @@ both plus the frontend.
 - Writes take `AppState.db` through the one `sync::with_write`, which is
   `db::lock_for(…, WRITE_LOCK_WAIT)` and answers `db::BUSY` if it cannot — reads go through
   `db_read` like everything else. The sentence lives beside the bound that produces it, and
-  the helper beside `AppState`; both were five and eleven copies until 2026-08-16.
+  the helper beside `AppState`, which was five named copies plus six inlined until 2026-08-16.
 - `cards.oracle_id` is NULLABLE and **no live row is null** — 0 of 116,590, all 81
   reversible printings included, because `card_row` falls back to `card_faces[0]`. Every
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
