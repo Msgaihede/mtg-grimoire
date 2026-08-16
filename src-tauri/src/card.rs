@@ -436,24 +436,19 @@ fn card_image_uri_inner(
     if !crate::schema::IMAGE_VARIANTS.contains(&variant) {
         return Err(format!("unknown image variant: {variant}"));
     }
-    // Both columns, in one row, because either may be the one that holds the picture — the
-    // same two `json_extract`s [`crate::images::resolve`] runs. The face index is the literal
-    // `0` rather than a bound parameter: this command takes no face, and face 0 is the whole
+    // The face index is the literal `0`: this command takes no face, and face 0 is the whole
     // of what a printing's picture means here.
-    let row: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT json_extract(image_uris, '$.' || ?2),
-                    json_extract(face_image_uris, '$[0].' || ?2)
-             FROM cards WHERE id = ?1",
-            params![card_id, variant],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    // Face first, top-level second — `resolve`'s
+    let row = crate::images::image_uri_row(conn, card_id, variant, 0)?;
+    // Face first, top-level second — `images::resolve`'s
     // `face.or_else(|| (key.face == 0).then_some(top).flatten())` with the face pinned to 0,
     // so the two cannot answer differently about the front of a card. A `meld` printing
     // carries both, and its top-level image is its front and nothing else.
+    //
+    // **Deliberately without `resolve`'s host fence.** That function answers `NoImage` for a
+    // URI off `cards.scryfall.io` or one with no `?<epoch>` cache-buster, because it is about
+    // to cache the bytes; this command hands a URL back to a caller who is not caching, and
+    // refusing one here would be a policy `resolve` owns and this does not. The query is
+    // shared; the policy is not.
     Ok(row.and_then(|(top, face)| face.or(top)))
 }
 
