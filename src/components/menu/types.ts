@@ -29,7 +29,13 @@ export interface MenuAction {
   label: string;
   Icon?: LucideIcon;
   disabled?: boolean;
-  /** Drawn beside a disabled row, in `text-dim`. Why it cannot be pressed. */
+  /**
+   * Drawn beside a disabled row, in `text-dim`. Why it cannot be pressed.
+   *
+   * **Optional on a disabled row, and a short phrase where it is given.** A row is as wide as
+   * its widest content, so one long reason sets the width of the whole panel — which is why the
+   * deck menu's zone rows grey silently rather than repeating a validation sentence.
+   */
   reason?: string;
   onSelect: () => void;
 }

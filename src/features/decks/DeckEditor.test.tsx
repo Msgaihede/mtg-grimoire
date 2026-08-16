@@ -3547,14 +3547,20 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * …and in a format that has one, an ineligible card is **greyed with its reason** rather than
-   * hidden — the reason being `commanderIneligibility`'s, the rule the validation panel judges
-   * the built deck by.
+   * …and in a format that has one, an ineligible card is **greyed** rather than hidden — the test
+   * being `commanderIneligibility`'s, the rule the validation panel judges the built deck by.
    *
    * `aria-disabled` and never the `disabled` attribute: the row exists to be read, so it has to
    * stay in the tab order.
+   *
+   * **The row's whole text is its label** (2026-08-17). It drew the rule's sentence beside the
+   * label until then, and a menu row is as wide as its widest content, so those two zone rows
+   * set the width of the entire card menu. Asserting the *absence* here rather than only in
+   * `deckCardMenu.test.tsx` is what pins the width fix to what the reader actually sees: a
+   * builder that stopped passing `reason` and a primitive that stopped drawing it are two
+   * different fixes and only this one is blind to which it got.
    */
-  it("greys the commander row with its reason in Commander", async () => {
+  it("greys the commander row in Commander, and words no refusal on it", async () => {
     deckGet.mockResolvedValue(
       detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]),
     );
@@ -3564,7 +3570,7 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
     expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(row).toHaveTextContent(/legendary/i);
+    expect(row).toHaveTextContent(/^Set as commander$/);
   });
 
   /**

@@ -202,15 +202,19 @@ describe("buildDeckCardMenu", () => {
   });
 
   /**
-   * The reason is `commanderIneligibility`'s own — the rule the validation panel judges a built
-   * deck by and the importer offers candidates by. A looser test here would offer a card the
-   * panel then refuses.
+   * The test underneath is `commanderIneligibility`'s own — the rule the validation panel judges
+   * a built deck by and the importer offers candidates by. A looser one here would offer a card
+   * the panel then refuses.
+   *
+   * **No `reason`, and that is the assertion worth having** (2026-08-17): the rule's sentences
+   * are written for the validation panel, and drawing one here set the width of every row in the
+   * menu. The row greys; the words live where there is room for them.
    */
-  it("greys the commander row with the reason the rules give", () => {
+  it("greys the commander row for an ineligible card, wordlessly", () => {
     const items = buildDeckCardMenu(bolt(), deps({ spec: spec("commander") }));
     const row = find(items, "Set as commander") as MenuAction;
     expect(row.disabled).toBe(true);
-    expect(row.reason).toMatch(/legendary/i);
+    expect(row.reason).toBeUndefined();
   });
 
   it("offers the commander row live for an eligible card, and sends it to the command zone", () => {
@@ -237,10 +241,10 @@ describe("buildDeckCardMenu", () => {
     expect(has(items, /companion/i)).toBe(false);
   });
 
-  it("greys the companion row for a card with no companion ability", () => {
+  it("greys the companion row for a card with no companion ability, wordlessly", () => {
     const row = find(buildDeckCardMenu(bolt(), deps()), "Set as companion") as MenuAction;
     expect(row.disabled).toBe(true);
-    expect(row.reason).toMatch(/companion ability/i);
+    expect(row.reason).toBeUndefined();
   });
 
   it("offers the companion row for a real companion whose condition the deck meets", () => {
@@ -264,8 +268,11 @@ describe("buildDeckCardMenu", () => {
   /**
    * The reigning commander gets a greyed row rather than a live one — the write would be a move
    * from a category to itself, which is the same nothing `Move to`'s own pile is greyed for.
-   * Worth its own case because the reason is *not* `commanderIneligibility`'s: the card in the
+   * Worth its own case because the test is *not* `commanderIneligibility`'s: the card in the
    * command zone is by definition an eligible one, so an eligibility test alone would offer it.
+   *
+   * `ALREADY_HERE` is still what greys it and is no longer drawn on it — a zone row words
+   * nothing, whichever of the two refusals it met. `Move to`'s own pile still draws that string.
    */
   it("greys the zone row on the card that is already in it", () => {
     const atraxa = card({
@@ -280,7 +287,7 @@ describe("buildDeckCardMenu", () => {
     const items = buildDeckCardMenu(atraxa, deps({ spec: spec("commander") }));
     const row = find(items, "Set as commander") as MenuAction;
     expect(row.disabled).toBe(true);
-    expect(row.reason).toBe("already here");
+    expect(row.reason).toBeUndefined();
   });
 
   /** A deck whose seeded zone has been lost cannot be written to, so nothing offers it: an
