@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DeckFolder } from "@/lib/ipc";
+import { deckDragData, readDeckDrag } from "./deckDrag";
 import { dragData, readDragData } from "./dnd";
-import {
-  buildFolderTree,
-  deckDragData,
-  flattenFolders,
-  folderDescendants,
-  readDeckDrag,
-} from "./FolderTree";
+import { buildFolderTree, flattenFolders, folderDescendants } from "./folders";
 
 const folder = (id: number, parentId: number | null, name: string, sortOrder = 0): DeckFolder => ({
   id,

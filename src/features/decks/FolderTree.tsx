@@ -7,11 +7,6 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import {
-  draggable,
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
@@ -19,14 +14,19 @@ import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckFolder } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { NOT_A_DRAG } from "./dnd";
+import { useDeckDropTarget, type DeckDrag } from "./deckDrag";
+import { flattenFolders, indent, type FolderNode } from "./folders";
 
 /**
- * The filing cabinet: the tree the deck gallery is read through, and the gesture that files a
- * deck into one of its drawers.
+ * The filing cabinet: the tree the deck gallery is read through, drawn as rows.
+ *
+ * **What the tree *is* lives in `folders.ts` and the gesture that files a deck into one of
+ * its drawers lives in `deckDrag.ts`.** This file is the drawing and nothing else: the rows,
+ * the one field that names a folder, and the two doors into a row's menu. The split is what
+ * lets `cardMenu.tsx` and `folderMenu.tsx` ask what is under a folder without importing a
+ * sidebar — and `MoveToFolder` offer the same folders without importing this.
  *
  * **Flat rows, indented — no twisty.** `deck_folders` has no notion of depth and a reader has
  * tens of folders at most, so every folder is always on screen and the indent is the whole of
@@ -34,270 +34,26 @@ import { NOT_A_DRAG } from "./dnd";
  * at it, which is the one thing a filing cabinet must never do.
  */
 
-/** Pixels of indent per level of nesting, and the padding the root sits at. */
-const INDENT_STEP = 14;
-const INDENT_BASE = 8;
-
 /**
- * The indent, as an **inline style**.
+ * The three modules this one was split out of, re-exported for `DecksPage.tsx` alone.
  *
- * Tailwind v4 scans source text for whole class names, so `pl-[${n}px]` built by
- * interpolation emits no rule at all — `VirtualTable`'s column template is an inline style
- * for exactly this reason, and a tree's indent is the same shape of problem.
+ * **A shim with one consumer and a date on it.** The gallery imports thirteen names from this
+ * path, and it is owned by another task in the same wave — so re-pointing it here would be two
+ * agents writing one file. It is the *page* that wants all three modules, not this component:
+ * `folders.ts` for the tree it builds, `deckDrag.ts` for the tile it makes draggable, and
+ * `MoveToFolder` for the popup it anchors to that tile. Every other consumer already imports
+ * the module it means. Delete this block with the import in `DecksPage.tsx` that needs it.
  */
-function indent(depth: number) {
-  return { paddingLeft: INDENT_BASE + depth * INDENT_STEP };
-}
-
-/** One folder as the tree draws it: where it sits, what is under it, and how much. */
-export interface FolderNode {
-  folder: DeckFolder;
-  /** 0 at the root of the tree. What the row is indented by. */
-  depth: number;
-  /**
-   * Live decks filed here **and in everything under it**.
-   *
-   * Recursive rather than direct, because a row reading 0 while a sub-folder under it holds
-   * twelve decks is a lie the reader can only catch by clicking. Archived decks are left out:
-   * they are behind their own disclosure with their own count, and a row that says 5 over a
-   * grid showing 4 is the same lie wearing the other hat.
-   */
-  deckCount: number;
-  children: FolderNode[];
-}
-
-/** What a folder row needs to know about the decks in it — the two fields, so a caller can
- *  pass `DeckRow[]` or anything else that answers them. */
-interface Filed {
-  folderId: number | null;
-  archived: boolean;
-}
-
-/** Siblings in the order the backend meant, then alphabetically, then by id so a tie is still
- *  stable across renders. */
-function order(a: DeckFolder, b: DeckFolder): number {
-  return a.sortOrder - b.sortOrder || a.name.localeCompare(b.name) || a.id - b.id;
-}
-
-/**
- * The flat `deck_folder_list` rows as a tree, with each node's deck count already summed.
- *
- * Two shapes of broken input are handled rather than trusted, and both resolve the same way —
- * **towards the root, never towards nothing**. A `parentId` naming a folder this list does not
- * carry (a folder another surface deleted between the two reads) draws its child at the root;
- * a cycle, which the backend refuses outright and which only corruption could produce, draws
- * every folder it swallowed at the root as a leaf. Dropping a folder would hide the decks in it
- * with no number anywhere pointing at them, and that is worse than a wrong indent.
- */
-export function buildFolderTree(
-  folders: readonly DeckFolder[],
-  decks: readonly Filed[],
-): FolderNode[] {
-  const byId = new Map(folders.map((f) => [f.id, f]));
-  const direct = new Map<number, number>();
-  for (const deck of decks) {
-    if (deck.archived || deck.folderId === null || !byId.has(deck.folderId)) continue;
-    direct.set(deck.folderId, (direct.get(deck.folderId) ?? 0) + 1);
-  }
-
-  const childrenOf = new Map<number | null, DeckFolder[]>();
-  for (const folder of folders) {
-    const parent = folder.parentId !== null && byId.has(folder.parentId) ? folder.parentId : null;
-    childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), folder]);
-  }
-
-  const seen = new Set<number>();
-  const build = (parentId: number | null, depth: number): FolderNode[] =>
-    [...(childrenOf.get(parentId) ?? [])].sort(order).flatMap((folder) => {
-      if (seen.has(folder.id)) return [];
-      seen.add(folder.id);
-      const children = build(folder.id, depth + 1);
-      const under = children.reduce((n, c) => n + c.deckCount, 0);
-      return [{ folder, depth, deckCount: (direct.get(folder.id) ?? 0) + under, children }];
-    });
-
-  const roots = build(null, 0);
-  for (const folder of folders) {
-    if (seen.has(folder.id)) continue;
-    seen.add(folder.id);
-    roots.push({ folder, depth: 0, deckCount: direct.get(folder.id) ?? 0, children: [] });
-  }
-  return roots;
-}
-
-/** The tree read top to bottom, which is the order it is drawn and the order a destination
- *  list offers. Each node keeps its own `depth`, so nothing has to be recomputed. */
-export function flattenFolders(nodes: readonly FolderNode[]): FolderNode[] {
-  return nodes.flatMap((node) => [node, ...flattenFolders(node.children)]);
-}
-
-/**
- * Every folder underneath one — what a folder may **not** be moved into.
- *
- * The backend refuses a move into a descendant in words, and that refusal is a fence rather
- * than the affordance: `deck_folders.parent_id` cascades onto itself, so a cycle is a graph
- * SQLite would walk forever the day the folder is deleted. This is what greys the offer out
- * before the reader can make it.
- *
- * Breadth-first with a visited set, so a corrupt cycle terminates here too.
- */
-export function folderDescendants(folders: readonly DeckFolder[], id: number): ReadonlySet<number> {
-  const out = new Set<number>();
-  let frontier = new Set<number>([id]);
-  while (frontier.size > 0) {
-    const next = new Set<number>();
-    for (const folder of folders) {
-      if (folder.parentId === null || !frontier.has(folder.parentId)) continue;
-      if (out.has(folder.id) || folder.id === id) continue;
-      out.add(folder.id);
-      next.add(folder.id);
-    }
-    frontier = next;
-  }
-  return out;
-}
-
-/**
- * A deck in the air, and the mark that says so.
- *
- * **A different mark from `dnd.ts`'s, deliberately, and it shares that module's key.** A deck
- * is not a card, and the two must be told apart in both directions: `readDragData` refuses
- * anything whose `dragSource` is not the card mark, so a deck dragged over a category column or
- * over the sidebar's Decks entry lights nothing up and writes nothing; and `readDeckDrag`
- * refuses a card for the same reason. Sharing the key is what makes each fence answer the
- * other's payload rather than ignoring it.
- */
-const DECK_MARK = "mtg-grimoire/deck-file-drag";
-const MARK_KEY = "dragSource";
-
-/** What a deck drag carries: the deck, and its name for whatever wants to say what moved. */
-export interface DeckDrag {
-  deckId: number;
-  name: string;
-}
-
-/** What a deck tile hands the adapter. Flat, so `canDrop` reads it without unwrapping. */
-export function deckDragData(drag: DeckDrag): Record<string, unknown> {
-  return { [MARK_KEY]: DECK_MARK, ...drag };
-}
-
-/**
- * The payload a folder may act on, or `null` for everything else.
- *
- * Field by field rather than a cast — `dnd.ts`'s rule, for its reason: this is the app's
- * boundary with an untyped store every draggable in the window writes into.
- */
-export function readDeckDrag(data: Record<string, unknown>): DeckDrag | null {
-  if (data[MARK_KEY] !== DECK_MARK) return null;
-  const { deckId, name } = data;
-  if (typeof deckId !== "number" || !Number.isSafeInteger(deckId) || deckId <= 0) return null;
-  if (typeof name !== "string") return null;
-  return { deckId, name };
-}
-
-/**
- * A deck tile that can be picked up, and a press on one of its controls that is a press on the
- * control.
- *
- * `cardDraggable`'s arrangement rather than `cardDraggable` itself: the payload is a deck and
- * the mark has to differ (see {@link DECK_MARK}), so what is shared is {@link NOT_A_DRAG} and
- * the reasoning. Chromium starts a drag from the nearest draggable *ancestor* of whatever was
- * pressed and the library adds no exclusion, so without the capture-phase `mousedown` a press
- * on Delete plus five pixels of travel is a drag of the whole tile and the click never lands.
- */
-export function deckDraggable({
-  element,
-  payload,
-}: {
-  element: HTMLElement;
-  /** Read at `dragstart`, so a tile renamed since it mounted carries what it is now. */
-  payload: () => DeckDrag;
-}): () => void {
-  let onControl = false;
-  const press = (event: Event) => {
-    const target = event.target;
-    onControl = target instanceof Element && target.closest(NOT_A_DRAG) !== null;
-  };
-  element.addEventListener("mousedown", press, true);
-  const stop = draggable({
-    element,
-    canDrag: () => !onControl,
-    getInitialData: () => deckDragData(payload()),
-  });
-  return () => {
-    element.removeEventListener("mousedown", press, true);
-    stop();
-  };
-}
-
-/**
- * The deck in the air, or `null` — what raises the ring on every folder that could take it.
- *
- * The deck rather than a bare "something is being dragged", because a folder the deck is
- * already in cannot take it: a boolean would light every drawer up and then refuse the one the
- * reader aimed at. A card drag raises nothing here at all, and this is where that is decided.
- */
-export function useDeckDragging(): DeckDrag | null {
-  const [drag, setDrag] = useState<DeckDrag | null>(null);
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => readDeckDrag(source.data) !== null,
-        onDragStart: ({ source }) => setDrag(readDeckDrag(source.data)),
-        // Fires for a cancelled drag as well as a completed one — the platform ends both the
-        // same way — so the rings stand down on Escape without this hearing a keypress.
-        onDrop: () => setDrag(null),
-      }),
-    [],
-  );
-  return drag;
-}
-
-/**
- * One place a deck can be let go: a folder row, or a folder card on the wall.
- *
- * `canDrop` and `onDrop` are read through a ref rather than through the effect's deps, so a
- * target does not tear itself down and re-register every time the deck list changes under it —
- * `AppShell`'s sidebar entries do the same, for the same reason.
- */
-export function useDeckDropTarget({
-  ref,
-  canDrop,
-  onDrop,
-}: {
-  ref: RefObject<HTMLElement | null>;
-  canDrop: (drag: DeckDrag) => boolean;
-  onDrop: (drag: DeckDrag) => void;
-}): boolean {
-  const [over, setOver] = useState(false);
-  const latest = useRef({ canDrop, onDrop });
-  useEffect(() => {
-    latest.current = { canDrop, onDrop };
-  });
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => {
-        const drag = readDeckDrag(source.data);
-        return drag !== null && latest.current.canDrop(drag);
-      },
-      onDragEnter: () => setOver(true),
-      onDragLeave: () => setOver(false),
-      onDrop: ({ source }) => {
-        setOver(false);
-        const drag = readDeckDrag(source.data);
-        // Asked again on the drop itself: `canDrop` and this can be a second apart, and only
-        // this one writes.
-        if (drag !== null && latest.current.canDrop(drag)) latest.current.onDrop(drag);
-      },
-    });
-  }, [ref]);
-
-  return over;
-}
+export { buildFolderTree, flattenFolders, folderDescendants, type FolderNode } from "./folders";
+export {
+  deckDragData,
+  deckDraggable,
+  readDeckDrag,
+  useDeckDragging,
+  useDeckDropTarget,
+  type DeckDrag,
+} from "./deckDrag";
+export { MoveToFolder } from "./MoveToFolder";
 
 /**
  * The one folder field that may be open, and what it is for.
@@ -354,8 +110,10 @@ export interface FolderTreeProps {
    *
    * **The menu is data and the page is what has the writes**, so this tree draws rows and never
    * decides what a row offers — the same split `DeckEditor` uses for a deck card's menu. It is
-   * also what keeps the import graph acyclic: `folderMenu.tsx` reads `folderDescendants` from
-   * *this* file, so a `buildFolderMenu` call in here would be a cycle.
+   * also what keeps the import graph acyclic: `folderMenu.tsx` reads `folderDescendants` — out of
+   * `folders.ts` since the split, out of *this file* before it — so a `buildFolderMenu` call in
+   * here would be a cycle either way. The split narrowed that edge rather than removing the
+   * reason for this prop.
    *
    * Not offered for "All decks", which is the tree's root and not a folder — there is nothing to
    * rename, move or delete.
@@ -799,116 +557,6 @@ function FolderNameField({
         </button>
       </form>
       {where && <p className="mt-1 text-[0.7rem] text-dim">{where}</p>}
-    </div>
-  );
-}
-
-const NOTHING_FORBIDDEN: ReadonlySet<number> = new Set();
-
-/**
- * Where a deck or a folder can be moved to — **the keyboard's half of the drag.**
- *
- * A drag-only affordance is half a feature, and this is the other half: the same two writes
- * (`deck_set_folder`, `deck_folder_move`) reached with the caret. `null` is the top level and
- * is an offer with a meaning rather than an omission — `DeckPatch` writes every column with
- * `coalesce(?n, column)`, so there is no patch that un-files a deck and this list is the only
- * way back to the root.
- */
-export function MoveToFolder({
-  label,
-  nodes,
-  currentId,
-  forbidden = NOTHING_FORBIDDEN,
-  forbiddenReason = null,
-  pending,
-  onPick,
-  onClose,
-}: {
-  /** The dialog's accessible name — "Move Burn to a folder". */
-  label: string;
-  nodes: readonly FolderNode[];
-  /** Where it already is: offered, inert. Moving something where it already is writes nothing
-   *  and bumps `updated_at` — `dropWrite`'s rule about a card dropped back in its own column. */
-  currentId: number | null;
-  /** Folders it may not go into — itself and its descendants, for a folder move. */
-  forbidden?: ReadonlySet<number>;
-  /** Why those are inert. Said once under the list rather than on each of them. */
-  forbiddenReason?: string | null;
-  pending: boolean;
-  onPick: (folderId: number | null) => void;
-  /** Focus left the layer on its own. Closes and hands nothing back. */
-  onClose: () => void;
-}) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const flat = flattenFolders(nodes);
-
-  // The caret moves into the layer, as it does for every other one in the app, so Escape has
-  // something to hand back and Tab reaches the destinations next.
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
-
-  const destination = (id: number | null, name: string, depth: number) => {
-    const inert = id === currentId || (id !== null && forbidden.has(id));
-    return (
-      <li key={id ?? "root"}>
-        <button
-          type="button"
-          disabled={inert || pending}
-          onClick={() => onPick(id)}
-          style={indent(depth)}
-          className={cn(
-            "flex w-full items-center gap-2 truncate rounded-md py-1.5 pr-2 text-left text-xs",
-            "transition-colors duration-150 motion-reduce:transition-none",
-            "hover:bg-surface hover:text-text disabled:opacity-40 disabled:hover:bg-transparent",
-            inert ? "text-dim" : "text-text",
-            FOCUS,
-          )}
-        >
-          {id === null ? (
-            <Layers className="size-3.5 flex-none" aria-hidden="true" />
-          ) : (
-            <Folder className="size-3.5 flex-none" aria-hidden="true" />
-          )}
-          <span className="min-w-0 flex-1 truncate">{name}</span>
-          {id === currentId && <span className="flex-none text-[0.7rem] text-dim">Here now</span>}
-        </button>
-      </li>
-    );
-  };
-
-  return (
-    <div
-      ref={panelRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-label={label}
-      // A press in here is a press on a control, never the start of a drag of the tile this
-      // panel is anchored inside.
-      data-no-drag=""
-      // Anchored to its trigger and pinned to the trigger's **right** edge, not portalled:
-      // the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects a
-      // runtime <style>, and nothing clips these popups — one opening leftward from a tile at
-      // the end of a row scrolls the whole app sideways.
-      className={cn(
-        "absolute right-0 top-8 w-56 rounded-lg border border-border bg-surface p-1 shadow-lg",
-        LAYER.popup,
-        FOCUS,
-      )}
-      onBlur={(e) => {
-        if (pending) return;
-        if (!panelRef.current?.contains(e.relatedTarget)) onClose();
-      }}
-    >
-      <ul className="max-h-56 overflow-y-auto">
-        {destination(null, "All decks", 0)}
-        {flat.map((node) => destination(node.folder.id, node.folder.name, node.depth + 1))}
-      </ul>
-      {forbiddenReason && (
-        <p className="border-t border-border px-2 pb-1 pt-1.5 text-[0.7rem] leading-relaxed text-dim">
-          {forbiddenReason}
-        </p>
-      )}
     </div>
   );
 }
