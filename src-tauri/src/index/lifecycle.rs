@@ -33,36 +33,6 @@ use super::CardIndex;
 use crate::sync::AppState;
 use std::sync::Arc;
 
-/// Write a failed index build down where a user can see it.
-///
-/// [`crate::errors::Source::Database`] and [`crate::errors::Kind::Io`], the same pair
-/// `sync.rs`'s `note_database` uses for a sweep, a reclaim or a compaction: this is the app's
-/// own SQLite failing at its own work, and the fix is a disk or a database rather than a
-/// query.
-///
-/// Best-effort and never waited on, for the reason every caller here is: the index is an
-/// optimisation, this describes a failure that has already been absorbed, and nothing about
-/// recording it is worth blocking a launch or a sync over.
-///
-/// **Safe to take the write lock from every call site, and that is checked rather than
-/// assumed.** `spawn_build` runs on a thread of its own holding nothing, and
-/// `collection::with_write_owned` — the one caller of [`invalidate_owned`] that has just
-/// written — releases its guard *before* calling in, which its own doc names as the house
-/// rule. Recording from inside a held guard is the deadlock `do_sync`'s orphan-sweep arm
-/// avoids by passing its connection down instead.
-fn note_index_failure(state: &AppState, operation: &str, message: &str) {
-    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        crate::errors::record(
-            &conn,
-            crate::errors::Source::Database,
-            operation,
-            crate::errors::Kind::Io,
-            message,
-            None,
-        );
-    }
-}
-
 /// What [`crate::sync::AppState`] holds: the published index, and the generation of the
 /// corpus it was built against.
 ///
@@ -195,7 +165,7 @@ pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
             // Recorded here and not in `build_now`, which returns its error for the caller to
             // decide about — the direct callers are tests, and this is the only production
             // path.
-            note_index_failure(&state, "index_build", &e);
+            crate::sync::note_database(&state, "index_build", &e);
         }
     })
 }
@@ -224,7 +194,7 @@ pub fn invalidate_owned(state: &AppState) {
     let mut next = (*base).clone();
     if let Err(e) = next.rebuild_owned(&conn) {
         eprintln!("the owned facet could not be refreshed: {e}");
-        note_index_failure(state, "index_owned_refresh", &e.to_string());
+        crate::sync::note_database(state, "index_owned_refresh", &e.to_string());
         return;
     }
     // Dropped in silence if the base is gone: a sync taking the index cold underneath a
@@ -452,5 +422,31 @@ mod tests {
             .join()
             .expect("a failed build must not panic the thread it runs on");
         assert!(current(&state).is_none());
+    }
+
+    /// A failed index build lands in `error_log` as the app's own database failing at its own
+    /// work — `Source::Database` + `Kind::Io`, which is `sync::note_database` and no longer a
+    /// second copy of it.
+    #[test]
+    fn a_failed_index_build_is_recorded_as_a_database_io_failure() {
+        let state = state_with_seeded_cards("note-database");
+        crate::sync::note_database(&state, "index_build", "the corpus could not be read");
+
+        let conn = crate::db::lock_blocking(&state.db);
+        let (source, kind, operation, message): (String, String, String, String) = conn
+            .query_row(
+                "SELECT source, kind, operation, message FROM error_log
+                  ORDER BY last_at DESC, rowid DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("the failure was written down");
+        assert_eq!(
+            source, "database",
+            "the app's own SQLite failing at its own work"
+        );
+        assert_eq!(kind, "io", "the fix is a disk or a database, not a query");
+        assert_eq!(operation, "index_build");
+        assert_eq!(message, "the corpus could not be read");
     }
 }

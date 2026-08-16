@@ -5,15 +5,11 @@
 //! which connection — these *write*, so they take `AppState.db` with a bound rather than
 //! `db_read`, and a lock they cannot get is an answer rather than a wait.
 
-use crate::schema::COLLECTION_GRAIN;
+use crate::schema::{COLLECTION_GRAIN, FINISHES};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-/// Scryfall's finish enum. Never a boolean — `etched` is a third thing, and collapsing it
-/// into `foil: true` is the single most common way an importer loses data.
-pub const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
 
 /// The NA condition scale, in descending order. The EU scale (`M/NM/EX/GD/LP/PL/PO`) is
 /// normalised into this one at the edge — see `src/lib/conditions.ts` — and the string it
@@ -22,13 +18,6 @@ pub const CONDITIONS: [&str; 5] = ["NM", "LP", "MP", "HP", "DMG"];
 
 /// What a card is assumed to be when nobody says otherwise.
 pub const DEFAULT_CONDITION: &str = "NM";
-
-/// What a write command says when it could not have the database.
-///
-/// A sentence rather than a lock error, and it names the wait: after the ingest was
-/// chunked (Task 1) the only thing that can hold the connection for five seconds is
-/// something genuinely stuck, and "try again in a moment" is both true and actionable.
-pub const BUSY: &str = "The card database is busy finishing a sync. Try that again in a moment.";
 
 /// What an *adjustment* says when the row it names is not there — an edit that could not be
 /// applied, unlike a delete that finds nothing (see [`remove_entry`]).
@@ -495,39 +484,25 @@ fn friendly(e: rusqlite::Error) -> String {
     text
 }
 
-/// Run `f` with the write connection, or answer [`BUSY`].
-///
-/// Bounded rather than blocking: this runs on a worker thread from a button press, and the
-/// one thing that can hold `AppState.db` for any length of time is a sync — which, since
-/// the ingest was chunked, holds it for one batch at a time.
-fn with_write<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
-        None => Err(BUSY.to_owned()),
-    }
-}
-
-/// [`with_write`], plus the facet index's `owned` dimension re-read afterwards.
+/// [`crate::sync::with_write`], plus the facet index's `owned` dimension re-read afterwards.
 ///
 /// Every command in this module that changes what the user owns goes through here, because
 /// `owned` is the one index dimension a user moves without a sync — and an index that
 /// disagrees with the collection greys out "Owned" for a card they have just added.
 ///
-/// **After the write lock is gone, never inside it.** [`with_write`] returns before this runs,
+/// **After the write lock is gone, never inside it.** [`crate::sync::with_write`] returns before this runs,
 /// which is the house rule that a command must not do its remaining work while holding its own
 /// guard: 10–23 ms of re-read under the write connection is 10–23 ms of every other writer
 /// waiting, for work that reads through a connection of its own and needs no lock at all.
 ///
-/// Only on success. A refusal — [`BUSY`], [`GONE`], a rejected quantity — changed nothing, and
-/// re-reading after one would be a copy of the whole index to arrive at the same answer.
+/// Only on success. A refusal — [`crate::db::BUSY`], [`GONE`], a rejected quantity — changed
+/// nothing, and re-reading after one would be a copy of the whole index to arrive at the same
+/// answer.
 fn with_write_owned<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
-    let answer = with_write(state, f);
+    let answer = crate::sync::with_write(state, f);
     if answer.is_ok() {
         crate::index::lifecycle::invalidate_owned(state);
     }
@@ -1796,46 +1771,6 @@ mod tests {
         assert_eq!(notes, "the good one");
     }
 
-    /// The bound is the whole point: a write that cannot have the database answers a
-    /// sentence rather than holding a button down until a sync finishes. It waits its full
-    /// [`crate::db::WRITE_LOCK_WAIT`] first — a lock that frees in 200 ms should be taken,
-    /// not refused — and then stops.
-    #[test]
-    fn a_write_that_cannot_have_the_database_says_so_rather_than_waiting_forever() {
-        let state = std::sync::Arc::new(AppState {
-            db: std::sync::Mutex::new(Connection::open_in_memory().unwrap()),
-            db_read: std::sync::Mutex::new(Connection::open_in_memory().unwrap()),
-            data_dir: std::path::PathBuf::from("D:\\app\\data"),
-            syncing: std::sync::atomic::AtomicBool::new(true),
-            // Neither is ever touched: this test stops at the lock.
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-            images: crate::images::Cache::new(std::path::PathBuf::from("D:\\app\\data\\images")),
-            index: std::sync::RwLock::default(),
-        });
-
-        let held = crate::db::lock_blocking(&state.db);
-        let started = std::time::Instant::now();
-        let answer = with_write(&state, |_| Ok::<_, String>("never runs"));
-        let waited = started.elapsed();
-        drop(held);
-
-        assert_eq!(answer.unwrap_err(), BUSY);
-        assert!(
-            waited >= crate::db::WRITE_LOCK_WAIT,
-            "a lock that frees in a moment must still be taken, but gave up after {waited:?}"
-        );
-        assert!(
-            waited < crate::db::WRITE_LOCK_WAIT * 2,
-            "the wait is bounded, and took {waited:?}"
-        );
-        // And the connection is usable the moment it is free again.
-        assert!(
-            with_write(&state, |c| add_entry(c, &input("nope", "foil", 1))
-                .map(|_| ()))
-            .is_err()
-        );
-    }
-
     /// Every write in this module goes through [`with_write_owned`], and this is what that
     /// buys: the facet index's `owned` dimension is true again by the time the command
     /// answers, so the panel the user is looking at does not grey out "Owned" for a card they
@@ -1847,8 +1782,8 @@ mod tests {
     /// the only visible trace of ~1 MB of index copied to learn nothing. (Measured: with the
     /// `is_ok` guard removed, the count assertion still passes and this one fails.)
     ///
-    /// The refusal is [`GONE`] rather than [`BUSY`]: a busy write would need the lock held
-    /// from another thread, and the point being pinned is the same either way.
+    /// The refusal is [`GONE`] rather than [`crate::db::BUSY`]: a busy write would need the
+    /// lock held from another thread, and the point being pinned is the same either way.
     #[test]
     fn a_write_that_lands_refreshes_the_owned_facet_and_one_that_is_refused_does_not() {
         let state = crate::index::fixtures::state_with_seeded_cards("collection-owned");

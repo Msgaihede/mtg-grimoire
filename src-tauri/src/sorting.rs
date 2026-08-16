@@ -147,7 +147,7 @@ impl<'de> Deserialize<'de> for Marketplace {
 ///
 /// The one SQL fragment every price site in this crate uses. `finish` is the caller's SQL for
 /// the finish being priced — `e.finish` on the collection, `coalesce(w.preferred_finish,
-/// 'nonfoil')` on the wishlist, and each of [`FINISH_LITERALS`] in turn where the caller holds a
+/// 'nonfoil')` on the wishlist, and each of [`finish_literals`] in turn where the caller holds a
 /// printing rather than a copy of one ([`printing_price_by_finish_expr`], the card pane's
 /// `FinishPrices`). **The printing itself is always the alias `c`**: every list in this
 /// crate joins `cards` as `c`, and hard-coding it here is what keeps the join key and the
@@ -210,11 +210,19 @@ fn feed_price(feed: &str, finish: &str) -> String {
 /// wishlist. The two callers here price a printing in all three at once instead, so each is a
 /// constant: [`printing_price_by_finish_expr`], and the card pane's `FinishPrices`, whose field
 /// order this also is.
-pub(crate) const FINISH_LITERALS: [&str; 3] = ["'nonfoil'", "'foil'", "'etched'"];
+///
+/// **Derived from [`crate::schema::FINISHES`] rather than respelled**, which is the rule the
+/// rest of the crate's CHECK vocabularies already follow (`deck_audit::ADD` is
+/// `schema::AUDIT_KINDS[0]`, `deck::LIVE` is `DECK_VARIANTS[0]`). Quoting here rather than in
+/// the constant because a SQL literal is this module's concern and not the schema's — the
+/// three `format!`s are built once per query alongside a SQL string of several kilobytes.
+pub(crate) fn finish_literals() -> [String; 3] {
+    crate::schema::FINISHES.map(|finish| format!("'{finish}'"))
+}
 
 /// What one copy of a **printing** costs at `market`, in whatever finish it is *sold* in.
 ///
-/// [`price_expr`] once per [`FINISH_LITERALS`] entry, coalesced — so a printing quoted nonfoil
+/// [`price_expr`] once per [`finish_literals`] entry, coalesced — so a printing quoted nonfoil
 /// is quoted nonfoil, and one that exists only in foil is quoted at its foil rate instead of
 /// reading as unpriced.
 ///
@@ -237,8 +245,8 @@ pub(crate) const FINISH_LITERALS: [&str; 3] = ["'nonfoil'", "'foil'", "'etched'"
 /// Cardmarket the third link is `NULL` by construction, so an etched-only printing is unpriced
 /// in euros and priced at every marketplace that does quote it.
 pub fn printing_price_by_finish_expr(market: Marketplace) -> String {
-    let links = FINISH_LITERALS
-        .map(|finish| price_expr(market, finish))
+    let links = finish_literals()
+        .map(|finish| price_expr(market, &finish))
         .join(",\n");
     format!("coalesce({links})")
 }
@@ -605,7 +613,7 @@ mod tests {
             assert!(!sql.contains("json_extract"), "{sql}");
         }
 
-        // Every link is `price_expr`'s, in `FINISH_LITERALS` order. A chain assembled by hand
+        // Every link is `price_expr`'s, in `finish_literals()` order. A chain assembled by hand
         // here is how one marketplace's hole comes to be spelled differently in two places.
         for market in [
             Marketplace::Tcgplayer,
@@ -614,8 +622,8 @@ mod tests {
             Marketplace::Manapool,
         ] {
             let sql = printing_price_by_finish_expr(market);
-            for finish in FINISH_LITERALS {
-                assert!(sql.contains(&price_expr(market, finish)), "{sql}");
+            for finish in finish_literals() {
+                assert!(sql.contains(&price_expr(market, &finish)), "{sql}");
             }
         }
     }

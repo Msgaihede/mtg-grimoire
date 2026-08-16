@@ -393,6 +393,39 @@ pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
     lock_conn(&state.db_read)
 }
 
+/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
+///
+/// Bounded rather than blocking: every caller is a button press on a worker thread, and the
+/// one thing that can hold `AppState.db` for any length of time is a sync — which, since the
+/// ingest was chunked, holds it for one batch at a time.
+///
+/// **This is the one definition of that rule**, the way [`crate::db::lock_plain`] is the one
+/// definition of poison recovery. It was five identical private copies (`collection`, `deck`,
+/// `deck_meta`, `deck_theory`, `wishlist`) plus six sites that inlined the same four lines,
+/// each documented as "kept per-module the way every other one in this crate is" — which was
+/// true, and was the problem.
+///
+/// Here rather than in [`crate::db`] because the parameter is [`AppState`]: `db` is the layer
+/// below and must not learn about the app's state. `&AppState` rather than `&Arc<AppState>`
+/// so that both shapes of caller fit — a command holding an `Arc` gets deref coercion for
+/// free, and [`crate::index::lifecycle`], which holds a bare reference, needs no clone.
+///
+/// **Never call this while holding a guard on `state.db`** — it does not deadlock, because
+/// [`crate::db::lock_for`] is a `try_lock`-plus-sleep loop rather than a blocking one, but a
+/// same-thread reentrant call spends the whole [`crate::db::WRITE_LOCK_WAIT`] failing to
+/// take a lock its own thread already holds, then answers [`crate::db::BUSY`] against itself.
+/// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
+/// connection down instead.
+pub(crate) fn with_write<T>(
+    state: &AppState,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        Some(conn) => f(&conn),
+        None => Err(crate::db::BUSY.to_owned()),
+    }
+}
+
 /// Upsert `sets`, returning how many rows were written.
 ///
 /// Rows with a blank `code` are skipped: `code` is the primary key, and SQLite would
@@ -541,11 +574,30 @@ fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::Scryfal
     }
 }
 
-/// Note a failure of the app's own database work — a sweep, a reclaim, a compaction.
+/// Note a failure of the app's own database work — a sweep, a reclaim, a compaction, a failed
+/// index build.
 ///
 /// These were `eprintln!` and nothing else, which in a release build is a message with
 /// nowhere to go.
-fn note_database(state: &Arc<AppState>, operation: &str, message: &str) {
+///
+/// [`crate::errors::Source::Database`] with [`crate::errors::Kind::Io`]: this is the app's own
+/// SQLite failing at its own work, and the fix is a disk or a database rather than a query.
+/// `index/lifecycle.rs` kept an identical private copy of this until 2026-08-16.
+///
+/// Best-effort, and skipped rather than waited for if the write connection is busy: it
+/// describes a failure that has already happened, on a path that is already returning an
+/// error, and no part of it is worth blocking on.
+///
+/// **Take the write lock here only if you are not already holding it.** A same-thread
+/// reentrant call does not deadlock — [`crate::db::lock_for`] is a `try_lock`-plus-sleep loop,
+/// not a blocking one — but it spends the whole [`crate::db::WRITE_LOCK_WAIT`] failing to take
+/// a lock its own thread already holds, then gives up and silently drops the `error_log` row
+/// it was trying to write. `do_sync`'s orphan-sweep arm is the site that has to remember: it
+/// has the connection in hand and calls [`crate::errors::record`] directly, because coming
+/// through here would waste that whole wait against a lock that scope already holds.
+/// `spawn_build` holds nothing, and `collection::with_write_owned` releases its guard before
+/// calling `invalidate_owned` — which its own doc names as the house rule.
+pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         crate::errors::record(
             &conn,
@@ -1600,5 +1652,44 @@ mod tests {
         drop(fresh);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&fresh_dir);
+    }
+
+    /// A write that cannot have the connection answers the one sentence, after spending the one
+    /// bound — and runs `f` when it can. Five copies of this helper agreed on that by accident
+    /// until 2026-08-16; now there is one and this is what holds it.
+    #[test]
+    fn with_write_answers_busy_rather_than_queueing_when_the_connection_is_held() {
+        let (state, dir) = file_state("with-write-busy", false);
+        let held = crate::db::lock_blocking(&state.db);
+
+        let start = std::time::Instant::now();
+        let answer: Result<(), String> = with_write(&state, |_| Ok(()));
+        let waited = start.elapsed();
+
+        assert_eq!(
+            answer.unwrap_err(),
+            crate::db::BUSY,
+            "a write that cannot have the connection answers the one sentence"
+        );
+        // It spent the bound rather than failing instantly or queueing forever.
+        assert!(
+            waited >= crate::db::WRITE_LOCK_WAIT,
+            "with_write must spend the whole bound before giving up, waited {waited:?}"
+        );
+        assert!(
+            waited < crate::db::WRITE_LOCK_WAIT * 2,
+            "the wait is bounded, and took {waited:?}"
+        );
+        drop(held);
+
+        // And with the connection free it runs `f` and hands back its answer.
+        let answer = with_write(&state, |c| {
+            c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())
+        });
+        assert_eq!(answer.unwrap(), 1);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

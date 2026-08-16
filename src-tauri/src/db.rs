@@ -70,6 +70,20 @@ pub fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
 /// honest answer is to say so rather than to hold a button down.
 pub const WRITE_LOCK_WAIT: Duration = Duration::from_secs(5);
 
+/// What a user-facing write says when it could not have the database inside
+/// [`WRITE_LOCK_WAIT`].
+///
+/// A sentence rather than a lock error, and it names the wait: since the ingest was chunked
+/// the only thing that can hold the connection for five seconds is something genuinely
+/// stuck, and "try again in a moment" is both true and actionable.
+///
+/// Here rather than in [`crate::collection`], where it began: nine modules outside the
+/// collection answer with it, and it is a statement about the *lock* — the other half of
+/// [`WRITE_LOCK_WAIT`], and what [`crate::sync::with_write`] returns when [`lock_for`]
+/// gives up. Note the near-neighbour [`BUSY_TIMEOUT`] is a different thing entirely:
+/// SQLite's own internal wait, not this app's answer to a caller.
+pub const BUSY: &str = "The card database is busy finishing a sync. Try that again in a moment.";
+
 /// Take any std mutex, waiting as long as it takes, and recover from poisoning.
 ///
 /// Poisoning means some other thread panicked while holding the lock. A `Connection`
