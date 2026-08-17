@@ -1,9 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { UpdateStatus } from "@/lib/ipc";
+import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { nextAction, type Update } from "@/lib/useUpdate";
 import { pickAsset } from "../../../.storybook/fake/db";
-import { CURRENT_VERSION, NEXT_VERSION, release } from "../../../.storybook/fake/fixtures";
+import {
+  CURRENT_VERSION,
+  NEXT_VERSION,
+  release,
+  releaseHistory,
+} from "../../../.storybook/fake/fixtures";
 import { UpdatePanel } from "./UpdatePanel";
 
 /**
@@ -83,11 +89,23 @@ function update(over: Partial<Update> = {}): Update {
   };
 }
 
+/**
+ * What `useReleaseHistory` hands the panel.
+ *
+ * The releases are `.storybook/fake/fixtures`' — the same builder `db.ts` seeds a world's
+ * cached page from, so a prop-driven story here and a world-driven one in `Chrome/AppShell`
+ * cannot disagree about what a release body looks like. That is `release()`'s own argument,
+ * applied to the list.
+ */
+function history(over: Partial<ReleaseHistory> = {}): ReleaseHistory {
+  return { releases: releaseHistory(), loading: false, error: null, ...over };
+}
+
 const meta = {
   title: "Settings/UpdatePanel",
   component: UpdatePanel,
   tags: ["autodocs"],
-  args: { update: update() },
+  args: { update: update(), history: history() },
   decorators: [
     // The column `SettingsPage` puts it in: `mx-auto max-w-2xl` is 42rem, and the panel is a
     // block inside it. Narrower and the header's `flex-wrap` would fold, which is a state of
@@ -123,7 +141,13 @@ const meta = {
           "honest answer for an MSI install or a Linux build, where a release exists and " +
           "nothing in this window can install it; and “Checking for updates…” is what an " +
           "install that has never asked says, because `available: null` means *both* “up to " +
-          "date” and “never looked” and only `lastCheckAt` tells them apart.",
+          "date” and “never looked” and only `lastCheckAt` tells them apart.\n\n" +
+          "**The version history under it is one page of `/releases`, cached.** The same " +
+          "single request that decides whether an update exists carries the whole page, so " +
+          "`update_history` reads a row and never the network — expanding a release costs " +
+          "nothing out of GitHub's 60 requests an hour. Every row starts closed: a reader " +
+          "opens Settings to check their version, and thirty unrolled bodies would bury the " +
+          "line that answers them.",
       },
     },
   },
@@ -155,14 +179,23 @@ export const UpToDate: Story = {
  *
  * Reachable from a seeded world too — `.storybook/fake/seeds.ts`'s `empty` is a first run, and
  * a window that has synced nothing has checked nothing either.
+ *
+ * **The history is empty here for the same reason and not by coincidence**: the page it lists
+ * is written by the check, so an install that has never checked has nothing cached to show.
+ * The sentence says that rather than drawing an app with no past, and the way out of it is the
+ * button at the top of the panel.
  */
 export const NeverChecked: Story = {
-  args: { update: update({ status: nothingNew({ lastCheckAt: null }) }) },
+  args: {
+    update: update({ status: nothingNew({ lastCheckAt: null }) }),
+    history: history({ releases: [] }),
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Checking for updates…")).toBeInTheDocument();
     await expect(canvas.queryByText(/latest version/)).toBeNull();
     await expect(canvas.getByText("Not checked yet")).toBeInTheDocument();
+    await expect(canvas.getByText(/No releases have been read yet/)).toBeInTheDocument();
   },
 };
 
@@ -172,18 +205,33 @@ export const NeverChecked: Story = {
  * The size is on the label rather than beside it, because "Download" and "6.5 MB" are one
  * decision: a reader on a metered connection is answering *that* question, not two.
  *
- * **The notes are shown as written and never interpreted.** This app has no markdown
- * renderer, and half-rendered markdown reads worse than none — so the release body's `###`
- * stays a `###`, in a capped scroller because a release body has no length limit and this
- * panel does. That is a claim about what is *absent* from the DOM, so it is asserted.
+ * **The notes are drawn, and the old claim here was the opposite one.** This panel used to
+ * print a release body verbatim in a `<pre>` on the argument that half-rendered markdown reads
+ * worse than none — true while there was no reader for it. `src/lib/releaseNotes.ts` is one,
+ * and it answers that argument rather than abandoning it: a line it has no rule for becomes a
+ * paragraph and is drawn as written, so the worst case is exactly what the `<pre>` gave.
+ *
+ * Three display decisions are visible in this one body, and each was asked for. The **version
+ * heading** the body opens with is dropped, because the line above already says `0.4.0` and the
+ * date. The **commit trailer** is stripped — a reader of a desktop changelog can do nothing with
+ * a SHA. And the **repeated bullet** collapses: the fixture carries the same message twice under
+ * two SHAs, which is what release-please writes when one commit lands on two branches, and it is
+ * the thing the bug report was actually about.
+ *
+ * Still a capped scroller, because a release body has no length limit and this panel does.
  */
 export const Available: Story = {
   args: { update: update() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Download 6.5 MB" })).toBeEnabled();
-    await expect(canvas.getByText(/### Features/)).toBeInTheDocument();
-    await expect(canvas.queryByRole("heading", { name: "Features" })).toBeNull();
+
+    // Rendered, not printed — the inverse of what this story used to assert.
+    await expect(canvas.queryByText(/### Features/)).toBeNull();
+    await expect(canvas.getByText("Features")).toBeInTheDocument();
+    // The fixture's two identical Features bullets are one row, and no SHA survives.
+    await expect(canvas.getByText(/the update panel you are reading/)).toBeInTheDocument();
+    await expect(canvas.queryByText(/23d15d5/)).toBeNull();
   },
 };
 
@@ -294,6 +342,46 @@ export const CannotUpdateItself: Story = {
  * The controls beside it stay usable, because a failure here is a thing to try again — and
  * `useUpdate` clears the error on the next action that gets anywhere rather than on a timer.
  */
+/**
+ * The version history, with one release opened.
+ *
+ * **Every row starts closed**, which is what the panel is for: a reader opens Settings to
+ * check which version they are on, and thirty release bodies unrolled underneath that would
+ * bury the line that answers them. So the list is versions and dates — the whole history
+ * legible at a glance — and a body appears only where one is asked for.
+ *
+ * The list reaches **past the running build in both directions**, and that is faithful rather
+ * than convenient: `update::check` caches the whole page it fetched and concludes nothing
+ * about which entries the reader has already passed, so `0.4.0` is here as well as the
+ * versions behind. The one marked `installed` is the running build, matched on
+ * `status.currentVersion`.
+ *
+ * The oldest fixture release publishes an **empty body**, which is a real thing a release can
+ * do — `ReleaseNotes` has a sentence of its own for it rather than an empty box that reads as
+ * a failure to load.
+ */
+export const HistoryOpened: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    const row = canvas.getByRole("button", { name: new RegExp(CURRENT_VERSION) });
+    await expect(row).toHaveAttribute("aria-expanded", "false");
+    await expect(canvas.getByText("installed")).toBeInTheDocument();
+
+    await userEvent.click(row);
+    await expect(row).toHaveAttribute("aria-expanded", "true");
+    // Scoped to this row's own `<li>`, and not because the query was ambiguous by accident:
+    // the release on offer above draws the *same* fixture body, so a canvas-wide query for a
+    // bullet would pass whether or not the row ever opened.
+    //
+    // `motion` draws an opening surface at its `initial` for one frame, so the body inside is
+    // not visible until the next — `findBy*` rather than `getBy*`, which is this repo's rule
+    // for anything inside a surface that has just opened.
+    const entry = within(row.closest("li") as HTMLElement);
+    await expect(await entry.findByText(/count a foil wish against foils only/)).toBeVisible();
+  },
+};
+
 export const Failed: Story = {
   args: {
     update: update({

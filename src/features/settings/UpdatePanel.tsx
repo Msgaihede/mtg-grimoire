@@ -1,8 +1,11 @@
 import { CircleArrowUp, CircleCheck, Download, ExternalLink, RefreshCw } from "lucide-react";
+import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
 import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
+import { ReleaseNotes } from "./ReleaseNotes";
+import { VersionHistory } from "./VersionHistory";
 
 /**
  * The download bar.
@@ -48,7 +51,14 @@ function Bar({ done, total }: { done: number; total: number }) {
  * other panel on this page; the only gold on it is the primary button and the focus ring,
  * which is what gold already means everywhere else in this window.
  */
-export function UpdatePanel({ update }: { update: Update }) {
+export function UpdatePanel({
+  update,
+  history,
+}: {
+  update: Update;
+  /** Every release the last check saw — see {@link VersionHistory}. */
+  history: ReleaseHistory;
+}) {
   const { status, progress, busy, action, error } = update;
   const release = status?.available ?? null;
 
@@ -89,12 +99,12 @@ export function UpdatePanel({ update }: { update: Update }) {
           </div>
 
           {release.notes && (
-            // Plain text in a scroller, not markdown: this app has no renderer for it, and
-            // a half-rendered release note reads worse than an unrendered one. Capped
-            // because a release body has no length limit and this panel does.
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg p-3 font-sans text-xs leading-relaxed text-dim">
-              {release.notes}
-            </pre>
+            // Drawn rather than dumped, since 2026-08-17 — `ReleaseNotes` says what changed
+            // and why the old `<pre>`'s argument no longer holds. Still capped and still a
+            // scroller: a release body has no length limit and this panel does.
+            <div className="max-h-48 overflow-auto rounded-md bg-bg p-3">
+              <ReleaseNotes notes={release.notes} />
+            </div>
           )}
 
           {progress && <Bar done={progress.done} total={progress.total} />}
@@ -138,6 +148,8 @@ export function UpdatePanel({ update }: { update: Update }) {
           )}
         </p>
       )}
+
+      <VersionHistory history={history} currentVersion={status?.currentVersion} />
 
       {/* A refusal from GitHub or from the swap itself, in the app's red. */}
       <PanelAlert tone="problem">{error}</PanelAlert>
