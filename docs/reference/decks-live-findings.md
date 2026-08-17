@@ -291,6 +291,11 @@ jsdom has no layout engine and every one of them is a claim about a box.
   **49–107** against **172**, so **65px**. The difference is the header row, which wraps to two
   lines at 1280 and does not at 1920, and the tighter figure is still the whole bar clear of every
   pile.
+
+  > **Superseded 2026-08-17 — the bar is 74px now.** See _"The quick zones, drawn to be found"_
+  > below. The spans become **49–123**, and the clearances **139px** at 1280×800 and **49px** at
+  > 1920×1080. Everything else in this section still holds: the wrapper is `h-0`, so the desk row
+  > did not move and only the gap under the bar was spent.
 - **It is the editor's width, minus the scrollbar.** Bar left **228** = the editor's left; bar
   right **1230** against the editor's **1245**, the 15px being the page scroller's own bar, which
   `inset-x-0` correctly excludes. Zones measured **240px** each at 1280, **400** at 1920 and
@@ -509,3 +514,58 @@ in a render is the whole window going blank, and jsdom never assembled the state
   value): the forced crossed pair opens alive and settles on Theory in one move; **320 presses at
   35 ms** across eight bursts, plus 16 real Chromium clicks, left `root` at 1, the pressed tab
   `aria-pressed="true"` every time, and **zero** console errors.
+
+## The quick zones, drawn to be found — 2026-08-17, **not the shipped window**
+
+The reader's report was that the bar of four drop targets is easy to miss. The change is four
+utility tokens on one box (`QuickZones.tsx`'s `QuickZone`), and it is entirely a question of
+value and size — which is the one class of question the harness below can answer honestly and
+the one the app lock was not free for.
+
+**Method, stated because it is not this page's usual one.** A `file://` page linking the **built**
+`dist/assets/index-*.css` — the real compiled sheet, so every colour and every arbitrary value is
+the shipped one — rendering the bar twice, once with each set of class strings, shot by headless
+Edge at `--force-device-scale-factor=1`. What makes the numbers worth keeping rather than merely
+plausible: **the harness reproduced the old bar at 58px, which is the figure the 2026-08-15 CDP
+pass above measured in the real window, to the pixel.** What it cannot answer is anything about
+app state or about the bar's position over a real deck — the clearances below are arithmetic off
+that height, not a second measurement, and they are exact only because the wrapper is `h-0` and
+the desk row therefore does not move.
+
+| | before | after |
+| --- | --- | --- |
+| zone box | **40px** | **56px** (`h-10` → `h-14`) |
+| label | 12px, weight 400, `oklch(0.65 0.01 90)` (`text-dim`) | **14px, weight 500, `oklch(0.93 0.005 90)`** (`text-sm font-medium text-text`) |
+| outline | 1px dashed `oklch(0.3 0.01 270)` (`border-border`) | **2px dashed `oklch(0.65 0.01 90)`** (`border-dim`) |
+| glyph | 14px (`size-3.5`) | **20px** (`size-5`) |
+| fill | `oklch(0.16 0.01 270)` (`bg-bg`) | unchanged |
+| whole bar | **58px** | **74px** |
+
+- **The zone width does not move**, and that is worth stating because it is what keeps the
+  2026-08-15 widths (240 at 1280, 400 at 1920, 176 at 1024, no label truncated at any of them)
+  standing: the boxes are `flex-1` in a bar of the editor's own width, and neither the count nor
+  the `gap-2` between them changed. Measured **243.8px** each in the harness's 1017px bar, which
+  is the editor's content width at 1280×800 on `main` since the horizontal overhang closed.
+- **The clearance the growth spends is 16px**, off the gap between the bar and the desk row and
+  off nothing else: **155 → 139** at 1280×800, **65 → 49** at 1920×1080. Both still clear every
+  pile, and 49 is the figure a fifth zone or a taller box would be spending.
+- **What was wrong was four defensible decisions taken together.** The label was `text-dim`, the
+  second-dimmest colour in the palette; the outline was `border-border`, four hundredths of a
+  lightness step off the `bg-bg` it enclosed; the box was 40px; and all of it had to be found
+  **during a drag**, which is the one moment a reader is looking at the card under their pointer
+  rather than at the chrome. Each token is defensible against a resting surface. This surface does
+  not rest — it exists for about two seconds — and a control that appears for two seconds cannot
+  also be quiet.
+- **The outline is now the colour the label used to be**, which inverts the hierarchy deliberately:
+  the box is found first and read second, which is the order a drop target is used in. Dashed
+  rather than solid at 2px, still, because a dashed edge is what says *let go here* rather than
+  *press me*.
+- **No gold was spent.** `DROP_RING`/`DROP_OVER` and `border-accent` remain the only accent on this
+  bar, so the hover state still has something to say that the resting state does not — the whole
+  change sits in the neutral half of the palette. Photographed in the same frame: the `over` zone
+  reads as distinctly *the* target beside three neutral siblings, and `opacity-40` still reads
+  unambiguously as a refused pile at the larger size.
+- **Not driven in the shipped window.** The layout claims this section leans on — zero height,
+  `sticky top-0`, the bar over the header row rather than over a pile — are the 2026-08-15 pass's
+  and are untouched by a change to one box's own tokens. What a live pass would add is the
+  clearance re-measured rather than derived.
