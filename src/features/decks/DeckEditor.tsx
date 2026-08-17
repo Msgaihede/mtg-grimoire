@@ -37,6 +37,7 @@ import {
 } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
+import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
@@ -930,6 +931,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     meta.createTag,
     meta.renameCategory,
     meta.setCategoryActive,
+    // A pile dragged past its neighbours on the desk, which is the fifth `useDeckMeta` write a
+    // reader can now make without opening the Categories dialog — and the one whose refusal is
+    // least visible on its own, because the optimistic order below puts the column back and
+    // nothing else on screen says why it moved.
+    meta.reorderCategories,
     meta.deleteCategory,
   ] as const;
   // **The undo hook's own refusal joins this banner rather than drawing a second one.** Its
@@ -1005,8 +1011,82 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * group with cards in it. Nothing holding cardboard is hidden, and nothing at all is hidden
    * from the surfaces a reader files a card with. The format also still judges the deck, which
    * is the check chip in the header and a different question again.
+   *
+   * **It is the reader's order while a reorder is in flight, and the server's the rest of the
+   * time** — see {@link localCategoryOrder}.
    */
-  const categories = deck.categories;
+  /**
+   * The pile the reader is dragging, kept where it landed rather than where the deck last said
+   * it was — the one write in this editor that draws its own answer before the backend has given
+   * one.
+   *
+   * A reorder is a round trip *and* a re-read of the whole deck, so a pile that only moved once
+   * `deck_get` came back would make the gesture read as a broken control: the reader lets go, the
+   * column snaps back to where it was, and moves a moment later. `CategoriesDialog` holds exactly
+   * this state for exactly this reason, and the two are deliberately the same shape.
+   *
+   * **It is dropped on a refusal**, which is the case that matters — a lie about what the deck's
+   * columns look like must not outlive the write that failed. The banner says why:
+   * `reorderCategories` is in `writes` above.
+   *
+   * Declared in front of the memo that reads it rather than beside the callback that writes it,
+   * because a `useMemo` runs during the render it is written in and a `const` below it is a
+   * temporal-dead-zone throw.
+   */
+  const [localCategoryOrder, setLocalCategoryOrder] = useState<number[] | null>(null);
+
+  const categories = useMemo(() => {
+    const rows = deck.categories;
+    if (localCategoryOrder === null) return rows;
+    const byId = new Map(rows.map((c) => [c.id, c]));
+    // **`sortOrder` is re-stamped from position, and that is not decoration.** `buildGroups`
+    // sorts by it — handing it an array in the right order and the old numbers would change
+    // nothing on the desk at all. Every other consumer of this array (the `Move to` submenu,
+    // deck settings' "Add cards to", the quick zones) reads it in array order and gets the same
+    // answer either way.
+    const picked = localCategoryOrder.flatMap((id, index) => {
+      const found = byId.get(id);
+      return found ? [{ ...found, sortOrder: index }] : [];
+    });
+    // The moment it stops describing the same set of rows it is a lie about the deck rather than
+    // a preview of it: a category created or deleted anywhere rebuilds from the server's order.
+    return picked.length === rows.length ? picked : rows;
+  }, [deck.categories, localCategoryOrder]);
+
+  /**
+   * The whole of the desk's reorder: the two ids a view can name, resolved against **every**
+   * category the deck has.
+   *
+   * `deck_category_reorder` writes `sort_order` from position over the whole list, and what a
+   * view holds is the piles it is drawing — the rail taken out by `splitRail`, the empty auto
+   * piles never built by `drawsWhenEmpty`. So the flow's positions are not this list's, and
+   * resolving them is this editor's job rather than the view's ({@link DeckCardActions
+   * .moveCategory} says so at the seam). Landing the dragged pile **at the target's index in the
+   * full list** is what puts it next to that pile in the flow as well, because the ids that are
+   * not on screen keep their relative places.
+   *
+   * **The list is read through a ref**, so this callback is stable: it is a dependency of every
+   * pile's drop-target registration, and one that changed with the deck would re-register a
+   * dozen targets on every write — including the one this makes.
+   */
+  const reorderCategories = meta.reorderCategories.mutate;
+  const categoriesRef = useRef(categories);
+  useEffect(() => {
+    categoriesRef.current = categories;
+  }, [categories]);
+  const moveCategory = useCallback(
+    (categoryId: number, targetId: number) => {
+      const ids = categoriesRef.current.map((c) => c.id);
+      const to = ids.indexOf(targetId);
+      // A pile that has been deleted under the drag. `movedTo` is total and would answer a copy
+      // of the list, which is a whole reorder sent to say nothing.
+      if (to < 0 || !ids.includes(categoryId)) return;
+      const next = movedTo(ids, categoryId, to);
+      setLocalCategoryOrder(next);
+      reorderCategories(next, { onError: () => setLocalCategoryOrder(null) });
+    },
+    [reorderCategories],
+  );
 
   /** Copies in the list on screen — **copies, not rows**, because that is what a reader counts
    *  and what an import's `replace` would clear. Every category, the inactive ones included:
@@ -1880,8 +1960,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       categoryMenu,
       renameCategory: (categoryId) =>
         categoryId === null ? null : renameCategoryField(categoryId),
+      // **Only while the deck is grouped by category**, and absent is the whole of the off
+      // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
+      // the desk are buckets the app derived, so there is no order of the reader's on screen to
+      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends,
+      // and every one of those is in the rail anyway.
+      moveCategory: groupBy === "category" ? moveCategory : undefined,
     }),
-    [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField],
+    [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField, groupBy, moveCategory],
   );
 
   /**

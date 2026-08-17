@@ -60,6 +60,7 @@ export function GroupHeader({
   marketplace,
   layout = "spread",
   id,
+  handle,
   actions,
   className,
 }: {
@@ -87,6 +88,21 @@ export function GroupHeader({
   layout?: "spread" | "tight" | "stacked";
   /** So the section under this can be `aria-labelledby` it. */
   id?: string;
+  /**
+   * The grip a pile is picked up by, for the one view that lets a reader move a pile — drawn
+   * **before the name, on the name's own line**, which is why it is a slot here rather than a
+   * sibling the view puts beside this component.
+   *
+   * A `stacked` heading is two lines, so a handle drawn outside it would centre itself against
+   * the pair and sit between the name and the count. `CategoriesDialog` draws its own handle
+   * beside this component instead, and is right to: its row is a single line and the handle
+   * belongs to the row rather than to the heading.
+   *
+   * Absent everywhere else, which is the whole of the rule that a pile is reorderable only where
+   * the reader can see the order they are changing. A derived group never gets one — see
+   * {@link actions}.
+   */
+  handle?: ReactNode;
   /** The group's own menu, where a view has one. A derived group has none — nothing can be
    *  renamed, reordered or switched off about "Mana value 3". */
   actions?: ReactNode;
@@ -103,6 +119,7 @@ export function GroupHeader({
       )}
     >
       <div className={cn("flex min-w-0 items-center gap-1.5", layout !== "tight" && "flex-1")}>
+        {handle}
         {/* Dimmed when the pile counts toward nothing — the quietest of the three signals
             that say so, and the one a reader sees without reading a word. */}
         <span
