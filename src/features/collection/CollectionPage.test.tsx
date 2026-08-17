@@ -96,6 +96,7 @@ const BOLT: CollectionRow = {
 
 /** One deck for the menu's "Add to → Deck" to reach. No theory list, so it is one row. */
 const BURN: DeckRow = {
+  gameKey: "any",
   id: 7,
   name: "Burn",
   formatKey: "commander",

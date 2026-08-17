@@ -138,6 +138,7 @@ import { useAppStore } from "@/lib/store";
 
 /** One deck on the wall, for the trip into its editor and back. */
 const BURN: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",

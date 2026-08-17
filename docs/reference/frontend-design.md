@@ -293,6 +293,50 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   resize the cards the reader just settled on. `useCardZoomGesture(ref, section)` names the section
   it is stepping. **The wishlist has no zoom because it has no card section** — it is `VirtualTable`
   only.
+- **What is drawn _on_ a card scales with it, through two inherited custom properties**
+  (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
+  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
+  the quantity tag, the Game Changer banner, the rule break, the printed no-picture frame and the
+  quick-add and stepper controls were all fixed Tailwind literals, so a doubled card carried
+  hundred-percent chrome. `SearchPage`'s own comment had already recorded the consequence — its
+  printings chip is inset 4px so it lands on the card's printed nameplate, and held at 4px it had
+  climbed into the border strip above the name by ~2×.
+  - **`--mark-scale` is the reader's zoom; `--control-scale` is that times `CONTROL_SHRINK` (0.85)**
+    — a control drawn on somebody's artwork, revealed on hover, does not need the presence a
+    table's stepper has. Both live in `src/lib/cardZoom.ts` and are published by `cardScaleVars()`.
+  - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
+    tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
+    `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper` are each
+    drawn on a card face *and* in one of the three tables or the card pane, so a prop would have to
+    be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
+    answered fifteen times by whoever adds the newest call site. Every mark reads
+    `var(--mark-scale, 1)` instead, and the fallback is what a table gets for knowing nothing.
+  - **Real geometry, never `transform: scale()`** — the standing rule, and here the caption strip is
+    what enforces it: it is *in flow*, and a transform changes no layout, so scaled text would grow
+    straight out of the strip the virtualiser sized its rows from.
+  - **What does not scale, and why**: hairline borders (1px is a hairline at every size),
+    `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
+    is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
+    stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
+    card), the banner's drop shadow, and the two walls' gutters.
+  - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build at
+    1280×800, against a real 116 712-card corpus, ctrl+wheel dispatched synthetically). Search
+    wall, 0.5× / 1× / 2×: tile **85 / 170 / 340**, caption type **6 / 12 / 24px**, rarity gem
+    **3 / 6 / 12**, quick-add **10.2 / 20.4 / 40.8**, the finish-and-crown chip **10×8 / 20×16 /
+    40×32** with its glyph **6 / 12 / 24** and its inset, padding and radius **2 / 4 / 8px**, the
+    printings chip **5 / 10 / 20px** type. That chip sat **1.7 % down the art at both 1× and 2×** —
+    the same place on the picture, which is the defect closed. Deck stack: card **105×158 /
+    210×319 / 420×639**, reveal **17 / 34 / 68**, quantity tag **12.6×11 / 25.2×22 / 50.4×44** at
+    **6 / 12 / 24px**, data line **14 / 28 / 56** at **5 / 10 / 20px**, `RULE BREAK` **9 / 18px**,
+    the Game Changer banner **117.8×12 / 235.5×24** with a **9 / 18px** crown, the stepper column
+    **20.4 / 40.8 / 81.6**. **The tag fits inside the reveal at 0.5× (11 ≤ 17)**, which is the one
+    property `stackAdvance`'s floor existed to protect and is now held by the tag scaling instead.
+    Deck grid: tile **75 / 300**, copy count **4.5 / 18px**, foot **10 / 40**, stepper **8.5 / 34**.
+    **The control case**: with the desk at 2× the deck's *table* row still read a **6px** gem and a
+    **20px** stepper with `--mark-scale` **unset**, and with the search wall at 2× beside an open
+    card pane the pane's finish glyph still read **12px**. The `85 → 340` tile at
+    `mark-scale 0.5 → 2` and `control-scale 0.425 → 1.7` was read off the tile's own computed style
+    at every stop.
 - **The rule this reversed, and why it was wrong.** It read: there is one `cardZoom` behind all of
   them, "because it is a statement about how the reader is reading cards rather than about how one
   list is configured: zoom the search wall, switch to Decks, and the cards there are already the
@@ -413,12 +457,19 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     against **`none`** under `prefers-reduced-motion: reduce` (with `transition-duration` still
     reading `0.15s`, which is the false failure this file's harness rule warns about, reproduced
     again).
-- **Anywhere a scaled budget contains unscaled chrome, the budget floors rather than scales:**
-  `max(base, scaled(base, zoom))`. Three surfaces landed on this independently. `CardGrid`'s 28px
-  caption is set by the 24px quick-add button inside it, so a plain 0.5× gives a 14px strip under a
-  28px caption and the virtualised rows overlap by the difference. `CardStack`'s 34px reveal is a
-  legibility floor for the chip laid over it, not a fraction of the card. `GridView`'s caption and
-  gutter are the same case (4.5px type at half size; tiles touching into one sheet of card backs).
+- **A scaled budget floors rather than scales only while the chrome inside it is unscaled — and
+  since 2026-08-17 almost none of it is.** The rule was `max(base, scaled(base, zoom))` and three
+  surfaces landed on it independently: `CardGrid`'s 28px caption was set by the 24px quick-add
+  button inside it, so a plain 0.5× gave a 14px strip under a 28px caption and the virtualised rows
+  overlapped by the difference; `CardStack`'s 34px reveal was a legibility floor for the 22px chip
+  laid over it; `GridView`'s caption was 4.5px type at half size. Every one of those arguments was
+  about chrome the zoom could not reach. **The marks read the card's own scale now** (below), so
+  each budget and its contents are one proportion and `atLeast` has one consumer left —
+  `GridView`'s **gutter**, which measures the space *between* two cards rather than anything drawn
+  on one, contains nothing, and would otherwise halve into a wall that reads as a single sheet of
+  card backs. `CardGrid`'s caption is also **derived** rather than written down now
+  (`ceil(24 × CONTROL_SHRINK) + 4` = 25), because the button it is a budget for is no longer 24px
+  and the two drifting apart is exactly the row overlap the constant exists to prevent.
   The stack's padding and border are the mirror rule — **added, never multiplied**, since chrome is
   not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason
   (210 + 12 + 2 = 224 at 1×, which is the `14rem` it replaced, exactly). **That border term is the
@@ -471,7 +522,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   on the first pass and the figure above needed a card moved into it first. The wash and
   `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
   the argument for having three.
-- **The sideboard and the maybeboard are a rail, not part of the flow — and the rail is a plain
+- **The sideboard, the maybeboard and every switched-off pile are a rail, not part of the flow —
+  and the rail is a plain
   flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
   before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
   it, at the same inline width and `flex` basis. **Nothing positions that box** — since 2026-08-17
@@ -490,7 +542,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   sweep that counts the deck's own piles must not find them; the name is unprefixed because
   `TextView` draws the same rail, and it
   is spelled for the _rail_ rather than for the Sideboard because the Sideboard is no longer the
-  only thing in it. It is rendered only when a `side` **or** `maybe` group exists, which is a real
+  only thing in it. It is rendered only when a `side` group, a `maybe` group **or a switched-off
+  pile** exists, which is a real
   condition for a story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES`
   seeds both into every deck, an empty category group is drawn for each (neither of them is one of
   the two conditional zones, and the seed writes both `origin: 'user'` — see `grouping.ts`'s
@@ -502,6 +555,43 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   is the wrap in the entry further down. **Those widths are unchanged by the Maybeboard joining**:
   the two piles share one rail one column wide, so the second costs height and nothing else, and
   the height is the one thing here that has not been driven in the window.
+- **The switch is `splitRail`'s second test, and the kind is tested first** (added 2026-08-17).
+  Every pile the reader has switched off joins the rail underneath the two played beside the deck;
+  switching one back on returns it to the flow at its own `sortOrder`, because the split is derived
+  on every render and nothing records where a pile was drawn last. `is_active = 0` means the pile
+  counts toward nothing — not size, not copy limits, not legality — so it is not part of the deck
+  being laid out, and a column of desk spent on it was a column spent on cards the reader had said
+  were out. **Testing the kind first is what keeps the rail's head still**: the Maybeboard is seeded
+  switched off, so a switch-first split would sink it under whatever the reader turned off last.
+  **It cost neither view a line of drawing code and it draws no divider** — a switched-off pile
+  already carries the section wash, the dimmed heading, the `INACTIVE` chip and the stack's
+  `opacity-60`, and the pile heading the rail is switched off too, so a rule under it would mark a
+  boundary that is not the one it looks like. The width is unchanged for the Maybeboard's reason:
+  the rail is one column wide however many piles are in it, and each one costs height.
+- **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against a real synced corpus — a 14-card Commander deck of nine categories). Every figure is a
+  `getBoundingClientRect` off the running window.
+  - **Before**: flow `Commander, Instant, Artifact, Creature, Test` at x **234 / 474 / 714**, the
+    last two wrapping to a second line at y **699** and **767**; rail at x **954**, 224 wide, 480
+    tall. The last flow column ends at 938, so the gutter is exactly **16** — `flowMaxWidth` holding.
+  - **Switching `Creature` off** moved it out of the flow and into the rail as its **third** pile
+    (y 795, under Sideboard at 295 and Maybeboard at 392), and **the flow closed up**: `Test` took
+    the vacated masonry slot at 234,699 — it had been at 474,767. The rail grew 480 → **986**, past
+    the 800px window, which the editor's page scroller takes; the rail's x did not move.
+  - **The kind-before-switch order was exercised where it can actually fail.** Switching `Commander`
+    off — position **1 of 9**, the lowest `sortOrder` in the deck — put it **third** in the rail:
+    `Sideboard, Maybeboard, Commander, Creature`. A switch-first split would have headed the rail
+    with it. This is the one reading no arithmetic in the suite substitutes for.
+  - **Switching both back on returned them to the flow in their own order** —
+    `Commander, Instant, Artifact, Creature, Test`, Commander back at the head — and the rail back
+    to two piles with **one** `INACTIVE` chip on screen. Nothing remembers a pile was railed.
+  - **The wide-desk arm came free**, because the window was resized to **2560** mid-pass: five piles
+    on one line, the flowing box capped at **1184px** (= 5 × 240 − 16, `flowMaxWidth`'s deck term
+    rather than the desk's), rail at 1434, and `documentElement.scrollWidth` **2560** against a
+    `clientWidth` of **2560** — no horizontal page scrollbar, which is what the 1024px floor forbids.
+  - **Not driven**: an entirely switched-off deck (the empty flow `flowMaxWidth` now documents), and
+    a switched-off pile under a derived grouping — that one is `views.test.tsx`'s and the
+    Maybeboard's ordinary path.
 - **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
   shipped window.** Against `.storybook/fake`, reading each group's accessible name off
   `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no

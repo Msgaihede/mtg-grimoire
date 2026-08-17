@@ -216,8 +216,9 @@ describe("CardStack geometry at a zoom", () => {
       expect(width).toBe(scaled(STACK_CARD_WIDTH, zoom));
       expect(stackImageHeight(zoom)).toBe(Math.round((width * 680) / 488));
       // The *face* is what keeps the printed proportion. The card is the face plus two hairlines
-      // and the foot standing under it, and the foot is floored rather than scaled — so the whole
-      // card is deliberately not a Magic card's shape below 1×, and only the face has to be.
+      // and the foot standing under it, less the rise the foot is tucked up by — and the rise is
+      // fixed at 4px, so the whole card is still deliberately not a Magic card's shape at every
+      // stop, and only the face has to be.
       expect(stackCardHeight(zoom)).toBe(
         stackImageHeight(zoom) + 2 + (stackDataHeight(zoom) - STACK_DATA_RISE),
       );
@@ -225,23 +226,31 @@ describe("CardStack geometry at a zoom", () => {
     }
 
     // The two ends, written out, so a change to the ladder is visible here rather than merely
-    // consistent with itself. At 0.5× the foot is still its floored 28 and the face is 146, which
-    // is why the card is 172 and not the 148 the face alone would give.
-    expect([stackCardWidth(MIN_ZOOM), stackCardHeight(MIN_ZOOM)]).toEqual([105, 172]);
+    // consistent with itself. At 0.5× the face is 146 and the foot is 14 — it scales now, where
+    // it used to be floored at 28, which is what made this figure 172 before the marks in that
+    // foot learnt to scale with it.
+    expect([stackCardWidth(MIN_ZOOM), stackCardHeight(MIN_ZOOM)]).toEqual([105, 158]);
     expect([stackCardWidth(MAX_ZOOM), stackCardHeight(MAX_ZOOM)]).toEqual([420, 639]);
   });
 
   /**
-   * The data line takes the same floor as the reveal strip, and for the same reason: it holds the
-   * printing's facts in type that is already at the app's smallest, so a bar scaled to 14px would
-   * be shorter than the words in it. Two floors in one file is two chances to "simplify" a `max`
-   * away, so both are pinned the same way — the second assertion in each loop is the one that
-   * fails if the floor stops doing work.
+   * The data line and the reveal strip both **moved off their floors** when the chrome inside them
+   * learnt to scale, and this is the pair of tests that used to pin the floors.
+   *
+   * Each floor existed because the thing it contained could not shrink: the bar held the printing's
+   * facts in type fixed at the app's smallest, and the strip held a quantity tag fixed at 22px. Both
+   * follow `--mark-scale` now, so the container and its contents are one proportion — and the old
+   * `max` would keep 28px of felt under a 105px card and spend a fifth of a half-size pile on a
+   * strip drawn for a tag twice the size of the one in it.
+   *
+   * **The `toBeLessThan` in each loop is what makes these tests about the change rather than about
+   * the arithmetic.** A floor reinstated by hand would satisfy `scaled()` at 1× and above and fail
+   * here, which is the only place the two spellings differ.
    */
-  it("holds the data line at its floor going down, and grows it going up", () => {
+  it("moves the data line with the card in both directions", () => {
     for (const zoom of ZOOM_STEPS.filter((z) => z < DEFAULT_ZOOM)) {
-      expect(stackDataHeight(zoom)).toBe(STACK_DATA_HEIGHT);
-      expect(scaled(STACK_DATA_HEIGHT, zoom)).toBeLessThan(STACK_DATA_HEIGHT);
+      expect(stackDataHeight(zoom)).toBe(scaled(STACK_DATA_HEIGHT, zoom));
+      expect(stackDataHeight(zoom)).toBeLessThan(STACK_DATA_HEIGHT);
     }
     for (const zoom of ZOOM_STEPS.filter((z) => z > DEFAULT_ZOOM)) {
       expect(stackDataHeight(zoom)).toBe(scaled(STACK_DATA_HEIGHT, zoom));
@@ -252,18 +261,17 @@ describe("CardStack geometry at a zoom", () => {
   });
 
   /**
-   * **The trap in this file, and the one thing here a plain multiply gets wrong.**
+   * The reveal strip, under the rule above — and it is the half worth reading twice, because this
+   * was the file's stated trap for as long as the tag on the strip was a fixed 22px.
    *
-   * The reveal strip is a legibility floor rather than a fraction of the card: the quantity chip
-   * is drawn over it and is 11px type at every zoom, so a strip scaled to 17px would be covered
-   * by the chip of the card below it. It grows above 1× and holds at 34 below, and the second
-   * assertion in each loop is what fails the day somebody "simplifies" the `Math.max` away — it
-   * says the floor is doing work, not merely agreeing with the multiplication.
+   * `QuantityTag` is drawn to `--mark-scale` now, so at 0.5× it is 11px of chip in a 17px reveal:
+   * the same fraction of the same strip it is at every other stop. **If that tag ever stops
+   * scaling, the floor comes back and this test goes with it** — they are one decision.
    */
-  it("holds the reveal strip at its floor going down, and grows it going up", () => {
+  it("moves the reveal strip with the card in both directions", () => {
     for (const zoom of ZOOM_STEPS.filter((z) => z < DEFAULT_ZOOM)) {
-      expect(stackAdvance(zoom)).toBe(STACK_ADVANCE);
-      expect(scaled(STACK_ADVANCE, zoom)).toBeLessThan(STACK_ADVANCE);
+      expect(stackAdvance(zoom)).toBe(scaled(STACK_ADVANCE, zoom));
+      expect(stackAdvance(zoom)).toBeLessThan(STACK_ADVANCE);
     }
     for (const zoom of ZOOM_STEPS.filter((z) => z > DEFAULT_ZOOM)) {
       expect(stackAdvance(zoom)).toBe(scaled(STACK_ADVANCE, zoom));
@@ -338,6 +346,28 @@ describe("CardStack geometry at a zoom", () => {
     const face = items()[0].querySelector("button")?.firstElementChild as HTMLElement;
     expect(face.style.height).toBe(`${stackImageHeight(2)}px`);
     expect(face.style.height).toBe("585px");
+  });
+
+  /**
+   * The card publishes the same zoom as two custom properties, which is how everything laid **on**
+   * it is sized: the quantity tag, the game-changer banner, the rule break, the printed frame under
+   * the art, the gem and finish glyph in the foot, and the stepper column in the margin.
+   *
+   * A variable rather than a prop because most of those are components the deck's table and text
+   * views draw too, where nothing zooms — so the question is answered once, here, and the `, 1`
+   * fallback answers it everywhere else. The pairing with the geometry above is the point: this is
+   * what let `stackAdvance` and `stackDataHeight` drop their floors, because the chrome they were
+   * budgets for now shrinks with them.
+   *
+   * **jsdom resolves no `calc()`**, so the sizes themselves are a live pass's to answer.
+   */
+  it("publishes the same zoom to everything drawn on the card", () => {
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" zoom={2} />);
+
+    for (const item of items()) {
+      expect(item.style.getPropertyValue("--mark-scale")).toBe("2");
+      expect(item.style.getPropertyValue("--control-scale")).toBe("1.7");
+    }
   });
 });
 
@@ -1216,7 +1246,10 @@ describe("CardStack marks", () => {
     // The place: the break is the card's top-right corner, the banner is in the title strip
     // on the left, tucked under the quantity tag.
     expect(mark.className).toContain("absolute");
-    expect(mark.className).toContain("right-[5px]");
+    // 5px from the right on a card at 100% zoom — the inset scales with the card, so the mark
+    // stays in the same place on the picture at every stop rather than drifting toward the middle
+    // of a doubled one.
+    expect(mark.className).toContain("right-[calc(5px*var(--mark-scale,1))]");
     expect(banners[0].className).not.toContain("absolute");
 
     // The edge: only the card that breaks a rule gets one.

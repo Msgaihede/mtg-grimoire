@@ -354,11 +354,21 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
  * before the switch existed keeps the grouping it was written against. It is a `manaValue` rule
  * and inert under the other two groupings, so a story asking for the split passes both — the
  * pair `("manaValue", …, true)` is the only combination that draws anything new.
+ *
+ * `switchedOff` names **one of the two piles of the reader's own** — `"Ramp"` or `"Removal"` — to
+ * seed with `is_active = 0`, the pile that counts toward nothing. It is last and optional for
+ * `separateX`'s reason: absent, this is the deck every existing story was written against. It is a
+ * name rather than an id because a story naming a heading is naming what a reader would recognise,
+ * and it takes one pile rather than a list because the thing it serves — where a switched-off pile
+ * is *drawn* — is answered by one as well as by five. **The two seeded zones are deliberately out
+ * of its reach**: the Maybeboard is already seeded off and the Sideboard's switch is its own
+ * story's subject, so pointing this at either would make one fixture say two things.
  */
 export function deckGroups(
   groupBy: GroupBy = "category",
   sortBy: SortBy = "alphabetical",
   separateX = false,
+  switchedOff?: "Ramp" | "Removal",
 ) {
   const commander = deckCategory("commander");
   // The seeded Sideboard sorts at 2 and the reader's own two piles are ahead of it here, so
@@ -372,8 +382,24 @@ export function deckGroups(
   // `deck_categories.origin`, written by whichever path made the row: `category_for_name` finds
   // a pile of this name before it creates one, so filing a ramp spell into the reader's "Ramp"
   // leaves it theirs.
-  const ramp: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp", sortOrder: 1 };
-  const removal: DeckCategory = { ...deckCategory("main"), id: 11, name: "Removal", sortOrder: 2 };
+  // `isActive` is written from the argument rather than left to `deckCategory`'s default, so that
+  // the switch is a property of the *category row* and reaches the cards through `inPile` below —
+  // a group whose `isActive` was flipped after `buildGroups` had run would draw the same wash over
+  // rows still claiming to count.
+  const ramp: DeckCategory = {
+    ...deckCategory("main"),
+    id: 10,
+    name: "Ramp",
+    sortOrder: 1,
+    isActive: switchedOff !== "Ramp",
+  };
+  const removal: DeckCategory = {
+    ...deckCategory("main"),
+    id: 11,
+    name: "Removal",
+    sortOrder: 2,
+    isActive: switchedOff !== "Removal",
+  };
 
   const inPile = (pile: DeckCategory, row: DeckCard): DeckCard => ({
     ...row,

@@ -21,8 +21,12 @@ export const NEUTRAL_COUNT_PAINT = {
  * The slanted right edge, and the whole of what keeps this from reading as a button: a printed
  * card has no rectangles in that corner, and a square chip laid on the art looks like something
  * to press.
+ *
+ * The 10px cut scales with the tag, because it is a proportion of the shape rather than a hairline:
+ * held at 10px on a tag drawn half size the slant is most of the banner, and on one drawn double it
+ * is a nick in the corner. `--mark-scale` is the card's own factor — see `lib/cardZoom.ts`.
  */
-const SLANT = "polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%)";
+const SLANT = "polygon(0 0, 100% 0, calc(100% - 10px*var(--mark-scale,1)) 100%, 0 100%)";
 
 /**
  * A number laid on a card, as a filled banner cut off at a slant — the deck stack's drawing of
@@ -74,8 +78,14 @@ export function CountTag({
       title={title}
       style={{ backgroundColor: paint.css, color: paint.fg, clipPath: SLANT }}
       className={cn(
-        "flex h-[22px] shrink-0 items-center pr-3 pl-1.5",
-        "font-mono text-xs leading-none tabular-nums",
+        // 22px, 12px and both paddings are the tag's geometry **at 100% zoom**. It is drawn on a
+        // card face in the deck's stack view, which the reader can zoom from 0.5× to 2×, so every
+        // one of them is multiplied by the card's own `--mark-scale` (`lib/cardZoom.ts`) — a tag
+        // that held still was a sticker on a doubled card and a banner on a halved one. The `, 1`
+        // fallback is what any future surface outside a zoomable card gets, unchanged.
+        "flex h-[calc(22px*var(--mark-scale,1))] shrink-0 items-center",
+        "pr-[calc(0.75rem*var(--mark-scale,1))] pl-[calc(0.375rem*var(--mark-scale,1))]",
+        "font-mono text-[calc(0.75rem*var(--mark-scale,1))] leading-none tabular-nums",
         className,
       )}
     >

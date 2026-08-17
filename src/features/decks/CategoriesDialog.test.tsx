@@ -109,6 +109,7 @@ const SUGGESTIONS: TagSuggestion[] = [{ name: "Budget swap", color: "moss" }];
 /** The deck row `deck_get` answers with. Nothing on this dialog reads a field of it — the one
  *  thing it wants out of `deck_get` is `cards`, for the auto-categoriser. */
 const DECK_ROW: DeckRow = {
+  gameKey: "any",
   id: 1,
   name: "Serah's Toolbox",
   formatKey: "commander",

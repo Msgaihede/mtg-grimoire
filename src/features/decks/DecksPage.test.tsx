@@ -68,6 +68,7 @@ import { useAppStore } from "@/lib/store";
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
 const BURN: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",
@@ -325,6 +326,25 @@ describe("DecksPage", () => {
     expect(within(tile).getByText("60")).toHaveClass("font-mono");
     const img = tile.querySelector("img");
     expect(img).toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
+  });
+
+  /**
+   * The platform, drawn **only when the deck has been given one**.
+   *
+   * `any` is what every deck is born as, so a tile that printed it would put a word that says
+   * nothing on nearly every tile in the gallery — and the caption already truncates in a narrow
+   * column. The test asserts both halves against one another because either alone passes on a
+   * caption that always draws the game, or never does.
+   */
+  it("names the deck's game on the tile, and says nothing when it has none", async () => {
+    deckList.mockResolvedValue([{ ...BURN, gameKey: "arena" }, KENRITH]);
+    wrap(<DecksPage />);
+
+    const pinned = await tileFor("Burn");
+    expect(within(pinned).getByText(/Modern/)).toHaveTextContent("Modern · Arena · 60 cards");
+
+    const unpinned = await tileFor("Kenrith Two-Drops");
+    expect(within(unpinned).getByText(/Commander/)).toHaveTextContent("Commander · 100 cards");
   });
 
   /**
@@ -639,6 +659,10 @@ describe("DecksPage", () => {
       expect(deckCreate).toHaveBeenCalledWith({
         name: "Sunday burn",
         formatKey: "modern",
+        // The dialog always sends the game, and `any` is what it always starts on: unlike the
+        // format there is no `last_deck_game` to seed it from, because a filter a reader set
+        // to find one format must not narrow the next dialog's list for them.
+        gameKey: "any",
         theoryEnabled: false,
       }),
     );
@@ -700,7 +724,11 @@ describe("DecksPage", () => {
     // this install, so the gallery's remembered format is what a first deck starts on — and it
     // reaches the import dialog exactly as it reaches the create one.
     await waitFor(() =>
-      expect(deckCreate).toHaveBeenCalledWith({ name: "Sunday burn", formatKey: "commander" }),
+      expect(deckCreate).toHaveBeenCalledWith({
+        name: "Sunday burn",
+        formatKey: "commander",
+        gameKey: "any",
+      }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
   });
@@ -1636,6 +1664,7 @@ describe("the folder row's menu", () => {
       expect(deckCreate).toHaveBeenCalledWith({
         name: "Aristocrats",
         formatKey: "commander",
+        gameKey: "any",
         theoryEnabled: false,
         folderId: 1,
       }),

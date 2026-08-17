@@ -1111,7 +1111,15 @@ describe("the result layout toggle", () => {
     const mark = screen.getByText("132 printings");
     expect(mark).toBeVisible();
     expect(mark).toHaveAttribute("title", "132 printings matched these filters");
-    expect(mark.parentElement).toHaveClass("bg-bg/85", "absolute", "top-1", "left-1");
+    // The wall's own chip, 4px in from the card's top-left corner at 100% zoom. That inset scales
+    // with the card: fixed, it climbed out of the printed nameplate it is meant to sit on and into
+    // the border strip above it by ~2×, which is what this corner's own comment recorded.
+    expect(mark.parentElement).toHaveClass(
+      "bg-bg/85",
+      "absolute",
+      "top-[calc(0.25rem*var(--mark-scale,1))]",
+      "left-[calc(0.25rem*var(--mark-scale,1))]",
+    );
   });
 
   /**

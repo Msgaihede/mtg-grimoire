@@ -25,6 +25,7 @@ import {
 /** A deck at the top level. The eight columns the gallery's own fixture carries, because every
  *  real row carries all of them. */
 const ATRAXA: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Atraxa Superfriends",
   formatKey: "commander",

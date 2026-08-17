@@ -32,6 +32,7 @@ vi.mock("./DeckCoverPicker", () => ({
 }));
 
 const VALUE: DeckSettingsValue = {
+  gameKey: "any",
   name: "Burn",
   formatKey: "modern",
   description: "Twenty damage, quickly.",
@@ -295,6 +296,38 @@ describe("DeckSettingsForm", () => {
 
     expect(onChange).toHaveBeenCalledWith({ formatKey: "commander" });
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The game, which settles in one act like the format beside it — so `onChange` and never
+   * `onCommit`.
+   *
+   * **And it carries `gameKey` alone.** The narrowing is the *host's*: it calls `pickerFormats`
+   * and hands the result back as `formats`, which is what lets a Modern deck say Arena and keep
+   * showing Modern. A form that shipped a `formatKey` along with this patch would be
+   * re-formatting a deck from inside a filter.
+   */
+  it("fires only onChange for the game, and moves no format with it", async () => {
+    const { onChange, onCommit } = form();
+
+    await userEvent.selectOptions(screen.getByLabelText("Game"), "arena");
+
+    expect(onChange).toHaveBeenCalledWith({ gameKey: "arena" });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /** Four fixed rows, `Any` first — a ladder rather than an alphabet, and the one option list
+   *  in this form that is not the host's to order. */
+  it("offers the four games, Any first", () => {
+    form();
+
+    const game = screen.getByLabelText("Game");
+    expect(game).toHaveValue("any");
+    expect(
+      within(game)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Any", "Paper", "Arena", "MTGO"]);
   });
 
   /** The list is drawn in the order it arrives — `pickerFormats` is the host's call, and this

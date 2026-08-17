@@ -274,11 +274,12 @@ export function StackView({
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
   // **The split happens before anything is drawn, and it has to.** The flow runs in the reader's
-  // own order and never re-orders anything, so a sideboard or a maybeboard left in that stream
-  // lands wherever the line it fell on happened to end. A rail held against the right edge is not
-  // part of the flow at all, so those groups are taken out of the *input* rather than pulled back
-  // out of the answer. Which kinds are railed, why the rail is not sorted here, and why there is
-  // no grouping-mode check beside the kind: {@link splitRail}.
+  // own order and never re-orders anything, so a sideboard, a maybeboard or a pile the reader has
+  // switched off, left in that stream, lands wherever the line it fell on happened to end. A rail
+  // held against the right edge is not part of the flow at all, so those groups are taken out of
+  // the *input* rather than pulled back out of the answer. Which piles are railed, why the kind is
+  // tested before the switch, why the rail is not sorted here, and why there is no grouping-mode
+  // check beside either word: {@link splitRail}.
   const { flow, rail } = splitRail(groups);
   // **Every pile a reader may drag, in the order they are drawn** — the flow's own, so the rail
   // is out by construction rather than by a second test, and a derived heading ("Mana value 3")
@@ -428,18 +429,27 @@ export function StackView({
           />
         ))}
       </div>
-      {/* The rail: the piles played *beside* the deck — the Sideboard and the Maybeboard, in the
-          reader's own `sortOrder` and never re-arranged here — on the right, never packed and
-          never wrapped away from the edge while there is room for it. It draws for an **empty**
-          pile too: an empty pile is where the next card of that kind goes, and a rail that
-          appeared with the first card would move the whole layout under the reader's hand at the
-          moment they were using it.
+      {/* The rail: everything that is not the deck being laid out — the piles played *beside* it,
+          the Sideboard and the Maybeboard, and under them every pile the reader has switched off —
+          on the right, never packed and never wrapped away from the edge while there is room for
+          it. Both runs are in the reader's own `sortOrder` and neither is re-arranged here. It
+          draws for an **empty** pile too: an empty pile is where the next card of that kind goes,
+          and a rail that appeared with the first card would move the whole layout under the
+          reader's hand at the moment they were using it.
 
-          **The Maybeboard is seeded switched off, so this rail routinely holds a dimmed pile**,
-          which is the first thing a reader will notice about it and needs no code here at all: a
-          group in the rail is the same `StackGroup` as one in the flow, so the wash, the dimmed
-          heading and the stack's `opacity-60` arrive with it rather than being defined twice. The
-          rail is *where* a pile is drawn, never *what* it is.
+          **The switched-off half costs this file nothing, which is the point of it being a split
+          rather than a second box** (added 2026-08-17). A group in the rail is the same
+          `StackGroup` as one in the flow, so the wash, the dimmed heading, the `INACTIVE` chip and
+          the stack's `opacity-60` arrive with it rather than being defined twice — and the return
+          journey is free for the same reason: `splitRail` is derived per render, so switching a
+          pile back on drops it into the flow at its own `sortOrder` with no state anywhere
+          recording that it was ever here. The rail is *where* a pile is drawn, never *what* it is,
+          and there is deliberately no divider between the two runs: an inactive pile already says
+          so three times over, and the Maybeboard heading the rail is switched off as well, so a
+          rule drawn under it would be marking a boundary that is not the one it looked like.
+
+          **The Maybeboard is seeded switched off, so this rail has always held a dimmed pile** —
+          which is why the change above needed no new drawing code at all.
 
           **There is no `ml-auto` here any more, and its absence is the fix** (changed 2026-08-17).
           It pinned the rail to the right *edge of the desk* rather than to the right of the deck,

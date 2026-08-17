@@ -40,6 +40,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { useDeck, useSwapFromPane } from "./useDeck";
 
 const DECK: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",
