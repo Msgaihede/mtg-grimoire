@@ -2413,8 +2413,12 @@ describe("StackView reordering", () => {
 
     await dragOnto(marked.closest("li") ?? marked, intoDraw);
 
+    // The whole write, spelled as the sibling case above spells it: this is a claim that the
+    // card drop is **untouched** by the reorder target sitting inside its section, so a field
+    // quietly lost on the way through would be exactly the regression to catch.
     expect(drop).toHaveBeenCalledWith({
       write: "move",
+      finish: null,
       cardId: "c-Sol Ring",
       from: RAMP.id,
       to: DRAW.id,
