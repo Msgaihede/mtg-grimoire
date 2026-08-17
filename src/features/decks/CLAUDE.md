@@ -1225,6 +1225,14 @@ price | type`). An **inactive category stays its own group in all three grouping
     _heading_ the rail is switched off as well, so a rule drawn under it would mark a boundary that
     is not the one it looks like. The change is one function; neither view grew a line of drawing
     code.
+
+  **Driven in the shipped window 2026-08-17** (debug build, 1280×800, real corpus): switching a
+  flowing pile off moved it to the rail's third slot and **the flow closed up behind it** — the
+  pile that had wrapped to the second line took the vacated masonry slot — while the rail's x and
+  its 16px gutter did not move. Switching off the pile with the deck's **lowest** `sortOrder` still
+  put it behind the Sideboard and the Maybeboard, which is the kind-before-switch order proved
+  where it can fail. Switching both back on restored the original flow order exactly. Every figure:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The rail hugs the deck, and what holds it one gutter away is a cap on the flowing box**
   (changed 2026-08-17, both column views). The flowing half is `flex-1`, so it takes every pixel the
   rail leaves, and a column layout then spends only _whole_ columns of it: the remainder sat inside

@@ -516,9 +516,31 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   already carries the section wash, the dimmed heading, the `INACTIVE` chip and the stack's
   `opacity-60`, and the pile heading the rail is switched off too, so a rule under it would mark a
   boundary that is not the one it looks like. The width is unchanged for the Maybeboard's reason:
-  the rail is one column wide however many piles are in it, and each one costs height. **Nothing
-  here has been driven in the shipped window**; the arithmetic is `columns.test.ts`, the placement
-  `views.test.tsx` in both views, and the picture the `SwitchedOffPile` story in each of them.
+  the rail is one column wide however many piles are in it, and each one costs height.
+- **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build, 1280×800,
+  against a real synced corpus — a 14-card Commander deck of nine categories). Every figure is a
+  `getBoundingClientRect` off the running window.
+  - **Before**: flow `Commander, Instant, Artifact, Creature, Test` at x **234 / 474 / 714**, the
+    last two wrapping to a second line at y **699** and **767**; rail at x **954**, 224 wide, 480
+    tall. The last flow column ends at 938, so the gutter is exactly **16** — `flowMaxWidth` holding.
+  - **Switching `Creature` off** moved it out of the flow and into the rail as its **third** pile
+    (y 795, under Sideboard at 295 and Maybeboard at 392), and **the flow closed up**: `Test` took
+    the vacated masonry slot at 234,699 — it had been at 474,767. The rail grew 480 → **986**, past
+    the 800px window, which the editor's page scroller takes; the rail's x did not move.
+  - **The kind-before-switch order was exercised where it can actually fail.** Switching `Commander`
+    off — position **1 of 9**, the lowest `sortOrder` in the deck — put it **third** in the rail:
+    `Sideboard, Maybeboard, Commander, Creature`. A switch-first split would have headed the rail
+    with it. This is the one reading no arithmetic in the suite substitutes for.
+  - **Switching both back on returned them to the flow in their own order** —
+    `Commander, Instant, Artifact, Creature, Test`, Commander back at the head — and the rail back
+    to two piles with **one** `INACTIVE` chip on screen. Nothing remembers a pile was railed.
+  - **The wide-desk arm came free**, because the window was resized to **2560** mid-pass: five piles
+    on one line, the flowing box capped at **1184px** (= 5 × 240 − 16, `flowMaxWidth`'s deck term
+    rather than the desk's), rail at 1434, and `documentElement.scrollWidth` **2560** against a
+    `clientWidth` of **2560** — no horizontal page scrollbar, which is what the 1024px floor forbids.
+  - **Not driven**: an entirely switched-off deck (the empty flow `flowMaxWidth` now documents), and
+    a switched-off pile under a derived grouping — that one is `views.test.tsx`'s and the
+    Maybeboard's ordinary path.
 - **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
   shipped window.** Against `.storybook/fake`, reading each group's accessible name off
   `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no
