@@ -624,7 +624,7 @@ export function CardStack({
   const picked =
     selectedSlot === null
       ? -1
-      : cards.findIndex((c) => deckCardSlot(c.categoryId, c.cardId) === selectedSlot);
+      : cards.findIndex((c) => deckCardSlot(c.categoryId, c.cardId, c.finish) === selectedSlot);
   const open = openIndex ?? (picked === -1 ? null : picked);
 
   return (

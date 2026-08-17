@@ -569,3 +569,65 @@ the desk row therefore does not move.
   `sticky top-0`, the bar over the header row rather than over a pile — are the 2026-08-15 pass's
   and are untouched by a change to one box's own tokens. What a live pass would add is the
   clearance re-measured rather than derived.
+
+## 2026-08-17 — a deck card names a finish (schema v19)
+
+Driven in the shipped window (`npm run tauri dev`, a **debug** build, against the real synced
+corpus copied out of the main checkout — 116k cards, real prices, real decks). CDP over
+`scripts/cdp.mjs`. Two defects found, neither of which any test in the repo could have caught,
+and both fixed in the same pass.
+
+### What it confirmed
+
+- **A pile really does hold both.** `Abandon Attachments` (TLA 205) in the deck's `Instant` pile
+  as **`2 copies, foil`** beside **`1 copy`** regular — two rows, one printing, one category.
+  Reached the way a reader would: `Set as foil` on the menu, a quick add for a second copy, then
+  `Move to → Instant`.
+- **The price follows the finish, on one screen.** The foil row drew **`Foil $0.71`** and the
+  regular row **`$0.29`** — the same printing, two figures, from real TCGplayer data. This is the
+  claim `deck_card_price_expr` exists for and the one a fixture cannot make.
+- **Copy limits sum across the split.** With 2 foil + 1 regular the rule break read
+  *"max 1 copy of Abandon Attachments; you have **3**"* — `engine.ts` counts by name and never saw
+  the grain change, which is the rule this branch most needed not to have broken.
+- **The fold, and undo splitting it back.** The pane's `Set as foil` on the regular row folded it
+  into the foil row: 15 rows → **14**, `3 copies, foil`, and the button flipped to `Set as
+  regular` in the same frame. One `Ctrl+Z` put it back to 15 rows, `1 regular` + `2 foil` —
+  **both restored at the finish they had**, which is what `deck_undo::CardRow.finish` buys and
+  what the finish-blind `Cell` scope makes possible.
+- **The label is context-dependent and correct.** `Set as foil` in the editor's pane, on a card
+  the deck holds. The menu row is live on a two-finish printing and greys silently on a one-finish
+  one.
+- **The printing's own statement survives.** `Serah Farron // Crystallized Serah` — a foil-only
+  printing in a deck predating v19 — already read `foil` in its accessible name with `finish`
+  NULL, which is `playedFinish`'s fallback arm working on real data.
+
+### Defect 1 — two rows of one printing shared one slot
+
+`deckCardSlot` was `${categoryId}:${cardId}` and did not grow the finish, so **both rows carried
+the identical `data-deck-card`**: `20:74ca45a4-97ab-4255-9129-884e8b42b984`, twice, in one pile.
+
+That is the string the pane hands focus back through after a swap (`deckControlFor`) and the one
+every view compares against `selectedSlot` — so the pane opening on either row marks **both**, and
+a post-swap hand-back lands on whichever comes first in the DOM.
+
+**Nothing in the repo could have failed on it.** Every fixture with two rows of one printing puts
+them in two *different* piles, where the category id already separates them. Fixed by adding the
+finish to the slot, and `views.test.tsx` now builds the one-pile case explicitly.
+
+### Defect 2 — the history called a finish change a printing swap
+
+The undo button read **"Undo — Swapped printing of Abandon Attachments"** after a press that
+changed no printing at all.
+
+`deck_set_card_finish` records the `swap` audit kind on purpose — `AUDIT_KINDS` is
+CHECK-constrained and both writes are the same act — and it writes `fromFinish`/`toFinish` where a
+printing swap writes `fromSet`/`toSet`. `auditText.ts` was never taught the second payload, so it
+read every `swap` row with the first one's sentence. True of the kind, false of the row.
+
+It now says **"Made Abandon Attachments foil"** with `regular → foil` beside it, and the fold note
+is unchanged. The payload is the discriminator, which is the pattern this file already uses for
+the `deck` kind's `field`.
+
+**The general lesson, since it is the second time this exact shape has cost something here:** a
+reused audit kind is a reused *sentence* until somebody writes the second one. The kind list stays
+short for a good reason; the renderer is where the cost lands.

@@ -13,6 +13,7 @@
  * sentence degrades to its shortest honest form rather than taking the dialog down.
  */
 import { plural } from "@/lib/counts";
+import { finishLabel } from "@/lib/finish";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
 import { gameLabel } from "./useFormatSpecs";
 
@@ -159,6 +160,34 @@ export function auditSentence(
       };
     }
     case "swap": {
+      /**
+       * **Two writes share this kind, and the payload is what tells them apart.**
+       *
+       * `deck_swap_printing` writes `fromSet`/`toSet`; `deck_set_card_finish` writes
+       * `fromFinish`/`toFinish`. They are one *kind* because `AUDIT_KINDS` is CHECK-constrained
+       * and both are the same act — the deck plays a different physical object of the same card
+       * — but they are two **sentences**, and reading the finish write as "Swapped printing of
+       * Abandon Attachments" was what a live pass caught: true of the kind, false of the row.
+       *
+       * The finish arm is tested first because it is the narrower claim: a printing swap never
+       * carries a finish key, so a payload that has one is a finish change.
+       */
+      if ("toFinish" in p || "fromFinish" in p) {
+        // `null` is the regular copy — the one finish that has no word in the column, so it is
+        // the one this has to supply. `finishLabel` prints an unrecognised value as stored,
+        // which is the rule for a column that holds whatever was written into it.
+        const said = (value: unknown) => {
+          const word = text(value);
+          return word === null ? "regular" : finishLabel(word).toLowerCase();
+        };
+        return {
+          text: `Made ${name} ${said(p.toFinish)}`,
+          detail: line(
+            `${said(p.fromFinish)} → ${said(p.toFinish)}`,
+            flag(p.folded) ? "folded into one row" : null,
+          ),
+        };
+      }
       // Set codes are stored lowercase, as `cards.set_code` holds them. Upper-casing is the
       // renderer's job — a set code is printed on a card in capitals, and this app writes it
       // that way everywhere it shows one.

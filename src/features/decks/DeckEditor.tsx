@@ -2207,7 +2207,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     paneDeckContext !== null &&
     paneDeckContext.deckId === deckId &&
     paneDeckContext.variant === variant
-      ? deckCardSlot(paneDeckContext.categoryId, paneDeckContext.cardId)
+      ? deckCardSlot(paneDeckContext.categoryId, paneDeckContext.cardId, paneDeckContext.finish)
       : null;
 
   /** What the add target is called, or `null` under {@link AUTO_CATEGORY} — where there is no

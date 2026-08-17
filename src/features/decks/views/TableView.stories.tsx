@@ -67,7 +67,7 @@ export const WithSelectedRow: Story = {
     // clicked. See `CardStack`'s `selectedSlot`.
     selectedSlot: (() => {
       const row = deckGroups()[1].cards[0];
-      return row ? deckCardSlot(row.categoryId, row.cardId) : null;
+      return row ? deckCardSlot(row.categoryId, row.cardId, row.finish) : null;
     })(),
   },
 };

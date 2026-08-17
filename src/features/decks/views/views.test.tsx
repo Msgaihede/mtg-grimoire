@@ -459,10 +459,46 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     const slots = [...document.querySelectorAll(`[${DECK_CARD_ATTR}]`)].map((n) =>
       n.getAttribute(DECK_CARD_ATTR),
     );
-    expect(slots).toContain(deckCardSlot(RAMP.id, "c-Sol Ring"));
+    expect(slots).toContain(deckCardSlot(RAMP.id, "c-Sol Ring", null));
     // Stamped whether or not the card can be edited: opening a card from a deck is what puts
     // the swap on offer, and that is true of a view drawn read-only.
     expect(slots.length).toBe(4);
+  });
+
+  /**
+   * **Two rows of one printing in one pile get two slots**, which they did not until a live pass
+   * found it (2026-08-17).
+   *
+   * A slot has to name one row. Since schema v18 a pile can hold the regular copy and the foil,
+   * and `deckCardSlot` was still `categoryId:cardId` — so both rows carried the *identical*
+   * `data-deck-card`, which marks both when the pane opens on either and sends the pane's
+   * post-swap focus hand-back to whichever comes first.
+   *
+   * **No fixture in this repo could have caught it**, which is why it is pinned here rather than
+   * left to the sweep above: every other two-row case puts the rows in two different piles,
+   * where the category id already separates them.
+   */
+  it("gives the foil row and the regular row of one printing two different slots", () => {
+    render(
+      renderView({
+        groups: [
+          {
+            ...GROUPS[0],
+            cards: [
+              card({ name: "Sol Ring", finish: "foil", finishes: '["nonfoil","foil"]' }),
+              card({ name: "Sol Ring", finishes: '["nonfoil","foil"]' }),
+            ],
+          },
+        ],
+        marketplace: TCG,
+      }),
+    );
+
+    const slots = [...document.querySelectorAll(`[${DECK_CARD_ATTR}]`)].map((n) =>
+      n.getAttribute(DECK_CARD_ATTR),
+    );
+    expect(slots).toHaveLength(2);
+    expect(new Set(slots).size).toBe(2);
   });
 
   /**
@@ -482,7 +518,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       renderView({
         groups: GROUPS,
         marketplace: TCG,
-        selectedSlot: deckCardSlot(RAMP.id, "c-Sol Ring"),
+        selectedSlot: deckCardSlot(RAMP.id, "c-Sol Ring", null),
       }),
     );
 
@@ -490,7 +526,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     expect(marked).toHaveLength(1);
     expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
       DECK_CARD_ATTR,
-      deckCardSlot(RAMP.id, "c-Sol Ring"),
+      deckCardSlot(RAMP.id, "c-Sol Ring", null),
     );
   });
 
@@ -511,7 +547,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       renderView({
         groups: TWO_PILES,
         marketplace: TCG,
-        selectedSlot: deckCardSlot(SIDE.id, "c-Sol Ring"),
+        selectedSlot: deckCardSlot(SIDE.id, "c-Sol Ring", null),
       }),
     );
 
@@ -519,7 +555,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     expect(marked).toHaveLength(1);
     expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
       DECK_CARD_ATTR,
-      deckCardSlot(SIDE.id, "c-Sol Ring"),
+      deckCardSlot(SIDE.id, "c-Sol Ring", null),
     );
   });
 
@@ -533,7 +569,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       renderView({
         groups: GROUPS,
         marketplace: TCG,
-        selectedSlot: deckCardSlot(SIDE.id, "c-Sol Ring"),
+        selectedSlot: deckCardSlot(SIDE.id, "c-Sol Ring", null),
       }),
     );
 
@@ -545,7 +581,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       renderView({
         groups: GROUPS,
         marketplace: TCG,
-        selectedSlot: deckCardSlot(RAMP.id, "c-Black Lotus"),
+        selectedSlot: deckCardSlot(RAMP.id, "c-Black Lotus", null),
       }),
     );
 
@@ -600,7 +636,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     // The drag handle is the whole card: an `<li>` in the three card views, and the row itself
     // in the table. Both carry the slot, so the slot is how one is found either way.
     const marked = document.querySelector<HTMLElement>(
-      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
 
     await dragOnto(marked.closest("li") ?? marked, target);
@@ -666,7 +702,7 @@ describe.each(VIEWS)("$name right-click", ({ render: renderView }) => {
    *  focusable element — a button in three of them, the row itself in the table. */
   const anchor = () =>
     document.querySelector<HTMLElement>(
-      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
 
   const draw = () => {
@@ -1766,7 +1802,7 @@ describe.each(COLUMN_VIEWS)(
       const target = rail()!.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${id}"]`);
       expect(target).not.toBeNull();
       const marked = document.querySelector<HTMLElement>(
-        `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+        `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
       )!;
 
       await dragOnto(marked.closest("li") ?? marked, target!);

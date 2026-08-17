@@ -327,7 +327,7 @@ export function TableView({
         selected={
           row.kind === "card" &&
           selectedSlot != null &&
-          deckCardSlot(row.card.categoryId, row.card.cardId) === selectedSlot
+          deckCardSlot(row.card.categoryId, row.card.cardId, row.card.finish) === selectedSlot
         }
         landedKey={row.kind === "card" ? landed?.get(row.card.id) : undefined}
       />
@@ -355,7 +355,7 @@ export function TableView({
         isSelected={(row) =>
           row.kind === "card" &&
           selectedSlot != null &&
-          deckCardSlot(row.card.categoryId, row.card.cardId) === selectedSlot
+          deckCardSlot(row.card.categoryId, row.card.cardId, row.card.finish) === selectedSlot
         }
         renderRow={renderRow}
       />

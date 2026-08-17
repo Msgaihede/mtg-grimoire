@@ -205,9 +205,21 @@ export const DECK_CARD_ATTR = "data-deck-card";
  * deck-scoped by construction. A category id is per-deck and unique across the whole table,
  * which makes this stronger than the zone word it replaces rather than weaker — but the deck
  * scoping is still the single open editor's, not this string's.
+ *
+ * **`finish` is here because a slot has to name one row, and since schema v18 a pile can hold a
+ * printing twice** — the regular copy and the foil. It was left out when the column landed, and
+ * a live pass found it in a minute: two rows of Abandon Attachments in one pile carried the
+ * *identical* `data-deck-card`, which makes `selectedSlot` mark both when the pane opens on
+ * either and makes the pane's post-swap focus hand-back land on whichever comes first. No test
+ * in the repo could have caught it — every fixture with two rows of one printing puts them in
+ * two different piles, where the category id already separates them.
+ *
+ * Empty for the regular copy, so every slot written before v18 keeps the string it had: this
+ * value is compared against itself across a re-render, never parsed, so the trailing colon
+ * costs nothing and the shape stays readable.
  */
-export function deckCardSlot(categoryId: number, cardId: string): string {
-  return `${categoryId}:${cardId}`;
+export function deckCardSlot(categoryId: number, cardId: string, finish: DeckFinish): string {
+  return `${categoryId}:${cardId}:${finish ?? ""}`;
 }
 
 /**
