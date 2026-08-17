@@ -1018,10 +1018,12 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         &tx,
         id,
         patch,
-        &name,
-        &format_key,
-        &game_key,
-        default_category_name.as_deref(),
+        &DeckResolved {
+            name: &name,
+            format_key: &format_key,
+            game_key: &game_key,
+            default_category_name: default_category_name.as_deref(),
+        },
         &before,
     )?;
     // No history row means nothing changed, and a step for a change that did not happen is a
@@ -1069,6 +1071,29 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 
+/// The three values [`update_deck`] validated out of a [`DeckPatch`], plus the one it looked up
+/// — everything the history needs that the patch does not already carry verbatim.
+///
+/// **A struct rather than four more parameters, and clippy is only half the reason.** The
+/// signature reached eight arguments when `game_key` joined it and `too_many_arguments` (7)
+/// failed the build — but the grouping is the honest shape anyway: these four share one
+/// property that none of `tx`, `id`, `patch` or `before` has, which is that they are the
+/// *patch's own fields after Rust has had its say*. A blank `formatKey` is [`DEFAULT_FORMAT`]
+/// here and a blank `gameKey` is [`DEFAULT_GAME`], so what the history compares is what was
+/// written rather than what was typed.
+struct DeckResolved<'a> {
+    /// Through [`valid_name`] — trimmed.
+    name: &'a Option<String>,
+    /// Through [`valid_format`] — a key `format_specs` carries, or [`DEFAULT_FORMAT`].
+    format_key: &'a Option<String>,
+    /// Through [`valid_game`] — one of [`crate::schema::DECK_GAMES`], or [`DEFAULT_GAME`].
+    game_key: &'a Option<String>,
+    /// The name [`update_deck`]'s fence already resolved for `patch.default_category_id`, or
+    /// `None` where the patch names no pile *or* names [`AUTO_CATEGORY`]. The one field here
+    /// that is a *lookup* rather than a validation, which is why it is a name and not a key.
+    default_category_name: Option<&'a str>,
+}
+
 /// Write [`update_deck`]'s history: one row per field whose value actually moved.
 ///
 /// `name` and `format_key` arrive already validated and canonicalised (a blank format key is
@@ -1084,17 +1109,15 @@ fn record_deck_edit(
     tx: &Connection,
     id: i64,
     patch: &DeckPatch,
-    name: &Option<String>,
-    format_key: &Option<String>,
-    // Already through [`valid_game`], so a blank `gameKey` is recorded as [`DEFAULT_GAME`] —
-    // what the deck actually is, rather than what the caller failed to say. `format_key`'s rule
-    // beside it.
-    game_key: &Option<String>,
-    // The name [`update_deck`]'s fence already resolved for `patch.default_category_id`, or
-    // `None` where the patch names no pile *or* names [`AUTO_CATEGORY`].
-    default_category_name: Option<&str>,
+    resolved: &DeckResolved<'_>,
     before: &DeckBefore,
 ) -> Result<Option<i64>, String> {
+    let DeckResolved {
+        name,
+        format_key,
+        game_key,
+        default_category_name,
+    } = *resolved;
     // The **last** row this writes, which is what the undo journal keys its one step on. A
     // patch that changes two fields is two history rows and one Ctrl+Z: one press is one
     // reversal, and a cursor that could land between the two would put half a form back.
