@@ -33,6 +33,14 @@ describe("GameChangerMark", () => {
     render(<GameChangerMark className="absolute top-1" />);
 
     const mark = screen.getByRole("img", { name: GAME_CHANGER_LABEL });
-    expect(mark).toHaveClass("absolute", "top-1", "text-pie-gold", "size-3");
+    // 12px is the glyph on a card at 100% zoom: every surface that draws this draws a card the
+    // reader can zoom, so the size is a multiple of the card's own `--mark-scale` rather than a
+    // constant. The `, 1` fallback is what leaves it at 12px anywhere the variable is unset.
+    expect(mark).toHaveClass(
+      "absolute",
+      "top-1",
+      "text-pie-gold",
+      "size-[calc(0.75rem*var(--mark-scale,1))]",
+    );
   });
 });

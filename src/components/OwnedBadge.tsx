@@ -13,6 +13,13 @@ import { cn } from "@/lib/utils";
  * for them" is true of almost every row in a 116 k-card database, and a wall of `×0` would
  * be forty stickers saying nothing. Callers may therefore render this unconditionally — the
  * component is its own guard, and `CardGrid` draws no corner for a mark that came back null.
+ *
+ * **Every size here is a size at 100% zoom.** The badge's own corner is on a card face on three
+ * zoomable walls, so the type, the gap and the heart all read the card's `--mark-scale`
+ * (`lib/cardZoom.ts`); the deck's table view and the search table take the `, 1` fallback and are
+ * unchanged. The leading is scaled beside the font size deliberately — an arbitrary `text-[…]`
+ * sets the font size **only**, so a `text-xs` swapped for one without its `1rem` partner leaves the
+ * line box at whatever it inherited.
  */
 export function OwnedBadge({
   owned,
@@ -41,7 +48,9 @@ export function OwnedBadge({
     <span
       title={hint}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 font-mono text-xs tabular-nums text-text",
+        "inline-flex shrink-0 items-center gap-[calc(0.25rem*var(--mark-scale,1))] font-mono",
+        "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+        "tabular-nums text-text",
         className,
       )}
     >
@@ -53,7 +62,10 @@ export function OwnedBadge({
       )}
       {wishlisted && (
         <>
-          <Heart className="size-3 shrink-0 fill-current" aria-hidden="true" />
+            <Heart
+            className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 fill-current"
+            aria-hidden="true"
+          />
           <span className="sr-only">{wishSentence}</span>
         </>
       )}

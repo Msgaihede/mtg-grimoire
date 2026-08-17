@@ -35,6 +35,11 @@ import { tagColorCss, tagFgCss } from "./tagColors";
  *
  * A dot rather than a word: a tag is a mark the reader put there and already knows, and a
  * 224px column has no room for a second label beside a card's name.
+ *
+ * **8px is its size on a card at 100% zoom.** The Grid view lays this on a card face the reader can
+ * zoom, so it reads that card's `--mark-scale` (`lib/cardZoom.ts`); the table and text views take
+ * the `, 1` fallback and are unchanged. The 1px ring around it does **not** scale — it is a hairline
+ * separating the dot from whatever it sits on, which is a job one pixel does at every size.
  */
 export function TagDot({
   name,
@@ -51,7 +56,11 @@ export function TagDot({
       aria-hidden="true"
       title={name}
       style={{ backgroundColor: tagColorCss(color) }}
-      className={cn("size-2 shrink-0 rounded-[2px] shadow-[0_0_0_1px_var(--color-bg)]", className)}
+      className={cn(
+        "size-[calc(0.5rem*var(--mark-scale,1))] shrink-0 rounded-[2px]",
+        "shadow-[0_0_0_1px_var(--color-bg)]",
+        className,
+      )}
     />
   );
 }
@@ -171,6 +180,17 @@ export function GameChangerBadge({ className }: { className?: string }) {
  * brief sets. A seal is the exception the brief is about the absence of: two fixed words, never
  * body text, never a string that can grow — and the serif is what makes it read as *stamped
  * into* the metal rather than typed on it.
+ *
+ * ## Every number in it is a number at 100% zoom
+ *
+ * This is stamped across a card face in the deck's stack view, which the reader zooms from 0.5× to
+ * 2× — so the height, the paddings, the tuck, the crown, the lettering **and the tail's own
+ * geometry** are all multiplied by that card's `--mark-scale` (`lib/cardZoom.ts`). The tail is the
+ * part that could not be left out: the notch, the fold's 5px band and the 9px it is offset by are
+ * one drawing, and holding any of the three still turns the ribbon into a rectangle with a dent at
+ * one end of the range and a chevron at the other. `tracking` is already `em`-relative, so it
+ * follows the lettering without being named here; the drop shadow does not scale, because a shadow
+ * that doubles reads as the banner lifting off the card.
  */
 export function GameChangerBanner({ className }: { className?: string }) {
   return (
@@ -180,22 +200,31 @@ export function GameChangerBanner({ className }: { className?: string }) {
       style={{
         // The ribbon's forked tail. The notch is cut into the *right* edge, so the banner
         // points away from the tag it emerges from rather than back into it.
-        clipPath: "polygon(0 0, 100% 0, calc(100% - 10px) 50%, 100% 100%, 0 100%)",
+        clipPath:
+          "polygon(0 0, 100% 0, calc(100% - 10px*var(--mark-scale,1)) 50%, 100% 100%, 0 100%)",
         backgroundImage: "linear-gradient(90deg, rgba(0,0,0,0.30), rgba(0,0,0,0.05))",
-        backgroundSize: "5px 100%",
-        backgroundPosition: "right 9px top",
+        backgroundSize: "calc(5px*var(--mark-scale,1)) 100%",
+        backgroundPosition: "right calc(9px*var(--mark-scale,1)) top",
         backgroundRepeat: "no-repeat",
       }}
       className={cn(
-        "-ml-2.5 mt-1 flex h-3 flex-none items-center gap-1 bg-pie-gold-deep pl-3.5 pr-[21px]",
+        "-ml-[calc(0.625rem*var(--mark-scale,1))] mt-[calc(0.25rem*var(--mark-scale,1))] flex",
+        "h-[calc(0.75rem*var(--mark-scale,1))] flex-none items-center",
+        "gap-[calc(0.25rem*var(--mark-scale,1))] bg-pie-gold-deep",
+        "pl-[calc(0.875rem*var(--mark-scale,1))] pr-[calc(21px*var(--mark-scale,1))]",
         "text-accent-fg shadow-[0_1px_5px_rgba(0,0,0,0.45)]",
         className,
       )}
     >
-      <Crown className="block size-[9px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
+      <Crown
+        className="block size-[calc(9px*var(--mark-scale,1))] shrink-0"
+        strokeWidth={2.5}
+        aria-hidden="true"
+      />
       <span
         className={cn(
-          "font-heading text-[0.5rem] leading-none font-semibold tracking-[0.06em] whitespace-nowrap",
+          "font-heading text-[calc(0.5rem*var(--mark-scale,1))] leading-none font-semibold",
+          "tracking-[0.06em] whitespace-nowrap",
           "[text-shadow:0_1px_0_rgba(255,255,255,0.25)]",
         )}
       >
@@ -213,6 +242,11 @@ export function GameChangerBanner({ className }: { className?: string }) {
  * row, a legality blob this app cannot read) is a fact worth a look rather than a rule the
  * reader broke. It is drawn over the art rather than beside the name so that it cannot be
  * mistaken for part of the card's own printed line.
+ *
+ * **9px and its padding are what it measures at 100% zoom.** Both surfaces that draw it — the
+ * stack's card and the Grid view's tile — are card faces the reader can zoom, so both read that
+ * card's `--mark-scale` (`lib/cardZoom.ts`). The border, the radius and the vertical padding stay
+ * where they are: all three are one pixel or three, and a hairline is a hairline at every size.
  */
 export function RuleBreakMark({ text, className }: { text: string; className?: string }) {
   return (
@@ -220,8 +254,9 @@ export function RuleBreakMark({ text, className }: { text: string; className?: s
       aria-hidden="true"
       title={text}
       className={cn(
-        "rounded-[3px] border border-destructive/50 bg-bg/85 px-1 py-px",
-        "font-mono text-[0.5625rem] text-destructive",
+        "rounded-[3px] border border-destructive/50 bg-bg/85 py-px",
+        "px-[calc(0.25rem*var(--mark-scale,1))]",
+        "font-mono text-[calc(0.5625rem*var(--mark-scale,1))] text-destructive",
         className,
       )}
     >
