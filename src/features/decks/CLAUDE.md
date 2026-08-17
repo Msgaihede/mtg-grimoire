@@ -180,6 +180,20 @@ reader to configure the deck they had just made; it now asks all of them.
   - **The tile draws it only when it is not `Any`** — `Modern · Arena · 60 cards` against
     `Modern · 60 cards`. `Any` is what every deck is born as, so printing it would put a word that
     says nothing on nearly every tile, in a caption that already truncates.
+  - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build,
+    1280×800, against a freshly synced 116 712-card corpus). The counts are the useful part,
+    because a filter that answered "everything" passes every assertion that only names one
+    format: the New deck dialog offered **24** formats on `Any` (25 seeded minus Future
+    Standard), **10** on Arena, **17** on Paper and **9** on MTGO. Narrowing to Arena moved the
+    select off Commander to Alchemy and **going back to Any restored Commander** — the property
+    the derived answer has and the effect it replaced did not. A Timeless deck switched to Paper
+    kept **Timeless in the list, between Standard and Tiny Leaders**, with the select still
+    reading `timeless`: the deck was not re-formatted. The history read **"Set the game to
+    Paper · was Arena"** (the words, not the keys), Undo was labelled with that same sentence and
+    put the deck back on Arena with the list back at 10, and the two tiles read `Timeless ·
+    Arena · 0 cards` against `Timeless · 0 cards`. **One thing only the live pass showed**: the
+    second New deck dialog opened on the *remembered* Timeless with the game back at `Any`,
+    which is `last_deck_format` existing and `last_deck_game` deliberately not.
 - **`defaultCategoryId` is the one field of `DeckSettingsValue` the two hosts do not both ask
   about, and the asymmetry is the honest one** (2026-08-15). The row is drawn only when a
   `categories` prop arrives, and `CreateDeckDialog` passes none: `deck_create` seeds the four
