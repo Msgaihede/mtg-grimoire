@@ -215,12 +215,27 @@ Every one of these has its measurement and its story in
   is **required**, because a wall that has not thought about which section it is must not silently
   share another wall's number. The shell, the tables and the card pane never scale. Three rules
   carry it, each with a live failure behind it in
-  [frontend-design.md](../docs/reference/frontend-design.md), and none of the three changed with the
-  split: the gesture needs a **native** `addEventListener` with `{ passive: false }` (React's
-  `onWheel` is passive, so `preventDefault` does nothing and WebView2 zooms the whole window on top
-  of you); the zoom rescales **geometry** and is never a `transform: scale()`; and **a scaled budget
-  holding unscaled chrome floors rather than scales** — `max(base, scaled(base, zoom))`, which is why
-  `CardGrid`'s caption, `CardStack`'s 34px reveal and `GridView`'s gutter all grow without shrinking.
+  [frontend-design.md](../docs/reference/frontend-design.md): the gesture needs a **native**
+  `addEventListener` with `{ passive: false }` (React's `onWheel` is passive, so `preventDefault`
+  does nothing and WebView2 zooms the whole window on top of you); the zoom rescales **geometry**
+  and is never a `transform: scale()`; and **everything drawn _on_ a card scales with it, through
+  two inherited custom properties** — `--mark-scale` and `--control-scale`, published by
+  `cardScaleVars(zoom)` in `src/lib/cardZoom.ts` and set on exactly three elements (`CardGrid`'s
+  tile, `GridView`'s tile, `CardStack`'s card). **A variable rather than a prop, because the marks
+  are shared**: `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper`
+  are each drawn on a card face _and_ in one of the three tables or the card pane, so a prop would
+  be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
+  answered fifteen times by whoever adds the newest call site. A mark reads `var(--mark-scale, 1)`
+  and the fallback is what a table gets for knowing nothing. Controls take the second variable
+  because they are drawn at `CONTROL_SHRINK` (85%) on a card and at full size in a row.
+  **This retired the third rule that used to sit here** — "a scaled budget holding unscaled chrome
+  floors rather than scales", `max(base, scaled(base, zoom))` — which is worth knowing because it
+  was true and its premise is gone: `CardGrid`'s caption, `CardStack`'s `stackAdvance` and
+  `stackDataHeight` and `GridView`'s foot each floored because the chrome inside them could not
+  shrink, and a floored budget around chrome that now does is 28px of strip around 6px of type.
+  `atLeast` survives for **`GridView`'s gutter alone**, which measures space *between* cards rather
+  than anything drawn on one. Hairlines, the Tailwind corner radii and `STACK_DATA_RISE` still do
+  not scale, each because the class it is derived from does not.
   **The badge is still one instance mounted at the app root** (`CardZoomIndicator`, a sibling of
   `AppShell`) — `LAYER.popup` only competes in the root stacking context, so mounting it inside a
   view would cap it at that view's — but it is now drawn at the **top-right of the section the
