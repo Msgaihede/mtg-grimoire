@@ -555,7 +555,14 @@ function Body({
       // row that no longer exists.
       if (!deckRow || swapping) return;
       startSwap(
-        { fromCardId: deckRow.cardId, toCardId, categoryId: deckRow.categoryId },
+        {
+          fromCardId: deckRow.cardId,
+          toCardId,
+          categoryId: deckRow.categoryId,
+          // Carried across: the reader is choosing a printing, not an object, so the foil copy
+          // of the old printing becomes the foil copy of the new one.
+          finish: deckRow.finish,
+        },
         {
           onSuccess: (result) => {
             // What this pane knows and the one replacing it cannot: where the caret came from,

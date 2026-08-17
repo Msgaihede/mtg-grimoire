@@ -212,6 +212,10 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     setName: card.setName,
     collectorNumber: card.collectorNumber,
     lang: card.lang,
+    // The regular copy, which is what an add means until the reader says otherwise. A story
+    // about the foil mark or the finish menu writes `deckCard(card, { finish: "foil" })` —
+    // and the card it picks has to be one whose `finishes` lists it, or the menu greys.
+    finish: null,
     needsReview: null,
     oracleId: card.oracleId,
     manaCost: card.manaCost,
@@ -288,6 +292,9 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     categoryKind: category.kind,
     categoryActive: category.isActive,
     variant: "live",
+    // The row's own, and among the four that survive an orphaning for the same reason: a finish
+    // is what the reader said they play, not something read back off a card that has gone.
+    finish: null,
     tagId: null,
     tagName: null,
     tagColor: null,

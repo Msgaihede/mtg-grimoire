@@ -860,6 +860,23 @@ export type CategoryOrigin = "user" | "auto";
 export type DeckVariant = "live" | "theory";
 
 /**
+ * Which object a deck row plays — `deck_cards.finish`, schema v18.
+ *
+ * **`null` is the regular copy, and `"nonfoil"` is not in this type.** Rust's
+ * `deck::normalise_finish` maps the word to NULL at the one command boundary and the column's
+ * CHECK makes any other path a hard error, because two spellings of "regular" would be two rows
+ * on `DECK_CARD_GRAIN` that draw identically on screen and sum apart. Narrowing it here means a
+ * surface cannot send the spelling that does not exist.
+ *
+ * It is the same shape `soleFinish` in `src/lib/finish.ts` already answers in, and for the same
+ * reason: nonfoil is the finish a price is assumed to be, so it is the one that needs no word.
+ *
+ * **This is part of a deck row's address, not just its content.** A foil copy and a regular copy
+ * of one printing in one pile are two rows, so every card command carries it.
+ */
+export type DeckFinish = Exclude<Finish, "nonfoil"> | null;
+
+/**
  * One category of one deck: a named pile the user owns.
  *
  * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
@@ -1538,7 +1555,8 @@ export interface DeckViewState {
  */
 export interface DeckCard {
   /** `deck_cards.id`. Answered by the writes, but **never** what addresses one: every card
-   *  command takes `(deckId, cardId, categoryId, variant)`, the grain the unique index is on. */
+   *  command takes `(deckId, cardId, categoryId, variant, finish)`, the grain the unique index
+   *  is on. */
   id: number;
   cardId: string;
   categoryId: number;
@@ -1576,6 +1594,19 @@ export interface DeckCard {
   setName: string | null;
   collectorNumber: string;
   lang: string;
+  /**
+   * Which object this row plays — {@link DeckFinish}, so `null` is the regular copy.
+   *
+   * **Part of the row's address, not just its content.** A foil copy and a regular copy of one
+   * printing in one pile are two rows since schema v18, so every card write carries it and a
+   * write aimed at one must never find the other.
+   *
+   * What a surface draws is `card.finish ?? soleFinish(card.finishes)` — the reader's own
+   * statement first, the printing's second. `soleFinish` says what the *object* is (a foil-only
+   * printing) and deliberately says nothing about a printing sold in both; this says what the
+   * deck plays, and it is the reader's.
+   */
+  finish: DeckFinish;
   /** A sentence when a sync could not keep this row's printing, `null` otherwise — the
    *  reconciler walks `deck_cards` too. */
   needsReview: string | null;
@@ -1907,6 +1938,21 @@ export interface ImportItem {
    *  is refused for the whole import, because one line that cannot land rolls the transaction
    *  back. */
   quantity: number;
+  /**
+   * The line's `*F*` / `*E*` marker, as {@link DeckFinish} — `null` where it carried neither.
+   *
+   * Part of the grain, so a list naming the same printing foil on one line and plain on another
+   * lands as **two rows** rather than one summed. `parse.ts` reads the marker, `plan.ts` carries
+   * it here, and nothing in between makes a decision about it: a finish is a fact about the
+   * line, not a filing decision.
+   *
+   * **Optional, exactly as {@link ImportItem.inactive} is and for its reason.** Rust takes it
+   * `#[serde(default)]`, and an absent field means the regular copy — which is what an import
+   * has always made. It is the same call `useDeck.addCard`'s optional `finish` makes and the
+   * opposite of the one `Slot` makes: this creates a row, where a default is the honest answer,
+   * rather than addressing one, where a default steps the wrong card.
+   */
+  finish?: DeckFinish;
   /**
    * **A name, not an id**, which is the one place this command's shape differs from
    * {@link ipc.deckAddCard}'s id arm and the difference is deliberate: an imported list names
@@ -2596,8 +2642,9 @@ export const ipc = {
     cardId: string,
     categoryId: number,
     variant: DeckVariant,
+    finish: DeckFinish,
     tagId: number | null,
-  ) => invoke<void>("deck_card_set_tag", { deckId, cardId, categoryId, variant, tagId }),
+  ) => invoke<void>("deck_card_set_tag", { deckId, cardId, categoryId, variant, finish, tagId }),
   /** Every folder there is, flat — the tree is the reader's to build from `parentId`. No deck
    *  scoping, because a folder belongs to no deck: it files them. */
   deckFolderList: () => invoke<DeckFolder[]>("deck_folder_list"),
@@ -2716,6 +2763,7 @@ export const ipc = {
     categoryId: number | null,
     categoryName: string | null,
     variant: DeckVariant,
+    finish: DeckFinish,
     quantity: number,
   ) =>
     invoke<EntryChange>("deck_add_card", {
@@ -2724,6 +2772,7 @@ export const ipc = {
       categoryId,
       categoryName,
       variant,
+      finish,
       quantity,
     }),
   /**
@@ -2743,6 +2792,7 @@ export const ipc = {
     cardId: string,
     categoryId: number,
     variant: DeckVariant,
+    finish: DeckFinish,
     quantity: number,
   ) =>
     invoke<EntryChange>("deck_set_card_quantity", {
@@ -2750,6 +2800,7 @@ export const ipc = {
       cardId,
       categoryId,
       variant,
+      finish,
       quantity,
     }),
   /**
@@ -2794,6 +2845,7 @@ export const ipc = {
     toCategoryId: number | null,
     toCategoryName: string | null,
     variant: DeckVariant,
+    finish: DeckFinish,
   ) =>
     invoke<number>("deck_move_card", {
       deckId,
@@ -2802,6 +2854,7 @@ export const ipc = {
       toCategoryId,
       toCategoryName,
       variant,
+      finish,
     }),
   /**
    * Swap a deck card to **another printing of the same card**: same category, same variant,
@@ -2822,8 +2875,44 @@ export const ipc = {
     toCardId: string,
     categoryId: number,
     variant: DeckVariant,
+    finish: DeckFinish,
   ) =>
-    invoke<SwapResult>("deck_swap_printing", { deckId, fromCardId, toCardId, categoryId, variant }),
+    invoke<SwapResult>("deck_swap_printing", {
+      deckId,
+      fromCardId,
+      toCardId,
+      categoryId,
+      variant,
+      finish,
+    }),
+  /**
+   * Change **which object** a deck row plays — the regular copy, the foil or the etched one.
+   *
+   * `deckSwapPrinting` one axis over, and the same shape for the same reason: the deck plays a
+   * different physical object of the same card. It **folds** the same way, so setting a row to
+   * a finish the pile already holds adds the quantities and takes the row that moved away, and
+   * `SwapResult.quantity` is the sum.
+   *
+   * Refused in words for three things: a finish the row already is (`nonfoil` and `null` are
+   * the same finish, so that pair is refused too), a finish the printing is not **sold** in,
+   * and a row that is not in that pile.
+   */
+  deckSetCardFinish: (
+    deckId: number,
+    cardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    fromFinish: DeckFinish,
+    toFinish: DeckFinish,
+  ) =>
+    invoke<SwapResult>("deck_set_card_finish", {
+      deckId,
+      cardId,
+      categoryId,
+      variant,
+      fromFinish,
+      toFinish,
+    }),
   /**
    * Everything this deck is short of, onto the wishlist. Answers how many **wishes were
    * touched** — one per oracle card, so the same card short in two categories is one wish for

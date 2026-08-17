@@ -36,6 +36,7 @@ const SEARCH: DragPayload = {
 };
 const ROW: DragPayload = {
   kind: "deck-card",
+  finish: null,
   cardId: "c-bolt",
   name: "Lightning Bolt",
   fromCategoryId: MAIN,
@@ -174,6 +175,7 @@ describe("dropWrite", () => {
   it("moves a deck row into the category it was dropped on", () => {
     expect(dropWrite(ROW, { kind: "category", categoryId: SIDE })).toEqual({
       write: "move",
+      finish: null,
       cardId: "c-bolt",
       from: MAIN,
       to: SIDE,
@@ -197,6 +199,7 @@ describe("dropWrite", () => {
   it("removes a deck row dropped on the tray, from the category it was in", () => {
     expect(dropWrite({ ...ROW, fromCategoryId: SIDE }, { kind: "remove" })).toEqual({
       write: "remove",
+      finish: null,
       cardId: "c-bolt",
       categoryId: SIDE,
     });
@@ -252,6 +255,7 @@ describe("dropWrite", () => {
   it("re-files a deck row dropped on the auto zone", () => {
     expect(dropWrite(ROW, { kind: "auto" })).toEqual({
       write: "auto-refile",
+      finish: null,
       cardId: "c-bolt",
       from: MAIN,
     });
@@ -262,6 +266,7 @@ describe("dropWrite", () => {
   it("addresses the re-file to the pile the card was picked up in", () => {
     expect(dropWrite({ ...ROW, fromCategoryId: SIDE }, { kind: "auto" })).toEqual({
       write: "auto-refile",
+      finish: null,
       cardId: "c-bolt",
       from: SIDE,
     });

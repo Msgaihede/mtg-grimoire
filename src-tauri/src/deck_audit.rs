@@ -444,8 +444,10 @@ mod tests {
                 quantity,
                 category_name: category.to_owned(),
                 // An ordinary, counted pile: this sweep is about which commands write history,
-                // and switching a pile off is not one of the effects it counts.
+                // and switching a pile off is not one of the effects it counts. The finish is
+                // out of scope for the same reason.
                 inactive: false,
+                finish: None,
             }
         }
 

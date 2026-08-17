@@ -117,6 +117,7 @@ describe("the deck row a card was opened from", () => {
     categoryName: "Main deck",
     cardId: "p1",
     variant: "live",
+    finish: null,
   };
 
   it("opens the card and remembers the row in one write", () => {
@@ -216,6 +217,7 @@ describe("the card a reader asked to see every printing of", () => {
       categoryName: "Main deck",
       cardId: "p1",
       variant: "live",
+      finish: null,
     });
 
     useAppStore.getState().requestAllPrintings(BOLT);

@@ -305,6 +305,9 @@ function deckCard(
     setCode: card.setCode,
     collectorNumber: card.collectorNumber,
     lang: card.lang,
+    // The regular copy. A seed that wanted a foil row would have to pick a printing whose
+    // `finishes` lists one, or the finish menu greys on the very card it seeded.
+    finish: null,
     needsReview: null,
     ...over,
   };

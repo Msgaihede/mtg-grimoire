@@ -19,6 +19,7 @@ import {
   type CardSummary,
   type DeckCard,
   type DeckCategory,
+  type DeckFinish,
   type DeckVariant,
 } from "@/lib/ipc";
 import { PRESS, statusLine } from "@/lib/motion";
@@ -870,7 +871,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: DeckCard, name: string) => {
       void startTagCreate({ name, color: DEFAULT_TAG_COLOR.token })
         .then((tag) =>
-          setTagOnSlot({ cardId: card.cardId, categoryId: card.categoryId, tagId: tag.id }),
+          setTagOnSlot({
+            cardId: card.cardId,
+            categoryId: card.categoryId,
+            finish: card.finish,
+            tagId: tag.id,
+          }),
         )
         // The refusal is already on the observer, and the observer is in the banner family above.
         // Swallowed here so a refused create is a sentence rather than an unhandled rejection.
@@ -916,6 +922,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     deck.refileCard,
     deck.update,
     deck.setTag,
+    // The finish write, whose three refusals — already that finish, a printing not sold in it,
+    // a row that is not in the pile — all arrive after the menu that made the press has closed.
+    deck.setCardFinish,
     meta.createTag,
     meta.renameCategory,
     meta.setCategoryActive,
@@ -1425,6 +1434,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
   const writeTag = deck.setTag.mutate;
+  const writeFinish = deck.setCardFinish.mutate;
 
   /**
    * One copy into a category — the quick add's write, and a drop's.
@@ -1487,20 +1497,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [cards]);
 
   const setQuantityAt = useCallback(
-    (cardId: string, categoryId: number, quantity: number) => {
+    (cardId: string, categoryId: number, finish: DeckFinish, quantity: number) => {
       // Zero takes the card out from under the caret — optimistically, so it happens on the
       // press — and the control the caret was on goes with it. Before the write, because the
       // card is gone by the time an answer arrives.
       if (quantity === 0) handOffTo(categoryId);
-      writeQuantity({ cardId, categoryId, quantity });
+      writeQuantity({ cardId, categoryId, finish, quantity });
     },
     [writeQuantity, handOffTo],
   );
 
   const moveTo = useCallback(
-    (cardId: string, from: number, to: number) => {
+    (cardId: string, from: number, to: number, finish: DeckFinish) => {
       writeMove(
-        { cardId, from, to },
+        { cardId, from, to, finish },
         {
           // The dropped card has left the pile it was in, so the caret goes to where it landed
           // — which announces the category it is now in. The same hand-off the stepper's zero
@@ -1510,6 +1520,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       );
     },
     [writeMove, handOffTo],
+  );
+
+  /** The card menu's `Set as foil` / `Set as regular`, and the card pane's own button. */
+  const setFinishAt = useCallback(
+    (card: DeckCard, to: DeckFinish) => {
+      writeFinish({
+        cardId: card.cardId,
+        categoryId: card.categoryId,
+        finish: card.finish,
+        to,
+      });
+    },
+    [writeFinish],
   );
 
   /**
@@ -1527,11 +1550,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const refileWrite = deck.refileCard.mutate;
   const refile = useCallback(
-    (cardId: string, from: number) => {
-      const card = cards.find((c) => c.cardId === cardId && c.categoryId === from);
+    (cardId: string, from: number, finish: DeckFinish) => {
+      // The finish is part of the `find` for the reason it is part of the write: a pile can
+      // hold this printing twice, and the two rows share a type line but not a slot.
+      const card = cards.find(
+        (c) => c.cardId === cardId && c.categoryId === from && c.finish === finish,
+      );
       if (!card) return;
       refileWrite(
-        { cardId, from, typeLine: card.typeLine, categoryName: card.categoryName },
+        { cardId, from, finish, typeLine: card.typeLine, categoryName: card.categoryName },
         {
           // The caret follows the card to the pile that now has it, which announces that pile's
           // name — the same hand-off a drag onto a heading makes, and the only feedback a move
@@ -1562,9 +1589,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // it. The one drop in this editor that points at no column — see {@link QuickZones}.
       else if (write.write === "auto-add") addTo(write.cardId, AUTO_CATEGORY, write.typeLine);
       // The same zone for a card the deck already holds, and the same rule — see {@link refile}.
-      else if (write.write === "auto-refile") refile(write.cardId, write.from);
-      else if (write.write === "move") moveTo(write.cardId, write.from, write.to);
-      else setQuantityAt(write.cardId, write.categoryId, 0);
+      else if (write.write === "auto-refile") refile(write.cardId, write.from, write.finish);
+      else if (write.write === "move") moveTo(write.cardId, write.from, write.to, write.finish);
+      else setQuantityAt(write.cardId, write.categoryId, write.finish, 0);
     },
     [addTo, moveTo, refile, setQuantityAt],
   );
@@ -1614,7 +1641,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /** The stepper's write, addressed by the card's own slot. */
   const setQuantity = useCallback(
-    (card: DeckCard, quantity: number) => setQuantityAt(card.cardId, card.categoryId, quantity),
+    (card: DeckCard, quantity: number) =>
+      setQuantityAt(card.cardId, card.categoryId, card.finish, quantity),
     [setQuantityAt],
   );
 
@@ -1629,9 +1657,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * deck can never be shown as one.
    *
    * The context carries the category's **name** as well as its id, because the pane is a
-   * sibling of this editor and has no category list to translate one with; and the **variant**,
+   * sibling of this editor and has no category list to translate one with; the **variant**,
    * because a deck is two lists and a swap addressed to the wrong one either misses or rewrites
-   * a row the reader is not looking at.
+   * a row the reader is not looking at; and the **finish**, for that same reason one column
+   * over — a pile can hold this printing twice, and the pane's swap and its foil button both
+   * write to one of the two.
    */
   const openCard = useCallback(
     (card: DeckCard) =>
@@ -1641,6 +1671,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         categoryName: card.categoryName,
         cardId: card.cardId,
         variant,
+        finish: card.finish,
       }),
     [deckId, openCardFromDeck, variant],
   );
@@ -1655,19 +1686,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * removal — see `useDeck.setQuantity`.
    */
   const removeCard = useCallback(
-    (card: DeckCard) => setQuantityAt(card.cardId, card.categoryId, 0),
+    (card: DeckCard) => setQuantityAt(card.cardId, card.categoryId, card.finish, 0),
     [setQuantityAt],
   );
 
-  /** The two deck writes the menu adds, each addressed by the **row** — a menu is opened on one
+  /** The deck writes the menu adds, each addressed by the **row** — a menu is opened on one
    *  card, which is more than a drop carries and is why these are not `applyDrop`'s pair. */
   const moveCardTo = useCallback(
-    (card: DeckCard, categoryId: number) => moveTo(card.cardId, card.categoryId, categoryId),
+    (card: DeckCard, categoryId: number) =>
+      moveTo(card.cardId, card.categoryId, categoryId, card.finish),
     [moveTo],
   );
   const setCardTag = useCallback(
     (card: DeckCard, tagId: number | null) =>
-      writeTag({ cardId: card.cardId, categoryId: card.categoryId, tagId }),
+      writeTag({ cardId: card.cardId, categoryId: card.categoryId, finish: card.finish, tagId }),
     [writeTag],
   );
 
@@ -1705,6 +1737,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           spec,
           moveTo: moveCardTo,
           setTag: setCardTag,
+          setFinish: setFinishAt,
           tags: deck.tags,
           createTag: createTagFor,
           remove: removeCard,
@@ -1722,6 +1755,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       spec,
       moveCardTo,
       setCardTag,
+      setFinishAt,
       createTagFor,
       removeCard,
     ],

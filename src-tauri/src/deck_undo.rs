@@ -1859,8 +1859,9 @@ mod tests {
             category_name: category.to_owned(),
             // An ordinary counted pile, which is what an import has always made. The flag says
             // the *file* called this pile a maybeboard (Archidekt's `{noDeck}`); a journal test
-            // about restoring rows has no opinion about that.
+            // about restoring rows has no opinion about that, nor about the finish.
             inactive: false,
+            finish: None,
         }
     }
 

@@ -4,6 +4,7 @@ import {
   type DeckCard,
   type DeckCategory,
   type DeckDetail,
+  type DeckFinish,
   type DeckPatch,
   type DeckTag,
   type DeckVariant,
@@ -79,6 +80,15 @@ export const DEFAULT_CATEGORY_NAME = "Main deck";
 interface Slot {
   cardId: string;
   categoryId: number;
+  /**
+   * Which object the row plays — the fifth part of the grain, since schema v18.
+   *
+   * **Required rather than optional, deliberately.** A pile can hold the regular copy and the
+   * foil as two rows, and a caller that had not thought about which one it means would address
+   * the regular one by default and step the wrong card. Optional would have compiled at every
+   * existing call site and been wrong at half of them.
+   */
+  finish: DeckFinish;
 }
 
 /**
@@ -170,10 +180,14 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * Rewrite one category slot in the cached answer, or drop it — addressed by the slot rather
    * than by `deck_cards.id`, like every write here.
    *
-   * The slot is `(cardId, categoryId, variant)`, which is `DECK_CARD_GRAIN` minus the deck the
-   * hook already is. The variant clause is belt and braces — the key scopes this cache to one
-   * list already — and it is written out because the grain is four things and a reader
-   * checking this against the schema should find all four.
+   * The slot is `(cardId, categoryId, variant, finish)`, which is `DECK_CARD_GRAIN` minus the
+   * deck the hook already is. The variant clause is belt and braces — the key scopes this cache
+   * to one list already — and it is written out because the grain is five things and a reader
+   * checking this against the schema should find all five.
+   *
+   * **The finish clause is not belt and braces**, and it is the one to get right: without it a
+   * stepper on the foil row patches the regular row too, so the reader watches both change and
+   * one of them snap back when the read lands.
    *
    * A slot the cache does not hold is left alone rather than added: this patches what is on
    * screen, and inventing a row the read never answered is how an optimistic update starts
@@ -183,7 +197,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
       if (!data) return data;
       const at = (c: DeckCard) =>
-        c.cardId === slot.cardId && c.categoryId === slot.categoryId && c.variant === variant;
+        c.cardId === slot.cardId &&
+        c.categoryId === slot.categoryId &&
+        c.variant === variant &&
+        c.finish === slot.finish;
       if (!data.cards.some(at)) return data;
       return {
         ...data,
@@ -310,10 +327,22 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       cardId,
       categoryId = null,
       typeLine,
+      finish = null,
       quantity,
     }: {
       cardId: string;
       categoryId?: number | null;
+      /**
+       * Which object to add — the regular copy unless a caller says otherwise.
+       *
+       * **Optional here and required on {@link Slot}, and the asymmetry is the honest one.** An
+       * add coming off a search wall, a drag or the quick-add field is a card being put into a
+       * deck, and the regular copy is what that means until the reader says which one they have;
+       * `deckSetCardFinish` is where the finish is the subject. A *write to an existing row*
+       * has no such default — the row is already one or the other, and guessing would step the
+       * wrong one.
+       */
+      finish?: DeckFinish;
       /** The card's own `type_line`, for the caller that named no category — the **fallback**
        *  half of the rule now that the tags are read here rather than passed in. `null` is a
        *  card whose printing has left `cards`; **absent** is a caller with nothing to say, which
@@ -335,7 +364,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
           : typeLine === undefined
             ? DEFAULT_CATEGORY_NAME
             : autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
-      return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, quantity);
+      return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, finish, quantity);
     },
     onSuccess: invalidate,
     onError: invalidate,
@@ -365,25 +394,28 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * *removes* here and a refused removal that stayed removed would be a card silently gone.
    */
   const setQuantity = useMutation({
-    mutationFn: ({ cardId, categoryId, quantity }: Slot & { quantity: number }) =>
-      ipc.deckSetCardQuantity(opened(id), cardId, categoryId, variant, quantity),
-    onMutate: async ({ cardId, categoryId, quantity }) => {
+    mutationFn: ({ cardId, categoryId, finish, quantity }: Slot & { quantity: number }) =>
+      ipc.deckSetCardQuantity(opened(id), cardId, categoryId, variant, finish, quantity),
+    onMutate: async ({ cardId, categoryId, finish, quantity }) => {
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
       // Zero takes the row out at the press rather than at the answer: it is what the write
       // means, and a row sitting at `0` for a round trip is a state this table never has.
-      patchSlot({ cardId, categoryId }, quantity === 0 ? null : (card) => ({ ...card, quantity }));
+      patchSlot(
+        { cardId, categoryId, finish },
+        quantity === 0 ? null : (card) => ({ ...card, quantity }),
+      );
       return saved;
     },
     onError: (_error, _slot, saved) => {
       if (saved !== undefined) queryClient.setQueryData(detailKey, saved);
       invalidate();
     },
-    onSuccess: (change, { cardId, categoryId }) => {
+    onSuccess: (change, { cardId, categoryId, finish }) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored.
       patchSlot(
-        { cardId, categoryId },
+        { cardId, categoryId, finish },
         change.removed ? null : (card) => ({ ...card, quantity: change.quantity }),
       );
       invalidate();
@@ -418,8 +450,35 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    *  nothing was added or removed — an inactive category reserves nothing — so it invalidates
    *  like the rest. */
   const moveCard = useMutation({
-    mutationFn: ({ cardId, from, to }: { cardId: string; from: number; to: number }) =>
-      ipc.deckMoveCard(opened(id), cardId, from, to, null, variant),
+    mutationFn: ({
+      cardId,
+      from,
+      to,
+      finish,
+    }: {
+      cardId: string;
+      from: number;
+      to: number;
+      /** Addresses the row and is carried across, never written: moving the foil copy to
+       *  another pile leaves it the foil copy. */
+      finish: DeckFinish;
+    }) => ipc.deckMoveCard(opened(id), cardId, from, to, null, variant, finish),
+    onSuccess: invalidate,
+  });
+
+  /**
+   * Change **which object** a row plays — the deck card menu's `Set as foil` and the card
+   * pane's own button.
+   *
+   * **No optimistic patch, deliberately**, and for a sharper reason than `clearCategory`'s: the
+   * write **folds**. Setting a row to a finish the pile already holds turns two rows into one
+   * with a quantity this side has not computed, so a guess would be right only when the pile
+   * held no row of the target finish — which is the common case, which is what would make the
+   * other one a bug nobody reproduces.
+   */
+  const setCardFinish = useMutation({
+    mutationFn: ({ cardId, categoryId, finish, to }: Slot & { to: DeckFinish }) =>
+      ipc.deckSetCardFinish(opened(id), cardId, categoryId, variant, finish, to),
     onSuccess: invalidate,
   });
 
@@ -458,10 +517,14 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       from,
       typeLine,
       categoryName,
+      finish,
     }: {
       cardId: string;
       /** The pile the card is in now — the slot the move leaves. */
       from: number;
+      /** Which of the pile's two rows of this printing is being re-filed. Carried across by the
+       *  move, never written: filing a card by what it does says nothing about what it is. */
+      finish: DeckFinish;
       /** The row's own type line. `null` is a real value and files the card under
        *  `UNCATEGORIZED`, which is a destination like any other. */
       typeLine: string | null;
@@ -481,7 +544,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       // any other — `origin: 'auto'`, gone with its last card — so the card lands somewhere it
       // can be seen and dragged out of, rather than staying put with a sentence.
       if (target === categoryName) return { moved: false, category: target, categoryId: null };
-      const categoryId = await ipc.deckMoveCard(opened(id), cardId, from, null, target, variant);
+      const categoryId = await ipc.deckMoveCard(
+        opened(id),
+        cardId,
+        from,
+        null,
+        target,
+        variant,
+        finish,
+      );
       return { moved: true, category: target, categoryId };
     },
     // **Only when something moved.** The two no-op answers touched no row, so re-reading the
@@ -525,11 +596,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       fromCardId,
       toCardId,
       categoryId,
+      finish,
     }: {
       fromCardId: string;
       toCardId: string;
       categoryId: number;
-    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, categoryId, variant),
+      /** Addresses the row and travels with it: the foil copy of the old printing becomes the
+       *  foil copy of the new one. The reader is choosing a printing, not an object. */
+      finish: DeckFinish;
+    }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, categoryId, variant, finish),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -572,8 +647,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * the `["decks"]` root on the way out, because the tag counts on every `DeckTag` row moved.
    */
   const setTag = useMutation({
-    mutationFn: ({ cardId, categoryId, tagId }: Slot & { tagId: number | null }) =>
-      ipc.deckCardSetTag(opened(id), cardId, categoryId, variant, tagId),
+    mutationFn: ({ cardId, categoryId, finish, tagId }: Slot & { tagId: number | null }) =>
+      ipc.deckCardSetTag(opened(id), cardId, categoryId, variant, finish, tagId),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -605,6 +680,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     moveCard,
     refileCard,
     swapPrinting,
+    setCardFinish,
     setTag,
     missingToWishlist,
   };

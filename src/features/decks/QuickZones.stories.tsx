@@ -40,6 +40,7 @@ const FROM_A_WALL: DragPayload = {
  *  take it at all, because a deck-card payload carries no type line to file by. */
 const FROM_THE_DECK: DragPayload = {
   kind: "deck-card",
+  finish: null,
   cardId: "c-bolt",
   name: "Lightning Bolt",
   fromCategoryId: 1,

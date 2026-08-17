@@ -5,7 +5,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { readDragData } from "@/features/decks/dnd";
-import type { CardDetail, CardFace, DeckVariant, Printing, PrintingsResponse } from "@/lib/ipc";
+import type {
+  CardDetail,
+  CardFace,
+  DeckFinish,
+  DeckVariant,
+  Printing,
+  PrintingsResponse,
+} from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock with `CardDetailPane`'s, where the hoisting order needs it.
@@ -99,6 +106,7 @@ const MAIN: PaneDeckContext = {
   categoryId: 1,
   categoryName: "Main deck",
   cardId: "p1",
+  finish: null,
   variant: "live",
 };
 
@@ -158,7 +166,8 @@ vi.mock("@/lib/ipc", async (original) => ({
       to: string,
       categoryId: number,
       variant: DeckVariant,
-    ) => deckSwapPrinting(deckId, from, to, categoryId, variant),
+      finish: DeckFinish,
+    ) => deckSwapPrinting(deckId, from, to, categoryId, variant, finish),
     collectionAdd: (input: unknown) => collectionAdd(input),
   },
 }));
@@ -1129,7 +1138,7 @@ describe("the printings list, opened from a deck row", () => {
     wrap("p1");
     await userEvent.click(await screen.findByRole("button", { name: /^Use this printing/ }));
 
-    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live");
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live", null);
     await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("p2"));
     expect(useAppStore.getState().paneDeckContext).toEqual({ ...MAIN, cardId: "p2" });
   });
@@ -1154,7 +1163,7 @@ describe("the printings list, opened from a deck row", () => {
     wrap("p1");
     await userEvent.click(await screen.findByRole("button", { name: /^Use this printing/ }));
 
-    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "theory");
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "theory", null);
     // And the re-anchor keeps it: the pane is still showing a theory row afterwards, so a
     // second press addresses the same list rather than falling back to `live`.
     await waitFor(() => expect(useAppStore.getState().paneDeckContext?.variant).toBe("theory"));
@@ -1195,7 +1204,7 @@ describe("the printings list, opened from a deck row", () => {
     // And a press that stayed still is the swap, which the pane then follows into.
     await userEvent.click(row);
 
-    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live");
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.categoryId, "live", null);
     await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("p2"));
   });
 

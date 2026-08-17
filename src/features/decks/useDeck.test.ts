@@ -124,6 +124,7 @@ const MAYBE: DeckCategory = {
 const BOLT: DeckCard = {
   id: 9,
   cardId: "p1",
+  finish: null,
   // The category is denormalized onto the row so a card can be drawn without a second lookup;
   // it is taken from {@link MAIN} here so the fixture cannot say two things about one pile.
   categoryId: MAIN.id,
@@ -261,15 +262,16 @@ describe("useDeck", () => {
     await result.current.setQuantity.mutateAsync({
       cardId: "p1",
       categoryId: MAIN.id,
+      finish: null,
       quantity: 3,
     });
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "theory", 3);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "theory", null, 3);
 
     await result.current.addCard.mutateAsync({ cardId: "p2", categoryId: SIDE.id, quantity: 1 });
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", null, 1);
 
-    await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, null, "theory");
+    await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id, finish: null });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, null, "theory", null);
 
     // The clear is variant-scoped like the rest, and that is the whole difference between it
     // and `deckCategoryDelete`, which takes both lists because the CASCADE does. Emptying the
@@ -325,10 +327,11 @@ describe("useDeck", () => {
     await result.current.setQuantity.mutateAsync({
       cardId: "p1",
       categoryId: MAIN.id,
+      finish: null,
       quantity: 3,
     });
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", 3);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 3);
     expect(deckAddCard).not.toHaveBeenCalled();
   });
 
@@ -342,10 +345,11 @@ describe("useDeck", () => {
     const change = await result.current.setQuantity.mutateAsync({
       cardId: "p1",
       categoryId: MAIN.id,
+      finish: null,
       quantity: 0,
     });
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 0);
     expect(change.removed).toBe(true);
   });
 
@@ -356,12 +360,13 @@ describe("useDeck", () => {
     await result.current.addCard.mutateAsync({
       cardId: "p2",
       categoryId: MAYBE.id,
+      finish: null,
       quantity: 1,
     });
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, null, "live", null, 1);
 
-    await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, null, "live");
+    await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id, finish: null });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, null, "live", null);
   });
 
   /**
@@ -389,7 +394,7 @@ describe("useDeck", () => {
     });
 
     expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Artifact", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Artifact", "live", null, 1);
   });
 
   /**
@@ -419,7 +424,7 @@ describe("useDeck", () => {
     // One card, asked about by the printing id being added — not the whole deck, and not the
     // oracle id, which no drag payload carries.
     expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Removal", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Removal", "live", null, 1);
   });
 
   /**
@@ -439,7 +444,7 @@ describe("useDeck", () => {
 
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Instant", quantity: 1 });
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", null, 1);
   });
 
   /**
@@ -461,12 +466,13 @@ describe("useDeck", () => {
     const answer = await result.current.refileCard.mutateAsync({
       cardId: "p2",
       from: MAIN.id,
+      finish: null,
       typeLine: "Instant",
       categoryName: MAIN.name,
     });
 
     expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Removal", "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Removal", "live", null);
     // The id the command answered with, which is what the caret is handed — the caller has no
     // other way to learn what was found or made.
     expect(answer).toEqual({ moved: true, category: "Removal", categoryId: 31 });
@@ -487,6 +493,7 @@ describe("useDeck", () => {
     const answer = await result.current.refileCard.mutateAsync({
       cardId: "p2",
       from: MAIN.id,
+      finish: null,
       typeLine: "Instant",
       categoryName: "Removal",
     });
@@ -515,12 +522,13 @@ describe("useDeck", () => {
     const answer = await result.current.refileCard.mutateAsync({
       cardId: "p2",
       from: MAIN.id,
+      finish: null,
       typeLine: null,
       categoryName: MAIN.name,
     });
 
     expect(answer).toEqual({ moved: true, category: "Uncategorized", categoryId: 77 });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Uncategorized", "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Uncategorized", "live", null);
   });
 
   /** And a card **already** in that pile is the one press that still writes nothing — the only
@@ -533,6 +541,7 @@ describe("useDeck", () => {
     const answer = await result.current.refileCard.mutateAsync({
       cardId: "p2",
       from: MAIN.id,
+      finish: null,
       typeLine: null,
       categoryName: "Uncategorized",
     });
@@ -552,12 +561,13 @@ describe("useDeck", () => {
     const answer = await result.current.refileCard.mutateAsync({
       cardId: "p2",
       from: MAIN.id,
+      finish: null,
       typeLine: "Artifact",
       categoryName: MAIN.name,
     });
 
     expect(answer.moved).toBe(true);
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Artifact", "live");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Artifact", "live", null);
   });
 
   /**
@@ -576,7 +586,7 @@ describe("useDeck", () => {
 
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Land", quantity: 1 });
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Land", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Land", "live", null, 1);
   });
 
   /**
@@ -599,7 +609,7 @@ describe("useDeck", () => {
       quantity: 1,
     });
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", null, 1);
     expect(change).toEqual({ id: 9, quantity: 4, removed: false });
   });
 
@@ -617,10 +627,10 @@ describe("useDeck", () => {
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: null, quantity: 1 });
-    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", 1);
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", null, 1);
 
     await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Dungeon", quantity: 1 });
-    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", 1);
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", null, 1);
   });
 
   /**
@@ -641,7 +651,7 @@ describe("useDeck", () => {
 
     await result.current.addCard.mutateAsync({ cardId: "p2", quantity: 1 });
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Main deck", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Main deck", "live", null, 1);
     expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 
@@ -665,7 +675,7 @@ describe("useDeck", () => {
       quantity: 1,
     });
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "live", null, 1);
     expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 
@@ -695,10 +705,11 @@ describe("useDeck", () => {
       fromCardId: "p1",
       toCardId: "p2",
       categoryId: MAIN.id,
+      finish: null,
     });
 
     await waitFor(() =>
-      expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.id, "live"),
+      expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.id, "live", null),
     );
     // Mid-flight, and the deck on screen is still the deck that was read: no guess was
     // written. This is what "no optimism" costs and buys — a beat of the old printing rather
@@ -766,6 +777,7 @@ describe("useDeck", () => {
     await result.current.setQuantity.mutateAsync({
       cardId: "p1",
       categoryId: MAIN.id,
+      finish: null,
       quantity: 3,
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
@@ -801,11 +813,11 @@ describe("useDeck", () => {
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, tagId: 8 });
-    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", 8);
+    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, tagId: 8 });
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 8);
 
-    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, tagId: null });
-    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null);
+    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, tagId: null });
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, null);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 });
@@ -843,6 +855,9 @@ describe("useSwapFromPane", () => {
           // The list the pane was opened from. `live` here, so these keep addressing the list they
           // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
           variant: "live",
+          // The regular copy, for that same reason: the foil case is a different row, and the
+          // point of these is the deck and the category rather than the object.
+          finish: null,
         }),
       { wrapper },
     );
@@ -851,9 +866,10 @@ describe("useSwapFromPane", () => {
       fromCardId: "p1",
       toCardId: "p2",
       categoryId: SIDE.id,
+      finish: null,
     });
 
-    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", SIDE.id, "live");
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", SIDE.id, "live", null);
     expect(answer).toEqual({ folded: false, quantity: 4 });
   });
 
@@ -881,6 +897,9 @@ describe("useSwapFromPane", () => {
           // The list the pane was opened from. `live` here, so these keep addressing the list they
           // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
           variant: "live",
+          // The regular copy, for that same reason: the foil case is a different row, and the
+          // point of these is the deck and the category rather than the object.
+          finish: null,
         }),
       {
         wrapper,
@@ -889,7 +908,12 @@ describe("useSwapFromPane", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await expect(
-      result.current.swap.mutateAsync({ fromCardId: "p1", toCardId: "p2", categoryId: MAIN.id }),
+      result.current.swap.mutateAsync({
+        fromCardId: "p1",
+        toCardId: "p2",
+        categoryId: MAIN.id,
+        finish: null,
+      }),
     ).rejects.toBe("That deck is not there any more.");
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
@@ -915,6 +939,9 @@ describe("useSwapFromPane", () => {
           // The list the pane was opened from. `live` here, so these keep addressing the list they
           // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
           variant: "live",
+          // The regular copy, for that same reason: the foil case is a different row, and the
+          // point of these is the deck and the category rather than the object.
+          finish: null,
         }),
       {
         wrapper,

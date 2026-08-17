@@ -722,7 +722,7 @@ it("swaps a deck row's printing from the card pane, and follows the deck onto it
   const pane = await screen.findByRole("complementary", { name: /card details/i });
   await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
 
-  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live");
+  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live", null);
 
   // The deck redraws on the printing it now holds — the row's picture is the M10 card. The
   // variant in that path is `DECK_CARD_VARIANT`; what this test is about is the **id**, `c2`.
@@ -963,7 +963,7 @@ it("hands the caret back to the deck's card after a swap", async () => {
   const pane = await screen.findByRole("complementary", { name: /card details/i });
   await userEvent.click(within(pane).getByRole("button", { name: /^Use this printing/ }));
 
-  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live");
+  expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live", null);
   // The row the swap rebuilt, on the printing the deck now holds — a *row*, so it is read by
   // its set and number rather than by the art the other view draws. Read off the deck's own card
   // and not off the screen: the pane followed the swap onto that printing, so its facts line says

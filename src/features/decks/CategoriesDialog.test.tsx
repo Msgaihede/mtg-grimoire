@@ -148,6 +148,7 @@ function deckCard(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     categoryName: "Main deck",
     categoryKind: "main",
     categoryActive: true,
+    finish: null,
     variant: "live",
     tagId: null,
     tagName: null,

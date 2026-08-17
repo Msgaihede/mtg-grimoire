@@ -730,6 +730,19 @@ pub struct ImportItem {
     /// means an ordinary, counted pile, which is what an import has always made.
     #[serde(default)]
     pub inactive: bool,
+    /// The line's `*F*` / `*E*` marker, as `deck_cards.finish` stores it — `None` is the regular
+    /// copy and `"nonfoil"` never arrives, because `deck::normalise_finish` is what this goes
+    /// through.
+    ///
+    /// **Part of the grain**, so a list naming the same printing foil on one line and plain on
+    /// another lands as two rows rather than one summed. Which lines carry it is TypeScript's
+    /// reading of the file (`parse.ts` reads the marker, `plan.ts` rides it here) — Rust
+    /// supplies the write, TS draws the conclusion, exactly as `inactive` above does.
+    ///
+    /// `#[serde(default)]` for that field's reason: a caller written before this still
+    /// deserialises, and absent is the regular copy, which is what an import has always made.
+    #[serde(default)]
+    pub finish: Option<String>,
 }
 
 /// What an import did, in the three numbers the "Imported 117 cards" report is written from.
@@ -838,8 +851,8 @@ pub fn commit_import(
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-                 quantity, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, unixepoch(), unixepoch())
+                 finish, quantity, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10, unixepoch(), unixepoch())
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
                 updated_at = unixepoch()",
@@ -892,6 +905,13 @@ pub fn commit_import(
             };
             let (set_code, collector_number, lang, name) =
                 crate::deck::printing_of(&tx, &item.card_id)?;
+            // Through the one normaliser, like every other write: a line marked `*F*` is a foil
+            // row, and one marked nothing is the regular copy. **Not checked against
+            // `cards.finishes`** — unlike `set_card_finish`, which is a reader pointing at a
+            // control this app drew. This is somebody else's export, and refusing a whole
+            // 117-line import because one line claims a foil the corpus does not list would
+            // cost the reader their paste over a fact about a marker.
+            let finish = crate::deck::normalise_finish(item.finish.as_deref())?;
             insert
                 .execute(params![
                     deck_id,
@@ -902,6 +922,7 @@ pub fn commit_import(
                     collector_number,
                     lang,
                     name,
+                    finish,
                     item.quantity
                 ])
                 .map_err(|e| e.to_string())?;
@@ -1618,6 +1639,9 @@ mod tests {
             // `inactive` deserialises to. The two tests about `{noDeck}` build their item by
             // hand rather than widen this helper for a flag every other test would pass `false`.
             inactive: false,
+            // The regular copy, for the same reason and with the same escape: a test about the
+            // `*F*` marker names its own item.
+            finish: None,
         }
     }
 
@@ -1857,6 +1881,7 @@ mod tests {
                 quantity: 1,
                 category_name: "(New) Maybeboard".to_owned(),
                 inactive: true,
+                finish: None,
             }],
         )
         .unwrap();
@@ -1896,6 +1921,7 @@ mod tests {
                 quantity: 1,
                 category_name: "Keepers".to_owned(),
                 inactive: true,
+                finish: None,
             }],
         )
         .unwrap();

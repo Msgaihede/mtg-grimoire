@@ -532,6 +532,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
 
     expect(spies.drop).toHaveBeenCalledWith({
       write: "move",
+      finish: null,
       cardId: "c-Sol Ring",
       from: RAMP.id,
       to: MAYBE.id,
@@ -1505,6 +1506,7 @@ describe.each(COLUMN_VIEWS)(
 
       expect(drop).toHaveBeenCalledWith({
         write: "move",
+        finish: null,
         cardId: "c-Sol Ring",
         from: RAMP.id,
         to: id,

@@ -79,6 +79,7 @@ function deps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
     categories: CATEGORIES,
     cards: [],
     spec: spec("modern"),
+    setFinish: vi.fn(),
     moveTo: vi.fn(),
     setTag: vi.fn(),
     tags: TAGS,
@@ -123,6 +124,9 @@ describe("buildDeckCardMenu", () => {
     expect(labels(items).slice(5)).toEqual([
       "Move to",
       "Set as companion",
+      // The finish row sits with the zone rows rather than with `Move to`: those say what this
+      // card *is* in the deck, and so does this. `Move to` is filing.
+      "Set as foil",
       "Tag card",
       "Remove card",
     ]);

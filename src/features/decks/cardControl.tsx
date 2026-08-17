@@ -574,6 +574,7 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
           cardId: latest.current.cardId,
           name: latest.current.name,
           fromCategoryId: latest.current.categoryId,
+          finish: latest.current.finish,
         }),
       });
     },

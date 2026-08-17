@@ -253,6 +253,7 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     spec: SPECS.commander,
     moveTo: (card, categoryId) => act(`move:${card.cardId}:${categoryId}`),
     setTag: (card, tagId) => act(`tag:${card.cardId}:${tagId ?? "none"}`),
+    setFinish: (card, to) => act(`finish:${card.cardId}:${to ?? "regular"}`),
     tags: TAGS,
     createTag: (card, name) => act(`new-tag:${card.cardId}:${name}`),
     // The stepper's zero by another road — there is no `remove` mutation in this app, because

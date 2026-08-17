@@ -62,6 +62,7 @@ export type ExportCard = Pick<
   | "categoryName"
   | "categoryKind"
   | "categoryActive"
+  | "finish"
 >;
 
 /** The maybeboard's heading, spelled once — it is `SECTION_CATEGORY.maybeboard`'s word read
@@ -133,9 +134,26 @@ function csvField(value: string): string {
   return value;
 }
 
-const CSV_HEADER = "Quantity,Name,Set,Collector number,Category";
+const CSV_HEADER = "Quantity,Name,Set,Collector number,Category,Finish";
 
-/** `quantity name`, with nothing about the printing — the shape a plain paste and MTGO share. */
+/**
+ * The `*F*` / `*E*` marker a line ends with, or `""` for the regular copy.
+ *
+ * The one thing every text format here can say about a finish, and the channel `parse.ts` reads
+ * back — a leading space included, so a caller appends it and nothing has to remember not to
+ * emit a trailing one on a plain row.
+ *
+ * **Not written by `arena` or `mtgo`**, which have no marker in the format; the finish is lost
+ * on a round trip through either, which is the same thing already true of a category there.
+ */
+function finishMark(card: ExportCard): string {
+  if (card.finish === "foil") return " *F*";
+  if (card.finish === "etched") return " *E*";
+  return "";
+}
+
+/** `quantity name`, with nothing about the printing — the shape a plain paste and MTGO share.
+ *  MTGO adds no finish mark; see {@link finishMark}. */
 function plainLine(card: ExportCard): string {
   return `${card.quantity} ${card.name}`;
 }
@@ -148,6 +166,12 @@ function plainLine(card: ExportCard): string {
  */
 function printedLine(card: ExportCard): string {
   return `${card.quantity} ${card.name} (${card.setCode.toUpperCase()}) ${card.collectorNumber}`;
+}
+
+/** {@link printedLine} with the finish marker — Moxfield's shape. Arena shares the line and not
+ *  the marker, which is why the two formats no longer share one writer. */
+function moxfieldLine(card: ExportCard): string {
+  return printedLine(card) + finishMark(card);
 }
 
 /**
@@ -164,7 +188,12 @@ function printedLine(card: ExportCard): string {
 function archidektLine(card: ExportCard): string {
   const flag = card.categoryActive ? "" : "{noDeck}";
   const set = card.setCode.toLowerCase();
-  return `${card.quantity}x ${card.name} (${set}) ${card.collectorNumber} [${card.categoryName}${flag}]`;
+  // The marker goes **after** the bracket, which is where `stripDecorations` peels it from: its
+  // loop takes the bracket off first and that is the only thing that puts `*F*` at the end.
+  // Writing it before the bracket would still round-trip — the loop runs to a fixed point — but
+  // it would not be the shape this app's own parser documents, and a file this app wrote should
+  // be the canonical one.
+  return `${card.quantity}x ${card.name} (${set}) ${card.collectorNumber} [${card.categoryName}${flag}]${finishMark(card)}`;
 }
 
 /**
@@ -234,7 +263,7 @@ export function formatExport(cards: readonly ExportCard[], format: ExportFormat)
   let text: string;
   switch (format) {
     case "plain":
-      text = rows.map(plainLine).join("\n");
+      text = rows.map((card) => plainLine(card) + finishMark(card)).join("\n");
       break;
     case "mtgo":
       // MTGO's own export omits the printing entirely — it resolves a name against whatever
@@ -250,11 +279,16 @@ export function formatExport(cards: readonly ExportCard[], format: ExportFormat)
         .join("\n");
       break;
     case "arena":
-    case "moxfield":
-      // One arm for both: the two sites write the same lines under the same fixed headings, and
-      // they differ only in what reaches here — `written` has already taken the switched-off
-      // piles out of Arena's, so its `Maybeboard` section can never be produced.
+      // Arena's line is `printedLine` and nothing else: the format has no finish marker, so a
+      // foil row exports plain and comes back plain. `written` has already taken the
+      // switched-off piles out, so a `Maybeboard` section can never be produced here.
       text = sections(grouped(rows, sectionOf, SECTION_ORDER), printedLine);
+      break;
+    case "moxfield":
+      // Arena's headings and lines **plus the finish marker**, which is the whole of what
+      // separates the two arms — they shared one until 2026-08-17, and the split is the price of
+      // Arena not having a marker rather than a difference anybody wanted.
+      text = sections(grouped(rows, sectionOf, SECTION_ORDER), moxfieldLine);
       break;
     case "archidekt":
       // Grouped by the pile's own name rather than by a section word, because this is one of the
@@ -276,6 +310,11 @@ export function formatExport(cards: readonly ExportCard[], format: ExportFormat)
             csvField(card.setCode),
             csvField(card.collectorNumber),
             csvField(card.categoryName),
+            // A column rather than a marker, because CSV has somewhere to put it — and the
+            // word rather than the letter, since nothing reads this back (`decklists.test.ts`
+            // excludes `csv` by name) and a column a person opens in a spreadsheet should say
+            // `foil`. Empty for the regular copy, which is what an empty cell means.
+            csvField(card.finish ?? ""),
           ].join(","),
         ),
       ].join("\n");
