@@ -1301,9 +1301,13 @@ pub fn set_card_tag(
     card_id: &str,
     category_id: i64,
     variant: &str,
+    finish: Option<&str>,
     tag_id: Option<i64>,
 ) -> Result<(), String> {
     let variant = valid_variant(variant)?;
+    // Addresses the row and is never written: since schema v18 a pile can hold the regular copy
+    // and the foil as two rows, and a label belongs to one of them.
+    let finish = crate::deck::normalise_finish(finish)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The new label's own name, gathered by the ownership fence rather than by a second query:
     // the fence has to read the row anyway, and the history needs the word rather than the id.
@@ -1335,8 +1339,8 @@ pub fn set_card_tag(
             "SELECT dc.name, t.name
                FROM deck_cards dc LEFT JOIN deck_tags t ON t.id = dc.tag_id
               WHERE dc.deck_id = ?1 AND dc.card_id = ?2 AND dc.category_id = ?3
-                AND dc.variant = ?4",
-            params![deck_id, card_id, category_id, variant],
+                AND dc.variant = ?4 AND coalesce(dc.finish, '') = coalesce(?5, '')",
+            params![deck_id, card_id, category_id, variant, finish],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
@@ -1348,9 +1352,10 @@ pub fn set_card_tag(
     let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
     let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     tx.execute(
-        "UPDATE deck_cards SET tag_id = ?5, updated_at = unixepoch()
-          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-        params![deck_id, card_id, category_id, variant, tag_id],
+        "UPDATE deck_cards SET tag_id = ?6, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+            AND coalesce(finish, '') = coalesce(?5, '')",
+        params![deck_id, card_id, category_id, variant, finish, tag_id],
     )
     .map_err(|e| e.to_string())?;
     // `card_id` set is what marks this the *card's* half of the `tag` kind, and `tag: null` is
@@ -1755,7 +1760,7 @@ pub async fn deck_card_set_tag(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
-            set_card_tag(c, deck_id, &card_id, category_id, &variant, tag_id)
+            set_card_tag(c, deck_id, &card_id, category_id, &variant, None, tag_id)
         })
     })
     .await
@@ -2966,14 +2971,23 @@ mod tests {
             .unwrap()
         };
 
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", Some(removal.id)).unwrap();
+        set_card_tag(
+            &conn,
+            deck_id,
+            "bolt-lea",
+            cat,
+            "live",
+            None,
+            Some(removal.id),
+        )
+        .unwrap();
         assert_eq!(tag_of(&conn), Some(removal.id));
 
         // Setting a second tag replaces the first — never both.
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", Some(ramp.id)).unwrap();
+        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, Some(ramp.id)).unwrap();
         assert_eq!(tag_of(&conn), Some(ramp.id));
 
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None).unwrap();
+        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap();
         assert_eq!(tag_of(&conn), None);
     }
 
@@ -2993,6 +3007,7 @@ mod tests {
             "bolt-lea",
             cat,
             "live",
+            None,
             Some(other_deck_tag.id),
         )
         .unwrap_err();
@@ -3004,7 +3019,7 @@ mod tests {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Main deck");
-        let err = set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None).unwrap_err();
+        let err = set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap_err();
         assert_eq!(err, CARD_NOT_IN_CATEGORY);
     }
 
@@ -3053,7 +3068,7 @@ mod tests {
         assert!(updated_at(&conn, deck_id) > 0, "so does tag update");
 
         backdate(&conn, deck_id);
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", Some(tag.id)).unwrap();
+        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, Some(tag.id)).unwrap();
         assert!(updated_at(&conn, deck_id) > 0, "and tagging a card");
 
         backdate(&conn, deck_id);

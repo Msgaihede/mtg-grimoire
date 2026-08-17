@@ -1662,7 +1662,17 @@ mod tests {
     /// One card into one named category, through the ordinary single-card write — so a test
     /// about an import never builds its "before" state with the thing under test.
     fn put(conn: &Connection, deck_id: i64, card_id: &str, category: &str, variant: &str, n: i64) {
-        crate::deck::add_card(conn, deck_id, card_id, None, Some(category), variant, n).unwrap();
+        crate::deck::add_card(
+            conn,
+            deck_id,
+            card_id,
+            None,
+            Some(category),
+            variant,
+            None,
+            n,
+        )
+        .unwrap();
     }
 
     /// Forget every history row, so what a test counts afterwards is only what it drove.

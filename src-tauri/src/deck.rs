@@ -127,6 +127,41 @@ pub const SAME_PRINTING: &str = "That is already this printing.";
 const PRINTING_GONE: &str = "That printing is not in the card database any more — a sync \
      replaced it while the card was open. Reopen the card for the printings it has now.";
 
+/// What [`set_card_finish`] says when it is asked to change a finish to itself. The menu greys
+/// the finish the row already is, so reaching this is a double-press or a menu that went stale
+/// — either way there is nothing to write. [`SAME_PRINTING`]'s shape, for its reason.
+pub const SAME_FINISH: &str = "That is already this finish.";
+
+/// What [`set_card_finish`] says when the printing is not sold in the finish it was pointed at.
+///
+/// Read off `cards.finishes`, so it is also what a printing that has **left** the corpus
+/// answers: the list of finishes went with the card, and "this printing is not sold in foil" is
+/// the honest thing to say about a printing the database no longer has. Deliberately not
+/// [`PRINTING_GONE`], which is about a printing the reader can see on screen and is a different
+/// piece of news.
+pub const FINISH_NOT_SOLD: &str = "That printing is not sold in that finish.";
+
+/// The one place `'nonfoil'` becomes `None`.
+///
+/// **`None` is the regular copy and `'nonfoil'` is never stored.** Two spellings of one thing
+/// would be two rows on [`crate::schema::DECK_CARD_GRAIN`] that draw identically on screen and
+/// sum apart — the worst shape a bug in this table can have. `deck_cards.finish`'s CHECK is the
+/// fence; this is the enforcement, and it is one function rather than a rule each command
+/// remembers.
+///
+/// **An unrecognised word is refused rather than dropped.** A caller sending one has a bug, and
+/// quietly filing its card as the regular copy would hide it. That is the opposite of the rule
+/// TypeScript's `finishLabel` follows when *displaying* a stored value — where printing what the
+/// reader's own data says is the honest answer — and the difference is that this is an input
+/// fence rather than a render.
+pub fn normalise_finish(raw: Option<&str>) -> Result<Option<String>, String> {
+    match raw {
+        None | Some("nonfoil") => Ok(None),
+        Some(f) if crate::schema::FINISHES.contains(&f) => Ok(Some(f.to_owned())),
+        Some(other) => Err(format!("`{other}` is not a finish this app knows.")),
+    }
+}
+
 /// One new deck, as the "New deck" dialog sends it — **a whole configured deck, in one INSERT**.
 ///
 /// Every deck-level field the settings dialog can edit is here, because the alternative is
@@ -1451,6 +1486,7 @@ struct CopiedCard {
     name: String,
     quantity: i64,
     needs_review: Option<String>,
+    finish: Option<String>,
 }
 
 /// Copy the deck, its categories, its tags and its cards — never its claims, never
@@ -1622,7 +1658,7 @@ pub fn duplicate_deck(
     let cards: Vec<CopiedCard> = tx
         .prepare(
             "SELECT category_id, tag_id, variant, card_id, set_code, collector_number, lang,
-                    name, quantity, needs_review
+                    name, quantity, needs_review, finish
                FROM deck_cards WHERE deck_id = ?1 ORDER BY id",
         )
         .map_err(|e| e.to_string())?
@@ -1638,6 +1674,11 @@ pub fn duplicate_deck(
                 name: r.get(7)?,
                 quantity: r.get(8)?,
                 needs_review: r.get(9)?,
+                // **Copied, like the pile's `origin` two functions up and for its reason**: a
+                // duplicate has the same shape as its original, so a deck of foils duplicated
+                // is a deck of foils. Left out, the copy would be a deck of regular cards with
+                // a different total, silently.
+                finish: r.get(10)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1647,8 +1688,8 @@ pub fn duplicate_deck(
         tx.execute(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, tag_id, quantity, needs_review, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11, unixepoch(), unixepoch())",
+                 name, tag_id, quantity, needs_review, finish, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12, unixepoch(), unixepoch())",
             params![
                 copy,
                 category_map.get(&card.category_id),
@@ -1661,6 +1702,7 @@ pub fn duplicate_deck(
                 card.tag_id.and_then(|t| tag_map.get(&t).copied()),
                 card.quantity,
                 card.needs_review,
+                card.finish,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1748,6 +1790,14 @@ pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
 /// (`autoCategoryFor`), because which pile a Sol Ring belongs in is domain logic and this
 /// module is plumbing. When both arrive the id wins: it is the more specific instruction, and
 /// it is the one a drag carries.
+///
+/// **`finish` is part of the address, not a column to overwrite.** It joins the grain at schema
+/// v18, so an add of the foil copy folds into the pile's foil row and leaves its regular row
+/// alone. `None` is the regular copy; [`normalise_finish`] is the fence.
+// Eight, and every one of them is a column of `DECK_CARD_GRAIN` or a value written at it. The
+// obvious cure — a struct — would be a shape nothing else in this module has, for a function
+// whose whole job is to name one row of one table.
+#[allow(clippy::too_many_arguments)]
 pub fn add_card(
     conn: &Connection,
     deck_id: i64,
@@ -1755,9 +1805,11 @@ pub fn add_card(
     category_id: Option<i64>,
     category_name: Option<&str>,
     variant: &str,
+    finish: Option<&str>,
     quantity: i64,
 ) -> Result<EntryChange, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
+    let finish = normalise_finish(finish)?;
     // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
     // conjure a row out of nothing. The same refusal `collection::add_entry` gives, from the
     // one constant that owns the sentence.
@@ -1811,8 +1863,8 @@ pub fn add_card(
     let sql = format!(
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             quantity, created_at, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, unixepoch(), unixepoch())
+             finish, quantity, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10, unixepoch(), unixepoch())
          ON CONFLICT({grain}) DO UPDATE SET
             quantity = deck_cards.quantity + excluded.quantity,
             updated_at = unixepoch()
@@ -1831,6 +1883,7 @@ pub fn add_card(
                 collector_number,
                 lang,
                 name,
+                finish,
                 quantity
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -1882,9 +1935,11 @@ pub fn set_card_quantity(
     card_id: &str,
     category_id: i64,
     variant: &str,
+    finish: Option<&str>,
     quantity: i64,
 ) -> Result<EntryChange, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
+    let finish = normalise_finish(finish)?;
     valid_quantity(quantity, "deck quantity")?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
@@ -1895,11 +1950,17 @@ pub fn set_card_quantity(
     // row is gone — and reading them once here is also what lets the `quantity` branch report
     // both numbers, which `RETURNING` cannot: SQLite's `RETURNING` on an UPDATE answers the
     // **new** row, so the old value is unrecoverable a statement later.
+    //
+    // **`coalesce(finish, '') = coalesce(?5, '')` rather than `finish IS ?5`**, so that this
+    // WHERE is the same test `DECK_CARD_GRAIN`'s index is built on and the two can never mean
+    // different things. Since v18 a pile can hold the regular copy and the foil as two rows,
+    // and a stepper aimed at one must not find the other.
     let current: Option<(i64, i64, String)> = tx
         .query_row(
             "SELECT id, quantity, name FROM deck_cards
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-            params![deck_id, card_id, category_id, variant],
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, card_id, category_id, variant, finish],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
@@ -1915,8 +1976,9 @@ pub fn set_card_quantity(
         if let Some((_, was, name)) = &current {
             tx.execute(
                 "DELETE FROM deck_cards
-                  WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-                params![deck_id, card_id, category_id, variant],
+                  WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+                    AND coalesce(finish, '') = coalesce(?5, '')",
+                params![deck_id, card_id, category_id, variant, finish],
             )
             .map_err(|e| e.to_string())?;
             // `reason` is null and stays null from here: the reconciler is the only writer
@@ -1956,9 +2018,10 @@ pub fn set_card_quantity(
     // could not do what it was asked. Putting a card into a category is [`add_card`].
     let (id, was, name) = current.ok_or_else(|| card_gone(&category))?;
     tx.execute(
-        "UPDATE deck_cards SET quantity = ?5, updated_at = unixepoch()
-          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-        params![deck_id, card_id, category_id, variant, quantity],
+        "UPDATE deck_cards SET quantity = ?6, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+            AND coalesce(finish, '') = coalesce(?5, '')",
+        params![deck_id, card_id, category_id, variant, finish, quantity],
     )
     .map_err(|e| e.to_string())?;
     let audit_id = crate::deck_audit::record(
@@ -2093,6 +2156,8 @@ pub fn clear_category(
 /// Answers the id of the category the copies are now in, which for the name arm is the only way
 /// a caller learns what was found or made. The caret follows a moved card to its new pile, so
 /// that id is not a convenience.
+// [`add_card`]'s reason, one command over.
+#[allow(clippy::too_many_arguments)]
 pub fn move_card(
     conn: &Connection,
     deck_id: i64,
@@ -2101,8 +2166,12 @@ pub fn move_card(
     to_category_id: Option<i64>,
     to_category_name: Option<&str>,
     variant: &str,
+    finish: Option<&str>,
 ) -> Result<i64, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
+    // Addresses the row; **never written**. Moving the foil copy to another pile leaves it the
+    // foil copy — the reader moved a card, they did not change what it is.
+    let finish = normalise_finish(finish)?;
     if to_category_id.is_none() && to_category_name.is_none() {
         return Err(NO_CATEGORY.to_owned());
     }
@@ -2152,8 +2221,9 @@ pub fn move_card(
     let moved_name: String = tx
         .query_row(
             "SELECT name FROM deck_cards
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-            params![deck_id, card_id, from_category_id, variant],
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, card_id, from_category_id, variant, finish],
             |r| r.get(0),
         )
         .optional()
@@ -2172,14 +2242,19 @@ pub fn move_card(
     // unambiguous to parse, and it is here anyway. `needs_review` comes across with a row
     // that lands in an empty category and is left alone where the target row already exists —
     // the fold's rule in `reconcile::fold_deck_card_into_existing`, for its reason.
+    //
+    // **`finish` is selected across**, so the row lands in the new pile as whatever object it
+    // was — and the fold above it is on the five-column grain, so a foil copy moved onto a pile
+    // holding the regular one is two rows there rather than one wrong one.
     let sql = format!(
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             tag_id, quantity, needs_review, created_at, updated_at)
+             tag_id, finish, quantity, needs_review, created_at, updated_at)
          SELECT deck_id, ?3, variant, card_id, set_code, collector_number, lang, name,
-                tag_id, quantity, needs_review, unixepoch(), unixepoch()
+                tag_id, finish, quantity, needs_review, unixepoch(), unixepoch()
            FROM deck_cards
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?4 AND variant = ?5
+            AND coalesce(finish, '') = coalesce(?6, '')
          ON CONFLICT({grain}) DO UPDATE SET
             quantity = deck_cards.quantity + excluded.quantity,
             updated_at = unixepoch()",
@@ -2187,13 +2262,21 @@ pub fn move_card(
     );
     tx.execute(
         &sql,
-        params![deck_id, card_id, to_category_id, from_category_id, variant],
+        params![
+            deck_id,
+            card_id,
+            to_category_id,
+            from_category_id,
+            variant,
+            finish
+        ],
     )
     .map_err(|e| e.to_string())?;
     tx.execute(
         "DELETE FROM deck_cards
-          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-        params![deck_id, card_id, from_category_id, variant],
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+            AND coalesce(finish, '') = coalesce(?5, '')",
+        params![deck_id, card_id, from_category_id, variant, finish],
     )
     .map_err(|e| e.to_string())?;
     // `delta` 0: a move changes no count. The copies are in the deck before and after, and a
@@ -2270,8 +2353,16 @@ pub fn swap_printing(
     to_card_id: &str,
     category_id: i64,
     variant: &str,
+    finish: Option<&str>,
 ) -> Result<SwapResult, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
+    // **Addresses both ends and is carried across**: the reader is changing which printing the
+    // deck plays, not which object it is, so the foil copy of the old printing becomes the foil
+    // copy of the new one. It is deliberately *not* checked against the new printing's
+    // `finishes` — a swap onto a printing sold in no foil would then be refused outright, where
+    // what a reader wants is the printing they picked. [`set_card_finish`] is where the finish
+    // is the subject, and that is where the check belongs.
+    let finish = normalise_finish(finish)?;
     // Before the transaction, so a no-op does not move `updated_at` and resort the gallery.
     if from_card_id == to_card_id {
         return Err(SAME_PRINTING.to_owned());
@@ -2288,8 +2379,9 @@ pub fn swap_printing(
     let (quantity, from_name, from_set): (i64, String, String) = tx
         .query_row(
             "SELECT quantity, name, set_code FROM deck_cards
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-            params![deck_id, from_card_id, category_id, variant],
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, from_card_id, category_id, variant, finish],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
@@ -2335,8 +2427,8 @@ pub fn swap_printing(
     let sql = format!(
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             quantity, created_at, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, unixepoch(), unixepoch())
+             finish, quantity, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10, unixepoch(), unixepoch())
          ON CONFLICT({grain}) DO UPDATE SET
             quantity = deck_cards.quantity + excluded.quantity,
             updated_at = unixepoch()
@@ -2355,6 +2447,7 @@ pub fn swap_printing(
                 collector_number,
                 lang,
                 name,
+                finish,
                 quantity
             ],
             |r| r.get(0),
@@ -2363,8 +2456,9 @@ pub fn swap_printing(
 
     tx.execute(
         "DELETE FROM deck_cards
-          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4",
-        params![deck_id, from_card_id, category_id, variant],
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+            AND coalesce(finish, '') = coalesce(?5, '')",
+        params![deck_id, from_card_id, category_id, variant, finish],
     )
     .map_err(|e| e.to_string())?;
 
@@ -2400,6 +2494,156 @@ pub fn swap_printing(
         folded,
         quantity: landed,
     })
+}
+
+/// Change which object a deck row plays: the regular copy, the foil, or the etched one.
+///
+/// **The same act as [`swap_printing`], one axis over** — the deck plays a different physical
+/// object of the same card — so it answers the same [`SwapResult`], folds the same way, and
+/// records the same `swap` audit kind rather than a tenth word. `AUDIT_KINDS` is
+/// CHECK-constrained and SQLite has no `ALTER … CHECK`, so a new word would mean rebuilding
+/// every reader's whole deck history for a spelling; `deck_import::commit_import` met this
+/// first and reused `add`/`remove` for the same reason.
+///
+/// **The fold is the half worth reading.** Setting the foil row of a pile that already holds a
+/// regular row is two rows becoming one: the quantities add and the row that moved is deleted.
+/// `tag_id` and `needs_review` are the **surviving** row's — [`add_card`]'s rule, because the
+/// row that was already there is the one the reader labelled.
+///
+/// Three refusals, each its own sentence: [`SAME_FINISH`] for a press that changes nothing,
+/// [`FINISH_NOT_SOLD`] for a finish the printing does not come in, and [`GONE`] for a row that
+/// is not in that pile.
+pub fn set_card_finish(
+    conn: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    category_id: i64,
+    variant: &str,
+    from_finish: Option<&str>,
+    to_finish: Option<&str>,
+) -> Result<SwapResult, String> {
+    let variant = crate::deck_meta::valid_variant(variant)?;
+    let from = normalise_finish(from_finish)?;
+    let to = normalise_finish(to_finish)?;
+    // Before the transaction, so a no-op does not move `updated_at` and resort the gallery —
+    // `swap_printing`'s fence, for its reason. Compared *after* normalising, so that `None` and
+    // `Some("nonfoil")` are the one thing they are.
+    if from == to {
+        return Err(SAME_FINISH.to_owned());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    touch_deck(&tx, deck_id)?;
+    let category = category_of_deck(&tx, deck_id, category_id)?;
+
+    // What the printing is actually sold in. A finish the object does not come in is not a
+    // choice the reader can make, whatever the menu happened to be drawing — and the menu
+    // drawing it at all means the editor is stale, which is the same situation
+    // `PRINTING_GONE` covers one command over.
+    //
+    // Only the **target** is checked. The finish being left may well be one the printing no
+    // longer lists — a corpus can change under a stored row — and refusing to move off it
+    // would strand the copies on exactly the value the reader is trying to correct.
+    if let Some(want) = to.as_deref() {
+        let sold: Option<String> = tx
+            .query_row(
+                "SELECT finishes FROM cards WHERE id = ?1",
+                params![card_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+        let sold_here = sold
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .is_some_and(|list| list.iter().any(|f| f == want));
+        if !sold_here {
+            return Err(FINISH_NOT_SOLD.to_owned());
+        }
+    }
+
+    // **One cell, and it names no finish** — which covers *both* rows of this printing in this
+    // pile, deliberately. This write moves quantity between them, so a scope naming one would
+    // restore half of what it read. See `deck_undo::Cell`.
+    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+
+    let row: Option<(i64, i64, String)> = tx
+        .query_row(
+            "SELECT id, quantity, name FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, variant, category_id, card_id, from],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    // `set_card_quantity`'s asymmetry: an adjustment to a row that is not there could not do
+    // what it was asked.
+    let (from_id, moved, name) = row.ok_or_else(|| card_gone(&category))?;
+
+    let landed: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT id, quantity FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, variant, category_id, card_id, to],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let (quantity, folded) = match landed {
+        // Two rows become one. The target keeps its own id, its tag and its sentence.
+        Some((target_id, there)) => {
+            tx.execute(
+                "UPDATE deck_cards SET quantity = ?2, updated_at = unixepoch() WHERE id = ?1",
+                params![target_id, there + moved],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![from_id])
+                .map_err(|e| e.to_string())?;
+            (there + moved, true)
+        }
+        // Nothing to fold into: the row changes finish in place and keeps everything else.
+        None => {
+            tx.execute(
+                "UPDATE deck_cards SET finish = ?2, updated_at = unixepoch() WHERE id = ?1",
+                params![from_id, to],
+            )
+            .map_err(|e| e.to_string())?;
+            (moved, false)
+        }
+    };
+
+    // `delta` 0 and the `swap` kind: the deck holds the same number of the same card, in a
+    // different object. `folded` rides along for `swap_printing`'s reason — a deck list that
+    // silently loses a line reads like a bug, and the history is the one place that can say it
+    // did not. The two finishes travel as the words the column stores, `null` for the regular
+    // copy, and `auditText.ts` is what turns them into a sentence.
+    let audit_id = crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::SWAP,
+        Some((card_id, &name)),
+        &json!({
+            "category": category,
+            "fromFinish": from,
+            "toFinish": to,
+            "folded": folded,
+        }),
+        0,
+    )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+    // **Runs, and changes nothing** — which is worth stating rather than leaving to be
+    // rediscovered. `allocate_deck` matches on oracle id and has never looked at a finish, so a
+    // foil row reserves whatever copy is free exactly as the regular one did. It runs because
+    // this is a write to `deck_cards` and that is the list of writes the allocator runs on;
+    // skipping it here would make this the one card write that is an exception.
+    allocate_deck(&tx, deck_id)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(SwapResult { folded, quantity })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -3414,6 +3658,7 @@ pub async fn deck_add_card(
     category_id: Option<i64>,
     category_name: Option<String>,
     variant: String,
+    finish: Option<String>,
     quantity: i64,
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
@@ -3426,6 +3671,7 @@ pub async fn deck_add_card(
                 category_id,
                 category_name.as_deref(),
                 &variant,
+                finish.as_deref(),
                 quantity,
             )
         })
@@ -3441,12 +3687,21 @@ pub async fn deck_set_card_quantity(
     card_id: String,
     category_id: i64,
     variant: String,
+    finish: Option<String>,
     quantity: i64,
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
-            set_card_quantity(c, deck_id, &card_id, category_id, &variant, quantity)
+            set_card_quantity(
+                c,
+                deck_id,
+                &card_id,
+                category_id,
+                &variant,
+                finish.as_deref(),
+                quantity,
+            )
         })
     })
     .await
@@ -3477,6 +3732,7 @@ pub async fn deck_category_clear(
 /// category the copies are now in, because the name arm's caller has no other way to learn what
 /// was found or made.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn deck_move_card(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
@@ -3485,6 +3741,7 @@ pub async fn deck_move_card(
     to_category_id: Option<i64>,
     to_category_name: Option<String>,
     variant: String,
+    finish: Option<String>,
 ) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -3497,6 +3754,7 @@ pub async fn deck_move_card(
                 to_category_id,
                 to_category_name.as_deref(),
                 &variant,
+                finish.as_deref(),
             )
         })
     })
@@ -3514,6 +3772,7 @@ pub async fn deck_swap_printing(
     to_card_id: String,
     category_id: i64,
     variant: String,
+    finish: Option<String>,
 ) -> Result<SwapResult, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -3525,6 +3784,39 @@ pub async fn deck_swap_printing(
                 &to_card_id,
                 category_id,
                 &variant,
+                finish.as_deref(),
+            )
+        })
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// The deck card menu's `Set as foil` and the card pane's own button. `fromFinish` is the row
+/// being addressed and `toFinish` what it should become — both `null` for the regular copy,
+/// which is the only spelling of it that reaches the column.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn deck_set_card_finish(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    card_id: String,
+    category_id: i64,
+    variant: String,
+    from_finish: Option<String>,
+    to_finish: Option<String>,
+) -> Result<SwapResult, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| {
+            set_card_finish(
+                c,
+                deck_id,
+                &card_id,
+                category_id,
+                &variant,
+                from_finish.as_deref(),
+                to_finish.as_deref(),
             )
         })
     })
@@ -3543,6 +3835,12 @@ mod tests {
 
     /// Five printings of two oracle cards.
     ///
+    /// **The `finishes` lists are the real ones**, which is what makes them useful rather than
+    /// decorative: Alpha printed no foils, so `bolt-lea` is the card `set_card_finish` must
+    /// refuse foil on, and M10 did, so `bolt-m10` is the one it must accept. A fixture that
+    /// said `["nonfoil","foil"]` everywhere would make the refusal untestable and the
+    /// acceptance meaningless.
+    ///
     /// `o1` is three printings of one common — the allocator's cross-printing walk needs a
     /// second and a third printing of the *same* card to have anything to walk. `o2` is the
     /// pair the read is judged on: Serra Angel was **uncommon** in Alpha and **rare** in
@@ -3555,30 +3853,31 @@ mod tests {
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,artist,mana_cost,cmc,type_line,oracle_text,colors,color_identity,
-                    legalities,power,toughness,prices,raw)
+                    legalities,power,toughness,prices,finishes,raw)
                VALUES
                  ('bolt-lea','o1','Lightning Bolt','lea','161','en','normal','common',
                   'Christopher Rush','{R}',1.0,'Instant',
                   'Lightning Bolt deals 3 damage to any target.','R','R',
                   '{"oldschool":"legal","modern":"legal"}',NULL,NULL,
-                  '{"usd":"400.00","usd_foil":null}','{}'),
+                  '{"usd":"400.00","usd_foil":null}','["nonfoil"]','{}'),
                  ('bolt-jp','o1','Lightning Bolt','4ed','209','ja','normal','common',
                   'Christopher Rush','{R}',1.0,'Instant',
                   'Lightning Bolt deals 3 damage to any target.','R','R',
-                  '{"oldschool":"not_legal","modern":"legal"}',NULL,NULL,NULL,'{}'),
+                  '{"oldschool":"not_legal","modern":"legal"}',NULL,NULL,NULL,
+                  '["nonfoil"]','{}'),
                  ('bolt-m10','o1','Lightning Bolt','m10','146','en','normal','common',
                   'Christopher Moeller','{R}',1.0,'Instant',
                   'Lightning Bolt deals 3 damage to any target.','R','R',
                   '{"oldschool":"not_legal","modern":"legal"}',NULL,NULL,
-                  '{"usd":"1.50"}','{}'),
+                  '{"usd":"1.50","usd_foil":"6.00"}','["nonfoil","foil"]','{}'),
                  ('serra-lea','o2','Serra Angel','lea','175','en','normal','uncommon',
                   'Douglas Shuler','{3}{W}{W}',5.0,'Creature — Angel','Flying, vigilance',
                   'W','W','{"oldschool":"legal","paupercommander":"not_legal"}','4','4',
-                  '{"usd":"120.00"}','{}'),
+                  '{"usd":"120.00"}','["nonfoil"]','{}'),
                  ('serra-8ed','o2','Serra Angel','8ed','44','en','normal','rare',
                   'Greg Staples','{3}{W}{W}',5.0,'Creature — Angel','Flying, vigilance',
                   'W','W','{"oldschool":"not_legal","paupercommander":"not_legal"}','4','4',
-                  '{"usd":"1.00"}','{}');"#,
+                  '{"usd":"1.00"}','["nonfoil"]','{}');"#,
         )
         .unwrap();
         conn
@@ -3606,8 +3905,9 @@ mod tests {
         crate::deck_meta::category_for_name(conn, deck_id, "Main deck").unwrap()
     }
 
-    /// [`add_card`] by explicit category, in the live variant — the shape almost every test
-    /// below wants, so the two arms it does not want stay visible where they are used.
+    /// [`add_card`] by explicit category, in the live variant, **as the regular copy** — the
+    /// shape almost every test below wants, so the arms it does not want stay visible where
+    /// they are used. [`add_foil`] is the same thing one finish over.
     fn add(
         conn: &Connection,
         deck_id: i64,
@@ -3622,6 +3922,29 @@ mod tests {
             Some(category_id),
             None,
             LIVE,
+            None,
+            quantity,
+        )
+        .unwrap()
+    }
+
+    /// [`add`], in foil. Named rather than spelled out at each site so that a test about the
+    /// finish reads as one at a glance, and so the `None` above stays the visible default.
+    fn add_foil(
+        conn: &Connection,
+        deck_id: i64,
+        card_id: &str,
+        category_id: i64,
+        quantity: i64,
+    ) -> EntryChange {
+        add_card(
+            conn,
+            deck_id,
+            card_id,
+            Some(category_id),
+            None,
+            LIVE,
+            Some("foil"),
             quantity,
         )
         .unwrap()
@@ -3769,7 +4092,8 @@ mod tests {
 
         // …and so is `variant`: a change tried out in Theory is a row of its own, never a
         // draft that could silently overwrite the deck as it is sleeved.
-        let theory = add_card(&conn, deck.id, "bolt-jp", Some(main), None, THEORY, 3).unwrap();
+        let theory =
+            add_card(&conn, deck.id, "bolt-jp", Some(main), None, THEORY, None, 3).unwrap();
         assert_ne!(theory.id, second.id);
         assert_eq!(
             theory.quantity, 3,
@@ -3794,6 +4118,7 @@ mod tests {
             None,
             Some("Burn spells"),
             LIVE,
+            None,
             2,
         )
         .unwrap();
@@ -3804,6 +4129,7 @@ mod tests {
             None,
             Some("Burn spells"),
             LIVE,
+            None,
             2,
         )
         .unwrap();
@@ -3832,7 +4158,7 @@ mod tests {
 
         // Neither an id nor a name is refused in words, and before anything is written:
         // `deck_cards.category_id` is NOT NULL, so there is no row to make.
-        let err = add_card(&conn, deck.id, "bolt-m10", None, None, LIVE, 1).unwrap_err();
+        let err = add_card(&conn, deck.id, "bolt-m10", None, None, LIVE, None, 1).unwrap_err();
         assert_eq!(err, NO_CATEGORY);
         assert_eq!(count(&conn, "deck_cards"), 1, "and nothing was written");
 
@@ -3846,6 +4172,7 @@ mod tests {
             Some(kind_of(&conn, deck.id, "side")),
             Some("Ignored"),
             LIVE,
+            None,
             1,
         )
         .unwrap();
@@ -3873,7 +4200,17 @@ mod tests {
         let main = main_of(&conn, deck.id);
         let theirs = main_of(&conn, other.id);
 
-        let err = add_card(&conn, deck.id, "bolt-lea", Some(main), None, "draft", 1).unwrap_err();
+        let err = add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(main),
+            None,
+            "draft",
+            None,
+            1,
+        )
+        .unwrap_err();
         assert!(err.contains("draft"), "{err}");
         for variant in crate::schema::DECK_VARIANTS {
             assert!(
@@ -3882,7 +4219,17 @@ mod tests {
             );
         }
 
-        let err = add_card(&conn, deck.id, "bolt-lea", Some(theirs), None, LIVE, 1).unwrap_err();
+        let err = add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(theirs),
+            None,
+            LIVE,
+            None,
+            1,
+        )
+        .unwrap_err();
         assert_eq!(err, crate::deck_meta::CATEGORY_WRONG_DECK);
 
         let err = add_card(
@@ -3892,6 +4239,7 @@ mod tests {
             Some(theirs + 999),
             None,
             LIVE,
+            None,
             1,
         )
         .unwrap_err();
@@ -3909,18 +4257,29 @@ mod tests {
         // fences deleted from all three commands. That is what this assertion used to be.
         add(&conn, deck.id, "bolt-lea", main, 4);
         assert_eq!(
-            set_card_quantity(&conn, deck.id, "bolt-lea", theirs, LIVE, 1).unwrap_err(),
+            set_card_quantity(&conn, deck.id, "bolt-lea", theirs, LIVE, None, 1).unwrap_err(),
             crate::deck_meta::CATEGORY_WRONG_DECK
         );
-        let err = set_card_quantity(&conn, deck.id, "bolt-lea", main, "draft", 1).unwrap_err();
+        let err =
+            set_card_quantity(&conn, deck.id, "bolt-lea", main, "draft", None, 1).unwrap_err();
         assert!(err.contains("draft"), "{err}");
         assert_eq!(
-            move_card(&conn, deck.id, "bolt-lea", main, Some(theirs), None, LIVE).unwrap_err(),
+            move_card(
+                &conn,
+                deck.id,
+                "bolt-lea",
+                main,
+                Some(theirs),
+                None,
+                LIVE,
+                None
+            )
+            .unwrap_err(),
             crate::deck_meta::CATEGORY_WRONG_DECK,
             "the destination is fenced as well as the source"
         );
         assert_eq!(
-            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", theirs, LIVE).unwrap_err(),
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", theirs, LIVE, None).unwrap_err(),
             crate::deck_meta::CATEGORY_WRONG_DECK
         );
         assert_eq!(
@@ -3937,18 +4296,18 @@ mod tests {
         let main = main_of(&conn, deck.id);
         let added = add(&conn, deck.id, "bolt-lea", main, 4);
 
-        let lowered = set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, 1).unwrap();
+        let lowered = set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, 1).unwrap();
         assert_eq!(
             (lowered.id, lowered.quantity, lowered.removed),
             (added.id, 1, false),
             "an absolute quantity, not an addition"
         );
 
-        let err = set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, -1).unwrap_err();
+        let err = set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, -1).unwrap_err();
         assert!(err.contains("is not a quantity"), "{err}");
         assert_eq!(count(&conn, "deck_cards"), 1, "and it never deletes");
 
-        let removed = set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, 0).unwrap();
+        let removed = set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, 0).unwrap();
         assert_eq!(
             (removed.id, removed.quantity, removed.removed),
             (added.id, 0, true)
@@ -3973,7 +4332,17 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-m10", main, 3);
         add(&conn, deck.id, "bolt-lea", side, 2);
-        add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 1).unwrap();
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            1,
+        )
+        .unwrap();
 
         // Copies, not rows: two printings at 4 and 3 is the 7 the confirmation quoted.
         let cleared = clear_category(&conn, deck.id, main, LIVE).unwrap();
@@ -4122,6 +4491,7 @@ mod tests {
             "bolt-lea",
             kind_of(&conn, deck.id, "side"),
             LIVE,
+            None,
             1,
         )
         .unwrap_err();
@@ -4140,7 +4510,17 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-lea", side, 1);
 
-        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            Some(side),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(count(&conn, "deck_cards"), 1, "one row, not two");
         let (category, quantity): (i64, i64) = conn
@@ -4157,7 +4537,17 @@ mod tests {
         // move that needed the id to resolve would refuse it.
         conn.execute("DELETE FROM cards", []).unwrap();
 
-        move_card(&conn, deck.id, "bolt-lea", side, Some(scratch), None, LIVE).unwrap();
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            side,
+            Some(scratch),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(count(&conn, "deck_cards"), 1);
         let (category, quantity, name, set): (i64, i64, String, String) = conn
@@ -4194,6 +4584,7 @@ mod tests {
             None,
             Some("Removal"),
             LIVE,
+            None,
         )
         .unwrap();
 
@@ -4238,6 +4629,7 @@ mod tests {
             None,
             Some("Removal"),
             LIVE,
+            None,
         )
         .unwrap();
 
@@ -4284,6 +4676,7 @@ mod tests {
             None,
             Some("Main deck"),
             LIVE,
+            None,
         )
         .unwrap();
 
@@ -4310,7 +4703,7 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
 
         assert_eq!(
-            move_card(&conn, deck.id, "bolt-lea", main, None, None, LIVE).unwrap_err(),
+            move_card(&conn, deck.id, "bolt-lea", main, None, None, LIVE, None).unwrap_err(),
             NO_CATEGORY,
         );
     }
@@ -4325,9 +4718,29 @@ mod tests {
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
         add(&conn, deck.id, "bolt-lea", main, 4);
-        add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 2).unwrap();
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            2,
+        )
+        .unwrap();
 
-        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            Some(side),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
 
         let rows: Vec<(String, i64, i64)> = conn
             .prepare("SELECT variant, category_id, quantity FROM deck_cards ORDER BY variant, id")
@@ -4392,7 +4805,8 @@ mod tests {
         );
         stop_the_clock(&conn, deck.id);
 
-        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE).unwrap();
+        let swapped =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
 
         assert_eq!((swapped.folded, swapped.quantity), (false, 3));
         // The other half of what every refusal below pins: a swap *is* an edit, so the deck
@@ -4428,7 +4842,16 @@ mod tests {
         // Any category, an inactive one included — choosing a printing is exactly what a
         // scratchpad is for, and it still reserves nothing.
         add(&conn, deck.id, "serra-lea", scratch, 1);
-        swap_printing(&conn, deck.id, "serra-lea", "serra-8ed", scratch, LIVE).unwrap();
+        swap_printing(
+            &conn,
+            deck.id,
+            "serra-lea",
+            "serra-8ed",
+            scratch,
+            LIVE,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             category_rows(&conn, deck.id),
             vec![
@@ -4457,7 +4880,8 @@ mod tests {
         // is not in the swap's way and must not collect the copies.
         add(&conn, deck.id, "bolt-m10", side, 1);
 
-        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE).unwrap();
+        let swapped =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
 
         assert_eq!(
             (swapped.folded, swapped.quantity),
@@ -4483,7 +4907,8 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 3);
         stop_the_clock(&conn, deck.id);
 
-        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-lea", main, LIVE).unwrap_err();
+        let err =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-lea", main, LIVE, None).unwrap_err();
 
         assert!(err.contains("already"), "{err}");
         assert_eq!(
@@ -4514,6 +4939,7 @@ mod tests {
             "bolt-m10",
             kind_of(&conn, deck.id, "side"),
             LIVE,
+            None,
         )
         .unwrap_err();
 
@@ -4542,7 +4968,8 @@ mod tests {
             .unwrap();
         stop_the_clock(&conn, deck.id);
 
-        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE).unwrap_err();
+        let err =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap_err();
 
         assert!(err.contains("sync"), "{err}");
         assert_eq!(
@@ -4566,7 +4993,8 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 3);
         stop_the_clock(&conn, deck.id);
 
-        let err = swap_printing(&conn, deck.id, "bolt-lea", "serra-lea", main, LIVE).unwrap_err();
+        let err =
+            swap_printing(&conn, deck.id, "bolt-lea", "serra-lea", main, LIVE, None).unwrap_err();
 
         assert!(
             err.contains("Lightning Bolt") && err.contains("Serra Angel"),
@@ -4597,7 +5025,8 @@ mod tests {
         conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
             .unwrap();
 
-        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "serra-8ed", main, LIVE).unwrap();
+        let swapped =
+            swap_printing(&conn, deck.id, "bolt-lea", "serra-8ed", main, LIVE, None).unwrap();
 
         assert_eq!((swapped.folded, swapped.quantity), (false, 3));
         assert_eq!(
@@ -4615,7 +5044,8 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 3);
         delete_deck(&conn, deck.id, None).unwrap();
 
-        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE).unwrap_err();
+        let err =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap_err();
 
         assert_eq!(err, GONE, "the same sentence every other card write gives");
     }
@@ -4639,7 +5069,8 @@ mod tests {
         )
         .unwrap();
 
-        let err = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE).unwrap_err();
+        let err =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap_err();
 
         assert!(err.contains("boom"), "{err}");
         assert_eq!(
@@ -4656,7 +5087,8 @@ mod tests {
 
         // Nothing was stranded: with the failure gone the same swap goes through.
         conn.execute_batch("DROP TRIGGER boom;").unwrap();
-        let swapped = swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE).unwrap();
+        let swapped =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
         assert_eq!((swapped.folded, swapped.quantity), (false, 3));
         assert_eq!(claims(&conn, deck.id), vec![(entry, 3)]);
     }
@@ -4678,8 +5110,18 @@ mod tests {
         let tag = crate::deck_meta::create_tag(&conn, deck.id, "Flex", "amber").unwrap();
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-jp", scratch, 1);
-        add_card(&conn, deck.id, "bolt-m10", Some(main), None, THEORY, 2).unwrap();
-        crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, Some(tag.id))
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-m10",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            2,
+        )
+        .unwrap();
+        crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, None, Some(tag.id))
             .unwrap();
         update_deck(
             &conn,
@@ -4951,7 +5393,17 @@ mod tests {
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         add(&conn, deck.id, "bolt-lea", main, 4);
-        add_card(&conn, deck.id, "bolt-m10", Some(main), None, THEORY, 40).unwrap();
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-m10",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            40,
+        )
+        .unwrap();
 
         assert_eq!(
             read_deck(&conn, deck.id).unwrap().unwrap().card_count,
@@ -5036,6 +5488,7 @@ mod tests {
             Some(main_of(&conn, deck.id)),
             None,
             LIVE,
+            None,
             1,
         )
         .unwrap_err();
@@ -5781,17 +6234,36 @@ mod tests {
         assert!(updated_at(&conn) > 0, "the add moved the deck");
 
         backdate(&conn);
-        set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, 2).unwrap();
+        set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, 2).unwrap();
         assert!(updated_at(&conn) > 0, "so does the stepper");
 
         backdate(&conn);
-        move_card(&conn, deck.id, "bolt-lea", main, Some(side), None, LIVE).unwrap();
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            Some(side),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
         assert!(updated_at(&conn) > 0, "and so does the move");
 
         // The same statement is the existence check: a stale deck id from a gallery that
         // has not refreshed is a sentence, never a foreign-key error.
-        let err =
-            add_card(&conn, deck.id + 999, "bolt-lea", Some(main), None, LIVE, 1).unwrap_err();
+        let err = add_card(
+            &conn,
+            deck.id + 999,
+            "bolt-lea",
+            Some(main),
+            None,
+            LIVE,
+            None,
+            1,
+        )
+        .unwrap_err();
         assert_eq!(err, GONE);
         assert_eq!(count(&conn, "deck_cards"), 1, "and nothing was written");
     }
@@ -6593,7 +7065,17 @@ mod tests {
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
 
-        add_card(&conn, deck.id, "bolt-lea", Some(main), None, THEORY, 4).unwrap();
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            4,
+        )
+        .unwrap();
 
         assert_eq!(claims(&conn, deck.id), vec![], "a plan reserves nothing");
         let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
@@ -6652,7 +7134,7 @@ mod tests {
         // entry holding none of the card must reserve none of it. A claim of zero is not
         // just wrong, it is `CHECK (quantity > 0)`: the allocator writes no row at all.
         crate::collection::set_quantity(&conn, entry, 0).unwrap();
-        set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, 4).unwrap();
+        set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, 4).unwrap();
 
         assert_eq!(
             claims(&conn, deck.id),
@@ -6815,6 +7297,174 @@ mod tests {
             "and a printing the feed has never listed is unpriced too"
         );
         assert_eq!(price("bolt-lea", Manapool), Some(390.0));
+    }
+
+    /// `'nonfoil'` is not a value this column stores, and [`normalise_finish`] is where that
+    /// becomes true rather than merely intended.
+    #[test]
+    fn nonfoil_normalises_to_the_regular_row() {
+        assert_eq!(normalise_finish(None).unwrap(), None);
+        assert_eq!(
+            normalise_finish(Some("nonfoil")).unwrap(),
+            None,
+            "the word and the absence are one thing, or the grain holds two rows that draw alike"
+        );
+        assert_eq!(
+            normalise_finish(Some("foil")).unwrap(),
+            Some("foil".to_owned())
+        );
+        assert_eq!(
+            normalise_finish(Some("etched")).unwrap(),
+            Some("etched".to_owned())
+        );
+        assert!(
+            normalise_finish(Some("holo")).is_err(),
+            "a finish this app has never heard of is refused, never quietly filed as regular"
+        );
+    }
+
+    /// A pile holds the foil copy **beside** the regular one, and each folds on its own.
+    ///
+    /// The whole feature in one assertion: `1 × foil` next to `3 × regular` of one printing, in
+    /// one pile, as two rows.
+    #[test]
+    fn a_pile_holds_the_foil_copy_beside_the_regular_one() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 2);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        add_foil(&conn, deck.id, "bolt-m10", main, 1);
+
+        let rows = live_rows(&conn, deck.id);
+        assert_eq!(
+            rows,
+            vec![(None, 3), (Some("foil".to_owned()), 1)],
+            "the two regular adds folded together and the foil add did not join them"
+        );
+    }
+
+    /// Setting a finish onto a row the pile already has **folds**, exactly as a swap onto a
+    /// printing the pile already holds does — and the surviving row is the one that was there.
+    #[test]
+    fn setting_a_finish_folds_into_the_row_that_is_already_there() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 3);
+        add_foil(&conn, deck.id, "bolt-m10", main, 1);
+
+        let result =
+            set_card_finish(&conn, deck.id, "bolt-m10", main, LIVE, Some("foil"), None).unwrap();
+        assert!(result.folded, "the pile already held a regular row");
+        assert_eq!(result.quantity, 4, "the sum, not the copies that moved");
+        assert_eq!(
+            live_rows(&conn, deck.id),
+            vec![(None, 4)],
+            "one row of four, and no foil row left behind"
+        );
+    }
+
+    /// With nothing to fold into, the row changes finish **in place** and keeps its quantity.
+    #[test]
+    fn setting_a_finish_with_no_row_to_fold_into_moves_the_row() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 2);
+
+        let result =
+            set_card_finish(&conn, deck.id, "bolt-m10", main, LIVE, None, Some("foil")).unwrap();
+        assert!(!result.folded);
+        assert_eq!(result.quantity, 2);
+        assert_eq!(
+            live_rows(&conn, deck.id),
+            vec![(Some("foil".to_owned()), 2)]
+        );
+    }
+
+    /// Three refusals, each its own sentence, and none of them a panic.
+    #[test]
+    fn set_card_finish_refuses_the_three_things_it_cannot_do() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+
+        assert_eq!(
+            set_card_finish(
+                &conn,
+                deck.id,
+                "bolt-m10",
+                main,
+                LIVE,
+                None,
+                Some("nonfoil")
+            )
+            .unwrap_err(),
+            SAME_FINISH,
+            "`nonfoil` and absent are the same finish, so this changes nothing and writes nothing"
+        );
+        // Alpha printed no foils, and this fixture's `cards.finishes` says so.
+        assert_eq!(
+            set_card_finish(&conn, deck.id, "bolt-lea", main, LIVE, None, Some("foil"))
+                .unwrap_err(),
+            FINISH_NOT_SOLD
+        );
+        assert!(
+            set_card_finish(&conn, deck.id, "bolt-m10", main, LIVE, Some("etched"), None).is_err(),
+            "there is no etched row in that pile to change"
+        );
+    }
+
+    /// A stepper aimed at one finish must not find the other — the grain is five columns wide,
+    /// and every card command's `WHERE` has to agree with it.
+    #[test]
+    fn a_write_aimed_at_one_finish_leaves_the_other_row_alone() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 3);
+        add_foil(&conn, deck.id, "bolt-m10", main, 2);
+
+        set_card_quantity(&conn, deck.id, "bolt-m10", main, LIVE, Some("foil"), 0).unwrap();
+        assert_eq!(
+            live_rows(&conn, deck.id),
+            vec![(None, 3)],
+            "the foil row went and the regular one is untouched"
+        );
+    }
+
+    /// A duplicate of a deck of foils is a deck of foils. The copy has the same shape as its
+    /// original — `deck_categories.origin`'s rule, one table over.
+    #[test]
+    fn a_duplicate_keeps_the_finishes_of_the_deck_it_copies() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add_foil(&conn, deck.id, "bolt-m10", main, 2);
+
+        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        assert_eq!(
+            live_rows(&conn, copy.id),
+            vec![(Some("foil".to_owned()), 2)]
+        );
+    }
+
+    /// Every `live` row of a deck as `(finish, quantity)`, ordered so a regular row sorts before
+    /// a foil one. The shape almost every test in this group asserts on.
+    fn live_rows(conn: &Connection, deck_id: i64) -> Vec<(Option<String>, i64)> {
+        conn.prepare(
+            "SELECT finish, quantity FROM deck_cards
+              WHERE deck_id = ?1 AND variant = 'live'
+              ORDER BY coalesce(finish, '')",
+        )
+        .unwrap()
+        .query_map(params![deck_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
     }
 
     /// **A row that names a finish is priced at that finish, and one that names none keeps the
@@ -7001,11 +7651,29 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-m10", side, 2);
         add(&conn, deck.id, "bolt-jp", scratch, 3);
-        add_card(&conn, deck.id, "serra-8ed", Some(main), None, THEORY, 7).unwrap();
-        crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, Some(tag.id))
+        add_card(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            7,
+        )
+        .unwrap();
+        crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, None, Some(tag.id))
             .unwrap();
-        crate::deck_meta::set_card_tag(&conn, deck.id, "serra-8ed", main, THEORY, Some(tag.id))
-            .unwrap();
+        crate::deck_meta::set_card_tag(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            main,
+            THEORY,
+            None,
+            Some(tag.id),
+        )
+        .unwrap();
 
         let live = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
 
@@ -7376,24 +8044,44 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main, 4);
         assert_eq!(claims(&conn, deck.id), vec![(entry, 4)]);
 
-        set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, 1).unwrap();
+        set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, 1).unwrap();
         assert_eq!(
             claims(&conn, deck.id),
             vec![(entry, 1)],
             "the stepper hands three copies back"
         );
 
-        move_card(&conn, deck.id, "bolt-lea", main, Some(scratch), None, LIVE).unwrap();
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            Some(scratch),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             claims(&conn, deck.id),
             vec![],
             "an inactive category is a scratchpad, and a scratchpad reserves nothing"
         );
 
-        move_card(&conn, deck.id, "bolt-lea", scratch, Some(side), None, LIVE).unwrap();
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            scratch,
+            Some(side),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
         assert_eq!(claims(&conn, deck.id), vec![(entry, 1)], "a sideboard does");
 
-        set_card_quantity(&conn, deck.id, "bolt-lea", side, LIVE, 0).unwrap();
+        set_card_quantity(&conn, deck.id, "bolt-lea", side, LIVE, None, 0).unwrap();
         assert_eq!(
             claims(&conn, deck.id),
             vec![],
@@ -7423,7 +8111,17 @@ mod tests {
             kind_of(&conn, deck.id, "maybe"),
             3,
         );
-        add_card(&conn, deck.id, "bolt-m10", Some(main), None, THEORY, 3).unwrap();
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-m10",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            3,
+        )
+        .unwrap();
 
         let touched = missing_to_wishlist(&conn, deck.id).unwrap();
 
