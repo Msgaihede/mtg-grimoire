@@ -359,7 +359,7 @@ export function deckCardName(card: DeckCard, ruleBreakText: string | null): stri
  * swap on offer, and that is true of a view drawn read-only.
  */
 export function deckCardProps(card: DeckCard) {
-  return { [DECK_CARD_ATTR]: deckCardSlot(card.categoryId, card.cardId) };
+  return { [DECK_CARD_ATTR]: deckCardSlot(card.categoryId, card.cardId, card.finish) };
 }
 
 /**

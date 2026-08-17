@@ -124,7 +124,7 @@ let handover: { cardId: string; report: string | null } | null = null;
 function deckControlFor(row: PaneDeckContext | null): HTMLElement | null {
   if (!row) return null;
   return document.querySelector<HTMLElement>(
-    `[${DECK_CARD_ATTR}="${deckCardSlot(row.categoryId, row.cardId)}"]`,
+    `[${DECK_CARD_ATTR}="${deckCardSlot(row.categoryId, row.cardId, row.finish)}"]`,
   );
 }
 

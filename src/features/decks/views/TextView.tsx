@@ -311,7 +311,7 @@ function TextGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
-              selected={deckCardSlot(card.categoryId, card.cardId) === selectedSlot}
+              selected={deckCardSlot(card.categoryId, card.cardId, card.finish) === selectedSlot}
               landedKey={landed?.get(card.id)}
             />
           ))}

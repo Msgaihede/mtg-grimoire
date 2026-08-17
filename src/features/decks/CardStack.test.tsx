@@ -534,7 +534,7 @@ describe("CardStack flip-through", () => {
  */
 describe("CardStack selection", () => {
   /** The pick is addressed the way every deck write is — by the slot, not by the printing. */
-  const slotOf = (card: DeckCard) => deckCardSlot(card.categoryId, card.cardId);
+  const slotOf = (card: DeckCard) => deckCardSlot(card.categoryId, card.cardId, card.finish);
   const mountPicked = (slot: string | null) =>
     render(<CardStack cards={CARDS} label="Ramp" currency="usd" selectedSlot={slot} />);
 
@@ -549,7 +549,7 @@ describe("CardStack selection", () => {
    *  `CardStack.tsx` is arithmetic about — two open cards would push the tail of the pile twice
    *  as far over whatever is drawn below it. */
   it("opens nothing at all when the picked card is in another pile", () => {
-    mountPicked(deckCardSlot(99, "c-Somewhere Else"));
+    mountPicked(deckCardSlot(99, "c-Somewhere Else", null));
 
     expect(openCards()).toHaveLength(0);
   });
@@ -563,7 +563,7 @@ describe("CardStack selection", () => {
    * this one rests closed and marks nothing, even though it holds that exact printing.
    */
   it("ignores the same printing picked in another pile", () => {
-    mountPicked(deckCardSlot(CARDS[1].categoryId + 1, CARDS[1].cardId));
+    mountPicked(deckCardSlot(CARDS[1].categoryId + 1, CARDS[1].cardId, null));
 
     expect(list().querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
     expect(openCards()).toHaveLength(0);
@@ -670,7 +670,7 @@ describe("CardStack selection and the pointer", () => {
         cards={CARDS}
         label="Ramp"
         currency="usd"
-        selectedSlot={deckCardSlot(CARDS[0].categoryId, CARDS[0].cardId)}
+        selectedSlot={deckCardSlot(CARDS[0].categoryId, CARDS[0].cardId, null)}
       />,
     );
     expect(openCard()).toBe(items()[0]);

@@ -1513,8 +1513,12 @@ describe("DeckEditor", () => {
     await open();
     // The fixture is the claim: two drawn copies, or the count below passes for want of a
     // second card rather than because the rule is right.
+    //
+    // `*=` rather than `$=`: a slot ends in its **finish** since v18 (`c-Lightning Bolt:` for
+    // the regular copy), so a suffix match on the card id stopped matching anything at all —
+    // which would have made this fixture check pass vacuously at zero had it been a `>=`.
     expect(
-      document.querySelectorAll(`[${DECK_CARD_ATTR}$="c-Lightning Bolt"]`),
+      document.querySelectorAll(`[${DECK_CARD_ATTR}*="c-Lightning Bolt"]`),
     ).toHaveLength(2);
 
     await userEvent.click(
@@ -1525,7 +1529,7 @@ describe("DeckEditor", () => {
     expect(marked).toHaveLength(1);
     expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
       DECK_CARD_ATTR,
-      deckCardSlot(MAIN, "c-Lightning Bolt"),
+      deckCardSlot(MAIN, "c-Lightning Bolt", null),
     );
   });
 
@@ -3531,7 +3535,7 @@ describe("DeckEditor — a card's menu", () => {
   /** Right-click the card the editor drew, found by the slot every view stamps on it. */
   async function rightClickCard(name: string) {
     const el = document.querySelector<HTMLElement>(
-      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, `c-${name}`)}"]`,
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, `c-${name}`, null)}"]`,
     );
     expect(el).not.toBeNull();
     // A raw dispatch outside `act()` is not flushed synchronously, which is why every caller
@@ -3594,7 +3598,7 @@ describe("DeckEditor — a card's menu", () => {
     await open();
 
     const el = document.querySelector<HTMLElement>(
-      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt")}"]`,
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt", null)}"]`,
     ) as HTMLElement;
     el.focus();
     fireEvent.keyDown(el, { key: "F10", shiftKey: true });
@@ -3899,7 +3903,7 @@ describe("DeckEditor — a card's menu", () => {
 
       const marked = await waitFor(() => {
         const el = document.querySelector<HTMLElement>(
-          `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt")}"]`,
+          `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt", null)}"]`,
         );
         expect(el).not.toBeNull();
         return el as HTMLElement;

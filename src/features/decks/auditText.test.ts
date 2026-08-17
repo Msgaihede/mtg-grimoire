@@ -118,6 +118,34 @@ describe("auditSentence", () => {
   });
 
   /**
+   * **The other write that records a `swap`, and it must not borrow that one's sentence.**
+   *
+   * `deck_set_card_finish` shares the kind because `AUDIT_KINDS` is CHECK-constrained and both
+   * are the same act — the deck plays a different physical object of the same card — but the
+   * two are different *sentences*, and the payload is the only thing that tells them apart.
+   * This is the case a live pass caught: the history drew "Swapped printing of Abandon
+   * Attachments" over a press that had changed no printing at all.
+   */
+  it("words a finish change as one, and never as a printing swap", () => {
+    expect(
+      auditSentence(entry("swap", { category: "Ramp", fromFinish: null, toFinish: "foil" })),
+    ).toEqual({ text: "Made Sol Ring foil", detail: "regular → foil" });
+
+    // The way back. `null` is the regular copy — the one finish with no word in the column, so
+    // it is the one the renderer has to supply.
+    expect(
+      auditSentence(entry("swap", { category: "Ramp", fromFinish: "etched", toFinish: null })),
+    ).toEqual({ text: "Made Sol Ring regular", detail: "etched → regular" });
+
+    // The fold is said here for the reason it is said above: two rows became one.
+    expect(
+      auditSentence(
+        entry("swap", { category: "Ramp", fromFinish: null, toFinish: "foil", folded: true }),
+      ),
+    ).toEqual({ text: "Made Sol Ring foil", detail: "regular → foil · folded into one row" });
+  });
+
+  /**
    * Set codes are stored lowercase, as `cards.set_code` holds them. Upper-casing is the
    * renderer's job, because a set code is printed on a card in capitals and this app writes
    * it that way everywhere it shows one.
