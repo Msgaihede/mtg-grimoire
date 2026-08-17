@@ -1366,6 +1366,56 @@ document overflow in any of them**.
 the suite — and so is the difference between the fix and the wrong fix, which are identical in
 every DOM assertion. `DeckEditor.test.tsx` pins the class and states the figures instead.
 
+## The drop ring with a side missing
+
+**2026-08-17.** Reported from the shipped window as "when dragging a card the outline is cut off by
+the edge of the container", with a screenshot of the deck builder mid-drag: the leftmost pile's gold
+ring drawn on three sides.
+
+**What it was.** `StackView`, `GridView` and `TextView` are `overflow-x-auto` — kept when the three
+views were given no height in 2026-08-14, for the one case where a single column zoomed past a
+narrow desk really is wider than its box. None of the three carried padding. **An `overflow` clips
+at the box's padding box**, so a pile laid out flush against the scroller's content edge has
+everything drawn outside its own border box painted in the clipped region:
+
+| mark | drawn at | with no padding |
+| --- | --- | --- |
+| `DROP_RING` (`ring-2`) | a box shadow, 2px outside the border box | the whole side, gone |
+| `FOCUS` (`outline-2 outline-offset-2`) | 2px of outline standing 2px off the edge | the whole side, gone |
+| `DROP_OVER` (`bg-accent/10`) | inside | untouched |
+
+Three surfaces, one defect, and the shape of it differs by view: Stacks loses the left edge of the
+first pile in every line and the right edge of the rail, Text the same plus the top of its first
+line, and **Grid loses the ring down both sides of every group at once** — a group there is as wide
+as the desk, so both of its vertical edges are the content edge.
+
+**The fix is `DROP_MARK_ROOM` (`p-1.5`) on all three roots**, defined beside the marks it makes room
+for in `src/lib/dropMarks.ts`. **Six pixels rather than the ring's two** because the outline is the
+larger of the two claims and a focus indicator clipped to half its width is a WCAG 2.4.7 failure
+rather than a cosmetic loss. `StackView` keeps its `pb-2`: Tailwind emits the `padding` shorthand
+before the `padding-bottom` longhand — `.p-1\.5` at byte **29 557** against `.pb-2` at **31 795** in
+`dist/assets/index-*.css` — so the longhand wins the bottom edge whatever order the two classes are
+written in, and the foot of a column is the one edge that was never clipped.
+
+**It belongs on the box that carries the `overflow`, and one level in is not the same fix** —
+padding on a child moves the target off the edge, but the ring is then drawn outside *that* child
+and lands back on the same clip. Same rule, and the same trap, as the `relative` in the section
+above. The other way out is `ring-inset`, which is what `TableView` has always drawn, its rows
+being absolutely positioned inside a virtualiser where an outset ring would paint over its
+neighbours.
+
+**Photographed rather than reasoned about**, and without either lock: a `file://` page against the
+built `dist/assets/index-*.css`, the two states of the root side by side, shot by headless Edge.
+Before, the ring is present on the right and bottom of the first pile and absent on its left and
+top, and the focused pile's outline is missing its top edge entirely; after, both are closed on all
+four sides.
+
+**Why no test catches it and none can.** jsdom has no layout engine, so nothing is clipped, every
+rect is zero, and a rendering assertion passes just as happily against a view that has lost the
+padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-auto` **and**
+`DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
+of the `overflow`.
+
 ## Vendored components and tokens
 
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).

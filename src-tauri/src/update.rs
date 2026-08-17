@@ -54,6 +54,15 @@ const CHECK_INTERVAL_SECS: u64 = 86_400;
 /// schema v6 step.
 const K_LAST_CHECK_AT: &str = "update_last_check_at";
 const K_LATEST_SEEN: &str = "update_latest_seen";
+const K_HISTORY: &str = "update_release_history";
+
+/// How many releases one check asks for.
+///
+/// **One page, and the number is GitHub's own default** — `/releases` pages at 30 unless told
+/// otherwise, so this is the figure the request would carry anyway, written down because a
+/// reader of the version history is entitled to know where the list stops. The repository has
+/// eleven releases today; the cap matters the year it does not.
+const HISTORY_PER_PAGE: u32 = 30;
 
 /// What the two Windows artifacts are called, as **suffixes**.
 ///
@@ -124,14 +133,47 @@ pub struct ReleaseInfo {
     /// `tag_name` with any leading `v` stripped — `0.3.0`.
     pub version: String,
     pub tag: String,
-    /// The release body, as written. Plain text to the UI: markdown is a renderer this app
-    /// does not have, and half-rendered markdown reads worse than none.
+    /// The release body, **verbatim**, markdown and all.
+    ///
+    /// Rust stores what GitHub sent and interprets none of it. Which of release-please's
+    /// shapes are drawn, whether a commit SHA is worth a line, whether two identical bullets
+    /// are one — those are display decisions, and they live in `src/lib/releaseNotes.ts`
+    /// with the renderer that acts on them.
     pub notes: String,
     pub published_at: Option<String>,
     pub html_url: String,
     /// Every asset on the release. Stored whole rather than pre-filtered, so the pick can
     /// be re-made against the install kind without another request.
     pub assets: Vec<Asset>,
+}
+
+/// One entry in the version history — a release, without the machinery for installing it.
+///
+/// [`ReleaseInfo`] minus its `assets`, and the subtraction is the point: the history is
+/// **thirty** releases and each carries five assets with a URL and a 64-character digest
+/// apiece, none of which a changelog can use. Only the release the app might actually
+/// install needs an asset list, and that one is cached separately as a `ReleaseInfo`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseNote {
+    pub version: String,
+    pub tag: String,
+    /// Verbatim, for [`ReleaseInfo::notes`]'s reason.
+    pub notes: String,
+    pub published_at: Option<String>,
+    pub html_url: String,
+}
+
+impl From<&ReleaseInfo> for ReleaseNote {
+    fn from(r: &ReleaseInfo) -> ReleaseNote {
+        ReleaseNote {
+            version: r.version.clone(),
+            tag: r.tag.clone(),
+            notes: r.notes.clone(),
+            published_at: r.published_at.clone(),
+            html_url: r.html_url.clone(),
+        }
+    }
 }
 
 /// What the UI polls and what a check answers.
@@ -416,7 +458,43 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 // Checking
 // ---------------------------------------------------------------------------------------
 
-/// Parse `/releases/latest` into the shape the rest of the module uses.
+/// Parse `/releases` — one page, newest first — dropping what a reader must never be offered.
+///
+/// **A draft and a prerelease are both filtered here rather than downstream**, because this
+/// list is two answers at once: the version history the panel draws, and the release the app
+/// compares itself against. `/releases/latest`, which this replaced, applied exactly this
+/// filter server-side; doing it here is what keeps the two answers from disagreeing about
+/// which releases exist.
+///
+/// An entry that will not parse is skipped rather than failing the page: one malformed
+/// release five versions back must not cost the reader their update check.
+fn parse_release_page(v: &serde_json::Value) -> Vec<ReleaseInfo> {
+    v.as_array()
+        .map(|list| {
+            list.iter()
+                .filter(|r| {
+                    !r["draft"].as_bool().unwrap_or(false)
+                        && !r["prerelease"].as_bool().unwrap_or(false)
+                })
+                .filter_map(|r| parse_release(r).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The release `/releases/latest` would have answered.
+///
+/// **The first entry, not the highest version**, and that is deliberate parity: GitHub
+/// defines its latest release as the most recent non-draft, non-prerelease one *by
+/// `created_at`*, and `/releases` is ordered by the same key. Picking the maximum version
+/// instead would quietly change what this app offers the day a patch for an older line is
+/// published after a newer minor — and [`is_newer`] is the guard that decides whether the
+/// answer is an update at all, so nothing is lost by leaving the ordering to GitHub.
+fn latest_of(page: &[ReleaseInfo]) -> Option<&ReleaseInfo> {
+    page.first()
+}
+
+/// Parse one release object into the shape the rest of the module uses.
 fn parse_release(v: &serde_json::Value) -> Result<ReleaseInfo, String> {
     let tag = v["tag_name"]
         .as_str()
@@ -480,6 +558,20 @@ pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Every release the last check saw, newest first — the version history, read from cache.
+///
+/// **No network of its own, ever.** The page this answers from is written by [`check`], which
+/// already fetches it to decide whether an update exists; asking GitHub again when a reader
+/// expands the history would spend a second request out of 60/hour to re-learn something
+/// already on disk. An install that has never checked answers an empty list, and the panel
+/// says so rather than pretending the app has no past.
+pub fn history(state: &AppState) -> Vec<ReleaseNote> {
+    let conn = crate::sync::lock_db_read(state);
+    get_app_meta(&conn, K_HISTORY)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// Ask GitHub for the latest release, honouring the 24 h throttle unless `force`.
@@ -552,7 +644,14 @@ async fn check_inner(
         return Err("an update check is already running".into());
     };
 
-    let url = format!("{}/repos/{REPO}/releases/latest", updater.api_base);
+    // `/releases` rather than `/releases/latest`, and it is **one request answering two
+    // questions**: the newest release the app might move to, and the version history the
+    // panel draws. A second endpoint for the history would spend a second request out of
+    // 60/hour per IP to fetch a superset of what this one already returns.
+    let url = format!(
+        "{}/repos/{REPO}/releases?per_page={HISTORY_PER_PAGE}",
+        updater.api_base
+    );
     let resp = updater
         .http
         .get(&url)
@@ -564,11 +663,15 @@ async fn check_inner(
 
     let code = resp.status().as_u16();
     if code == 404 {
-        // A repository with no published release at all. Not an error the user can act on,
-        // and not worth a banner — record the check and answer "nothing new".
+        // A repository that is not there at all. `/releases` answers `200 []` rather than
+        // 404 for a repository with no releases — that case is the empty page below — so
+        // this arm is narrower than it was under `/releases/latest`, and kept because the
+        // response to both is the same: not an error the user can act on, and not worth a
+        // banner. Record the check and answer "nothing new".
         let conn = crate::sync::lock_db(state);
         let _ = set_app_meta(&conn, K_LAST_CHECK_AT, &now.to_string());
         let _ = clear_app_meta(&conn, K_LATEST_SEEN);
+        let _ = clear_app_meta(&conn, K_HISTORY);
         drop(conn);
         drop(guard);
         return Ok(status(state, updater));
@@ -589,7 +692,8 @@ async fn check_inner(
         .map_err(|e| format!("could not read GitHub's answer: {e}"))?;
     let body: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("GitHub's answer was not readable JSON: {e}"))?;
-    let release = parse_release(&body)?;
+    let page = parse_release_page(&body);
+    let notes: Vec<ReleaseNote> = page.iter().map(ReleaseNote::from).collect();
 
     {
         let conn = crate::sync::lock_db(state);
@@ -597,9 +701,21 @@ async fn check_inner(
         // Cached whether or not it is newer: `status` re-compares against the running
         // version on every read, so storing it unconditionally keeps one rule instead of
         // two and makes the cache correct across an update without a clearing step.
-        match serde_json::to_string(&release) {
-            Ok(json) => set_app_meta(&conn, K_LATEST_SEEN, &json).map_err(|e| e.to_string())?,
-            Err(_) => clear_app_meta(&conn, K_LATEST_SEEN).map_err(|e| e.to_string())?,
+        //
+        // A page with nothing on it — a repository with no releases, or one publishing
+        // nothing but prereleases — clears both keys rather than leaving yesterday's answer
+        // standing, which is the same thing the 404 arm above does.
+        match latest_of(&page).map(serde_json::to_string) {
+            Some(Ok(json)) => {
+                set_app_meta(&conn, K_LATEST_SEEN, &json).map_err(|e| e.to_string())?
+            }
+            _ => clear_app_meta(&conn, K_LATEST_SEEN).map_err(|e| e.to_string())?,
+        }
+        match serde_json::to_string(&notes) {
+            Ok(json) if !notes.is_empty() => {
+                set_app_meta(&conn, K_HISTORY, &json).map_err(|e| e.to_string())?
+            }
+            _ => clear_app_meta(&conn, K_HISTORY).map_err(|e| e.to_string())?,
         }
     }
     // Before the answer, never after. See the guard's binding above.
@@ -1026,6 +1142,25 @@ mod tests {
         })
     }
 
+    /// One page of `/releases`, in the order GitHub answers it: newest first, with a draft
+    /// and a prerelease among the real ones. Both of those are things `/releases/latest`
+    /// filtered server-side and this module now has to filter itself.
+    fn live_page() -> serde_json::Value {
+        serde_json::json!([
+            {"tag_name": "v0.4.0", "draft": true, "prerelease": false,
+             "published_at": null, "html_url": "https://example.invalid/draft",
+             "body": "not published yet", "assets": []},
+            {"tag_name": "v0.3.0", "draft": false, "prerelease": false,
+             "published_at": "2026-08-10T00:00:00Z",
+             "html_url": "https://example.invalid/0.3.0",
+             "body": "### Features\n* the newest real release\n", "assets": []},
+            {"tag_name": "v0.3.0-rc.1", "draft": false, "prerelease": true,
+             "published_at": "2026-08-09T12:00:00Z",
+             "html_url": "https://example.invalid/rc", "body": "a candidate", "assets": []},
+            live_payload(),
+        ])
+    }
+
     #[test]
     fn versions_compare_by_component_and_a_v_prefix_is_optional() {
         assert!(is_newer("0.3.0", "0.2.0"));
@@ -1104,6 +1239,73 @@ mod tests {
         // An MSI install is `Other`, and `Other` has nothing to download — the `.msi` on the
         // release is deliberately not offered.
         assert!(pick_asset(&release.assets, InstallKind::Other).is_none());
+    }
+
+    /// The filter `/releases/latest` used to apply server-side, now applied here.
+    ///
+    /// A draft is not published and a prerelease is not what a reader running a stable build
+    /// asked for; offering either as "the latest version" would be this module inventing a
+    /// release policy the repository does not have. The history is the same list, so both
+    /// answers are filtered by construction rather than by two agreeing rules.
+    #[test]
+    fn a_draft_and_a_prerelease_are_on_neither_the_history_nor_the_offer() {
+        let page = parse_release_page(&live_page());
+
+        assert_eq!(
+            page.iter().map(|r| r.version.as_str()).collect::<Vec<_>>(),
+            ["0.3.0", "0.2.0"],
+            "the draft and the release candidate are dropped"
+        );
+        assert_eq!(latest_of(&page).map(|r| r.version.as_str()), Some("0.3.0"));
+    }
+
+    /// The order is GitHub's, and taking the first entry is what keeps this in step with the
+    /// endpoint it replaced. A patch to an older line published *after* a newer minor sorts
+    /// first by `created_at`, and `/releases/latest` would have answered exactly the same.
+    #[test]
+    fn the_latest_release_is_the_first_entry_rather_than_the_highest_version() {
+        let page = parse_release_page(&serde_json::json!([
+            {"tag_name": "v0.2.1", "draft": false, "prerelease": false,
+             "html_url": "", "body": "a backport", "assets": []},
+            {"tag_name": "v0.3.0", "draft": false, "prerelease": false,
+             "html_url": "", "body": "the newer minor", "assets": []},
+        ]));
+        assert_eq!(latest_of(&page).map(|r| r.version.as_str()), Some("0.2.1"));
+    }
+
+    /// One malformed release five versions back must not cost the reader their update check.
+    #[test]
+    fn an_unparseable_entry_is_skipped_rather_than_failing_the_page() {
+        let page = parse_release_page(&serde_json::json!([
+            {"draft": false, "prerelease": false, "body": "no tag at all"},
+            {"tag_name": "v0.3.0", "draft": false, "prerelease": false,
+             "html_url": "", "body": "fine", "assets": []},
+        ]));
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].version, "0.3.0");
+    }
+
+    /// A history entry keeps the body and drops the machinery. Thirty releases' worth of
+    /// asset URLs and 64-character digests is what this subtraction is worth, and none of it
+    /// can be used by a changelog.
+    #[test]
+    fn a_history_entry_keeps_the_notes_and_drops_the_assets() {
+        let release = parse_release(&live_payload()).unwrap();
+        assert_eq!(release.assets.len(), 5);
+
+        let note = ReleaseNote::from(&release);
+        assert_eq!(note.version, "0.2.0");
+        assert_eq!(note.tag, "v0.2.0");
+        assert_eq!(note.notes, release.notes);
+        assert_eq!(note.published_at.as_deref(), Some("2026-08-09T04:02:20Z"));
+
+        let json = serde_json::to_value(&note).unwrap();
+        assert_eq!(json["publishedAt"], "2026-08-09T04:02:20Z");
+        assert_eq!(json["htmlUrl"], release.html_url);
+        assert!(
+            json.get("assets").is_none(),
+            "a history entry carries no assets: {json}"
+        );
     }
 
     #[test]
@@ -1379,7 +1581,10 @@ mod tests {
         let mock = server
             .mock_async(|when, then| {
                 when.method("GET")
-                    .path(format!("/repos/{REPO}/releases/latest"))
+                    .path(format!("/repos/{REPO}/releases"))
+                    // One page, and the size is asked for explicitly rather than left to
+                    // GitHub's default — the history the panel draws stops where this says.
+                    .query_param("per_page", HISTORY_PER_PAGE.to_string())
                     // GitHub answers 403 without a User-Agent, so the header is not
                     // decoration — it is pinned here because it is easy to drop and the
                     // failure would only show in the field.
@@ -1387,8 +1592,10 @@ mod tests {
                     .header("Accept", "application/vnd.github+json");
                 then.status(200)
                     .header("content-type", "application/json")
-                    .json_body(serde_json::json!({
+                    .json_body(serde_json::json!([{
                         "tag_name": "v9.9.9",
+                        "draft": false,
+                        "prerelease": false,
                         "published_at": "2026-08-09T04:02:20Z",
                         "html_url": "https://github.com/Msgaihede/mtg-grimoire/releases/tag/v9.9.9",
                         "body": "the notes",
@@ -1398,7 +1605,15 @@ mod tests {
                             "digest": "sha256:abc",
                             "browser_download_url": "https://example.invalid/p.zip"
                         }]
-                    }));
+                    }, {
+                        "tag_name": "v0.1.0",
+                        "draft": false,
+                        "prerelease": false,
+                        "published_at": "2026-08-01T00:00:00Z",
+                        "html_url": "https://github.com/Msgaihede/mtg-grimoire/releases/tag/v0.1.0",
+                        "body": "the first one",
+                        "assets": []
+                    }]));
             })
             .await;
 
@@ -1435,6 +1650,16 @@ mod tests {
             Some("9.9.9")
         );
 
+        // The same one request also left the version history behind, which is the whole
+        // reason `/releases` replaced `/releases/latest`. `history` asks GitHub nothing.
+        let past = history(&state);
+        assert_eq!(
+            past.iter().map(|r| r.version.as_str()).collect::<Vec<_>>(),
+            ["9.9.9", "0.1.0"],
+            "newest first, and the older release is there too"
+        );
+        assert_eq!(past[1].notes, "the first one");
+
         // A second, unforced check inside the window makes no request at all — the mock
         // would count a second hit.
         check(&state, &updater, false).await.unwrap();
@@ -1451,9 +1676,8 @@ mod tests {
         let server = httpmock::MockServer::start_async().await;
         server
             .mock_async(|when, then| {
-                when.method("GET")
-                    .path(format!("/repos/{REPO}/releases/latest"));
-                then.status(200).json_body(serde_json::json!({
+                when.method("GET").path(format!("/repos/{REPO}/releases"));
+                then.status(200).json_body(serde_json::json!([{
                     "tag_name": "v9.9.9",
                     "html_url": "https://github.com/Msgaihede/mtg-grimoire/releases/tag/v9.9.9",
                     "body": "",
@@ -1462,7 +1686,7 @@ mod tests {
                         "size": 1, "digest": "sha256:abc",
                         "browser_download_url": "https://example.invalid/p.zip"
                     }]
-                }));
+                }]));
             })
             .await;
 
@@ -1482,26 +1706,81 @@ mod tests {
 
     /// A repository with no published release is not an error the user can act on. It must
     /// still stamp the check, or every launch would ask again.
+    ///
+    /// **The shape of that answer changed with the endpoint**: `/releases/latest` answered
+    /// 404, `/releases` answers `200 []`. Both arms are still here — the 404 one for a
+    /// repository that is not there at all — and both must reach the same place.
     #[tokio::test]
     async fn a_repository_with_no_release_is_not_an_error() {
+        for (name, status_code, body) in [
+            ("empty-page", 200, serde_json::json!([])),
+            (
+                "not-found",
+                404,
+                serde_json::json!({"message": "Not Found"}),
+            ),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method("GET").path(format!("/repos/{REPO}/releases"));
+                    then.status(status_code).json_body(body.clone());
+                })
+                .await;
+
+            let (state, dir) = file_state(name);
+            let updater = updater_at(server.base_url(), InstallKind::Portable);
+
+            let answered = check(&state, &updater, false).await.unwrap();
+            assert!(answered.available.is_none(), "{name}");
+            assert!(
+                answered.last_check_at.is_some(),
+                "{name}: the check is stamped, or every launch asks again"
+            );
+            assert!(history(&state).is_empty(), "{name}");
+
+            drop(state);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A page of nothing but prereleases reads as "no releases", and — the part worth a test
+    /// — **clears** what an earlier check left behind rather than leaving a stale history
+    /// standing beside a `lastCheckAt` that says it was just refreshed.
+    #[tokio::test]
+    async fn a_later_check_that_finds_nothing_clears_what_an_earlier_one_cached() {
         let server = httpmock::MockServer::start_async().await;
-        server
+        let first = server
             .mock_async(|when, then| {
-                when.method("GET")
-                    .path(format!("/repos/{REPO}/releases/latest"));
-                then.status(404)
-                    .json_body(serde_json::json!({"message": "Not Found"}));
+                when.method("GET").path(format!("/repos/{REPO}/releases"));
+                then.status(200).json_body(serde_json::json!([{
+                    "tag_name": "v9.9.9", "draft": false, "prerelease": false,
+                    "html_url": "", "body": "the notes", "assets": []
+                }]));
             })
             .await;
 
-        let (state, dir) = file_state("no-release");
+        let (state, dir) = file_state("cleared");
         let updater = updater_at(server.base_url(), InstallKind::Portable);
+        check(&state, &updater, true).await.unwrap();
+        assert_eq!(history(&state).len(), 1);
 
-        let answered = check(&state, &updater, false).await.unwrap();
-        assert!(answered.available.is_none());
+        first.delete_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method("GET").path(format!("/repos/{REPO}/releases"));
+                then.status(200).json_body(serde_json::json!([{
+                    "tag_name": "v9.9.9-rc.2", "draft": false, "prerelease": true,
+                    "html_url": "", "body": "a candidate", "assets": []
+                }]));
+            })
+            .await;
+
+        let answered = check(&state, &updater, true).await.unwrap();
+        assert!(answered.available.is_none(), "a prerelease is not an offer");
         assert!(
-            answered.last_check_at.is_some(),
-            "the check is stamped, or every launch asks again"
+            history(&state).is_empty(),
+            "yesterday's history does not survive a check that found nothing"
         );
 
         drop(state);
@@ -1516,8 +1795,7 @@ mod tests {
         let server = httpmock::MockServer::start_async().await;
         server
             .mock_async(|when, then| {
-                when.method("GET")
-                    .path(format!("/repos/{REPO}/releases/latest"));
+                when.method("GET").path(format!("/repos/{REPO}/releases"));
                 then.status(403).body("rate limit exceeded");
             })
             .await;
