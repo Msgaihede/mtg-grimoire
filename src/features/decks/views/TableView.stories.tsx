@@ -3,6 +3,7 @@ import { expect, fn, within } from "storybook/test";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { deckGroups, deckViolations } from "../../../../.storybook/fake/fixtures";
+import { deckCardSlot } from "../dnd";
 import { TableView } from "./TableView";
 
 const meta = {
@@ -61,7 +62,14 @@ export const Default: Story = {
  *  results — a quiet surface rather than gold, because the card being read is already beside
  *  the pane. */
 export const WithSelectedRow: Story = {
-  args: { selectedCardId: deckGroups()[1].cards[0]?.cardId ?? null },
+  args: {
+    // The **slot**, not the printing: a card filed in two piles is marked in the one the reader
+    // clicked. See `CardStack`'s `selectedSlot`.
+    selectedSlot: (() => {
+      const row = deckGroups()[1].cards[0];
+      return row ? deckCardSlot(row.categoryId, row.cardId) : null;
+    })(),
+  },
 };
 
 /** Grouped by type: the bands change, the columns do not. */
