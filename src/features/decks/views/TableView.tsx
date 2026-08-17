@@ -40,6 +40,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -81,7 +82,7 @@ export function TableView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   className,
 }: {
@@ -100,8 +101,9 @@ export function TableView({
    * compare. The controls themselves are `cardControl.tsx`'s, the same ones.
    */
   actions?: DeckCardActions;
-  /** Which card the open pane is about, so its row says so. */
-  selectedCardId?: string | null;
+  /** Which slot the open pane is about ({@link deckCardSlot}), so its row says so. By the slot
+   *  rather than the printing; `CardStack` has why. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
    *  landed. See `cardControl`'s `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
@@ -320,12 +322,14 @@ export function TableView({
         actions={actions}
         onDrop={drop}
         selected={
-          row.kind === "card" && selectedCardId != null && row.card.cardId === selectedCardId
+          row.kind === "card" &&
+          selectedSlot != null &&
+          deckCardSlot(row.card.categoryId, row.card.cardId) === selectedSlot
         }
         landedKey={row.kind === "card" ? landed?.get(row.card.id) : undefined}
       />
     ),
-    [columns.length, marketplace, actions, drop, selectedCardId, landed],
+    [columns.length, marketplace, actions, drop, selectedSlot, landed],
   );
 
   return (
@@ -346,7 +350,9 @@ export function TableView({
         extraHeight={extraHeight}
         onActivate={onSelect ? (row) => row.kind === "card" && onSelect(row.card) : undefined}
         isSelected={(row) =>
-          row.kind === "card" && selectedCardId != null && row.card.cardId === selectedCardId
+          row.kind === "card" &&
+          selectedSlot != null &&
+          deckCardSlot(row.card.categoryId, row.card.cardId) === selectedSlot
         }
         renderRow={renderRow}
       />

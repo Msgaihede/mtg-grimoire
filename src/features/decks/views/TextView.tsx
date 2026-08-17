@@ -29,6 +29,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -77,7 +78,7 @@ export function TextView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   columnHeight = 640,
   className,
@@ -90,9 +91,10 @@ export function TextView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
-  /** The printing the pane is open on. A line has no room for a ring around a card face, so it
-   *  says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of gold on it. */
-  selectedCardId?: string | null;
+  /** The slot the pane is open on ({@link deckCardSlot}). A line has no room for a ring around a
+   *  card face, so it says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of
+   *  gold on it. By the slot rather than the printing; `CardStack` has why. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
@@ -192,7 +194,7 @@ export function TextView({
                 violations={violations}
                 onSelect={onSelect}
                 actions={actions}
-                selectedCardId={selectedCardId}
+                selectedSlot={selectedSlot}
                 landed={landed}
               />
             ))}
@@ -232,7 +234,7 @@ export function TextView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
-              selectedCardId={selectedCardId}
+              selectedSlot={selectedSlot}
               landed={landed}
             />
           ))}
@@ -250,7 +252,7 @@ function TextGroup({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
 }: {
   group: CardGroup;
@@ -259,7 +261,7 @@ function TextGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the lines — see {@link TextView}'s own props. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
@@ -298,7 +300,7 @@ function TextGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
-              selected={card.cardId === selectedCardId}
+              selected={deckCardSlot(card.categoryId, card.cardId) === selectedSlot}
               landedKey={landed?.get(card.id)}
             />
           ))}

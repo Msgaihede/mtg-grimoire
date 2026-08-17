@@ -1302,14 +1302,36 @@ price | type`). An **inactive category stays its own group in all three grouping
   pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character
   `components/CardArt`'s `selected` recipe, because the deck is answering the same question the
   search wall answers and a reader must not have to learn two vocabularies two clicks apart. Landed
-  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed the
-  way the question is asked: picked by `cardId` (a pane is open on a _printing_, so a card filed in
-  two piles is marked in both — `TableView` already did this and the other three now agree), landed
-  by `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
+  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed by
+  the **row**, not by the printing: picked by `deckCardSlot(categoryId, cardId)`, landed by
+  `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
   worth pointing at. `TextView` says picked as `SELECTED_ROW` and `TableView` keeps
   `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
   agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
   sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
+- **Picked is keyed by the _slot_, and that reversed the rule this file used to state**
+  (2026-08-17). It was `cardId` alone, argued as "a pane is open on a _printing_, so a card filed
+  in two piles is marked in both — which is the honest answer to which card the pane is about".
+  It was not honest, it was a **reported bug**: a deck holding one card in the Main deck and the
+  Sideboard marked both copies from one click, and in `StackView` — where the mark is also the
+  pile's **resting state** — one press stood a card clear of two stacks at once, which the
+  geometry note at the top of `CardStack.tsx` is arithmetic against. A `deck_cards` row is
+  `(deck, card, category, variant)` and a click names one row, so the mark is addressed the way
+  every deck _write_ already is, through the `deckCardSlot` spelling `DECK_CARD_ATTR` was
+  already stamping. **`DeckEditor` derives it from `paneDeckContext`** — the store's own record of
+  which row the open card came out of — so no new state was added, and the `variant` test in that
+  derivation is the one that can actually fail: the toolbar switches `live`/`theory` without
+  touching an open pane, which is exactly the case `useSwapFromPane` was once caught rewriting
+  the wrong half of.
+- **The other half of that change: a card opened from anywhere that is not a row of this deck now
+  marks _no_ row of it.** It used to mark every copy of that printing in the deck, which sounds
+  like a courtesy and is the same defect reached by a different gesture — a docked-panel tile for
+  a card the deck holds twice lit up both. Every opener but the deck's own cards goes through
+  `setSelectedCardId`, which clears `paneDeckContext` in the same write, so there is no slot and
+  nothing is picked. **Browsing printings in the pane keeps the mark**, which is new and is right:
+  `viewPrinting` deliberately leaves the context alone, so the row stays picked while the reader
+  flips through — where the old rule dropped the card back into its pile the moment they moved
+  off the printing the deck holds.
 - **The landed mark is gold with a glow since 2026-08-15, and it was parchment before that — but
   the half that is a _requirement_ is that it is drawn _inside_ the card's face.** The old rule
   read gold as taken four times over on this one surface — focus, the picked ring, and both halves

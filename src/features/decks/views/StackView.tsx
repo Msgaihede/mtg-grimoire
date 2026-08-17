@@ -219,7 +219,7 @@ export function StackView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   className,
 }: {
@@ -232,9 +232,9 @@ export function StackView({
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
   actions?: DeckCardActions;
-  /** The printing the pane is open on — the picked card wears a gold ring, and in this view it
-   *  is also what the pile rests open on. See {@link CardStack}. */
-  selectedCardId?: string | null;
+  /** The slot the pane is open on ({@link deckCardSlot}) — the picked card wears a gold ring, and
+   *  in this view it is also what the pile rests open on. See {@link CardStack}. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
    *  landed. Handed down whole, like `violations`. */
   landed?: ReadonlyMap<number, number>;
@@ -399,7 +399,7 @@ export function StackView({
             violations={violations}
             onSelect={onSelect}
             actions={actions}
-            selectedCardId={selectedCardId}
+            selectedSlot={selectedSlot}
             landed={landed}
             zoom={cardZoom}
             flowWidth={columnWidth}
@@ -453,7 +453,7 @@ export function StackView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
-              selectedCardId={selectedCardId}
+              selectedSlot={selectedSlot}
               landed={landed}
               zoom={cardZoom}
             />
@@ -477,7 +477,7 @@ function StackGroup({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   zoom,
   flowWidth,
@@ -488,7 +488,7 @@ function StackGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
   /** The zoom this pile's box was sized from, handed straight through to the stack so the two
    *  are the same number rather than two reads of one store. */
@@ -607,7 +607,7 @@ function StackGroup({
           violations={violations}
           onSelect={onSelect}
           actions={actions}
-          selectedCardId={selectedCardId}
+          selectedSlot={selectedSlot}
           landed={landed}
           zoom={zoom}
           // The third of the three signals a switched-off pile carries — the wash on the section
