@@ -2526,7 +2526,7 @@ mod tests {
     /// screenful a 100 ms slot per tile, which is most of what "images load slowly" was.
     #[tokio::test]
     async fn consecutive_fetches_are_not_paced_apart() {
-        const N: usize = 6;
+        const N: usize = 20;
         let f = Fixture::new("unpaced");
         let server = MockServer::start();
         server.mock(|when, then| {
@@ -2546,13 +2546,33 @@ mod tests {
             f.get(&client, &key(id, 0, Variant::Grid)).await.unwrap();
         }
 
-        // The old gate forced (N-1) × 100 ms = 500 ms on exactly this sequence, whatever the
-        // origin did, so **any** bound under 500 ms catches a pacing interval coming back.
-        // Picked at 400 rather than at the 6 ms this actually measures, because the margin
-        // that matters is the one above: a bound tight enough to also fail on a busy CI
-        // runner would be a flaky gate, and a flaky gate teaches people to re-run it.
+        // The old gate forced an interval between fetch *starts*, so it costs (N-1) × 100 ms on
+        // exactly this sequence whatever the origin does — **1 900 ms** here. Any bound under
+        // that catches it coming back.
+        //
+        // **N is the margin, not the bound, and that is the correction of 2026-08-17.** This was
+        // six fetches against 400 ms, on the stated reasoning that 400 was far enough above what
+        // it measures to survive a busy CI runner. It was not: `rust (windows-latest)` read
+        // **472 ms** and took `ci-ok` red on a pull request whose diff contained no Rust at all,
+        // while the Linux half of the same matrix passed. At N = 6 the whole gap between healthy
+        // and the defect is 500 ms, so there was nowhere left to raise the bound *to* — the dial
+        // was wrong.
+        //
+        // **Which dial is right follows from where the time goes, measured here rather than
+        // assumed** (2026-08-17, debug, this machine): N = 6 → 24.3 ms, N = 20 → 47.6 ms,
+        // N = 40 → 77.4 ms, i.e. **≈ 15 ms fixed + ≈ 1.56 ms per fetch**. The fixed term is
+        // `Fixture::new` and `MockServer::start` — a temp directory and a socket, exactly the
+        // work that stalls on a loaded Windows runner, and the only plausible home for that
+        // 472 ms (as a per-fetch cost it would be 76 ms, a 49× per-fetch slowdown on an
+        // in-process mock). So the noise is essentially **fixed** and the defect is **per
+        // fetch**: raising N moves the thing being detected and leaves the noise where it is.
+        //
+        // At N = 20 that buys both margins at once — healthy **47.6 ms**, defect **≈ 1 950 ms**,
+        // and a 1 000 ms bound sits ~950 ms above healthy (more than twice the worst stall CI has
+        // actually produced) and ~950 ms below the defect. Twenty sequential fetches against a
+        // local mock cost nothing: the whole test runs in 0.08 s.
         assert!(
-            started.elapsed() < Duration::from_millis(400),
+            started.elapsed() < Duration::from_millis(1_000),
             "{N} sequential fetches took {:?} — something is pacing them apart again",
             started.elapsed()
         );
