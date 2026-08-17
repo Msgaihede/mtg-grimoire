@@ -26,6 +26,7 @@ import {
   stackImageHeight,
 } from "./CardStack";
 import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
+import { deckCardSlot } from "./dnd";
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
 
@@ -502,11 +503,13 @@ describe("CardStack flip-through", () => {
  * nothing.
  */
 describe("CardStack selection", () => {
-  const mountPicked = (cardId: string | null) =>
-    render(<CardStack cards={CARDS} label="Ramp" currency="usd" selectedCardId={cardId} />);
+  /** The pick is addressed the way every deck write is — by the slot, not by the printing. */
+  const slotOf = (card: DeckCard) => deckCardSlot(card.categoryId, card.cardId);
+  const mountPicked = (slot: string | null) =>
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" selectedSlot={slot} />);
 
   it("rests on the picked card rather than on a closed pile", () => {
-    mountPicked(CARDS[1].cardId);
+    mountPicked(slotOf(CARDS[1]));
 
     expect(openCards()).toHaveLength(1);
     expect(openCard()).toBe(items()[1]);
@@ -516,8 +519,23 @@ describe("CardStack selection", () => {
    *  `CardStack.tsx` is arithmetic about — two open cards would push the tail of the pile twice
    *  as far over whatever is drawn below it. */
   it("opens nothing at all when the picked card is in another pile", () => {
-    mountPicked("c-Somewhere Else");
+    mountPicked(deckCardSlot(99, "c-Somewhere Else"));
 
+    expect(openCards()).toHaveLength(0);
+  });
+
+  /**
+   * **The same printing in another pile is another card, and this pile is not the one picked.**
+   *
+   * The defect that made the slot the key (2026-08-17): the pick used to be a bare `cardId`, so
+   * a printing filed in the Main deck and the Sideboard was picked in both — one click, two piles
+   * each standing a card clear of its stack. Here the reader clicked the *other* pile's copy, so
+   * this one rests closed and marks nothing, even though it holds that exact printing.
+   */
+  it("ignores the same printing picked in another pile", () => {
+    mountPicked(deckCardSlot(CARDS[1].categoryId + 1, CARDS[1].cardId));
+
+    expect(list().querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
     expect(openCards()).toHaveLength(0);
   });
 
@@ -526,7 +544,7 @@ describe("CardStack selection", () => {
    * One card carries it, and it is the same card the pile is resting open on.
    */
   it("marks the picked card, and only it", () => {
-    mountPicked(CARDS[2].cardId);
+    mountPicked(slotOf(CARDS[2]));
 
     const marked = list().querySelectorAll(`[${SELECTED_ATTR}]`);
     expect(marked).toHaveLength(1);
@@ -618,7 +636,12 @@ describe("CardStack selection and the pointer", () => {
    */
   it("lets the pointer open a neighbour, and comes back to the picked card", async () => {
     render(
-      <CardStack cards={CARDS} label="Ramp" currency="usd" selectedCardId={CARDS[0].cardId} />,
+      <CardStack
+        cards={CARDS}
+        label="Ramp"
+        currency="usd"
+        selectedSlot={deckCardSlot(CARDS[0].categoryId, CARDS[0].cardId)}
+      />,
     );
     expect(openCard()).toBe(items()[0]);
 

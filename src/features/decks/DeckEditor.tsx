@@ -45,7 +45,7 @@ import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { useDeckUndo } from "./useDeckUndo";
-import { dropWrite, type DeckWrite, type DragPayload } from "./dnd";
+import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "./export/ExportDialog";
 import {
   asGroupBy,
@@ -656,6 +656,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  const paneDeckContext = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
 
   const row = deck.deck;
@@ -2137,6 +2138,37 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ? row.defaultCategoryId
       : AUTO_CATEGORY;
 
+  /**
+   * **Which one card is picked** — the deck row the pane was opened from, as a
+   * {@link deckCardSlot}, or `null`.
+   *
+   * The mark used to be `selectedCardId` straight out of the store, and that was the bug this
+   * replaced (2026-08-17): a printing filed in two piles was marked in both, so one click stood
+   * a card clear of the stack in two places at once. A deck row is `(category, card)` and a
+   * click names one of them, so the mark is now addressed the way every deck *write* already is
+   * — and it comes from `paneDeckContext`, which is the store's own answer to "which row did
+   * this card come out of" and needed no new state to say so.
+   *
+   * **A card opened from anywhere that is not a row of this deck marks nothing**, which is a
+   * second change and the deliberate half of it. The docked panel's tiles, the validation
+   * panel's names and every other opener go through `setSelectedCardId`, which clears the
+   * context in the same write — so the old rule marked *every* copy of a panel tile's card in
+   * the deck, which is the reported defect reached by a different gesture. There is no one slot
+   * to pick, so nothing is picked.
+   *
+   * **The `variant` test is the one that can actually fail.** `setOpenDeckId` clears the context,
+   * so `deckId` cannot drift and is restated here only because this expression should not have to
+   * be read against a store invariant two files away. The variant can: the toolbar switches
+   * `live`/`theory` without touching an open pane, and the same printing in the same category of
+   * both lists is exactly the case `useSwapFromPane` was once caught rewriting the wrong half of.
+   */
+  const selectedSlot =
+    paneDeckContext !== null &&
+    paneDeckContext.deckId === deckId &&
+    paneDeckContext.variant === variant
+      ? deckCardSlot(paneDeckContext.categoryId, paneDeckContext.cardId)
+      : null;
+
   /** What the add target is called, or `null` under {@link AUTO_CATEGORY} — where there is no
    *  one answer, because the pile is per card. */
   const targetName =
@@ -2150,12 +2182,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     violations,
     onSelect: openCard,
     actions,
-    // The two marks a card can carry here, in the four views that draw them. `selectedCardId` is
-    // the store's — every surface in the app that opens a card writes it, so a card opened from
-    // the panel beside the deck marks the deck's own copy of it too, which is the true answer to
-    // "which card is the pane about". `landed` is this editor's alone: nothing outside it can
-    // add a card to the deck the reader is looking at.
-    selectedCardId,
+    // The two marks a card can carry here, in the four views that draw them. `landed` is this
+    // editor's alone: nothing outside it can add a card to the deck the reader is looking at.
+    // `selectedSlot` is derived from the store just above.
+    selectedSlot,
     landed,
     // No `className`, and the `min-h-0` that was here went with the desk's height (2026-08-14):
     // it said "this view may be squeezed below its content", which is the sentence that made the
