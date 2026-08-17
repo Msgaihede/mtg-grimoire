@@ -2117,12 +2117,29 @@ export interface ReleaseInfo {
   /** `tag_name` without its leading `v` — `0.3.0`. */
   version: string;
   tag: string;
-  /** The release body as written. Plain text: this app has no markdown renderer, and half
-   *  rendered markdown reads worse than none. */
+  /** The release body **verbatim**, markdown and all. Rust interprets none of it;
+   *  `src/lib/releaseNotes.ts` reads it and the settings panel draws the result. */
   notes: string;
   publishedAt: string | null;
   htmlUrl: string;
   assets: UpdateAsset[];
+}
+
+/**
+ * One entry in the version history. Mirrors `update::ReleaseNote`.
+ *
+ * {@link ReleaseInfo} without its `assets`, and the subtraction is deliberate: the history is
+ * up to thirty releases, each of which carries five assets with a URL and a 64-character
+ * digest, and a changelog can use none of it. Only the release the app might install needs an
+ * asset list.
+ */
+export interface ReleaseNote {
+  version: string;
+  tag: string;
+  /** Verbatim, for {@link ReleaseInfo.notes}'s reason. */
+  notes: string;
+  publishedAt: string | null;
+  htmlUrl: string;
 }
 
 /**
@@ -2903,6 +2920,16 @@ export const ipc = {
   /** Empty the log. Answers how many rows went. */
   errorLogClear: () => invoke<number>("error_log_clear"),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /**
+   * Every release the last check saw, newest first — the version history.
+   *
+   * **Reads a cache and never the network.** `update_check` fetches one page of
+   * `/repos/…/releases` to decide whether an update exists and writes the whole page to
+   * `app_meta`, so expanding the history costs nothing out of GitHub's 60 requests an hour.
+   * An install that has never checked answers `[]`, which the panel says out loud rather
+   * than drawing an app with no past.
+   */
+  updateHistory: () => invoke<ReleaseNote[]>("update_history"),
   /** Ask GitHub. `force` skips the 24 h throttle, which is what the Check now button sends. */
   updateCheck: (force: boolean) => invoke<UpdateStatus>("update_check", { force }),
   /**
