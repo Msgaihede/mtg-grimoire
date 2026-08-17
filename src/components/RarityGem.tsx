@@ -11,6 +11,13 @@ import { cn } from "@/lib/utils";
  *
  * Never a filled badge: the direction's colour budget is spent on mana and card art, and a
  * mythic-orange pill would out-shout the art it annotates.
+ *
+ * **The gem is 6px on a card at 100% zoom and scales with it.** Three of those call sites are card
+ * faces the reader can zoom — the wall's caption, the deck tile's foot, the stack's data line —
+ * where a dot that held still turned into a speck beside a doubled card; the four table cells and
+ * the pane get `var(--mark-scale, 1)`'s fallback and are unchanged. The **word** takes no size of
+ * its own either way: it inherits the line it is drawn in, which on a card is a line that scales
+ * and in a table is one that does not.
  */
 export function RarityGem({
   rarity,
@@ -25,7 +32,12 @@ export function RarityGem({
   const color = rarityColor(rarity);
   const word = rarity ?? "unknown";
   return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
+    <span
+      className={cn(
+        "inline-flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]",
+        className,
+      )}
+    >
       <span
         aria-hidden="true"
         // **A `title` as well as the `sr-only` word below, because they are for two different
@@ -35,7 +47,7 @@ export function RarityGem({
         // call sites had grown their own `title` before this component consolidated them, and
         // consolidating meant answering both questions here rather than dropping one.
         title={word.replace(/^./, (c) => c.toUpperCase())}
-        className="size-1.5 shrink-0 rounded-full"
+        className="size-[calc(0.375rem*var(--mark-scale,1))] shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />
       {/* The word is the accessible name whether or not it is drawn: a gem with no text is

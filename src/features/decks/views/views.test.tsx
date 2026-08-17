@@ -1565,12 +1565,34 @@ describe("GridView tiles", () => {
   });
 
   /**
-   * The foot and the gutter grow with the card and hold at their own size going down, and the
-   * controls sit **on** the foot at either end — which is the derivation worth pinning, because
-   * the bar's offset was a fixed utility for as long as the foot was a fixed height, and the two
-   * would have parted company at exactly the zoom nobody looks at.
+   * The tile publishes the reader's zoom as the two custom properties every mark drawn on it sizes
+   * itself against — the copy count, the tag dot, the rule break, the gem in the foot and the
+   * stepper laid over it. It is a variable rather than a prop because three of those five are also
+   * drawn in this view's table and text siblings, where nothing zooms and the `, 1` fallback is the
+   * answer. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+   *
+   * **jsdom resolves no `calc()`**, so this pins the publishing and not the result: a mark whose
+   * class was mistyped reads identically here, and a mistyped Tailwind arbitrary value emits no
+   * rule at all. The sizes are a live pass's to answer.
    */
-  it("grows the foot and the gutter with the tiles, and never shrinks them", () => {
+  it("publishes the deck's card scale to the marks on the tile", () => {
+    draw(2);
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("2");
+    expect(tile().style.getPropertyValue("--control-scale")).toBe("1.7");
+    cleanup();
+
+    draw(0.5);
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("0.5");
+    expect(tile().style.getPropertyValue("--control-scale")).toBe("0.425");
+  });
+
+  /**
+   * The foot moves with the card in **both** directions now and the gutter still holds at its own
+   * size going down, and the controls sit **on** the foot at either end — which is the derivation
+   * worth pinning, because the bar's offset was a fixed utility for as long as the foot was a fixed
+   * height, and the two would have parted company at exactly the zoom nobody looks at.
+   */
+  it("moves the foot with the tiles both ways, and floors only the gutter", () => {
     draw(2);
     expect(wall().style.gap).toBe("20px");
     expect(foot().style.height).toBe("40px");
@@ -1578,13 +1600,20 @@ describe("GridView tiles", () => {
     expect(controls().style.bottom).toBe("40px");
     cleanup();
 
-    // Half size: the card halves, and none of the three follows it down.
+    // Half size: the card halves and **the foot halves with it**, because everything standing in
+    // that foot — the gem, the price, the stepper over it — is drawn to `--mark-scale` now. It
+    // used to hold at 20px and 9px, on the argument that a 4px caption is not type; that argument
+    // was about chrome the zoom could not reach.
+    //
+    // The gutter is the one thing here that still floors, and the difference is what it measures:
+    // it is the space *between* two cards rather than anything drawn *on* one, so there is nothing
+    // for it to stay in step with, and 5px of gap is a wall that reads as a single sheet.
     draw(0.5);
     expect(tile().style.width).toBe("75px");
     expect(wall().style.gap).toBe("10px");
-    expect(foot().style.height).toBe("20px");
-    expect(foot().style.fontSize).toBe("9px");
-    expect(controls().style.bottom).toBe("20px");
+    expect(foot().style.height).toBe("10px");
+    expect(foot().style.fontSize).toBe("5px");
+    expect(controls().style.bottom).toBe("10px");
   });
 
   /**
