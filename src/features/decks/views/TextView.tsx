@@ -11,7 +11,7 @@ import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
-import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
+import { DeckFinishMark, GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
   deckCardBodyProps,
   deckCardName,
@@ -355,6 +355,9 @@ function TextRow({
         >
           {card.name}
         </span>
+        {/* Decoration here, like the badge beside it: this row is a button with an explicit
+            `aria-label`, so the words are `deckCardName`'s. */}
+        <DeckFinishMark card={card} />
         {card.gameChanger === true && <GameChangerBadge />}
         {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />

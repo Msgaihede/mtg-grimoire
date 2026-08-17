@@ -1,5 +1,5 @@
 import { StrictMode, useState } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -134,13 +134,14 @@ const marketplaceFeedStatus = vi.fn();
 const printingGroupBy = vi.fn();
 const setPrintingGroupBy = vi.fn();
 /**
- * The two deck commands the pane can reach, and it reaches them only when the card was opened
- * from a deck row: the swap its printings rows offer, and the deck read that comes with the
- * hook the swap is mounted from (`useSwapFromPane` takes the whole of `useDeck`, whose query
- * the editor is normally already sharing).
+ * The three deck commands the pane can reach, and it reaches them only when the card was opened
+ * from a deck row: the swap its printings rows offer, the **finish** its foil button writes, and
+ * the deck read that comes with the hook both are mounted from (`useSwapFromPane` takes the
+ * whole of `useDeck`, whose query the editor is normally already sharing).
  */
 const deckGet = vi.fn();
 const deckSwapPrinting = vi.fn();
+const deckSetCardFinish = vi.fn();
 /**
  * The write behind the card menu's "Add to → Collection", which is the pane's own — reached
  * through `useCardMenuDeps`, mounted here rather than by a page.
@@ -168,6 +169,14 @@ vi.mock("@/lib/ipc", async (original) => ({
       variant: DeckVariant,
       finish: DeckFinish,
     ) => deckSwapPrinting(deckId, from, to, categoryId, variant, finish),
+    deckSetCardFinish: (
+      deckId: number,
+      cardId: string,
+      categoryId: number,
+      variant: DeckVariant,
+      fromFinish: DeckFinish,
+      toFinish: DeckFinish,
+    ) => deckSetCardFinish(deckId, cardId, categoryId, variant, fromFinish, toFinish),
     collectionAdd: (input: unknown) => collectionAdd(input),
   },
 }));
@@ -298,6 +307,7 @@ beforeEach(() => {
   // and the pane stops offering swaps it could only have refused (see the `gone` test).
   deckGet.mockReset().mockResolvedValue(DECK_DETAIL);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   collectionAdd.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   useAppStore.setState(useAppStore.getInitialState());
 });
@@ -926,6 +936,69 @@ describe("the foil view", () => {
       "aria-pressed",
       "false",
     );
+  });
+
+  /**
+   * **Inside the deck editor the button is a write, and it says so.**
+   *
+   * The pane there is showing the reader's *own copy*, so the control that turns the sheen on is
+   * the control that says which object the deck plays. The label is the whole of how a reader
+   * can tell the two apart before pressing — `Set as` against `View as` — and `regular` rather
+   * than `nonfoil`, because "set as nonfoil" is not a thing anybody says.
+   */
+  it("sets the deck row's finish where the pane is showing one, and only shows it where it is not", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+
+    // No deck row: the view toggle it has always been, and nothing is written.
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: "View as foil" }));
+    expect(deckSetCardFinish).not.toHaveBeenCalled();
+
+    cleanup();
+    useAppStore.getState().openCardFromDeck(MAIN);
+    wrap("p1");
+
+    const set = await screen.findByRole("button", { name: "Set as foil" });
+    expect(set).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(set);
+
+    // The row is addressed by its slot, `finish` included — the pile can hold this printing
+    // twice, and the press is about the row the pane was opened from.
+    expect(deckSetCardFinish).toHaveBeenCalledWith(4, "p1", MAIN.categoryId, "live", null, "foil");
+    // The sheen turns on at the press rather than at the answer, so the label moves with it.
+    expect(screen.getByRole("button", { name: "Set as regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /** The pane opens on the copy the deck actually plays, rather than on the plain photograph of
+   *  it — which is the one thing the `key={cardId}` reset cannot do on its own. */
+  it("opens showing the finish the deck row already plays", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardFromDeck({ ...MAIN, finish: "foil" });
+
+    wrap("p1");
+
+    expect(await screen.findByRole("button", { name: "Set as regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /** Browsing the printings list moves the pane onto a card the deck does not hold, so there is
+   *  no row for a press to write to and the button goes back to being a view. */
+  it("is a view again on a printing the deck does not hold", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardFromDeck(MAIN);
+
+    // The context still names `p1`; the pane is showing `p2`.
+    wrap("p2");
+
+    expect(await screen.findByRole("button", { name: "View as foil" })).toBeVisible();
   });
 
   it("names the etched view where etched is the only shiny finish there is", async () => {

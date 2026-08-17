@@ -6,7 +6,7 @@ import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
-import { soleFinish } from "@/lib/finish";
+import { playedFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
@@ -717,7 +717,7 @@ function StackedCard({
   const face = useImageRetry(
     card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
   );
-  const finish = soleFinish(card.finishes);
+  const finish = playedFinish(card.finish, card.finishes);
   // The allocator claims no copy for an inactive category, so every row in one reads 0 owned
   // by construction — a shortage mark there would report one the reader does not have. The
   // switch, never the kind: a Maybeboard switched *on* is short of copies like any other pile.

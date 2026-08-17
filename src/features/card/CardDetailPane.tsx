@@ -21,10 +21,17 @@ import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dn
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
-import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
-import { ipc, ipcError, type CardDetail, type CardFace, type Printing } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type CardDetail,
+  type CardFace,
+  type DeckFinish,
+  type Printing,
+} from "@/lib/ipc";
 import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { dialog, PRESS } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -431,7 +438,36 @@ function Body({
   // nothing here would take the hook's `live` default — which, where the same printing sits in
   // the same category of both lists, rewrites the live row from a theory pane and reports
   // success. `undefined` with no context is the default again, which is the idle case.
-  const { swap, deckGone } = useSwapFromPane(deckRow, deckRow?.variant);
+  const { swap, setCardFinish, deckGone } = useSwapFromPane(deckRow, deckRow?.variant);
+
+  /**
+   * The foil control's subject, or `null` — see {@link DeckFinishTarget}.
+   *
+   * **Only where the pane is showing the deck row itself**, which is the `cardId` test: the pane
+   * browses printings, so a reader two printings along is looking at a card the deck does not
+   * hold and there is no row for a press to write to. The swap beside it needs no such test
+   * because its whole job is to move the deck *onto* the printing being looked at.
+   *
+   * `deckGone` closes the other hole the swap already closes: a deck another view has deleted
+   * offers no write here either.
+   */
+  const setFinish = setCardFinish.mutate;
+  const deckFinish = useMemo(
+    () =>
+      deckRow === null || deckGone || deckRow.cardId !== cardId
+        ? null
+        : {
+            finish: deckRow.finish,
+            set: (to: DeckFinish) =>
+              setFinish({
+                cardId: deckRow.cardId,
+                categoryId: deckRow.categoryId,
+                finish: deckRow.finish,
+                to,
+              }),
+          },
+    [deckRow, deckGone, cardId, setFinish],
+  );
 
   // A different card is a different card, and the back of the last one is not where a
   // reader wants to arrive. Reset during render — React's own answer to state that has to
@@ -702,7 +738,12 @@ function Body({
 
       {card.data && (
         <>
-          <Art card={card.data} face={face} onFlip={() => setFace((f) => (f === 0 ? 1 : 0))} />
+          <Art
+            card={card.data}
+            face={face}
+            onFlip={() => setFace((f) => (f === 0 ? 1 : 0))}
+            deckFinish={deckFinish}
+          />
           <Facts card={card.data} face={face} marketplace={marketplace} />
           <Legalities card={card.data} />
           <Printings
@@ -762,7 +803,11 @@ function artistOf(card: CardDetail, face: number): string | null {
  * `soleFinish`, which answers only where there is exactly one non-plain finish and is what the
  * marking on every other card surface in the app is drawn from.
  */
-function foilViewFinish(finishesJson: string | null): Finish | null {
+// The return type is `DeckFinish` rather than `Finish | null`, which is a narrowing this
+// function already guaranteed and now states: the two arms below answer `foil` and `etched` and
+// nothing else, and `nonfoil` is the value that makes it answer `null`. That is exactly
+// `deck_cards.finish`'s vocabulary, so the toggle can write what it shows without a cast.
+function foilViewFinish(finishesJson: string | null): DeckFinish {
   const finishes = parseFinishes(finishesJson);
   if (!finishes.includes("nonfoil")) return null;
   if (finishes.includes("foil")) return "foil";
@@ -776,7 +821,36 @@ function foilViewFinish(finishesJson: string | null): Finish | null {
  * The direction doc's one absolute: on a screen that has card art, the art is the loudest
  * thing on it. Everything below is 12–14px grey.
  */
-function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: () => void }) {
+/**
+ * What the pane's foil control is **about**, or `null` when it is about nothing but the picture.
+ *
+ * Inside the deck editor, on a card the open deck holds, this pane is showing *the reader's own
+ * copy* — so the button that turns the sheen on is the button that says which object the deck
+ * plays, and pressing it writes. Anywhere else there is no row to write, so it stays what it has
+ * always been: a way to see what the shiny one looks like.
+ *
+ * **The surface supplies a fact and never a decision**, which is `cardMenu.tsx`'s `paneCardId`
+ * rule one component over: this is the row, and the label, the write and the seeded state are
+ * all worked out at the control.
+ */
+interface DeckFinishTarget {
+  /** What the deck row plays now — what the toggle opens on. */
+  finish: DeckFinish;
+  /** `useDeck.setCardFinish`, already addressed to this row by the caller. */
+  set: (to: DeckFinish) => void;
+}
+
+function Art({
+  card,
+  face,
+  onFlip,
+  deckFinish,
+}: {
+  card: CardDetail;
+  face: number;
+  onFlip: () => void;
+  deckFinish: DeckFinishTarget | null;
+}) {
   const sides = faceCount(card.layout, card.faces.length);
   const src = cardImageUrl(card.id, face, "display");
   // The src that failed, so a flip or a new card clears it without an effect.
@@ -795,7 +869,11 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
    * frame of the previous printing's sheen over the new card's art before it corrected itself,
    * which is the same reason the face reset in `Body` is a render-time write and not an effect.
    */
-  const [foilView, setFoilView] = useState(false);
+  //
+  // **Seeded from the deck row where there is one**, which is the one thing the key cannot do
+  // for us: browsing to another printing still throws this subtree away, and the new one opens
+  // showing the copy the deck actually plays rather than the plain photograph of it.
+  const [foilView, setFoilView] = useState(deckFinish?.finish != null);
   const foilable = foilViewFinish(card.finishes);
   // What the overlay is asked for. `soleFinish` is the statement — this printing *is* foil — and
   // the toggle is the only thing that ever adds to it; the two cannot both answer, because
@@ -803,6 +881,38 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
   // least two.
   const marked = foilView && foilable ? foilable : soleFinish(card.finishes);
   const FoilGlyph = foilable === "etched" ? Gem : Sparkles;
+
+  /**
+   * The press: a view toggle everywhere, **and a write where the pane is about a deck row**.
+   *
+   * Both halves, not one or the other. The sheen still turns on at the press — the reader asked
+   * to see it and a control that waited on a round trip to change anything would read as broken
+   * — and the write goes out beside it. A refused write is the editor's banner to draw, exactly
+   * as a refused swap is; there is no state here to roll back, because the *view* really did
+   * change and is what the reader asked for.
+   */
+  const pressFoil = () => {
+    const next = !foilView;
+    setFoilView(next);
+    if (deckFinish !== null && foilable !== null) deckFinish.set(next ? foilable : null);
+  };
+
+  /**
+   * What the button says, and it says what the press **does** rather than what it shows.
+   *
+   * `Set as …` where there is a deck row behind the pane and `View as …` where there is not,
+   * because those are two different acts and a label that named only the visible half would be
+   * a control that quietly edits a deck. **`regular` rather than `FINISH_LABEL.nonfoil`** on
+   * the write arm: "set as nonfoil" is not a thing anybody says, and `Regular` is the word the
+   * deck card's own menu uses for the same choice. The view arm keeps the wording it shipped
+   * with.
+   */
+  const foilLabel = (() => {
+    if (foilable === null) return "";
+    const shiny = FINISH_LABEL[foilable].toLowerCase();
+    if (deckFinish !== null) return foilView ? "Set as regular" : `Set as ${shiny}`;
+    return foilView ? `View as ${FINISH_LABEL.nonfoil.toLowerCase()}` : `View as ${shiny}`;
+  })();
 
   return (
     <div className="space-y-2">
@@ -883,7 +993,7 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
               // here and a name that no longer contains the visible label is a control voice
               // control can no longer press (WCAG 2.5.3, the rule `DeckStats`' send button set).
               aria-pressed={foilView}
-              onClick={() => setFoilView((on) => !on)}
+              onClick={pressFoil}
               className={cn(
                 "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md",
                 "border border-border py-1.5 text-xs text-dim transition-colors duration-150",
@@ -900,11 +1010,7 @@ function Art({ card, face, onFlip }: { card: CardDetail; face: number; onFlip: (
                   tiles, one surface over. The two glyphs stay the same two so the button and the
                   finish marks on the printings rows below agree about what foil looks like. */}
               <FoilGlyph className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 truncate">
-                {foilView
-                  ? `View as ${FINISH_LABEL.nonfoil.toLowerCase()}`
-                  : `View as ${FINISH_LABEL[foilable].toLowerCase()}`}
-              </span>
+              <span className="min-w-0 truncate">{foilLabel}</span>
             </button>
           )}
         </div>

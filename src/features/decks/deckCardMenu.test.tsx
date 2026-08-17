@@ -133,6 +133,100 @@ describe("buildDeckCardMenu", () => {
   });
 
   /**
+   * **The finish row, and the three shapes that question has** — `collectionItem`'s rule one
+   * file over, for its reason: a choice with one answer is not a choice.
+   */
+  describe("the finish row", () => {
+    const BOTH = '["nonfoil","foil"]';
+
+    /**
+     * By **id**, not by label — `find` matches labels, and `Set as commander` and `Set as
+     * companion` are two rows above this one that a `/^Set as/` regex swallows. The id is the
+     * one thing the row keeps through all three of its shapes.
+     */
+    const finishRow = (items: MenuItem[]): Exclude<MenuItem, { kind: "separator" }> => {
+      const row = items.find(
+        (i): i is Exclude<MenuItem, { kind: "separator" }> =>
+          i.kind !== "separator" && i.id === "finish",
+      );
+      if (!row) throw new Error(`no finish row in [${labels(items).join(", ")}]`);
+      return row;
+    };
+
+    it("toggles in one press on a printing sold in two finishes", () => {
+      const setFinish = vi.fn();
+      const card = bolt({ finishes: BOTH, finish: null });
+      const row = finishRow(buildDeckCardMenu(card, deps({ setFinish })));
+
+      expect(row.label).toBe("Set as foil");
+      expect(row.kind).toBe("action");
+      if (row.kind === "action") row.onSelect();
+      expect(setFinish).toHaveBeenCalledWith(card, "foil");
+    });
+
+    it("names the way back when the row is already foil", () => {
+      const setFinish = vi.fn();
+      const card = bolt({ finishes: BOTH, finish: "foil" });
+      const row = finishRow(buildDeckCardMenu(card, deps({ setFinish })));
+
+      // `regular`, not `nonfoil`: "set as nonfoil" is not a thing anybody says.
+      expect(row.label).toBe("Set as regular");
+      if (row.kind === "action") row.onSelect();
+      expect(setFinish).toHaveBeenCalledWith(card, null);
+    });
+
+    it("offers a submenu of the printing's own finishes when it is sold in three", () => {
+      const card = bolt({ finishes: '["nonfoil","foil","etched"]', finish: "foil" });
+      const row = finishRow(buildDeckCardMenu(card, deps()));
+
+      expect(row.kind).toBe("submenu");
+      if (row.kind !== "submenu") return;
+      // Scryfall's order — plain, then the premium treatments — and deliberately not
+      // `sortOptions`': the order *is* the information here.
+      expect(labels(row.items)).toEqual(["Regular", "Foil", "Etched"]);
+      // The finish it already is, drawn and greyed rather than dropped, so the list keeps its
+      // length and its positions.
+      expect(row.items.map((i) => i.kind === "action" && i.disabled === true)).toEqual([
+        false,
+        true,
+        false,
+      ]);
+    });
+
+    /**
+     * **Greyed, and silent.** This menu's own precedent (`zoneItem`) rather than
+     * `cardMenu.tsx`'s greyed-with-a-reason: a menu row is sized by its widest content, so a
+     * sentence on a row that greys on a large minority of cards would set the width of every
+     * row in the panel.
+     */
+    it("greys on a printing sold in one finish, and says nothing", () => {
+      const row = finishRow(buildDeckCardMenu(bolt({ finishes: '["nonfoil"]' }), deps()));
+
+      expect(row.kind === "action" && row.disabled).toBe(true);
+      expect(row.kind === "action" && row.reason).toBeUndefined();
+    });
+
+    /** A printing whose `finishes` column is empty or unreadable is *unknown*, not a choice to
+     *  offer — the same floor `finishChoices` gives the collection picker. */
+    it("greys on a printing whose finish list is missing", () => {
+      const row = finishRow(buildDeckCardMenu(bolt({ finishes: null }), deps()));
+      expect(row.kind === "action" && row.disabled).toBe(true);
+    });
+
+    /** The row stays **present** when it is greyed, so its position never moves — `View all
+     *  printings`' rule, for its reason. */
+    it("keeps its place in the list when it is greyed", () => {
+      const at = (finishes: string | null) =>
+        buildDeckCardMenu(bolt({ finishes }), deps()).findIndex(
+          (i) => i.kind !== "separator" && i.id === "finish",
+        );
+
+      expect(at('["nonfoil"]')).toBe(at(BOTH));
+      expect(at('["nonfoil","foil","etched"]')).toBe(at(BOTH));
+    });
+  });
+
+  /**
    * **`Remove card` sits below a rule of its own**, and the rule is the point: everything above
    * it says where this card goes or what it is called, and this one takes the cardboard out. A
    * row that removes a card must not sit flush against the row that renames its label.

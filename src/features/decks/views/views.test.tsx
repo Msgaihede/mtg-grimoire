@@ -694,6 +694,44 @@ describe.each(VIEWS.filter((v) => v.name !== "TableView"))("$name", ({ render: r
     expect(sol.getAttribute("aria-label")).toContain("game changer");
   });
 
+  /**
+   * **Which object a row plays, said in words.**
+   *
+   * The mark is a chip over art on two of these three and a glyph beside the name on the text
+   * columns, and on all three it is decoration once the control is named — so the sentence
+   * rides in the name, exactly as the rule break above it does. Nothing at all for the regular
+   * copy: nonfoil is the finish a card is assumed to be.
+   *
+   * **Both halves of `playedFinish` in one case.** Sol Ring is a row that *says* foil on a
+   * printing sold in both; Arcane Signet is a row that says nothing on the same kind of
+   * printing and is deliberately unmarked (a sheen on 61 % of a wall would be decoration);
+   * Avacyn says nothing on a **foil-only** printing and is marked anyway, because `soleFinish`
+   * is a fact about the object rather than about the deck.
+   */
+  it("says which object a card is, in words — the row's answer, then the printing's", () => {
+    render(
+      renderView({
+        groups: [
+          {
+            ...GROUPS[0],
+            cards: [
+              card({ name: "Sol Ring", finish: "foil", finishes: '["nonfoil","foil"]' }),
+              card({ name: "Arcane Signet", finishes: '["nonfoil","foil"]' }),
+              card({ name: "Avacyn", finishes: '["foil"]' }),
+            ],
+          },
+        ],
+        marketplace: TCG,
+      }),
+    );
+
+    const nameOf = (label: RegExp) =>
+      screen.getByRole("button", { name: label }).getAttribute("aria-label");
+    expect(nameOf(/^Sol Ring/)).toContain("foil");
+    expect(nameOf(/^Arcane Signet/)).not.toContain("foil");
+    expect(nameOf(/^Avacyn/)).toContain("foil");
+  });
+
   it("names every group's list for anything that reads structure", () => {
     setup();
     expect(screen.getByRole("list", { name: "Ramp" })).toBeInTheDocument();

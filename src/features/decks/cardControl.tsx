@@ -41,6 +41,7 @@ import {
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { QuantityStepper } from "@/components/QuantityStepper";
+import { FINISH_LABEL, playedFinish } from "@/lib/finish";
 import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -324,10 +325,16 @@ export function deckCardName(card: DeckCard, ruleBreakText: string | null): stri
   // The allocator claims no copy for an inactive category, so every card in one reads 0 owned
   // by construction — announcing a shortage there would report one the reader does not have.
   const short = card.categoryActive && card.ownedQuantity < card.quantity;
+  // Which object this row plays. Three of the four views draw it as `FoilOverlay`'s chip and
+  // the text columns as a glyph, and on every one of them it is decoration once the button is
+  // named — so this is where it is said. `null` for the regular copy, which is the finish a
+  // card is assumed to be and the one that needs no word.
+  const finish = playedFinish(card.finish, card.finishes);
   return [
     card.name,
     card.quantity > 1 ? `${card.quantity} copies` : null,
     short ? `you own ${card.ownedQuantity} of ${card.quantity}` : null,
+    finish === null ? null : FINISH_LABEL[finish].toLowerCase(),
     card.tagName,
     card.gameChanger === true ? "game changer" : null,
     ruleBreakText === null ? null : `rule break: ${ruleBreakText}`,

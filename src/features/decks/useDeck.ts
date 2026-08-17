@@ -724,6 +724,15 @@ export function useSwapFromPane(
   return {
     swap: deck.swapPrinting,
     /**
+     * The pane's foil button, for a card that **is** a row of the open deck.
+     *
+     * Handed over from the same hook mount as the swap rather than a second one, for the reason
+     * that mount exists at all: `useDeck` is a live `deck_get`, and two of them would be two
+     * reads of one deck. The pane presses this where it presses the swap — on the reader's own
+     * copy — and where there is no deck row it draws a view toggle instead and presses nothing.
+     */
+    setCardFinish: deck.setCardFinish,
+    /**
      * The read succeeded and answered nothing: another view has deleted this deck.
      *
      * `DeckEditor`'s `gone`, from the query the two of them share — which is the point of

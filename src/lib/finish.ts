@@ -85,6 +85,26 @@ export function soleFinish(json: string | null): Finish | null {
   return finishes[0] === "nonfoil" ? null : finishes[0];
 }
 
+/**
+ * **What a deck card is drawn as** — the reader's own statement first, the printing's second.
+ *
+ * `stored` is `deck_cards.finish` (schema v18): what this deck says it plays, `null` when it has
+ * not said. `listed` is the printing's `finishes` column, which {@link soleFinish} reads.
+ *
+ * The order is the whole of the rule and it is not arbitrary. `soleFinish` says what the
+ * *object* is — 12 366 printings exist only in foil, and Scryfall's photograph of one is
+ * byte-identical to a plain card's — and it deliberately says **nothing** about a printing sold
+ * in both, because a sheen on 61 % of a wall would be decoration. A stored finish is a different
+ * claim, *this deck plays the shiny one*, and it is the reader's own, so it wins where it exists
+ * and the printing's statement is what a silent row falls back to.
+ *
+ * Written once because two views draw it (`CardStack`, `GridView`) and a second spelling is how
+ * one card comes to be marked two ways on one screen.
+ */
+export function playedFinish(stored: Finish | null, listed: string | null): Finish | null {
+  return stored ?? soleFinish(listed);
+}
+
 /** The finishes a printing exists in. Unknown values are dropped, not guessed at. */
 export function parseFinishes(json: string | null): Finish[] {
   const parsed = safeParse(json);
