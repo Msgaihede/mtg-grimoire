@@ -148,3 +148,8 @@ number to compare against.
   compiles against a tree its siblings are still changing, so a suite run mid-fan-out fails for
   reasons that are not its own, and `npm run verify` is too slow to pay for N times. Have each
   one report what it changed, then run `npm run verify` yourself before the commit.
+- **Ask through the `AskUserQuestion` tool, not in prose.** When you need more information or a
+  decision between approaches, put it in the tool — the option cards are how he wants to answer.
+  Keep the evidence with it: lead the question or an option's description with what was measured,
+  and put your recommendation first, labelled. He can still write his own answer through "Other",
+  and an answer that is not on the list is the point rather than scope creep.

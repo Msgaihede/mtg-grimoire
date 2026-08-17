@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  CONTROL_SCALE_VAR,
+  CONTROL_SHRINK,
   DEFAULT_SECTION_ZOOMS,
   DEFAULT_ZOOM,
+  MARK_SCALE_VAR,
   MAX_ZOOM,
   MIN_ZOOM,
   ZOOM_SECTIONS,
   ZOOM_STEPS,
+  cardScaleVars,
   formatZoom,
   scaled,
   stepZoom,
@@ -115,6 +119,44 @@ describe("scaled", () => {
 
   it("never leaves a fraction anywhere on the ladder", () => {
     for (const step of ZOOM_STEPS) expect(Number.isInteger(scaled(170, step))).toBe(true);
+  });
+});
+
+/**
+ * The two variables a card publishes for the marks drawn on it.
+ *
+ * There is nothing else in this repo that can check them. The values only mean anything to a
+ * browser resolving `calc()` against an inherited custom property, and **jsdom has no layout engine
+ * at all** — a test can see that the tile set `--mark-scale: 2`, and cannot see that the crown in
+ * its corner came out 24px. So what is pinned here is the arithmetic and the *pairing*: that the
+ * control scale is the mark scale less its shrink, and that neither floors. The rest is a live
+ * pass's to answer, and `docs/reference/frontend-design.md` carries what one found.
+ */
+describe("the card scale variables", () => {
+  it("publishes the zoom itself, with no floor in either direction", () => {
+    expect(cardScaleVars(1)[MARK_SCALE_VAR]).toBe("1");
+    expect(cardScaleVars(2)[MARK_SCALE_VAR]).toBe("2");
+    // **The half-size arm is the whole point of this test.** Every budget that holds a mark used
+    // to floor at 1× — `CardGrid`'s caption, `GridView`'s foot, `stackAdvance`, `stackDataHeight`
+    // — because the marks inside them could not shrink. They can now, and a floor reinstated here
+    // would put the app back to a 28px strip around 6px of type.
+    expect(cardScaleVars(MIN_ZOOM)[MARK_SCALE_VAR]).toBe(String(MIN_ZOOM));
+    for (const step of ZOOM_STEPS) expect(cardScaleVars(step)[MARK_SCALE_VAR]).toBe(String(step));
+  });
+
+  it("draws a control on a card smaller than its panel twin, at every stop", () => {
+    for (const step of ZOOM_STEPS) {
+      const vars = cardScaleVars(step);
+      expect(Number(vars[CONTROL_SCALE_VAR])).toBeCloseTo(step * CONTROL_SHRINK);
+      // The pairing is the thing: a control and the mark beside it in one caption reading two
+      // different zooms is the drift this function exists to make impossible.
+      expect(Number(vars[CONTROL_SCALE_VAR])).toBeLessThan(Number(vars[MARK_SCALE_VAR]));
+    }
+  });
+
+  it("names two different properties, so a mark and a control cannot be conflated", () => {
+    expect(MARK_SCALE_VAR).not.toBe(CONTROL_SCALE_VAR);
+    expect(Object.keys(cardScaleVars(1)).sort()).toEqual([CONTROL_SCALE_VAR, MARK_SCALE_VAR].sort());
   });
 });
 

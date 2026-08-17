@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CategoryKind } from "@/lib/ipc";
-import { packColumns, splitRail } from "./columns";
+import { flowMaxWidth, packColumns, splitRail } from "./columns";
 
 const heights = (columns: number[][]) => columns.map((c) => c.reduce((n, h) => n + h, 0));
 
@@ -48,9 +48,66 @@ describe("packColumns", () => {
   });
 });
 
-/** Only the two fields the split is about. `splitRail` is generic on `{ kind }` precisely
- *  so a test can hand it this and not a whole `CardGroup`. */
-const group = (name: string, kind: CategoryKind | null) => ({ name, kind });
+/**
+ * **This is the only place the expression itself can be asserted, and that is a fact about jsdom
+ * rather than a preference.**
+ *
+ * `flowMaxWidth` returns CSS for an inline `max-width`, so the obvious test is to render a view and
+ * read the style back. jsdom's `cssstyle` does not reject what it cannot parse — it **rewrites**
+ * it, and this exact value comes back out as
+ * `min(464px * , * calc(round(100% * , * down - (224px * 224px) * , + 16px) - 16px))`: the
+ * pile-count term folded, the `round()` shredded, and no error anywhere. So a string assertion over
+ * there would pin a jsdom bug and go red the day it is fixed. The views assert that a cap is
+ * *present* and that it goes away with the rail; the arithmetic is here, on the pure function; and
+ * whether the browser then draws one gutter is a story play's, in a real engine that lays out.
+ *
+ * Verified in Chromium 151 (the version of the WebView2 runtime this app ships against) before any
+ * of it was written: `round()` is CSS's own floor, it takes a percentage, and the percentage is
+ * resolved against the flex container at layout time.
+ */
+describe("flowMaxWidth", () => {
+  /**
+   * Both terms, spelled out once. The `min()` is the whole design — the desk's answer and the
+   * deck's, whichever is smaller — so the test is the literal string rather than a shape match: a
+   * refactor that drops either term still produces valid CSS that lays out plausibly and is wrong
+   * in exactly one of the two directions this exists to cover.
+   */
+  it("caps at the columns that fit and at the columns the deck has", () => {
+    expect(flowMaxWidth("224px", "16px", 6)).toBe(
+      "min(calc(6 * (224px + 16px) - 16px), calc(round(down, 100% - 224px, 224px + 16px) - 16px))",
+    );
+  });
+
+  /** `TextView` states its column in `rem` and `StackView` in pixels off the zoom, and every
+   *  operation here is arithmetic CSS does in whatever unit it is handed — which is the whole
+   *  reason the lengths are strings. A helper that had taken numbers could not have served both. */
+  it("works in whatever unit the view states its column in", () => {
+    expect(flowMaxWidth("18.75rem", "1.5rem", 3)).toBe(
+      "min(calc(3 * (18.75rem + 1.5rem) - 1.5rem), " +
+        "calc(round(down, 100% - 18.75rem, 18.75rem + 1.5rem) - 1.5rem))",
+    );
+  });
+
+  /**
+   * **A `max-width` that resolves negative is clamped to zero, and the flowing box carries a
+   * `min-width` of one column** — so at nought columns the two would disagree in writing while
+   * agreeing on screen, which is the kind of rule that gets "simplified" in the wrong direction
+   * later. The floor makes the ceiling say what the minimum beside it already does.
+   */
+  it("never asks for less than one column", () => {
+    expect(flowMaxWidth("224px", "16px", 0)).toBe(flowMaxWidth("224px", "16px", 1));
+  });
+});
+
+/** Only the fields the split is about. `splitRail` is generic on `{ kind, isActive }` precisely
+ *  so a test can hand it this and not a whole `CardGroup`. **`isActive` defaults to `true`** —
+ *  being in the deck is the ordinary state, so a case that says nothing about the switch is
+ *  asking about the kind, and the cases that do care read as the exception they are. */
+const group = (name: string, kind: CategoryKind | null, isActive = true) => ({
+  name,
+  kind,
+  isActive,
+});
 const names = (groups: readonly { name: string }[]) => groups.map((g) => g.name);
 
 describe("splitRail", () => {
@@ -108,14 +165,15 @@ describe("splitRail", () => {
   });
 
   /**
-   * **The three kinds that still flow, said in one place.**
+   * **The three kinds that still flow while they are switched on, said in one place.**
    *
    * A derived group — "Mana value 3" is a heading and nothing more — has no rules role at all, so
    * it flows; the `kind` decides and the grouping mode never does. `commander` and `companion`
    * flow for a reason of their own that `splitRail`'s doc states: one card each, so railing either
    * would spend a whole column's width on a pile read at a glance. This is the assertion that
    * fails if "the two beside-the-deck kinds" ever creeps outward into "every kind that is not
-   * `main`".
+   * `main`". Every group here is switched **on**, which is what makes it about the kind alone —
+   * the switch's own answer for these two is the case below.
    */
   it("keeps a derived, a commander and a companion group in the flow", () => {
     const { flow, rail } = splitRail([
@@ -136,28 +194,97 @@ describe("splitRail", () => {
    * Under `manaValue` and `type`, `buildGroups` buckets the **active** cards and then appends
    * every inactive category *unchanged* — that is `grouping.ts`'s own headline rule. So a reader
    * who flips the Sideboard's switch and then groups by mana value hands this function exactly
-   * the list below: headings that flow, and railed groups that do not. The Maybeboard is in this
-   * list too because for that pile it is not a corner case at all — it is seeded switched off, so
-   * this is the shape it arrives in almost every time.
+   * the list below: derived headings that flow, and railed piles that do not. The Maybeboard is in
+   * this list too because for that pile it is not a corner case at all — it is seeded switched off,
+   * so this is the shape it arrives in almost every time.
    *
-   * **What a failure looks like:** a split that had learned about `groupBy`, or that read
-   * `isActive` as well as `kind`, leaves those piles flowing between "Mana value 2" and "Mana
-   * value 3", where the greedy pack drops them at the end of the run — the position problem the
-   * rail exists to remove, back again in the two modes and for the one reader least likely to be
-   * believed about it.
+   * **The derived headings are what make this about more than the switch.** Every bucket
+   * `buildGroups` invents is `isActive: true`, so they flow by the second test as well as the
+   * first, and a reader can tell the two piles that were railed from the ones that were never
+   * eligible.
+   *
+   * **What a failure looks like:** a split that had learned about `groupBy` leaves those piles
+   * flowing between "Mana value 2" and "Mana value 3", where the greedy pack drops them at the end
+   * of the run — the position problem the rail exists to remove, back again in the two modes and
+   * for the one reader least likely to be believed about it.
    */
   it("carries switched-off railed groups to the rail among derived groups", () => {
     const { flow, rail } = splitRail([
       group("Mana value 2", null),
       group("Mana value 3", null),
-      // The extra field is the point of the case: this is the pile as `buildGroups` appends it,
-      // switch and all, and nothing in the split may read that switch.
-      { ...group("Sideboard", "side"), isActive: false },
-      { ...group("Maybeboard", "maybe"), isActive: false },
+      group("Sideboard", "side", false),
+      group("Maybeboard", "maybe", false),
     ]);
 
     expect(names(flow)).toEqual(["Mana value 2", "Mana value 3"]);
     expect(names(rail)).toEqual(["Sideboard", "Maybeboard"]);
+  });
+
+  /**
+   * **A pile the reader switched off is railed, under the two kinds that head the rail.**
+   *
+   * This is the whole of the change of 2026-08-17. `is_active = 0` means the pile counts toward
+   * nothing — not size, not copies, not legality — so it is not part of the deck being laid out,
+   * and leaving it in the flow spent a column of the desk on cards the reader had already said
+   * were not in the deck.
+   *
+   * The order is the assertion that matters: `Cut for now` lands **after** the Sideboard and the
+   * Maybeboard even though its `sortOrder` puts it between them here. The kind test runs first,
+   * so the rail's head is the two beside-the-deck piles whatever anyone's switch says, and the
+   * reader's own switched-off piles follow underneath.
+   */
+  it("rails a switched-off pile of the reader's own, under the two railed kinds", () => {
+    const { flow, rail } = splitRail([
+      group("Sideboard", "side"),
+      group("Ramp", "main"),
+      group("Cut for now", "main", false),
+      group("Maybeboard", "maybe", false),
+    ]);
+
+    expect(names(flow)).toEqual(["Ramp"]);
+    expect(names(rail)).toEqual(["Sideboard", "Maybeboard", "Cut for now"]);
+  });
+
+  /**
+   * **Switching the pile back on returns it to the flow, at its own place in it.**
+   *
+   * There is no state to undo: the split is derived from the two words the group carries, so the
+   * round trip is the same list read twice. `Cut for now` comes back **between** Ramp and Removal
+   * rather than at either end, which is the half a rail that remembered anything would get wrong —
+   * and it is what "they move back to the main stack flow" has to mean for a reader who arranged
+   * their categories.
+   */
+  it("returns a pile to the flow, in its own order, when it is switched back on", () => {
+    const piles = (isActive: boolean) => [
+      group("Sideboard", "side"),
+      group("Ramp", "main"),
+      group("Cut for now", "main", isActive),
+      group("Removal", "main"),
+    ];
+
+    expect(names(splitRail(piles(false)).flow)).toEqual(["Ramp", "Removal"]);
+    expect(names(splitRail(piles(true)).flow)).toEqual(["Ramp", "Cut for now", "Removal"]);
+    expect(names(splitRail(piles(true)).rail)).toEqual(["Sideboard"]);
+  });
+
+  /**
+   * **A switched-off command zone rails like anything else**, which is the one place the two tests
+   * disagree about the same pile.
+   *
+   * `commander` and `companion` are exempt from the rail while they are on, and the exemption's
+   * reason is an argument about a pile that is *in* the deck: one card each, so a column of desk
+   * spent on either is a column spent permanently. A switched-off command zone is not in the deck
+   * at all, so nothing is left of that argument and the second test answers.
+   */
+  it("rails a switched-off commander or companion", () => {
+    const { flow, rail } = splitRail([
+      group("Commander", "commander", false),
+      group("Companion", "companion", false),
+      group("Ramp", "main"),
+    ]);
+
+    expect(names(flow)).toEqual(["Ramp"]);
+    expect(names(rail)).toEqual(["Commander", "Companion"]);
   });
 
   /**
@@ -169,18 +296,33 @@ describe("splitRail", () => {
    * appended the maybes after the sides, would answer the same four headings in the wrong order,
    * and it would be silently overruling a reader who had dragged their categories where they
    * wanted them. `sortOrder` is the reader's; the rail inherits it and adds nothing.
+   *
+   * **The two switched-off piles are the same claim about the rail's second run.** They keep the
+   * order they arrived in too, and the run they are in is the only thing the concatenation
+   * decides. `Cut for now` is in front of the whole railed run in the input and comes out behind
+   * all of it, which is the one re-arrangement this function does make — and it is the rule rather
+   * than a sort, because nothing inside either run moves.
    */
   it("carries every railed group in the order it arrived, sorting nothing", () => {
     const { flow, rail } = splitRail([
+      group("Cut for now", "main", false),
       group("Sideboard", "side"),
       group("Ramp", "main"),
       group("Wishboard", "side"),
       group("Maybeboard", "maybe"),
       group("Against control", "side"),
+      group("Retired", "main", false),
     ]);
 
     expect(names(flow)).toEqual(["Ramp"]);
-    expect(names(rail)).toEqual(["Sideboard", "Wishboard", "Maybeboard", "Against control"]);
+    expect(names(rail)).toEqual([
+      "Sideboard",
+      "Wishboard",
+      "Maybeboard",
+      "Against control",
+      "Cut for now",
+      "Retired",
+    ]);
   });
 
   it("answers two empty arrays for no groups", () => {

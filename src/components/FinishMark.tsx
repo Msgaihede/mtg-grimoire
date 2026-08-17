@@ -25,6 +25,12 @@ const GLYPH = { foil: Sparkles, etched: Gem } as const;
  * inherited the overlay's `pointer-events: none`, and a tooltip is shown by the element the
  * pointer *hits*. A mark placed inside anything `pointer-events-none` is a mark with no
  * tooltip, silently.
+ *
+ * **12px is its size on a card at 100% zoom, not its size.** The glyph is drawn over a card face
+ * on four surfaces that the reader can zoom, and a chip that held still while the card doubled was
+ * the defect this scaling exists to fix. `--mark-scale` (`lib/cardZoom.ts`) is the card's own
+ * factor, inherited from the tile; the `, 1` fallback is what the card pane's finish list and every
+ * other still surface gets, so those are untouched by construction.
  */
 export function FinishMark({ finish, className }: { finish: Finish; className?: string }) {
   if (finish === "nonfoil") return null;
@@ -35,7 +41,10 @@ export function FinishMark({ finish, className }: { finish: Finish; className?: 
       // describing the icon rather than the card. `<title>` follows the label for a pointer.
       role="img"
       aria-label={FINISH_LABEL[finish]}
-      className={cn("inline-block size-3 shrink-0 text-accent", className)}
+      className={cn(
+        "inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-accent",
+        className,
+      )}
     >
       <title>{FINISH_LABEL[finish]}</title>
     </Glyph>

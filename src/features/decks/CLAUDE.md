@@ -151,6 +151,49 @@ folder, theory, and **where an unfiled add lands** — is **one component, `Deck
 drawn by two hosts** (2026-08-14). The "New deck" dialog used to ask two questions and leave the
 reader to configure the deck they had just made; it now asks all of them.
 
+- **The game is a filter that is also a stored field, and both halves are deliberate**
+  (2026-08-17). `decks.game_key` (schema v18) is `any | paper | arena | mtgo`, drawn as a select
+  on **every surface that picks a format** — `DeckSettingsForm` (so both dialogs), the import
+  dialog's `FormatSelect`, and the editor header's `Deck game` — and the only thing it *does* is
+  narrow that format list to the formats whose seeded `games` cell carries it. Five rules hold it:
+  - **The narrowing is one function.** `pickerFormats(specs, keep, game)` — the third argument
+    defaults to `ANY_GAME`, which narrows nothing, so no caller that had not thought about games
+    changed. `playableIn` reads `spec.games`, the seeded cell, and never a list of keys spelled
+    out in TypeScript: that mapping is genuinely likely to be corrected (Commander on MTGO is a
+    judgement call the seed names as one), and a rule written twice is a rule corrected twice.
+  - **Setting a game never re-formats a deck**, and `keep` is the whole of it. A Modern deck
+    switched to Arena still shows Modern, folded back into the alphabet by the same argument that
+    already covered a format which had left the seed. That old case was the edge one; this is now
+    the ordinary way a deck's format falls out of its own picker.
+  - **Except where the format is a draft rather than a row**, which is the create path and the
+    import path. There the value is `useState` and *can* be left pointing at a format no option
+    carries — a controlled `<select>` then shows its **first** row while still reporting the old
+    value, so the deck would be made in Modern while the dialog read Alchemy. Both repair with an
+    effect, to the first row of the narrowed list, and **both guard on the real picker rather than
+    on the fallback**: on the launch where `format_specs` has not answered, the list is a one-row
+    `Casual` and repairing against it overwrites the format the host resolved. That shipped for
+    one test run in `CreateDeckDialog`.
+  - **There is no `last_deck_game` beside `last_deck_format`.** The format a reader last built in
+    is a preference worth carrying; the game is a filter they set to *find* a format, and
+    remembering it would open the next New deck dialog with most of the list already hidden for a
+    reason nothing on screen explains. Every deck is born on `Any`.
+  - **The tile draws it only when it is not `Any`** — `Modern · Arena · 60 cards` against
+    `Modern · 60 cards`. `Any` is what every deck is born as, so printing it would put a word that
+    says nothing on nearly every tile, in a caption that already truncates.
+  - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build,
+    1280×800, against a freshly synced 116 712-card corpus). The counts are the useful part,
+    because a filter that answered "everything" passes every assertion that only names one
+    format: the New deck dialog offered **24** formats on `Any` (25 seeded minus Future
+    Standard), **10** on Arena, **17** on Paper and **9** on MTGO. Narrowing to Arena moved the
+    select off Commander to Alchemy and **going back to Any restored Commander** — the property
+    the derived answer has and the effect it replaced did not. A Timeless deck switched to Paper
+    kept **Timeless in the list, between Standard and Tiny Leaders**, with the select still
+    reading `timeless`: the deck was not re-formatted. The history read **"Set the game to
+    Paper · was Arena"** (the words, not the keys), Undo was labelled with that same sentence and
+    put the deck back on Arena with the list back at 10, and the two tiles read `Timeless ·
+    Arena · 0 cards` against `Timeless · 0 cards`. **One thing only the live pass showed**: the
+    second New deck dialog opened on the *remembered* Timeless with the game back at `Any`,
+    which is `last_deck_format` existing and `last_deck_game` deliberately not.
 - **`defaultCategoryId` is the one field of `DeckSettingsValue` the two hosts do not both ask
   about, and the asymmetry is the honest one** (2026-08-15). The row is drawn only when a
   `categories` prop arrives, and `CreateDeckDialog` passes none: `deck_create` seeds the four
@@ -1094,6 +1137,22 @@ price | type`). An **inactive category stays its own group in all three grouping
   which. `overflow-x-auto` survives on all three for the one case the wrapping bullets below
   reserve, and costs nothing: it implies `overflow-y: auto`, which can never find anything to
   scroll in a box with no height of its own.
+  **It did cost one thing, and it took until 2026-08-17 to name it: the drop ring, sliced off at
+  the edge of the desk.** An `overflow` clips at the box's **padding box**, and all three of these
+  roots had no padding — so a pile flush against the content edge had its `DROP_RING` painted
+  entirely in the clipped region and lost that side for the whole length of a drag. The leftmost
+  pile in Stacks and the rail on the right were the reader's own report; the first line of Text and
+  every group in Grid (a group there is as wide as the desk, so it lost the ring down **both**
+  sides) are the same defect. The fix is `DROP_MARK_ROOM` from `src/lib/dropMarks.ts` — `p-1.5`, on
+  all three roots — and **6px rather than the ring's 2**, because the same sections carry `FOCUS`,
+  which stands 4px proud, and a focus mark clipped to half its width is a WCAG 2.4.7 failure rather
+  than a cosmetic one. `pb-2` still wins Stacks' bottom edge: Tailwind emits the `padding`
+  shorthand before the `padding-bottom` longhand (`.p-1\.5` at 29 557 against `.pb-2` at 31 795 in
+  the built sheet), whatever order the two classes are written in. **`TableView` needs none of it**
+  — its rows are absolutely positioned inside a virtualiser, so it draws `ring-inset` and always
+  has. Photographed before and after against the built stylesheet; the sweep that keeps it is
+  `views.test.tsx`'s `leaves its drop marks room inside the box that clips them`, written as a
+  class assertion because **jsdom has no layout engine and therefore no clip at all**.
   **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
   `VirtualTable` mounts the rows in view and holds a spacer open for the rest; a scrollport is
   what it _is_, and given no height it draws its own scrollbar **and** the page's. So the desk row
@@ -1225,14 +1284,73 @@ price | type`). An **inactive category stays its own group in all three grouping
   switched off, reaches the rail by that route almost every time. **Nothing here sorts the rail**:
   the Sideboard sits above the Maybeboard because that is where the reader's own `sortOrder` puts
   them, and a reader who reorders their categories gets the order they chose. The split reads `kind`
-  and nothing else — not `isActive`, and never `groupBy`, which would push a deck concept into the
+  and the switch and nothing else — **never `groupBy`**, which would push a deck concept into the
   one file here whose whole discipline is not knowing what a deck is. A group in the rail is the
   same `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with
   it rather than being defined twice.
+- **Every pile the reader has switched off is railed too, under those two — and that reverses what
+  this page said** (changed 2026-08-17). `splitRail`'s second test is `!isActive`, and the old rule
+  refused it in writing: _"a switched-off pile is still that pile"_. True, and an argument about
+  identity where the question is placement. `is_active = 0` is the whole of what `maybe` ever meant
+  — the pile counts toward nothing and the allocator claims no copy for it — so it is not part of
+  the deck being laid out, and leaving it in the flow spent a column of the desk on cards the reader
+  had already said were out. The old argument survives as what the rail **preserves**: this is a
+  place and not a deletion. The pile keeps its id, its heading, its menu and its drop target, and
+  **switching it back on returns it to the flow at its own `sortOrder`** — the split is derived on
+  every render, so no state anywhere records that it was ever railed, and there is nothing to undo.
+  Three consequences, each a decision:
+  - **The kind is tested _before_ the switch, and that order is load-bearing.** The Maybeboard is
+    seeded switched off, so a switch-first test would file it with the reader's own switched-off
+    piles and sink the rail's fixed head under whatever they turned off last — in the ordinary case
+    rather than a corner. Swapping the two tests is the one edit `views.test.tsx`' rail block would
+    catch and nothing else in the suite would.
+  - **`commander` and `companion` rail when they are switched off**, and that does not weaken their
+    exemption below: "one card each, read at a glance" is an argument about a pile that is _in_ the
+    deck, and a switched-off command zone is not one.
+  - **There is no divider between the rail's two runs, and no caption over the second.** A
+    switched-off pile already says so three times — the section's `bg-surface/60` wash,
+    `GroupHeader`'s dimmed name and `INACTIVE` chip, and the stack's `opacity-60` — and the pile
+    _heading_ the rail is switched off as well, so a rule drawn under it would mark a boundary that
+    is not the one it looks like. The change is one function; neither view grew a line of drawing
+    code.
+
+  **Driven in the shipped window 2026-08-17** (debug build, 1280×800, real corpus): switching a
+  flowing pile off moved it to the rail's third slot and **the flow closed up behind it** — the
+  pile that had wrapped to the second line took the vacated masonry slot — while the rail's x and
+  its 16px gutter did not move. Switching off the pile with the deck's **lowest** `sortOrder` still
+  put it behind the Sideboard and the Maybeboard, which is the kind-before-switch order proved
+  where it can fail. Switching both back on restored the original flow order exactly. Every figure:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
+- **The rail hugs the deck, and what holds it one gutter away is a cap on the flowing box**
+  (changed 2026-08-17, both column views). The flowing half is `flex-1`, so it takes every pixel the
+  rail leaves, and a column layout then spends only _whole_ columns of it: the remainder sat inside
+  that box as blank desk between the last pile and the Sideboard. **It is not a fixed cost** — it is
+  whatever the desk's width leaves over, up to very nearly a whole column, and it moves with
+  `stackColumnWidth`, so every zoom step changed it and the reader met it as a zoom bug. Measured on
+  the screenshot that reported it: a 1606px flowing box at 224px columns uses 1424, so the Sideboard
+  stood **198px** from the deck where two piles are 16 apart. `flowMaxWidth` (`views/columns.ts`,
+  shared by both views) caps the box at
+  `min(<columns the deck has>, round(down, 100% − <one column>, <column + gap>) − <gap>)` —
+  **`round(down, …)` is CSS's own floor**, so the count is still the browser's and this file's rule
+  that nothing here measures the desk survives whole. Verified in Chromium 151, the WebView2
+  runtime's version, before it was written: `round()` takes a percentage and resolves it against the
+  flex container at layout. The second term is the one that matters on a wide desk — a freshly
+  created deck flows two piles, and the first term alone would hand it seven columns of box.
+  **`ml-auto` is gone from both rails and its absence _is_ the fix**: a margin that eats free space
+  cannot be asked to eat all but 16px of it, so it was pinning the rail to the right edge of the
+  desk rather than to the right of the deck. What that costs is the wrapped line — see the bullet
+  below. **jsdom cannot check any of this**: `cssstyle` does not reject the value, it rewrites it
+  (`min(464px * , * calc(round(100% * , * down − …`), so `columns.test.ts` asserts the expression on
+  the pure function, the view suites assert only that a cap is present and that it goes with the
+  rail, and the gutter itself is a live claim.
 - **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
   column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
-  own `flex-wrap` drops the rail onto the next line — `ml-auto` is what keeps it on the right when
-  it lands there, and a no-op at every other width. `min-w-0`/`flex-1` cannot say this, because a
+  own `flex-wrap` drops the rail onto the next line — and since 2026-08-17 it lands at the **left**,
+  under the first column, where `ml-auto` used to hold it right. That is deliberate and was the
+  reader's call: once the rail is _under_ the deck there is no "right of the deck" left to be at,
+  and everything else in both views starts at the left edge. **A `max-width` cannot disturb this** —
+  CSS resolves one below a `min-width` in the minimum's favour, so the wrap is decided before the
+  cap is consulted. `min-w-0`/`flex-1` cannot say this, because a
   flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
   **this view has no business observing its own box** — the rule that outlived
   `DEFAULT_COLUMN_HEIGHT`, and which the masonry above does **not** weaken: what that observes is
@@ -1246,20 +1364,25 @@ price | type`). An **inactive category stays its own group in all three grouping
   `LAYER.raised` with a leftward seam shadow, and all four existed for a single reason: to hold the
   rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
   downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
-  shadow draws a permanent divider across a layout in which nothing moves. `ml-auto` is the whole
-  mechanism that is left. The rail therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
+  shadow draws a permanent divider across a layout in which nothing moves. **`ml-auto` was the last
+  mechanism it had and it went on 2026-08-17** — see the cap bullet above — so the rail is now a
+  plain flex child in document order after the deck, with no positioning of its own at all. The rail
+  therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
   `STACK_ATTR` means "a pile drawn in the flow", and the rail's piles are by construction the ones
   that never reach it, so a sweep counting the deck's own piles goes on counting those. The
   constant is spelled for the _rail_ rather than for the Sideboard, because the Sideboard is no
   longer the only thing in it. `views.test.tsx` asserts
   those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
   no other test would notice.
-- **`commander` and `companion` are still not railed, and that is not an omission** — one card
-  each, by construction, and railing either would spend a column's width on a pile that is read at
-  a glance, permanently, in every deck. What the rail prevents at the other end is a drag with no
+- **`commander` and `companion` are still not railed while they are switched on, and that is not an
+  omission** — one card each, by construction, and railing either would spend a column's width on a
+  pile that is read at a glance, permanently, in every deck. (Switched off they rail like any other
+  pile; see the switch bullet above for why that leaves this reason intact.) What the rail prevents
+  at the other end is a drag with no
   destination on screen: the two railed piles sort last, so packed they were the far end of the
   run, and a card dragged out of the main deck had nowhere to be let go of. The rail is drawn only
-  when a `side` **or** `maybe` group exists, and **that condition is real for a story and not for
+  when a `side` group, a `maybe` group **or a switched-off pile** exists, and **that condition is
+  real for a story and not for
   the app**: `PREDEFINED_CATEGORIES` seeds both into every deck, both draw whether or not anything
   is in them (neither is one of the two conditional zones, and the seed writes both `origin: 'user'`
   — a rules zone is a pile nobody has to earn), and a predefined pile cannot be deleted
@@ -1319,14 +1442,36 @@ price | type`). An **inactive category stays its own group in all three grouping
   pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character
   `components/CardArt`'s `selected` recipe, because the deck is answering the same question the
   search wall answers and a reader must not have to learn two vocabularies two clicks apart. Landed
-  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed the
-  way the question is asked: picked by `cardId` (a pane is open on a _printing_, so a card filed in
-  two piles is marked in both — `TableView` already did this and the other three now agree), landed
-  by `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
+  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed by
+  the **row**, not by the printing: picked by `deckCardSlot(categoryId, cardId)`, landed by
+  `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
   worth pointing at. `TextView` says picked as `SELECTED_ROW` and `TableView` keeps
   `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
   agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
   sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
+- **Picked is keyed by the _slot_, and that reversed the rule this file used to state**
+  (2026-08-17). It was `cardId` alone, argued as "a pane is open on a _printing_, so a card filed
+  in two piles is marked in both — which is the honest answer to which card the pane is about".
+  It was not honest, it was a **reported bug**: a deck holding one card in the Main deck and the
+  Sideboard marked both copies from one click, and in `StackView` — where the mark is also the
+  pile's **resting state** — one press stood a card clear of two stacks at once, which the
+  geometry note at the top of `CardStack.tsx` is arithmetic against. A `deck_cards` row is
+  `(deck, card, category, variant)` and a click names one row, so the mark is addressed the way
+  every deck _write_ already is, through the `deckCardSlot` spelling `DECK_CARD_ATTR` was
+  already stamping. **`DeckEditor` derives it from `paneDeckContext`** — the store's own record of
+  which row the open card came out of — so no new state was added, and the `variant` test in that
+  derivation is the one that can actually fail: the toolbar switches `live`/`theory` without
+  touching an open pane, which is exactly the case `useSwapFromPane` was once caught rewriting
+  the wrong half of.
+- **The other half of that change: a card opened from anywhere that is not a row of this deck now
+  marks _no_ row of it.** It used to mark every copy of that printing in the deck, which sounds
+  like a courtesy and is the same defect reached by a different gesture — a docked-panel tile for
+  a card the deck holds twice lit up both. Every opener but the deck's own cards goes through
+  `setSelectedCardId`, which clears `paneDeckContext` in the same write, so there is no slot and
+  nothing is picked. **Browsing printings in the pane keeps the mark**, which is new and is right:
+  `viewPrinting` deliberately leaves the context alone, so the row stays picked while the reader
+  flips through — where the old rule dropped the card back into its pile the moment they moved
+  off the printing the deck holds.
 - **The landed mark is gold with a glow since 2026-08-15, and it was parchment before that — but
   the half that is a _requirement_ is that it is drawn _inside_ the card's face.** The old rule
   read gold as taken four times over on this one surface — focus, the picked ring, and both halves
@@ -1419,16 +1564,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   two the gesture landed in — the desk's box read `top 263 / right 830` and the panel's wall
   `top 551 / right 1230`. Full figures in
   [frontend-design.md](../../../docs/reference/frontend-design.md).
-  **Two of them are floors rather than proportions and they are the ones to know**:
-  `stackAdvance` is `max(34, scaled(34, zoom))` and `stackDataHeight` is `max(28, scaled(28, zoom))`,
-  so both grow going up and **hold at their base going down**. Each measures something laid over or
-  inside the card — the quantity tag on the reveal strip, the type in the data line — and type does
-  not shrink because a card did. Scaling either linearly is the mistake the floor exists to prevent:
-  at 0.5× the reveal would be 17px under an unscaled tag, and the data bar would be 14px around 11px
-  type. The same grow-only rule governs the grid view's caption and gutter and `CardGrid`'s caption
-  strip: **anywhere a scaled budget has to contain unscaled chrome, the budget floors rather than
-  scales.** `STACK_DATA_RISE` is the third kind — 4px at every zoom, because the 7px corner radius
-  it hides the seam of is a Tailwind class that does not scale either.
+  **Two of them were floors rather than proportions, and both stopped being floors on 2026-08-17 —
+  keep the reasoning, because it will be made again.** `stackAdvance` was `max(34, scaled(34, zoom))`
+  and `stackDataHeight` `max(28, scaled(28, zoom))`, growing going up and holding at their base going
+  down. Each measures something laid over or inside the card — the quantity tag on the reveal strip,
+  the type in the data line — and type does not shrink because a card did: at 0.5× the reveal would
+  be 17px under a 22px tag, and the data bar 14px around 11px type. Every word of that was true while
+  the tag and the type were fixed sizes. **They are not**: everything drawn on a card reads
+  `--mark-scale` now (see [`src/CLAUDE.md`](../../CLAUDE.md)), so at 0.5× the tag is 11px in a 17px
+  reveal — the same fraction of the same strip — and the floor would spend a fifth of a half-size
+  pile on a mark drawn to half of it. Both are plain `scaled()` today, and **if the tag ever stops
+  scaling the `max` comes back with it**; they are one decision written in two files.
+  `GridView`'s caption and `CardGrid`'s caption strip went the same way and for the same reason;
+  `atLeast` survives in `GridView` for the **gutter alone**, which is space *between* cards rather
+  than chrome on one. `STACK_DATA_RISE` is the kind that never moved — 4px at every zoom, because
+  the 7px corner radius it hides the seam of is a Tailwind class that does not scale either.
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part

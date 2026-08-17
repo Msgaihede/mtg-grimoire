@@ -7,8 +7,8 @@
 import { useRef } from "react";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
-import { scaled } from "@/lib/cardZoom";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { cardScaleVars, scaled } from "@/lib/cardZoom";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
@@ -36,6 +36,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -64,18 +65,20 @@ const CAPTION_TEXT = 9;
 const TILE_GAP = 10;
 
 /**
- * A base that **grows with the zoom and never shrinks below itself** — the rule for everything on
- * this wall that is not the card.
+ * A base that **grows with the zoom and never shrinks below itself** — and, since the marks
+ * themselves learnt to scale, the rule for exactly one thing on this wall: the gutter.
  *
- * The card is a picture and scales in both directions honestly; the things around it do not. Type
- * has a floor (9px is already the smallest this app writes anything, and 4px is not type), and a
- * 10px gutter is what stops a wall of cards reading as one sheet — halve it at 0.5× and the tiles
- * touch, which is precisely the zoom a reader chose in order to see more cards at once.
+ * It used to govern the foot and the type in it as well, on the argument that the card is a picture
+ * and scales in both directions honestly while the things around it do not. That was true while
+ * they did not: a 9px caption under a halved card would have become 4px, which is not type. It is
+ * false now — the caption, the gem, the copy count and the stepper all follow `--mark-scale`
+ * (`lib/cardZoom.ts`), so a floored budget is a 20px strip around 5px of type, which is the same
+ * fault the other way up.
  *
- * So they hold at the bottom and grow at the top, where the opposite failure waits: a 2× tile
- * under a 20px caption is a card that has outgrown its label. It is `CardStack`'s
- * `stackAdvance` argument and `CardGrid`'s caption argument, which is three surfaces reaching the
- * same answer independently — a plain `scaled()` here would be a legibility bug at half size.
+ * The gutter keeps the floor because it is the one measurement here that is **between** cards
+ * rather than **on** one: 10px is what stops a wall of cards reading as one sheet, and halving it
+ * at 0.5× is precisely the zoom a reader chose in order to see more cards at once. Nothing is being
+ * contained, so there is nothing for it to stay in step with.
  */
 function atLeast(base: number, zoom: number): number {
   return Math.max(base, scaled(base, zoom));
@@ -87,7 +90,7 @@ export function GridView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   className,
 }: {
@@ -99,9 +102,10 @@ export function GridView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
-  /** The printing the pane is open on, so its tile wears the same gold ring a search tile does.
-   *  By `cardId`, so a printing filed in two piles is marked in both — `CardStack` has why. */
-  selectedCardId?: string | null;
+  /** The slot the pane is open on ({@link deckCardSlot}), so its tile wears the same gold ring a
+   *  search tile does. By the slot rather than the printing, so a card filed in two piles is
+   *  marked in the one the reader clicked — `CardStack` has why. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
@@ -141,9 +145,19 @@ export function GridView({
     // reach the page, where it would be an X scrollbar across the whole app. It implies
     // `overflow-y: auto`, which can never find anything to scroll in a box with no height of
     // its own.
+    //
+    // {@link DROP_MARK_ROOM} for `StackView`'s reason and it is the same defect, not a matching
+    // spacing choice: a group's ring is painted outside its border box, this box clips at its
+    // padding box, and with no padding every group in the wall lost the ring down both of its
+    // sides — the full height of the group rather than a corner, since a group here is as wide as
+    // the desk.
     <div
       ref={scrollRef}
-      className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-x-auto", className)}
+      className={cn(
+        "flex min-w-0 flex-1 flex-col gap-5 overflow-x-auto",
+        DROP_MARK_ROOM,
+        className,
+      )}
     >
       {groups.map((group) => (
         <GridGroup
@@ -153,7 +167,7 @@ export function GridView({
           violations={violations}
           onSelect={onSelect}
           actions={actions}
-          selectedCardId={selectedCardId}
+          selectedSlot={selectedSlot}
           landed={landed}
           zoom={cardZoom}
         />
@@ -170,7 +184,7 @@ function GridGroup({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   zoom,
 }: {
@@ -180,7 +194,7 @@ function GridGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
   /** How large the reader is drawing cards, from the wall above. */
   zoom: number;
@@ -234,7 +248,7 @@ function GridGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
-              selected={card.cardId === selectedCardId}
+              selected={deckCardSlot(card.categoryId, card.cardId) === selectedSlot}
               landedKey={landed?.get(card.id)}
               zoom={zoom}
             />
@@ -296,11 +310,11 @@ function GridCard({
   zoom: number;
 }) {
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
-  // The foot and its type, which grow with the tile and never shrink under it. Computed once
-  // here because three things read the height: the strip itself, the type inside it, and the
-  // controls that sit directly above it.
-  const captionHeight = atLeast(CAPTION_HEIGHT, zoom);
-  const captionText = atLeast(CAPTION_TEXT, zoom);
+  // The foot and its type, which move with the tile in both directions now — see {@link atLeast},
+  // which no longer governs either of them. Computed once here because three things read the
+  // height: the strip itself, the type inside it, and the controls that sit directly above it.
+  const captionHeight = scaled(CAPTION_HEIGHT, zoom);
+  const captionText = scaled(CAPTION_TEXT, zoom);
 
   return (
     <li
@@ -313,7 +327,12 @@ function GridCard({
       // follows without a second number to keep in step. An inline style rather than the fixed
       // width utility this used to carry: Tailwind scans source text for whole class names, so an
       // interpolated one emits no rule and the tile collapses to its content.
-      style={{ width: scaled(TILE_WIDTH, zoom) }}
+      //
+      // The two variables beside it are the other half of that geometry: everything drawn *on* the
+      // card — the copy count, the tag, the rule break, the gem, the stepper — sizes itself against
+      // them rather than taking a prop, because each of those marks is also drawn in the table and
+      // text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+      style={{ width: scaled(TILE_WIDTH, zoom), ...cardScaleVars(zoom) }}
       // The tile is the card's whole body, so a press on the control bar over its foot — a
       // positioned sibling of the button rather than part of it — does not read as a click on
       // the desk. See `cardControl`'s `CARD_BODY_ATTR`.
@@ -392,15 +411,37 @@ function GridCard({
               card surface in this app. It used to be a full-width scrim strip along the top with
               these pushed to the right end — under that chip, which the two have overlapped for
               as long as both were drawn. */}
-          <span className="absolute top-1 left-1 flex items-center gap-1">
+          <span
+            className={cn(
+              "absolute flex items-center",
+              "top-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
+              "gap-[calc(0.25rem*var(--mark-scale,1))]",
+            )}
+          >
             {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
-            <span className="shrink-0 rounded-sm bg-accent px-1 font-mono text-[0.5625rem] tabular-nums text-accent-fg">
+            {/* The copy count, at the size it is on a card at 100% zoom. `TagDot` beside it reads
+                the same variable from inside its own component; this one is the view's own chip,
+                so it says so here. */}
+            <span
+              className={cn(
+                "shrink-0 rounded-sm bg-accent font-mono tabular-nums text-accent-fg",
+                "px-[calc(0.25rem*var(--mark-scale,1))]",
+                "text-[calc(0.5625rem*var(--mark-scale,1))]",
+              )}
+            >
               {card.quantity}
             </span>
           </span>
 
           {ruleBreakText !== null && (
-            <RuleBreakMark text={ruleBreakText} className="absolute bottom-1 left-1" />
+            <RuleBreakMark
+              text={ruleBreakText}
+              className={cn(
+                "absolute",
+                "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+                "left-[calc(0.25rem*var(--mark-scale,1))]",
+              )}
+            />
           )}
 
           {/* Over the picture rather than over the whole tile, so the foot's gem and price stay
@@ -422,7 +463,7 @@ function GridCard({
             enough to hold whatever type it is given or the gem clips. */}
         <span
           style={{ height: captionHeight, fontSize: captionText }}
-          className="flex items-center gap-1.5 font-mono text-dim"
+          className="flex items-center gap-[calc(0.375rem*var(--mark-scale,1))] font-mono text-dim"
         >
           <RarityGem rarity={card.rarity} />
           <span className="ml-auto shrink-0 tabular-nums text-text">
@@ -441,7 +482,10 @@ function GridCard({
           the zoom's doing: the bar sits directly on top of the foot, so its offset is the foot's
           height — a computed number, and `DeckCardControls` takes a class string and no style. An
           offset utility was that number while the foot was always 20px. */}
-      <span style={{ bottom: captionHeight }} className="absolute inset-x-0 px-1">
+      <span
+        style={{ bottom: captionHeight }}
+        className="absolute inset-x-0 px-[calc(0.25rem*var(--mark-scale,1))]"
+      >
         <DeckCardControls card={card} actions={actions} className={REVEALED_ON_CARD} />
       </span>
     </li>

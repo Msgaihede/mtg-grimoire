@@ -55,7 +55,15 @@ type Story = StoryObj<typeof meta>;
  * than a fact: a shortage chip on twenty cards would draw a wall of red across a story whose
  * subject is the columns.
  */
-function wideGroups() {
+/**
+ * @param switchedOff the name of one pile of the reader's own to switch **off** — `is_active = 0`,
+ *   the pile that counts toward nothing. Absent, every category here is on and this is the fixture
+ *   the four wide-deck stories have always drawn. It is a name rather than an id because the only
+ *   caller is a story naming a heading a reader would recognise, and it is one pile rather than a
+ *   list because the story it serves is about *where* a switched-off pile is drawn, which one of
+ *   them answers as well as five.
+ */
+function wideGroups(switchedOff?: string) {
   const commander = deckCategory("commander");
   // The two piles the rail takes, at the sort orders the reader's own arrangement gives them:
   // the seeded Sideboard at the **2** schema v8's migration gave it, third of the eight and
@@ -80,6 +88,7 @@ function wideGroups() {
     id,
     name,
     sortOrder,
+    isActive: name !== switchedOff,
   });
   const ramp = named(10, "Ramp", 1);
   const removal = named(11, "Removal", 3);
@@ -182,6 +191,14 @@ export const Default: Story = {
  * boxes and their gutter (464) and not three (704), so the six wrap onto three lines beside the
  * rail. Neither the Sideboard nor the Maybeboard is in any of it — `splitRail` pins both kinds, so
  * both are taken out of the list before the flow is drawn, and drawn in the rail after.
+ *
+ * **The flowing box is 464 rather than 528, which is the change of 2026-08-17** (`flowMaxWidth`).
+ * The 64px between those two numbers is the remainder — the part of the desk too narrow to hold a
+ * third box — and it used to sit inside the flowing box as blank desk in front of the rail, so the
+ * Sideboard stood 80px from the deck instead of 16. It is at the far right of the canvas now,
+ * past the rail, where nothing is drawn. This story is the one to look at for it: the remainder is
+ * whatever the desk's width leaves over, so it is a different number at every canvas and at every
+ * zoom stop, which is why the reader met it as a zoom bug.
  *
  * **Six of six, at any desk height, which is what changed on 2026-08-14.** The flow used to be
  * `packColumns`' answer, and this story's count was arithmetic about the *height* the meta's
@@ -522,6 +539,70 @@ export const Rail: Story = {
     // group in the flow — the empty Sideboard says so in its own words, and it is the only pile
     // here saying it.
     expect(within(rail).getByText("Nothing here yet.")).toBeInTheDocument();
+  },
+};
+
+/**
+ * A pile the reader switched off, drawn in the rail **under** the Sideboard and the Maybeboard —
+ * the change of 2026-08-17, and the story to look at for it.
+ *
+ * `is_active = 0` is the whole of what `maybe` ever meant: the pile counts toward nothing — not
+ * size, not copy limits, not legality, and the allocator claims no copy for it. So it is not part
+ * of the deck being laid out, and a column of desk spent on it was a column spent on cards the
+ * reader had already said were out. `Threats` here is the pile they switched off; the flow is the
+ * five that are still in the deck.
+ *
+ * **What to look at, in this order:**
+ *
+ * * **The rail has three piles and its head has not moved.** Sideboard, Maybeboard, then Threats —
+ *   even though `Threats` is `sortOrder` 5 and the Maybeboard is 7. `splitRail` tests the pile's
+ *   kind *before* its switch, so the two played beside the deck head the rail whatever their own
+ *   switches say. Test it the other way round and the Maybeboard — which is seeded switched off —
+ *   would sink under whatever the reader turned off most recently, which is the rail's fixed head
+ *   moving in the ordinary case rather than a corner.
+ * * **Two dimmed piles in one column, and neither cost this view any code.** The Maybeboard and
+ *   Threats carry the same four marks — the section's wash, the dim heading, the `INACTIVE` chip
+ *   and the stack at `opacity-60` — because a group in the rail is the same `StackGroup` as a group
+ *   in the flow. That is also why there is **no divider** above the switched-off run: an inactive
+ *   pile already says so four times over, and the pile heading the rail is switched off too, so a
+ *   rule drawn under it would mark a boundary that is not the one it looks like.
+ * * **The cards are still there.** Seeing what is in a pile is the whole affordance for deciding to
+ *   switch it back on, and switching it on returns it to the flow between Card draw and Lands —
+ *   `splitRail` is derived per render, so nothing anywhere remembers that it was ever railed.
+ */
+export const SwitchedOffPile: Story = {
+  args: { groups: wideGroups("Threats") },
+  decorators: [
+    // {@link PinnedSideboard}'s desk, for its reason: narrow enough that the flow has to wrap, so
+    // the rail is holding its side of a line rather than sitting in slack.
+    (Story) => (
+      <div className="flex w-full max-w-3xl">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
+    // Five flowing piles: the six of {@link PinnedSideboard} less the one the reader switched off,
+    // and the gap it left closed up rather than held open.
+    expect(stacks.map((stack) => stack.querySelector('[id^="group-"]')?.textContent)).toEqual([
+      "Commander",
+      "Ramp",
+      "Removal",
+      "Card draw",
+      "Lands",
+    ]);
+    // The order is the assertion that can fail: `Threats` is third, behind two piles whose
+    // `sortOrder` is *after* it, because the kind is tested before the switch.
+    const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${RAIL_ATTR}]`);
+    expect([...rail.querySelectorAll('[id^="group-"]')].map((h) => h.textContent)).toEqual([
+      "Sideboard",
+      "Maybeboard",
+      "Threats",
+    ]);
+    // Both switched-off piles are marked, and both marks are inside the rail — the chip travels
+    // with the group, so a rail that had grown a lighter definition of a pile would lose them.
+    expect(within(rail).getAllByText("INACTIVE")).toHaveLength(2);
   },
 };
 

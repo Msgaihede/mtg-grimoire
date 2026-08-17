@@ -310,7 +310,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v18.** v18 adds one column and rebuilds one index — `deck_cards.finish`
+- **Schema is v19.** v19 adds one column and rebuilds one index — `deck_cards.finish`
   (`NULL | 'foil' | 'etched'`, CHECKed) and `idx_deck_cards_grain` widened with
   `coalesce(finish, '')`. **A deck card names a finish**, which reverses the rule that had held
   since v5: foil is a *finish of a printing* in Scryfall's model rather than a printing, so
@@ -320,12 +320,38 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `COLLECTION_GRAIN`'s device for its reason: SQLite treats NULLs in a UNIQUE index as
   *distinct*, so the bare column would have stopped every regular add folding into the row
   already there. It is the **first rewind on this ladder that has to drop an index first**
-  (SQLite refuses `DROP COLUMN` on an indexed column), so `UNDO_V18` is three statements, and
+  (SQLite refuses `DROP COLUMN` on an indexed column), so `UNDO_V19` is three statements, and
   `DECK_CARD_GRAIN` leaves
   `every_plain_grain_constant_names_the_index_the_head_schema_carries` to join the two grains
   held to their indexes by their `ON CONFLICT` targets instead. **It also settles a claim this
-  file made twice**: `ALTER TABLE … ADD COLUMN` *can* carry a CHECK, and it is enforced. The
-  whole design: [the spec](../superpowers/specs/2026-08-17-deck-card-finish-design.md).
+  file made twice**: `ALTER TABLE … ADD COLUMN` *can* carry a CHECK, and it is enforced — which
+  is why the v18 entry below no longer gives that as the reason its own two columns have none.
+  **It was written as v18 and landed as v19**, which is this ladder's own collision rule doing
+  its job: the game columns were written on another branch against the same head of 17 and
+  merged first. The whole design:
+  [the spec](../superpowers/specs/2026-08-17-deck-card-finish-design.md).
+- **v18 adds two columns and re-seeds one table** —
+  `format_specs.games TEXT NOT NULL DEFAULT 'paper,arena,mtgo'` (which platforms each format is
+  playable on, a comma-joined list of `schema::GAMES`) and
+  `decks.game_key TEXT NOT NULL DEFAULT 'any'` (which platform a deck is for, `schema::DECK_GAMES`).
+  The deck's answer is a **filter over the format picker** and nothing else: it narrows which
+  formats every format select offers, and `pickerFormats`' `keep` folds the deck's own format
+  back in, so a Modern deck set to Arena still says Modern. Rust supplies both facts and draws
+  no conclusion; the narrowing is `src/features/decks/useFormatSpecs.ts`'s.
+  **`'any'` is a stored sentinel rather than a NULL**, `default_category_id`'s argument one rung
+  down: `DeckPatch` writes `coalesce(?n, column)`, so a bound NULL means *leave it* and a
+  nullable column could never say "back to Any". Neither column carries a CHECK — not because
+  `ADD COLUMN` cannot add one, which is what this said until v19 and is false, but because the
+  fence belongs where a caller can reach: `deck::valid_game` is Rust's on the one of the two a
+  command parameter reaches, and `format_specs.games` needs none because only the seed writes it.
+  **The step also forced the format seed to split in two.** `FORMAT_SPECS_SEED_V5` is now frozen
+  history — what v5 wrote, replayed by every fresh install long before this column exists — and
+  `FORMAT_SPECS_SEED` is head, carrying `games`, re-run here with `INSERT OR REPLACE`. Leaving
+  one constant was not available: a head seed naming `games` fails at v5 on a new machine, and a
+  head seed *not* naming it would silently reset every row's platforms to the DDL default the
+  next time a migration corrected any other cell.
+  `the_head_format_seed_agrees_with_v5_on_every_shared_cell` compares the two column by column,
+  which is what keeps the split from becoming two opinions about the other fifteen cells.
 - v17 adds one table — `deck_undo`, the deck editor's undo journal: one step
   per deck write, keyed 1:1 to the `deck_audit` row it reverses, with a nullable `undone_at` that
   is the cursor. A **sibling** of the history rather than a column on it, because `deck_audit` is
@@ -442,7 +468,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cards`' columns _and_ its indexes — by stored SQL, since a narrow and a widened
   `idx_cards_collapse` share a name. **Since v12 it compares `decks`' columns too, in _ordinal_
   order** (`deck_columns`, `card_columns`' counterpart): `decks` has an `ALTER` ladder of its own
-  now — v8's three columns, v12's three, v13's one and v16's one — and every read of a deck row is
+  now — v8's three columns, v12's three, v13's one, v16's one and v18's one — and every read of a
+  deck row is
   **positional**, so a route that reaches head with the same column _set_ in a different order is
   a `DeckRow` reading the wrong fields with no error anywhere. **Since v15 it compares
   `deck_categories`' columns as well** (`category_columns`), for the half of that reasoning that is
@@ -464,15 +491,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   which is the only thing that can prove a machine entering the ladder under v10 still ends up
   with every index a fresh install has.
   **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
-  for every one of them whose DDL is not idempotent.** All seven rewind fixtures —
+  for every one of them whose DDL is not idempotent.** Every rewind fixture —
   `v9_database`, `v10_database`, `v11_database`, `v12_database`, `v13_database`, `v14_database`,
-  `v15_database` — are built the same way, because
+  `v15_database`, `v16_database`, `v17_database` — is built the same way, because
   only version 1's DDL is frozen and there is no way to _build_ a later database forwards:
   migrate to head, undo by hand, renumber. `migrate` then reads `user_version` once and walks
   every step above it, so each of those steps is **replayed** over the fixture.
-  `CREATE TABLE IF NOT EXISTS` survives that; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
-  answers `duplicate column name`. That is why v16's `decks.default_category_id` has to come back
-  out in all six below it, v15's `deck_categories.origin` in the five below **it**, v13's
+  **The forward-built fixtures owe the mirror of that rule, and v18 is what made it bite.**
+  `v1_database` and `v6_deck_database` are hand-written old schemas rather than rewinds, so a step
+  *above* them that writes to a table they never created fails on them alone — and v18 writes to
+  `format_specs`, which v5 creates and `v6_deck_database` had simply never bothered with. Four
+  tests died on `no such table: format_specs`, none of them about games. The fixture creates the
+  table now (v5's DDL as a literal, seeded through `FORMAT_SPECS_SEED_V5`), which is the same
+  argument its own comment already made about the five `cards` columns it replays: a fixture that
+  stopped at an earlier shape is a pre-v5 database wearing a v6 label.
+  `CREATE TABLE IF NOT EXISTS` survives a replay; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
+  answers `duplicate column name`. That is why v18's two columns have to come back out in every
+  fixture below it, v16's `decks.default_category_id` in all six below **it**, v15's
+  `deck_categories.origin` in the five below that, v13's
   `separate_x_group` in the four below that, and v12's three
   view-state columns in the three below that, `v9_database` and
   `v10_database` included — the three travel together as one `UNDO_V12` constant, so they cannot

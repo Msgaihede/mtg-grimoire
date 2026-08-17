@@ -9,7 +9,7 @@ import { DeckDialog } from "./DeckDialog";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
 import { useDeckFolders } from "./useDeckFolders";
-import { pickerFormats, useFormatSpecs, type FormatOption } from "./useFormatSpecs";
+import { ANY_GAME, pickerFormats, useFormatSpecs, type FormatOption } from "./useFormatSpecs";
 import type { Decks } from "./useDecks";
 
 /**
@@ -25,6 +25,12 @@ import type { Decks } from "./useDecks";
 const BLANK: DeckSettingsValue = {
   name: "",
   formatKey: DEFAULT_FORMAT,
+  // **Every deck is born on `Any`, and this one is not overwritten the way the format is.**
+  // There is no `last_deck_game` beside `last_deck_format`, deliberately: the format a reader
+  // last built in is a preference worth carrying, while the game is a *filter* they set to find
+  // a format — remembering it would mean the next New deck dialog opened with most of the
+  // format list already hidden, for a reason nothing on screen explains.
+  gameKey: ANY_GAME,
   description: "",
   notes: "",
   theoryEnabled: false,
@@ -379,15 +385,45 @@ function CreateDeckBody({
   }, [id]);
 
   /**
-   * The formats to offer. **Never `[]`** — see {@link CASUAL_ONLY}.
+   * The formats to offer, narrowed to the game the draft is on. **Never `[]`** — see
+   * {@link CASUAL_ONLY}.
    *
    * No `keep` row, unlike the settings dialog's: that one folds in a deck's own format in case
-   * the seed no longer offers it, and there is no deck here whose format could have left.
+   * the picker no longer offers it, and there is no deck here whose format could have left.
+   *
+   * **Which means the draft's format can fall out of this list, and that is the one thing the
+   * create path has to handle that the edit path does not.** A reader who picks Modern and then
+   * switches the game to Arena is holding a `formatKey` no option carries, and a controlled
+   * `<select>` with an unmatched value shows its *first* row while still reporting the old one
+   * — so the deck would be made in Modern while the dialog read "Alchemy". {@link formatKey}
+   * below is what closes that.
    */
-  const formats = useMemo(() => {
-    const picker = pickerFormats(specs);
-    return picker.length > 0 ? picker : CASUAL_ONLY;
-  }, [specs]);
+  const picker = useMemo(() => pickerFormats(specs, null, value.gameKey), [specs, value.gameKey]);
+  const formats = picker.length > 0 ? picker : CASUAL_ONLY;
+
+  /**
+   * The format the dialog is actually on — **derived, never written back to the draft.**
+   *
+   * An effect that repaired `value.formatKey` was the obvious shape and is the one React's own
+   * lint refuses (`react-hooks/set-state-in-effect`): state computable from state is a render,
+   * not a synchronisation. Deriving it also has a property the repair did not — it is **not
+   * destructive**. A reader who narrows to Arena, thinks better of it and goes back to Any finds
+   * Modern still selected, because the draft was never overwritten.
+   *
+   * The first row of the narrowed list when the draft's format is not in it: that is what the
+   * `<select>` draws for an unmatched value anyway, so this makes the reported answer agree with
+   * the screen rather than inventing a third one.
+   *
+   * **The `picker.length === 0` arm is the guard, and it is why this reads `picker` rather than
+   * {@link formats}.** On the one launch where `format_specs` has not answered, `formats` is
+   * {@link CASUAL_ONLY} — a one-row list carrying no `modern` — so deriving against *that* would
+   * answer Casual for the whole loading window and quietly discard the format the host resolved.
+   * That shipped for one test run as an effect, which is the version the suite caught.
+   */
+  const formatKey =
+    picker.length === 0 || picker.some((f) => f.key === value.formatKey)
+      ? value.formatKey
+      : picker[0].key;
 
   const paths = useMemo(() => folderPaths(folders.folders), [folders.folders]);
 
@@ -440,7 +476,11 @@ function CreateDeckBody({
     create.mutate(
       {
         name: trimmed,
-        formatKey: value.formatKey,
+        // The **derived** key and not the draft's, so the deck is made in the format the select
+        // was showing. They differ only after the reader has narrowed the game past their own
+        // earlier pick, which is exactly the case this sends the right answer for.
+        formatKey,
+        gameKey: value.gameKey,
         description: trimmedOrAbsent(value.description),
         notes: trimmedOrAbsent(value.notes),
         coverCardId: coverCardId ?? undefined,
@@ -471,7 +511,9 @@ function CreateDeckBody({
           reaches the same `submit`, which is where the blank-name refusal lives. */}
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <DeckSettingsForm
-          value={value}
+          // The draft, with the **derived** format over it — the same key `submit` sends, so the
+          // select cannot show one format while the button makes a deck in another.
+          value={{ ...value, formatKey }}
           onChange={onChange}
           // Enter in the Name field, and the same function the button calls — so the three
           // guards below (a write in flight, a deck already made, a blank name) refuse a

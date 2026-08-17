@@ -263,6 +263,7 @@ describe("buildCardMenu", () => {
  * ------------------------------------------------------------------------------------------ */
 
 const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow => ({
+  gameKey: "any",
   formatKey: "commander",
   formatName: "Commander",
   description: null,

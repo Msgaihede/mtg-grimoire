@@ -3,7 +3,7 @@
  * built around.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -21,7 +21,7 @@ import {
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
-import { RAIL_ATTR, splitRail } from "./columns";
+import { flowMaxWidth, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -99,6 +99,18 @@ const FLOW_ROW = 1;
  * foot of every column — 20px of slack under the last pile, on top of the root's `pb-2`.
  */
 const FLOW_GAP_Y = 20;
+
+/**
+ * The gutter between two piles side by side, in pixels — the `gap-4` on the root and the `gap-x-4`
+ * on the flowing grid, which are **one number that happens to be written twice**.
+ *
+ * They have to stay one number. The first spaces the rail from the deck and the second spaces two
+ * piles from each other, and {@link flowMaxWidth}'s whole promise is that a reader cannot tell
+ * which of the two they are looking at. This constant is the third spelling, and it exists because
+ * that promise is arithmetic: the cap has to subtract exactly the gutter the classes draw, or the
+ * flowing box is capped a pixel off its own last column and the gap comes back a pixel at a time.
+ */
+const FLOW_GAP_X = 16;
 
 /**
  * How many rows of the flowing grid a pile of this pixel height claims — its height, plus the one
@@ -207,7 +219,7 @@ export function StackView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   className,
 }: {
@@ -220,9 +232,9 @@ export function StackView({
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
   actions?: DeckCardActions;
-  /** The printing the pane is open on — the picked card wears a gold ring, and in this view it
-   *  is also what the pile rests open on. See {@link CardStack}. */
-  selectedCardId?: string | null;
+  /** The slot the pane is open on ({@link deckCardSlot}) — the picked card wears a gold ring, and
+   *  in this view it is also what the pile rests open on. See {@link CardStack}. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
    *  landed. Handed down whole, like `violations`. */
   landed?: ReadonlyMap<number, number>;
@@ -260,11 +272,12 @@ export function StackView({
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
   // **The split happens before anything is drawn, and it has to.** The flow runs in the reader's
-  // own order and never re-orders anything, so a sideboard or a maybeboard left in that stream
-  // lands wherever the line it fell on happened to end. A rail held against the right edge is not
-  // part of the flow at all, so those groups are taken out of the *input* rather than pulled back
-  // out of the answer. Which kinds are railed, why the rail is not sorted here, and why there is
-  // no grouping-mode check beside the kind: {@link splitRail}.
+  // own order and never re-orders anything, so a sideboard, a maybeboard or a pile the reader has
+  // switched off, left in that stream, lands wherever the line it fell on happened to end. A rail
+  // held against the right edge is not part of the flow at all, so those groups are taken out of
+  // the *input* rather than pulled back out of the answer. Which piles are railed, why the kind is
+  // tested before the switch, why the rail is not sorted here, and why there is no grouping-mode
+  // check beside either word: {@link splitRail}.
   const { flow, rail } = splitRail(groups);
 
   return (
@@ -309,10 +322,20 @@ export function StackView({
     // `flex-1` is inert in the editor for the same reason — the page hands this view a plain
     // block to fill — and is kept because it is the sentence a host in a *row* reads: it is how
     // the view takes its share of the width, which is the axis this box has ever shared.
+    //
+    // **{@link DROP_MARK_ROOM} is the padding, and it is what keeps a drag's own affordance on
+    // screen.** This box clips at its padding box, so with none the leftmost pile's `DROP_RING`
+    // and the rail's were each sliced down the edge for the whole length of a drag, and a pile's
+    // focus outline with them. `pb-2` outlives it and still wins the bottom edge — Tailwind emits
+    // the `padding` shorthand before the `padding-bottom` longhand, whatever order the two are
+    // written in here — because the foot of a column is the one edge that was never clipped and
+    // 8px is what the layout was drawn with.
     <div
       ref={scrollRef}
       className={cn(
-        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto pb-2 h-full",
+        "flex h-full min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto",
+        DROP_MARK_ROOM,
+        "pb-2",
         className,
       )}
     >
@@ -338,6 +361,19 @@ export function StackView({
           sideways. `min-w-0`/`flex-1` cannot say it — they describe how a box shares slack, not
           the width at which it must stop sharing.
 
+          **`maxWidth` is the other end of that sentence, and it is what puts the rail one gutter
+          from the deck rather than a zoom step away from it** (added 2026-08-17). `flex-1` takes
+          every pixel the rail leaves and `auto-fill` then spends only whole ones, so the remainder
+          sat *inside* this box as dead desk between the last pile and the Sideboard — 182px of it
+          on the reader's own screenshot, and a different number at every stop on the zoom ladder,
+          which is what made it read as a zoom bug. {@link flowMaxWidth} caps this box at the
+          columns it can actually use, and at `flow.length` when the desk holds more than the deck
+          has piles for. **It is `min-width`'s junior**: CSS resolves a `max-width` below a
+          `min-width` in the minimum's favour, so the narrow case above is decided before this is
+          consulted and the wrap it describes is untouched. **Only while a rail is drawn** — with
+          nothing after this box, the remainder is desk nobody is looking at, and capping it would
+          be a rule with no reader.
+
           **`items-start` is load-bearing twice over now.** It keeps each pile its own height —
           stretched, a switched-off pile's `bg-surface/60` wash would grow to fill its whole grid
           area and read as an empty box nobody drew — and that same content-sizing is what makes
@@ -357,6 +393,10 @@ export function StackView({
       <div
         style={{
           minWidth: columnWidth,
+          maxWidth:
+            rail.length > 0
+              ? flowMaxWidth(`${columnWidth}px`, `${FLOW_GAP_X}px`, flow.length)
+              : undefined,
           gridTemplateColumns: `repeat(auto-fill, ${columnWidth}px)`,
           gridAutoRows: `${FLOW_ROW}px`,
         }}
@@ -370,30 +410,50 @@ export function StackView({
             violations={violations}
             onSelect={onSelect}
             actions={actions}
-            selectedCardId={selectedCardId}
+            selectedSlot={selectedSlot}
             landed={landed}
             zoom={cardZoom}
             flowWidth={columnWidth}
           />
         ))}
       </div>
-      {/* The rail: the piles played *beside* the deck — the Sideboard and the Maybeboard, in the
-          reader's own `sortOrder` and never re-arranged here — on the right, never packed and
-          never wrapped away from the edge while there is room for it. It draws for an **empty**
-          pile too: an empty pile is where the next card of that kind goes, and a rail that
-          appeared with the first card would move the whole layout under the reader's hand at the
-          moment they were using it.
+      {/* The rail: everything that is not the deck being laid out — the piles played *beside* it,
+          the Sideboard and the Maybeboard, and under them every pile the reader has switched off —
+          on the right, never packed and never wrapped away from the edge while there is room for
+          it. Both runs are in the reader's own `sortOrder` and neither is re-arranged here. It
+          draws for an **empty** pile too: an empty pile is where the next card of that kind goes,
+          and a rail that appeared with the first card would move the whole layout under the
+          reader's hand at the moment they were using it.
 
-          **The Maybeboard is seeded switched off, so this rail routinely holds a dimmed pile**,
-          which is the first thing a reader will notice about it and needs no code here at all: a
-          group in the rail is the same `StackGroup` as one in the flow, so the wash, the dimmed
-          heading and the stack's `opacity-60` arrive with it rather than being defined twice. The
-          rail is *where* a pile is drawn, never *what* it is.
+          **The switched-off half costs this file nothing, which is the point of it being a split
+          rather than a second box** (added 2026-08-17). A group in the rail is the same
+          `StackGroup` as one in the flow, so the wash, the dimmed heading, the `INACTIVE` chip and
+          the stack's `opacity-60` arrive with it rather than being defined twice — and the return
+          journey is free for the same reason: `splitRail` is derived per render, so switching a
+          pile back on drops it into the flow at its own `sortOrder` with no state anywhere
+          recording that it was ever here. The rail is *where* a pile is drawn, never *what* it is,
+          and there is deliberately no divider between the two runs: an inactive pile already says
+          so three times over, and the Maybeboard heading the rail is switched off as well, so a
+          rule drawn under it would be marking a boundary that is not the one it looked like.
 
-          `ml-auto` is a no-op while the flowing half is `flex-1`, and does the work in the one
-          case that matters: the rail on its own line, still right. The width is the same
-          `stackColumnWidth` the flowing piles are, inline and in both halves of the shorthand,
-          because a Tailwind class built from a number emits no CSS rule at all.
+          **The Maybeboard is seeded switched off, so this rail has always held a dimmed pile** —
+          which is why the change above needed no new drawing code at all.
+
+          **There is no `ml-auto` here any more, and its absence is the fix** (changed 2026-08-17).
+          It pinned the rail to the right *edge of the desk* rather than to the right of the deck,
+          so it absorbed the whole of the flowing box's leftover width and drew the gap this change
+          exists to close — a margin that eats free space cannot be told to eat all but 16px of it.
+          The rail is a plain flex child now, one `gap-4` after a box that {@link flowMaxWidth} has
+          already capped at whole columns, which is the same gutter as between any two piles.
+          **What it cost is the wrapped line**: a desk too narrow for one pile beside the rail drops
+          the rail below the deck, and it lands at the **left**, under the first column, where
+          `ml-auto` used to hold it right. That is the reader's own call and the honest one — once
+          the rail is under the deck rather than beside it there is no "right of the deck" left to
+          be at, and everything else in this view starts at the left edge.
+
+          The width is the same `stackColumnWidth` the flowing piles are, inline and in both halves
+          of the shorthand, because a Tailwind class built from a number emits no CSS rule at all —
+          and it is the length `flowMaxWidth` subtracts for this box, so the two must not drift.
 
           **The piles inside carry no `flowWidth`, and that is not tidiness.** This box is
           `flex-col`, so a `flex: 0 0 224px` on a child would be read down the *main* axis and
@@ -403,7 +463,7 @@ export function StackView({
         <div
           {...{ [RAIL_ATTR]: "" }}
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
-          className="ml-auto flex flex-col gap-5"
+          className="flex flex-col gap-5"
         >
           {rail.map((group) => (
             <StackGroup
@@ -413,7 +473,7 @@ export function StackView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
-              selectedCardId={selectedCardId}
+              selectedSlot={selectedSlot}
               landed={landed}
               zoom={cardZoom}
             />
@@ -437,7 +497,7 @@ function StackGroup({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   zoom,
   flowWidth,
@@ -448,7 +508,7 @@ function StackGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
   /** The zoom this pile's box was sized from, handed straight through to the stack so the two
    *  are the same number rather than two reads of one store. */
@@ -567,7 +627,7 @@ function StackGroup({
           violations={violations}
           onSelect={onSelect}
           actions={actions}
-          selectedCardId={selectedCardId}
+          selectedSlot={selectedSlot}
           landed={landed}
           zoom={zoom}
           // The third of the three signals a switched-off pile carries — the wash on the section

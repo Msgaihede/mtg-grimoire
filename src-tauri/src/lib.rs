@@ -73,6 +73,19 @@ async fn update_status(
     Ok(update::status(state.inner(), updater.inner()))
 }
 
+/// Every release the last check saw, newest first. No network — this reads the page that
+/// check already fetched and cached, which is why expanding the version history costs
+/// nothing out of GitHub's 60 requests an hour.
+#[tauri::command]
+async fn update_history(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<update::ReleaseNote>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || update::history(&state))
+        .await
+        .map_err(|e| format!("could not read the version history: {e}"))
+}
+
 /// Ask GitHub. `force` skips the 24 h throttle; a second concurrent call is refused.
 #[tauri::command]
 async fn update_check(
@@ -343,6 +356,7 @@ pub fn run() {
             error_log_list,
             error_log_clear,
             update_status,
+            update_history,
             update_check,
             update_download,
             update_apply,

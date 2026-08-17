@@ -10,10 +10,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { formatSpecs },
 }));
 
-import { useFormatSpecs } from "./useFormatSpecs";
+import { ANY_GAME, gameLabel, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 
 /** One row of the seed, cell for cell — `commander` as `schema.rs` actually writes it. */
 const COMMANDER: FormatSpec = {
+  games: ["paper"],
   key: "commander",
   displayName: "Commander",
   enabledInPicker: true,
@@ -46,8 +47,47 @@ const CASUAL: FormatSpec = {
   commanderRule: null,
   life: 20,
   hasLegalityData: false,
+  games: ["paper", "arena", "mtgo"],
   sortOrder: 24,
 };
+
+/** An Arena-only format, and the one `games` cell that excludes Paper. */
+const HISTORIC: FormatSpec = {
+  ...COMMANDER,
+  key: "historic",
+  displayName: "Historic",
+  deckMin: 60,
+  deckMax: null,
+  maxCopies: 4,
+  sideboardMax: 15,
+  singleton: false,
+  requiresCommander: false,
+  commanderRule: null,
+  life: 20,
+  games: ["arena"],
+  sortOrder: 3,
+};
+
+/** Two platforms rather than one or three — the shape a `includes` bug reads as either. */
+const MODERN: FormatSpec = {
+  ...HISTORIC,
+  key: "modern",
+  displayName: "Modern",
+  games: ["paper", "mtgo"],
+  sortOrder: 7,
+};
+
+/** The row no picker offers, whatever the game — `enabledInPicker: false`. */
+const FUTURE: FormatSpec = {
+  ...MODERN,
+  key: "future",
+  displayName: "Future Standard",
+  enabledInPicker: false,
+  games: ["paper", "arena", "mtgo"],
+  sortOrder: 2,
+};
+
+const ALL = [COMMANDER, CASUAL, HISTORIC, MODERN, FUTURE];
 
 /** One client for the whole test, so a remount asks the *cache* rather than the mock. */
 let client: QueryClient;
@@ -104,5 +144,81 @@ describe("useFormatSpecs", () => {
 
     expect(result.current.specs).toEqual([]);
     expect(result.current.formatSpecFor("commander")).toBeNull();
+  });
+});
+
+describe("pickerFormats", () => {
+  const keys = (game?: Parameters<typeof pickerFormats>[2]) =>
+    pickerFormats(ALL, null, game).map((f) => f.key);
+
+  /** No game is every offerable format, which is what makes the argument's default a no-op
+   *  and is why no caller that has not thought about games had to change. */
+  it("offers every enabled format when no game is named", () => {
+    expect(keys()).toEqual(keys(ANY_GAME));
+    expect(keys()).toEqual(["casual", "commander", "historic", "modern"]);
+  });
+
+  /**
+   * The narrowing, read off the seed's `games` cell.
+   *
+   * Both directions are asserted on purpose: Arena keeps Historic **and drops Modern**, Paper
+   * does the reverse. A filter that answered "everything" would pass the first half of each.
+   */
+  it("narrows the list to the formats that platform plays", () => {
+    expect(keys("arena")).toEqual(["casual", "historic"]);
+    expect(keys("paper")).toEqual(["casual", "commander", "modern"]);
+    expect(keys("mtgo")).toEqual(["casual", "modern"]);
+  });
+
+  /** `enabledInPicker` outranks the game: Future Standard is a format you can test a card
+   *  against and cannot build for, on every platform it is legal in. */
+  it("still refuses a format no picker offers, whatever the game", () => {
+    expect(keys("paper")).not.toContain("future");
+    expect(keys()).not.toContain("future");
+  });
+
+  /**
+   * **The whole of "setting a game never re-formats a deck", on this side.**
+   *
+   * A Modern deck switched to Arena is the ordinary way a deck's own format falls out of the
+   * list — the older way, a format that left the seed, is the same code path. Without `keep`
+   * the select would show its first row while still reporting `modern`, and the deck would be
+   * silently re-formatted by the reader's next unrelated change.
+   */
+  it("folds the deck's own format back in when the game would drop it", () => {
+    const kept = pickerFormats(ALL, { key: "modern", name: "Modern" }, "arena");
+
+    expect(kept.map((f) => f.key)).toContain("modern");
+    // Alphabetically among the rest rather than pinned in front: it is an option like any
+    // other, and the `<select>`'s own `value` already marks it as the current one.
+    expect(kept.map((f) => f.key)).toEqual(["casual", "historic", "modern"]);
+  });
+
+  /** A format the narrowed list already carries is not added twice. */
+  it("adds no duplicate row when the kept format survives the filter", () => {
+    const kept = pickerFormats(ALL, { key: "historic", name: "Historic" }, "arena");
+
+    expect(kept.filter((f) => f.key === "historic")).toHaveLength(1);
+  });
+
+  /** A spec naming no platform is offered under `Any` and under nothing else. Rust guarantees
+   *  the cell is never empty; this pins what the filter does if that guarantee ever slips —
+   *  fail closed, so the wrong answer is a missing row rather than an illegal deck. */
+  it("offers a format with no platforms only when no game is named", () => {
+    const orphan: FormatSpec = { ...MODERN, key: "orphan", displayName: "Orphan", games: [] };
+
+    expect(pickerFormats([orphan], null).map((f) => f.key)).toEqual(["orphan"]);
+    expect(pickerFormats([orphan], null, "paper")).toEqual([]);
+  });
+});
+
+describe("gameLabel", () => {
+  it("words each key, and falls back to a key it has never heard of", () => {
+    expect(gameLabel("any")).toBe("Any");
+    expect(gameLabel("mtgo")).toBe("MTGO");
+    // `decks.game_key` carries no CHECK — `ALTER TABLE … ADD COLUMN` cannot add one — so this
+    // state can exist, and showing it is how anybody would find out. Calling it "Any" would
+    // hide the one thing worth seeing.
+    expect(gameLabel("gameboy")).toBe("gameboy");
   });
 });

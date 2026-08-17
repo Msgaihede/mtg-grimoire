@@ -36,6 +36,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 7,
+    games: ["paper", "mtgo"],
   },
   vintage: {
     key: "vintage",
@@ -54,6 +55,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 10,
+    games: ["paper", "mtgo"],
   },
   // The one seeded format that forbids companions outright, and the reason is the cell next
   // to it: no sideboard, so no sideboard slot for one to sit in (research doc).
@@ -74,6 +76,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: false,
     sortOrder: 5,
+    games: ["arena"],
   },
   commander: {
     key: "commander",
@@ -92,6 +95,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 12,
+    games: ["paper"],
   },
   oathbreaker: {
     key: "oathbreaker",
@@ -110,6 +114,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 13,
+    games: ["paper"],
   },
   brawl: {
     key: "brawl",
@@ -128,6 +133,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 15,
+    games: ["arena"],
   },
   paupercommander: {
     key: "paupercommander",
@@ -146,6 +152,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 18,
+    games: ["paper"],
   },
   duel: {
     key: "duel",
@@ -165,6 +172,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 19,
+    games: ["paper"],
   },
   oldschool: {
     key: "oldschool",
@@ -183,6 +191,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 20,
+    games: ["paper"],
   },
   tlr: {
     key: "tlr",
@@ -201,6 +210,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: 3,
     allowsCompanion: true,
     sortOrder: 23,
+    games: ["paper"],
   },
   casual: {
     key: "casual",
@@ -219,6 +229,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 24,
+    games: ["paper", "arena", "mtgo"],
   },
   limited: {
     key: "limited",
@@ -237,6 +248,7 @@ export const SPECS: Record<string, FormatSpec> = {
     maxManaValue: null,
     allowsCompanion: true,
     sortOrder: 25,
+    games: ["paper", "arena", "mtgo"],
   },
 };
 

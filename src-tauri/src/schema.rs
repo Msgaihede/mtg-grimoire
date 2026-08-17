@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -276,7 +276,7 @@ pub const PREDEFINED_CATEGORIES: [(&str, &str, bool); 4] = [
 /// `ON CONFLICT(…)` target must match verbatim, and a target that matches no index is a
 /// runtime error at the first quick-add rather than a compile error.
 ///
-/// **`coalesce(finish, '')` is [`COLLECTION_GRAIN`]'s device, for its reason** (v18).
+/// **`coalesce(finish, '')` is [`COLLECTION_GRAIN`]'s device, for its reason** (v19).
 /// `deck_cards.finish` is nullable — NULL is the regular copy, and `'nonfoil'` is never
 /// stored — and SQLite treats NULLs in a UNIQUE index as *distinct*, so the bare column
 /// would enforce nothing at all: every regular add would insert a new row rather than
@@ -325,6 +325,36 @@ pub const DECK_TAG_GRAIN: &str = "deck_id, name";
 /// that could silently overwrite it. `deck::allocate_deck` reserves collection copies for
 /// `live` only: a theory list is a plan, and a plan claims nothing.
 pub const DECK_VARIANTS: [&str; 2] = ["live", "theory"];
+
+/// Where a card can be played, as Scryfall spells it — the vocabulary of `cards.games` and,
+/// from schema v18, of a `format_specs.games` cell.
+///
+/// **Three words and not four**, because these are Scryfall's own and the corpus already uses
+/// them: a format's answer and a printing's answer are then the same string, which is what
+/// would let a future filter compare them without a translation table in between. A fourth
+/// platform is a word no card in this database carries.
+///
+/// Stored as a **comma-joined list in one cell** rather than as a `format_games` table. The
+/// list is read whole, by TypeScript, for every row at once — `format_specs` is handed to the
+/// engine entire and has been since spec §6 — so a join would answer the same fact in two
+/// queries and split one format's rules across two places. `a_format_spec_games_cell_holds_
+/// only_scryfall_game_words` is what keeps the cells inside this vocabulary, since no CHECK
+/// can (the column arrives by `ALTER TABLE … ADD COLUMN`).
+pub const GAMES: [&str; 3] = ["paper", "arena", "mtgo"];
+
+/// What `decks.game_key` may hold: [`GAMES`], plus the word for a deck that has not been
+/// pinned to a platform.
+///
+/// **`any` is a stored sentinel rather than a NULL**, and for [`crate::deck::AUTO_CATEGORY`]'s
+/// reason exactly: [`crate::deck::DeckPatch`] writes `coalesce(?n, column)`, so a bound NULL
+/// means *leave it* and a nullable column could never have said "back to Any" without a
+/// command of its own — the price `decks.folder_id` pays through `deck::set_folder`. It is
+/// first in the list because it is the column's DDL default and what every deck is born as.
+///
+/// The three after it are [`GAMES`] in order, which
+/// `the_deck_game_vocabulary_is_any_plus_the_scryfall_games` pins — two arrays that must not
+/// drift, written out rather than concatenated because a `const` cannot concatenate.
+pub const DECK_GAMES: [&str; 4] = ["any", "paper", "arena", "mtgo"];
 
 /// Scryfall's finish enum. Never a boolean — `etched` is a third thing, and collapsing it
 /// into `foil: true` is the single most common way an importer loses data.
@@ -396,7 +426,13 @@ pub const ALLOCATION_GRAIN: &str = "deck_id, collection_entry_id";
 ///   after 2011 — the pool check does the narrowing. That is not deriving one format from
 ///   another (this seed never copies a *legality*); it is two formats genuinely sharing one
 ///   eligibility rule.
-const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
+/// # This constant is **history**, and [`FORMAT_SPECS_SEED`] is the one to edit
+///
+/// It is what the v5 step wrote, frozen there for [`CARDS_COLUMNS`]'s reason: a fresh install
+/// replays the whole ladder, so v5 runs before v18's `games` column exists and a statement here
+/// naming that column would fail on new machines only. The head seed carries every cell this
+/// one does plus `games`, and v18 re-runs it over these rows.
+const FORMAT_SPECS_SEED_V5: &str = "INSERT OR REPLACE INTO format_specs
     (key, display_name, enabled_in_picker, deck_min, deck_max, max_copies, sideboard_max,
      singleton, requires_commander, commander_rule, life, restricted_semantic,
      has_legality_data, max_mana_value, allows_companion, sort_order) VALUES
@@ -425,6 +461,72 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
     ('tlr',             'Tiny Leaders: Reborn', 1, 50,  50,   1,    10,   1, 1, 'tlr',         20, 'banned_as_commander', 1, 3,    1, 23),
     ('casual',          'Casual',               1, 0,   NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 24),
     ('limited',         'Limited',              1, 40,  NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 25);";
+
+/// The format rules **at head** — [`FORMAT_SPECS_SEED_V5`] plus the `games` cell v18 added,
+/// and the constant a future correction re-runs.
+///
+/// Every other cell is byte-identical to the frozen copy above, deliberately: this is that
+/// statement with one column, not a second opinion about the other fifteen. What the two must
+/// never do is disagree, and `the_head_format_seed_agrees_with_v5_on_every_shared_cell` is what
+/// says so — it walks both into two databases and compares them column by column.
+///
+/// # What `games` means
+///
+/// Which platforms a person can actually play the format on, as a comma-joined list of
+/// [`GAMES`] words. A **fact about the format**, which is why it is a seeded cell rather than a
+/// map in TypeScript: the crate's rule is that `format_specs` is data and a new format is a
+/// row. The deck picker filters on it and draws no conclusion Rust has not been told.
+///
+/// The four groups, and the reasoning behind the ones that are not obvious:
+///
+/// * **All three** — Standard, Future Standard, and the two pseudo-formats. `casual` and
+///   `limited` are judged against no card pool at all (`has_legality_data = 0`), so pinning
+///   either to a platform would be inventing a rule; the widest answer is the honest one and
+///   is also the DDL default, so a row that somehow escapes this seed is never hidden by the
+///   filter. **Failing open is the rule here**, exactly as it is for the Oracle tags.
+/// * **Arena only** — Historic, Timeless, Gladiator, Alchemy and all three Brawls. These are
+///   Arena's own formats; the digital-only cards in them (`alchemy` rebalances) exist in no
+///   paper printing.
+/// * **Paper and MTGO** — Pioneer, Modern, Legacy, Pauper, Vintage. Arena's nearest thing to
+///   Pioneer is Explorer, which is a **different card pool** and a format of its own; treating
+///   Pioneer as an Arena format would offer a reader cards Arena has never had.
+/// * **MTGO only** — Penny Dreadful, whose legality is defined by MTGO ticket prices.
+/// * **Paper only** — the eight singleton and eternal formats: Commander, Oathbreaker, Pauper
+///   Commander, Duel Commander, Old School, Premodern, PreDH, Tiny Leaders. **Three of those
+///   are judgement calls and are named so that changing one is a decision rather than a
+///   discovery**: Commander, Pauper Commander and Premodern all get played on MTGO, in casual
+///   rooms and unsanctioned leagues, and this seed reads "sanctioned format" rather than "has
+///   ever been cast there". Correcting one is a new migration step re-running this constant,
+///   which is the whole reason the cells live here.
+const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
+    (key, display_name, enabled_in_picker, deck_min, deck_max, max_copies, sideboard_max,
+     singleton, requires_commander, commander_rule, life, restricted_semantic,
+     has_legality_data, max_mana_value, allows_companion, sort_order, games) VALUES
+    ('standard',        'Standard',             1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 1,  'paper,arena,mtgo'),
+    ('future',          'Future Standard',      0, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 2,  'paper,arena,mtgo'),
+    ('historic',        'Historic',             1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 3,  'arena'),
+    ('timeless',        'Timeless',             1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 4,  'arena'),
+    ('gladiator',       'Gladiator',            1, 100, NULL, 1,    0,    1, 0, NULL,          20, 'max_one',             1, NULL, 0, 5,  'arena'),
+    ('pioneer',         'Pioneer',              1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 6,  'paper,mtgo'),
+    ('modern',          'Modern',               1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 7,  'paper,mtgo'),
+    ('legacy',          'Legacy',               1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 8,  'paper,mtgo'),
+    ('pauper',          'Pauper',               1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 9,  'paper,mtgo'),
+    ('vintage',         'Vintage',              1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 10, 'paper,mtgo'),
+    ('penny',           'Penny Dreadful',       1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 11, 'mtgo'),
+    ('commander',       'Commander',            1, 100, 100,  1,    0,    1, 1, 'edh',         40, 'max_one',             1, NULL, 1, 12, 'paper'),
+    ('oathbreaker',     'Oathbreaker',          1, 60,  60,   1,    0,    1, 1, 'oathbreaker', 20, 'max_one',             1, NULL, 1, 13, 'paper'),
+    ('standardbrawl',   'Standard Brawl',       1, 60,  60,   1,    0,    1, 1, 'brawl',       25, 'max_one',             1, NULL, 1, 14, 'arena'),
+    ('brawl',           'Brawl',                1, 100, 100,  1,    0,    1, 1, 'brawl',       25, 'max_one',             1, NULL, 1, 15, 'arena'),
+    ('competitivebrawl','Competitive Brawl',    1, 100, 100,  1,    0,    1, 1, 'brawl',       25, 'max_one',             1, NULL, 1, 16, 'arena'),
+    ('alchemy',         'Alchemy',              1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 17, 'arena'),
+    ('paupercommander', 'Pauper Commander',     1, 100, 100,  1,    0,    1, 1, 'pdh',         30, 'max_one',             1, NULL, 1, 18, 'paper'),
+    ('duel',            'Duel Commander',       1, 100, 100,  1,    0,    1, 1, 'duel',        20, 'banned_as_commander', 1, NULL, 1, 19, 'paper'),
+    ('oldschool',       'Old School',           1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 20, 'paper'),
+    ('premodern',       'Premodern',            1, 60,  NULL, 4,    15,   0, 0, NULL,          20, 'max_one',             1, NULL, 1, 21, 'paper'),
+    ('predh',           'PreDH',                1, 100, 100,  1,    0,    1, 1, 'edh',         40, 'max_one',             1, NULL, 1, 22, 'paper'),
+    ('tlr',             'Tiny Leaders: Reborn', 1, 50,  50,   1,    10,   1, 1, 'tlr',         20, 'banned_as_commander', 1, 3,    1, 23, 'paper'),
+    ('casual',          'Casual',               1, 0,   NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 24, 'paper,arena,mtgo'),
+    ('limited',         'Limited',              1, 40,  NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 25, 'paper,arena,mtgo');";
 
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
 /// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
@@ -838,7 +940,9 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             raw = json_raw("raw")
         ))?;
 
-        tx.execute_batch(FORMAT_SPECS_SEED)?;
+        // The **frozen** copy, not the head constant: this statement is what v5 wrote, and a
+        // fresh install replays it long before v18 adds the `games` column the head seed names.
+        tx.execute_batch(FORMAT_SPECS_SEED_V5)?;
         // Literal `5`, for the reason v3 writes a literal `3` and v4 a literal `4`.
         tx.execute_batch("PRAGMA user_version = 5;")?;
         tx.commit()?;
@@ -1589,10 +1693,61 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 18 {
         let tx = conn.unchecked_transaction()?;
+        // **Which platform a deck is for, and which platforms a format is playable on** — two
+        // columns for one question, because the question has two halves and only one of them is
+        // the reader's. `format_specs.games` is a *fact about the format*, seeded; `decks.
+        // game_key` is the reader's answer, and the only thing it does is narrow the format
+        // picker to the rows whose cell carries it.
+        //
+        // **`'any'` is a real value and not a missing one**, [`crate::deck::AUTO_CATEGORY`]'s
+        // argument one column over: [`crate::deck::DeckPatch`] writes `coalesce(?n, column)`, so
+        // a bound NULL is *leave it* and a nullable column could not have said "back to Any"
+        // without a command of its own. `DEFAULT 'any'` also fills every deck that predates the
+        // column with what those decks already were — no platform was ever asked about, so no
+        // platform is what they answer.
+        //
+        // **`games` defaults to all three, which is the fail-open answer and is deliberate.**
+        // The seed below writes every one of the 25 rows, so the default is reached only by a
+        // row that escaped it; a format the filter *hides* because nobody gave it a platform is
+        // a format the reader cannot build for, while one it wrongly offers is a format they can
+        // simply not pick. The floor rather than an error, which is the rule the Oracle tags are
+        // already read under.
+        //
+        // **No CHECK on either.** `decks.game_key` gets the Rust fence `last_variant` has
+        // ([`crate::deck::valid_game`], over [`DECK_GAMES`]), because a command parameter
+        // reaches it. `format_specs.games` gets none and needs none: no caller can write it, it
+        // is this constant's alone, and a test walks the cells against [`GAMES`]. (The reason
+        // written here until v19 was that `ADD COLUMN` cannot carry a CHECK — see the step
+        // below, which adds one.)
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid is
+        // renumbered, so no `cards_fts` rebuild is owed either.
+        tx.execute_batch(
+            "ALTER TABLE format_specs
+                ADD COLUMN games TEXT NOT NULL DEFAULT 'paper,arena,mtgo';
+             ALTER TABLE decks ADD COLUMN game_key TEXT NOT NULL DEFAULT 'any';",
+        )?;
+        // The head seed over the rows v5 wrote — `INSERT OR REPLACE`, which is the shape this
+        // table's corrections have always taken. It is what fills `games` with something other
+        // than the DDL default, and re-running it here rather than writing 25 `UPDATE`s is what
+        // keeps one statement the single description of what a `format_specs` row holds.
+        tx.execute_batch(FORMAT_SPECS_SEED)?;
+        // Literal `18`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 18;")?;
+        tx.commit()?;
+    }
+    if v < 19 {
+        let tx = conn.unchecked_transaction()?;
         // **A deck card names a finish**, which reverses "a deck names a printing and never a
         // finish". Scryfall models foil as a finish *of* a printing rather than as a printing
         // — 53 224 of 107 337 paper printings carry one under the same id — so wanting the
         // foil copy was a thing the model had no way to say.
+        //
+        // **This step was written as v18 and landed as v19**, which is the collision this
+        // ladder's own doc predicts: v18 (the game columns) was written on another branch
+        // against the same head of 17 and merged first. Renumbering on the way in is the whole
+        // of the rule — a version that has shipped is spent.
         //
         // **Nullable, and NULL is the regular copy, so there is no backfill**: every row that
         // predates this step already means what it now says. `'nonfoil'` is deliberately not
@@ -1629,8 +1784,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              CREATE UNIQUE INDEX idx_deck_cards_grain
                 ON deck_cards (deck_id, variant, category_id, card_id, coalesce(finish, ''));",
         )?;
-        // Literal `18`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA user_version = 18;")?;
+        // Literal `19`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 19;")?;
         tx.commit()?;
     }
     Ok(())
@@ -2084,7 +2239,7 @@ pub(crate) mod tests {
     /// be wrapped and indented however it reads best. The three grains with `coalesce(…)` in
     /// them cannot be checked this way — an expression column comes back with a NULL name —
     /// and do not need to be, since a mismatched conflict target is a hard error at the first
-    /// write. **[`DECK_CARD_GRAIN`] became the third of those in v18**, when `finish` joined
+    /// write. **[`DECK_CARD_GRAIN`] became the third of those in v19**, when `finish` joined
     /// it; it left this list rather than losing its fence, since every
     /// `ON CONFLICT ({DECK_CARD_GRAIN})` in [`crate::deck`], [`crate::deck_meta`] and
     /// [`crate::deck_theory`] still fails loudly at the first write if it drifts.
@@ -3776,9 +3931,39 @@ pub(crate) mod tests {
                 updated_at INTEGER NOT NULL
              );
 
+             -- v5's own table, and it is here for the reason the five `cards` columns above
+             -- are: a real v6 database went through v5 and has it, `migrate` reads
+             -- `user_version` once and skips every step below v7, and **a step above this
+             -- rung now writes to it** — v18 alters `format_specs` and re-seeds it. Without
+             -- this the fixture is a pre-v5 database wearing a v6 label, and it reaches head
+             -- with `no such table: format_specs`, which no real upgrade can produce. The DDL
+             -- is a literal because this fixture describes history.
+             CREATE TABLE format_specs (
+                key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                enabled_in_picker INTEGER NOT NULL DEFAULT 1,
+                deck_min INTEGER NOT NULL,
+                deck_max INTEGER,
+                max_copies INTEGER,
+                sideboard_max INTEGER,
+                singleton INTEGER NOT NULL DEFAULT 0,
+                requires_commander INTEGER NOT NULL DEFAULT 0,
+                commander_rule TEXT,
+                life INTEGER NOT NULL,
+                restricted_semantic TEXT NOT NULL DEFAULT 'max_one'
+                    CHECK (restricted_semantic IN ('max_one','banned_as_commander')),
+                has_legality_data INTEGER NOT NULL DEFAULT 1,
+                max_mana_value INTEGER,
+                allows_companion INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL
+             );
+
              PRAGMA user_version = 6;",
         )
         .unwrap();
+        // The rows v5 wrote, through the frozen constant rather than a copy of it — that one
+        // *is* the v5 statement and cannot change, which is the whole point of the split.
+        conn.execute_batch(FORMAT_SPECS_SEED_V5).unwrap();
         conn
     }
 
@@ -4453,21 +4638,37 @@ pub(crate) mod tests {
     /// references `deck_undo`.
     const UNDO_V17: &str = "DROP TABLE deck_undo;";
 
-    /// And v18's finish column on `deck_cards` — **three statements, because the column is in
+    /// And v18's two columns: which platforms a format is playable on, and which one a deck is
+    /// for.
+    ///
+    /// Owed for [`UNDO_V13`]'s reason — `ALTER TABLE … ADD COLUMN` twice, so a fixture that
+    /// forgot this one could not migrate at all — and undone the same way. No index names
+    /// either column and no constraint references one, which is what SQLite refuses a drop
+    /// over.
+    ///
+    /// **The re-seed needs no undoing, and that is a fact about the two seeds rather than
+    /// luck.** v18 re-runs [`FORMAT_SPECS_SEED`], which is [`FORMAT_SPECS_SEED_V5`] plus the
+    /// column being dropped here — every other cell is byte-identical, so once `games` is gone
+    /// the rows are indistinguishable from the ones v5 wrote.
+    /// `the_head_format_seed_agrees_with_v5_on_every_shared_cell` is what keeps that true.
+    const UNDO_V18: &str = "ALTER TABLE format_specs DROP COLUMN games;
+         ALTER TABLE decks DROP COLUMN game_key;";
+
+    /// And v19's finish column on `deck_cards` — **three statements, because the column is in
     /// an index**.
     ///
     /// Owed for [`UNDO_V13`]'s reason: the DDL is `ALTER TABLE … ADD COLUMN`, so a fixture
-    /// that forgot it could not migrate at all — v18 would answer `duplicate column name` over
+    /// that forgot it could not migrate at all — v19 would answer `duplicate column name` over
     /// a table already carrying the column, a failure no real upgrade can produce.
     ///
     /// **This is the first rewind on this ladder that has to take an index down first, and it
     /// is exactly the trap [`UNDO_V12`]'s doc names as the reason a rewind through v8 would be
     /// dishonest.** SQLite refuses `DROP COLUMN` on a column any index references, and
     /// `finish` is the fifth term of `idx_deck_cards_grain`. So: drop the index, drop the
-    /// column, and **put the v17-era index back** — the four-column one, spelled out as a
+    /// column, and **put the v18-era index back** — the four-column one, spelled out as a
     /// literal rather than built from [`DECK_CARD_GRAIN`], because what this restores is what
     /// v8 built and the constant now describes head.
-    const UNDO_V18: &str = "DROP INDEX idx_deck_cards_grain;
+    const UNDO_V19: &str = "DROP INDEX idx_deck_cards_grain;
          ALTER TABLE deck_cards DROP COLUMN finish;
          CREATE UNIQUE INDEX idx_deck_cards_grain
             ON deck_cards (deck_id, variant, category_id, card_id);";
@@ -4520,6 +4721,7 @@ pub(crate) mod tests {
              {UNDO_V16}
              {UNDO_V17}
              {UNDO_V18}
+             {UNDO_V19}
              PRAGMA user_version = 9;",
         ))
         .unwrap();
@@ -4719,6 +4921,7 @@ pub(crate) mod tests {
              {UNDO_V16}
              {UNDO_V17}
              {UNDO_V18}
+             {UNDO_V19}
              PRAGMA user_version = 10;",
         ))
         .unwrap();
@@ -4739,7 +4942,7 @@ pub(crate) mod tests {
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
-             PRAGMA user_version = 11;"
+             {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
         conn
@@ -4813,7 +5016,7 @@ pub(crate) mod tests {
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
-             PRAGMA user_version = 12;"
+             {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
         conn
@@ -5126,7 +5329,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} PRAGMA user_version = 13;"
+            "{UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -5433,7 +5636,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} PRAGMA user_version = 14;"
+            "{UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -5608,7 +5811,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V16} {UNDO_V17} {UNDO_V18} PRAGMA user_version = 15;"
+            "{UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -5623,13 +5826,17 @@ pub(crate) mod tests {
     /// takes both back off. Nothing references `deck_undo`, so nothing has to come down first
     /// — the trap [`v9_database`] documents on `legal_mask`, which this rung does not have.
     ///
-    /// **It stopped being the "one step below head" fixture at v18**, a title it took from
-    /// [`v15_database`] and handed to [`v17_database`].
+    /// **It held the "one step below head" title and has handed it on** — to
+    /// [`v17_database`], as [`v15_database`] handed it to this one, and v19 has since moved it
+    /// on again to [`v18_database`]. That line has moved with every rung and is left here as
+    /// the record of which fixture the title belonged to.
     fn v16_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V17} {UNDO_V18} PRAGMA user_version = 16;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -5703,17 +5910,17 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    // ---- v18: a deck card names a finish ---------------------------------------------
+    // ---- v19: a deck card names a finish ---------------------------------------------
 
-    /// A database at version 17: everything v17 left behind, and none of v18.
+    /// A database at version 18: everything v18 left behind, and none of v19.
     ///
-    /// Honest for [`UNDO_V13`]'s reason rather than [`UNDO_V17`]'s — v18's DDL is
+    /// Honest for [`UNDO_V13`]'s reason rather than [`UNDO_V17`]'s — v19's DDL is
     /// `ALTER TABLE … ADD COLUMN`, so a fixture that forgot the rewind could not migrate at
-    /// all. It is the "one step below head" fixture now, the title [`v16_database`] held.
-    fn v17_database() -> Connection {
+    /// all. It is the "one step below head" fixture now, the title [`v17_database`] held.
+    fn v18_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V18} PRAGMA user_version = 17;"))
+        conn.execute_batch(&format!("{UNDO_V19} PRAGMA user_version = 18;"))
             .unwrap();
         conn
     }
@@ -5728,7 +5935,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    /// The v18 step over a v17 database: the column arrives, every existing row reads regular,
+    /// The v19 step over a v18 database: the column arrives, every existing row reads regular,
     /// and the grain index comes back carrying the expression.
     ///
     /// **The index half is the one worth driving.** The step drops and recreates
@@ -5737,12 +5944,12 @@ pub(crate) mod tests {
     /// off `sqlite_master` rather than `PRAGMA index_info`, which answers a NULL name for an
     /// expression column and so cannot see the thing that changed.
     #[test]
-    fn the_v18_step_adds_the_finish_column_over_a_v17_database() {
-        let conn = v17_database();
+    fn the_v19_step_adds_the_finish_column_over_a_v18_database() {
+        let conn = v18_database();
         assert_eq!(
             has_column(&conn, "deck_cards", "finish"),
             0,
-            "a v17 database may not already carry v18's column"
+            "a v18 database may not already carry v19's column"
         );
         let deck_id = deck(&conn, "Old");
         let cat = category(&conn, deck_id, "main", "Main deck");
@@ -5777,16 +5984,16 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION);
     }
 
-    /// [`v17_database`] must really sit one step below head, or the tests below it are a fresh
+    /// [`v18_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     ///
-    /// **The fixture named here has changed four times** — v14's, v15's, v16's, now v17's — and
-    /// each move was this assertion going red, which is the whole reason it is written against
-    /// `SCHEMA_VERSION - 1` rather than a number.
+    /// **The fixture named here has changed five times** — v14's, then v15's, then v16's,
+    /// then v17's, now v18's — and each move was this assertion going red, which is the whole
+    /// reason it is written against `SCHEMA_VERSION - 1` rather than a number.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v17_database();
+        let conn = v18_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -5795,19 +6002,188 @@ pub(crate) mod tests {
         assert_eq!(
             has_column(&conn, "deck_cards", "finish"),
             0,
-            "the v18 column must not be there yet"
+            "the v19 column must not be there yet"
         );
 
-        // v17's own table is standing, because this fixture undoes one rung rather than two —
-        // and v16's column below it with it.
+        // v18's own columns are standing, because this fixture undoes one rung rather than
+        // two — and v17's table below them with it.
+        assert!(
+            deck_columns(&conn).contains(&"game_key".to_owned()),
+            "v18's column belongs to this version and must survive the rewind"
+        );
         assert_eq!(
             table_count(&conn, "deck_undo"),
             1,
-            "v17's table belongs to this version and must survive the rewind"
+            "v17's journal belongs to this version and must survive the rewind"
         );
+    }
+
+    // ---- v18: the deck's game, and the platforms a format is playable on ----------------
+
+    /// A database at version 17: everything v17 left behind, and none of v18.
+    ///
+    /// [`v15_database`]'s trick three rungs up, and honest for [`UNDO_V18`]'s reason: two
+    /// `ADD COLUMN`s are the whole of what v18's DDL did, and two `DROP COLUMN`s undo them
+    /// exactly — no index and no constraint names either one. The re-seed needs no undoing;
+    /// [`UNDO_V18`] says why.
+    ///
+    /// **It is the "one step below head" fixture now**, the title [`v16_database`] held.
+    fn v17_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"))
+            .unwrap();
+        conn
+    }
+
+    /// The step itself, from the version below it: both columns arrive, every deck that
+    /// predates them reads `any`, and the 25 format rows come back carrying their platforms.
+    ///
+    /// **`DEFAULT 'any'` is the whole of the upgrade's promise.** There is nothing to back-fill
+    /// — no deck was ever asked which platform it was for — so an existing deck answers exactly
+    /// what it always meant, and the format picker it opens is the unfiltered one it always was.
+    #[test]
+    fn the_v18_step_adds_the_game_columns_over_a_v17_database() {
+        let conn = v17_database();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'Burn', 'modern', unixepoch(), unixepoch());",
+        )
+        .unwrap();
         assert!(
-            deck_columns(&conn).contains(&"default_category_id".to_owned()),
-            "v16's column belongs to this version and must survive the rewind"
+            !deck_columns(&conn).contains(&"game_key".to_owned()),
+            "a v17 database may not already carry v18's column"
+        );
+
+        migrate(&conn).unwrap();
+
+        let game: String = conn
+            .query_row("SELECT game_key FROM decks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            game, "any",
+            "a deck that predates the column was never asked, and `any` is what that means"
+        );
+        assert_eq!(
+            format_games(&conn, "modern"),
+            "paper,mtgo",
+            "the re-seed is what fills the cell — the DDL default would have said all three"
+        );
+        assert_eq!(format_games(&conn, "historic"), "arena");
+        assert_eq!(format_games(&conn, "casual"), "paper,arena,mtgo");
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// One format's `games` cell.
+    fn format_games(conn: &Connection, key: &str) -> String {
+        conn.query_row(
+            "SELECT games FROM format_specs WHERE key = ?1",
+            rusqlite::params![key],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Every cell of every row holds [`GAMES`] words, and nothing else.
+    ///
+    /// **The whole of the fence**, because there is none in SQL: the column arrives by
+    /// `ALTER TABLE … ADD COLUMN`, which cannot carry a CHECK — v12's `last_variant` met this
+    /// first. Unlike that column there is no Rust fence either, and there is nothing for one to
+    /// guard: no command parameter reaches this cell, so [`FORMAT_SPECS_SEED`] is the only
+    /// writer and this test is what holds it to the vocabulary.
+    ///
+    /// A blank cell fails too. `''` would split to one empty word, match no game, and take the
+    /// format silently out of every filtered picker — a format nobody can build for, with
+    /// nothing on screen saying why.
+    #[test]
+    fn a_format_spec_games_cell_holds_only_scryfall_game_words() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT key, games FROM format_specs ORDER BY sort_order")
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows.len(), 25, "every seeded format answers this question");
+
+        for (key, games) in rows {
+            assert!(!games.is_empty(), "`{key}` names no platform at all");
+            for game in games.split(',') {
+                assert!(
+                    GAMES.contains(&game),
+                    "`{key}` names `{game}`, which is not one of {}",
+                    GAMES.join(", ")
+                );
+            }
+        }
+    }
+
+    /// [`DECK_GAMES`] is [`GAMES`] with the sentinel in front, and the two may not drift.
+    ///
+    /// Written out rather than concatenated because a `const` cannot concatenate, which is
+    /// exactly the situation that lets two lists part company with nothing going red.
+    #[test]
+    fn the_deck_game_vocabulary_is_any_plus_the_scryfall_games() {
+        assert_eq!(
+            DECK_GAMES[0], "any",
+            "the sentinel, and the column's default"
+        );
+        assert_eq!(&DECK_GAMES[1..], &GAMES[..]);
+    }
+
+    /// The two seeds describe the same 25 formats and differ by exactly one column.
+    ///
+    /// **This is what makes [`UNDO_V18`] honest**, and it is the cost of the split:
+    /// [`FORMAT_SPECS_SEED_V5`] is frozen history that a fresh install replays, and
+    /// [`FORMAT_SPECS_SEED`] is the one anybody edits, so a correction made to the head seed
+    /// alone is correct and a cell *accidentally* changed there is a v5 database and a v18
+    /// database disagreeing about a rule. Column by column rather than row counts, because a
+    /// typo in one `deck_min` is exactly the shape of drift a count cannot see.
+    #[test]
+    fn the_head_format_seed_agrees_with_v5_on_every_shared_cell() {
+        let shared = "key, display_name, enabled_in_picker, deck_min, deck_max, max_copies, \
+                      sideboard_max, singleton, requires_commander, commander_rule, life, \
+                      restricted_semantic, has_legality_data, max_mana_value, allows_companion, \
+                      sort_order";
+        // Head, through the ladder: v5 writes the frozen copy and v18 replaces it.
+        let head = Connection::open_in_memory().unwrap();
+        migrate(&head).unwrap();
+        // And v5's statement on its own, into a table of the same shape.
+        let old = Connection::open_in_memory().unwrap();
+        migrate(&old).unwrap();
+        old.execute_batch("DELETE FROM format_specs;").unwrap();
+        old.execute_batch(FORMAT_SPECS_SEED_V5).unwrap();
+
+        let read = |conn: &Connection| -> Vec<String> {
+            let sql = format!("SELECT {shared} FROM format_specs ORDER BY sort_order");
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let count = stmt.column_count();
+            let rows = stmt
+                .query_map([], |r| {
+                    let mut cells = Vec::with_capacity(count);
+                    for i in 0..count {
+                        cells.push(format!("{:?}", r.get_ref(i)?));
+                    }
+                    Ok(cells.join(" | "))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>();
+            rows
+        };
+
+        assert_eq!(
+            read(&head),
+            read(&old),
+            "the head seed may add `games` and may not restate any other cell differently"
         );
     }
 
@@ -5888,17 +6264,17 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_eighteen() {
+    fn the_schema_version_is_nineteen() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 18);
+        assert_eq!(SCHEMA_VERSION, 19);
     }
 
-    /// The v18 grain widens rather than the row changing meaning: a foil copy and a regular
+    /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular
     /// copy of one printing, in one pile of one list, are **two rows** — and each folds on
     /// its own.
     ///
@@ -5986,7 +6362,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every deck that predates v18 reads regular, which is what it already meant — so the
+    /// Every deck that predates v19 reads regular, which is what it already meant — so the
     /// step carries **no backfill** and no deck's totals move on the upgrade.
     ///
     /// Driven through the `deck_card` helper, which writes no `finish` at all, exactly as

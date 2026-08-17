@@ -10,6 +10,7 @@ import {
   ZOOM_SECTIONS,
   ZOOM_STEPS,
 } from "@/lib/cardZoom";
+import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
@@ -217,9 +218,24 @@ interface ViewProps {
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** The two marks a card can carry beside its own facts — see the sweep that asserts them. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
 }
+
+/**
+ * One printing filed in **two** piles — the shape the whole `(deck, card, category, variant)`
+ * grain exists for, and the fixture the selection rule turns on.
+ *
+ * Kept out of {@link GROUPS} rather than folded into it, for `SIDE`'s reason: every count and
+ * every order asserted in this file is a claim about that fixture, and a second Sol Ring in it
+ * would have rewritten all of them.
+ */
+const TWO_PILES: CardGroup[] = buildGroups(
+  [card({ name: "Sol Ring" }), card({ name: "Sol Ring", categoryKind: "side" })],
+  [RAMP, SIDE],
+  "category",
+  "alphabetical",
+);
 
 describe.each(VIEWS)("$name", ({ render: renderView }) => {
   const setup = (over: Partial<ViewProps> = {}) => {
@@ -457,11 +473,18 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
    * one", which is why this sweeps an attribute rather than a class — a class is a recipe, and
    * a test that asserted `ring-accent` would go red the day the ring became an outline.
    *
-   * By `cardId`, so a printing filed in two piles is marked in both. Sol Ring is in one here,
-   * which is what makes the count a claim.
+   * **By the slot rather than by the printing**, which is the same address every deck write is
+   * made to — and the same one `DECK_CARD_ATTR` already stamps, so the mark and the caret's way
+   * home cannot spell "which card" two ways.
    */
   it("marks the card the pane is open on", () => {
-    render(renderView({ groups: GROUPS, marketplace: TCG, selectedCardId: "c-Sol Ring" }));
+    render(
+      renderView({
+        groups: GROUPS,
+        marketplace: TCG,
+        selectedSlot: deckCardSlot(RAMP.id, "c-Sol Ring"),
+      }),
+    );
 
     const marked = [...document.querySelectorAll(`[${SELECTED_ATTR}]`)];
     expect(marked).toHaveLength(1);
@@ -471,8 +494,60 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     );
   });
 
+  /**
+   * **One card at a time, and a printing in two piles is two cards.**
+   *
+   * The reported defect, and it was the same defect in all four views: the mark was keyed on
+   * `cardId` alone, so clicking a card the deck holds in both the Main deck and the Sideboard
+   * marked *both* copies — and in `StackView`, where the mark is also what the pile rests open
+   * on, stood a card clear of two stacks from one click. A `deck_cards` row is
+   * `(deck, card, category, variant)`; the click names one row, so the mark does too.
+   *
+   * The count is the claim: `TWO_PILES` holds exactly one printing, twice, so a rule that keyed
+   * on the printing answers 2 here and can answer nothing else.
+   */
+  it("marks one pile's copy when the same printing is filed in two", () => {
+    render(
+      renderView({
+        groups: TWO_PILES,
+        marketplace: TCG,
+        selectedSlot: deckCardSlot(SIDE.id, "c-Sol Ring"),
+      }),
+    );
+
+    const marked = [...document.querySelectorAll(`[${SELECTED_ATTR}]`)];
+    expect(marked).toHaveLength(1);
+    expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
+      DECK_CARD_ATTR,
+      deckCardSlot(SIDE.id, "c-Sol Ring"),
+    );
+  });
+
+  /**
+   * The other half of the same rule: a printing this deck *does* hold, picked in a pile it is
+   * not in, marks nothing. A `cardId` key could not tell this case from the one above — both are
+   * "the deck holds Sol Ring" — which is why the slot is what travels.
+   */
+  it("marks nothing when the picked slot names a pile the card is not in", () => {
+    render(
+      renderView({
+        groups: GROUPS,
+        marketplace: TCG,
+        selectedSlot: deckCardSlot(SIDE.id, "c-Sol Ring"),
+      }),
+    );
+
+    expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
+  });
+
   it("marks nothing when the pane is open on a card this deck does not hold", () => {
-    render(renderView({ groups: GROUPS, marketplace: TCG, selectedCardId: "c-Black Lotus" }));
+    render(
+      renderView({
+        groups: GROUPS,
+        marketplace: TCG,
+        selectedSlot: deckCardSlot(RAMP.id, "c-Black Lotus"),
+      }),
+    );
 
     expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
   });
@@ -797,6 +872,36 @@ describe("the views that are not the table", () => {
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
     expect(screen.getByText("0 cards")).toBeInTheDocument();
   });
+
+  /**
+   * **These three are the app's only scrollers whose drop targets sit flush against their own
+   * content edge, and that cost the leftmost pile its ring.** A `DROP_RING` is a box shadow and
+   * `FOCUS` is an outline, so neither is inside the box that laid the pile out — but `overflow`
+   * clips at the scroller's *padding box*, so with no padding the mark was painted in the clipped
+   * region and the reader saw a ring with a side missing for the whole length of a drag.
+   *
+   * **Written as a class sweep because jsdom cannot see the defect it guards.** There is no
+   * layout engine here, so nothing is clipped, every rect is zero and a rendering assertion would
+   * pass against a view that had lost the padding again — the same reason `focus outline inside
+   * the box that clips it` above is a sweep. The pair is asserted together on purpose: the
+   * padding is only load-bearing *because* of the `overflow`, and a view that dropped the
+   * `overflow-x-auto` would be a different change entirely (the overhang would reach the page and
+   * put an X scrollbar across the whole app, which the 1024px floor forbids).
+   *
+   * The `TableView` is deliberately not one of these: its rows are absolutely positioned inside a
+   * virtualiser, so it draws `ring-inset` and wants no room at all.
+   */
+  it.each([
+    ["StackView", <StackView key="s" groups={GROUPS} marketplace={TCG} />],
+    ["TextView", <TextView key="t" groups={GROUPS} marketplace={TCG} />],
+    ["GridView", <GridView key="g" groups={GROUPS} marketplace={TCG} />],
+  ])("%s leaves its drop marks room inside the box that clips them", (_name, element) => {
+    const { container } = render(element);
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain("overflow-x-auto");
+    expect(root?.className).toContain(DROP_MARK_ROOM);
+  });
 });
 
 describe("StackView flow", () => {
@@ -970,6 +1075,11 @@ describe("StackView flow", () => {
       `repeat(auto-fill, ${stackColumnWidth(DEFAULT_ZOOM)}px)`,
     );
     expect(box.style.gridAutoRows).toBe("1px");
+    // **And no cap, because this deck has no rail.** The cap exists to leave the Sideboard one
+    // gutter from the deck; with nothing drawn after this box, the width past its last column is
+    // desk nobody is looking at, and capping it would narrow the flow for no reader. The `$name
+    // rail` block asserts the other side of the same `if`.
+    expect(box.style.maxWidth).toBe("");
   });
 
   /**
@@ -1056,9 +1166,15 @@ describe("StackView flow", () => {
    * and every one of those four existed for one reason: to hold the rail in view *while the deck's
    * columns scrolled sideways underneath it*. The piles wrap downward now, so nothing passes
    * under the rail — an opaque backdrop would occlude nothing and the seam shadow would draw a
-   * permanent divider across a layout in which nothing moves. `ml-auto` is the whole mechanism
-   * that is left: a no-op while the flow is `flex-1`, and what keeps the rail on the right in the
-   * one case that matters, its own wrapped line.
+   * permanent divider across a layout in which nothing moves.
+   *
+   * **`ml-auto` is asserted absent, and that reverses what this test said until 2026-08-17.** It
+   * was the last mechanism the rail had, and it turned out to be the bug rather than the remainder
+   * of the fix: a margin that eats free space pinned the rail to the right edge of the *desk*, so
+   * everything the flowing box left over — up to very nearly a whole column, and a different
+   * number at every zoom stop — opened as a gap between the deck and the Sideboard. The rail hugs
+   * the deck now, and what holds it one gutter away is the cap on the flowing box
+   * (`flowMaxWidth`), not a margin here. Putting `ml-auto` back restores the gap in full.
    *
    * The negatives are asserted rather than assumed because the alternative shipped: reinstating a
    * sticky rail is a two-word edit that no other test in this file would notice.
@@ -1079,7 +1195,7 @@ describe("StackView flow", () => {
     // Whole class names, never a substring: `bg-bg` is a prefix of nothing here, but `border`
     // inside `border-transparent` is exactly the trap this file's group-chrome block names.
     const classes = rail()!.className.split(" ");
-    expect(classes).toContain("ml-auto");
+    expect(classes).not.toContain("ml-auto");
     // A column of groups — the one box in this view that still stacks piles vertically, which is
     // why the rail changes where a pile sits and nothing about what is in it.
     expect(classes).toContain("flex-col");
@@ -1154,13 +1270,17 @@ describe("StackView flow", () => {
    *
    * **Both kinds, because for the Maybeboard this is the ordinary case rather than the corner
    * one.** A sideboard is switched off by a reader who chose to; the Maybeboard is seeded off, so
-   * under a derived grouping it arrives by this route almost every time. If the split ever grew an
-   * `isActive` check the Sideboard would lose the rail only for readers who had turned it off, and
-   * the Maybeboard would lose it for everybody.
+   * under a derived grouping it arrives by this route almost every time.
    *
-   * Without this, `StackView` could grow a `groupBy` check — or a `group.isActive` one — and
-   * every assertion in this file would stay green while a reader who switched their sideboard
-   * off and grouped by curve lost the rail.
+   * **Both reach the rail by the _kind_ test and not by the switch**, which is why this pair is
+   * still worth its own case now that a switched-off pile is railed anyway (2026-08-17). The two
+   * tests would agree about these two groups whichever ran first, so the assertion cannot tell
+   * them apart — what it can still tell is that the split has not learned about `groupBy`. The
+   * ordering of the two tests is asserted where it can fail: the case below, where the reader's own
+   * switched-off pile lands under a Maybeboard that is switched off too.
+   *
+   * Without this, `StackView` could grow a `groupBy` check and every assertion in this file would
+   * stay green while a reader who switched their sideboard off and grouped by curve lost the rail.
    */
   it.each([
     { kind: "side", name: "Sideboard", id: 2, sortOrder: 2, cardName: "Blood Moon" },
@@ -1349,9 +1469,10 @@ describe.each(COLUMN_VIEWS)(
     const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
     /**
      * The box the deck's own piles flow in — read as the rail's own **previous** sibling rather
-     * than by position in the tree, because the order of the two is load-bearing. `ml-auto` puts
-     * the rail at the right of the line it ends; a rail drawn first would be pinned to the left
-     * with the whole deck flowing after it, and every other assertion here would still pass.
+     * than by position in the tree, because the order of the two is load-bearing. Document order
+     * is the whole of what puts the rail after the deck now that no margin does: a rail drawn
+     * first would sit at the left with the entire deck flowing after it, and every other
+     * assertion here would still pass.
      */
     const flow = () => rail()!.previousElementSibling as HTMLElement;
     const headingsIn = (root: Element) =>
@@ -1425,6 +1546,86 @@ describe.each(COLUMN_VIEWS)(
     });
 
     /**
+     * **A pile the reader switched off is drawn in the rail, under the Sideboard and the
+     * Maybeboard** — the change of 2026-08-17, in both views.
+     *
+     * `is_active = 0` is the whole of what `maybe` ever meant: the pile counts toward nothing —
+     * not size, not copies, not legality — so it is not part of the deck being laid out, and a
+     * column of the desk spent on it was a column spent on cards the reader had already said were
+     * out. The unit half of this is `columns.test.ts`; what only a render can say is that the pile
+     * arrives in the rail's own box, with its heading and its cards, rather than being dropped
+     * somewhere between the two.
+     *
+     * **The order is the assertion that can fail.** `Draw` is `sortOrder` 3, ahead of the
+     * Maybeboard's 4, and it comes out **last** — so `splitRail` really does test the kind before
+     * the switch, and the rail's head stays the two beside-the-deck piles whatever their own
+     * switches say. That matters in the ordinary case rather than a corner: the Maybeboard is
+     * seeded off, so a switch-first split would sink the rail's fixed head under whatever the
+     * reader turned off most recently. Swap those two tests and this is the only thing in the suite
+     * that goes red — every other assertion here answers the same set of headings either way.
+     *
+     * The card is asserted present as well: "Draw is not in the flow" is equally true of a view
+     * that dropped the pile on the floor, and seeing what is in a pile is the whole affordance for
+     * deciding to switch it back on.
+     */
+    it("rails a pile the reader switched off, under the two played beside the deck", () => {
+      const off = { ...DRAW, isActive: false };
+      draw(
+        buildGroups(
+          [
+            card({ name: "Sol Ring" }),
+            card({
+              name: "Rhystic Study",
+              categoryId: off.id,
+              categoryName: off.name,
+              categoryActive: false,
+            }),
+            card({ name: "Rest in Peace", categoryKind: "side" }),
+          ],
+          [RAMP, SIDE, off, MAYBE],
+          "category",
+          "alphabetical",
+        ),
+      );
+
+      expect(headingsIn(flow())).toEqual(["Ramp"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard", "Draw"]);
+      expect(within(rail()!).getByText(/Rhystic Study/)).toBeInTheDocument();
+    });
+
+    /**
+     * **Switching it back on returns it to the flow, in its own place in it.**
+     *
+     * The second half of what the change is for, and the half with nothing behind it: the split is
+     * derived per render, so there is no state to restore and no journey to reverse. Asserted
+     * anyway, because "it comes back" is the promise — and a later edit that cached the rail's
+     * contents, to save re-splitting on every render, would break exactly this and nothing else.
+     *
+     * **`Draw` returns _between_ Ramp and Removal rather than at either end**, which is the part a
+     * cache or a `useState` would get wrong even while it got the membership right. `sortOrder` is
+     * the reader's own arrangement, and the flow is in it.
+     */
+    it("returns a switched-off pile to the flow when it is switched back on", () => {
+      const REMOVAL = category({ id: 7, name: "Removal", kind: "main", sortOrder: 5 });
+      const desk = (isActive: boolean) =>
+        buildGroups(
+          [card({ name: "Sol Ring" }), card({ name: "Rest in Peace", categoryKind: "side" })],
+          [RAMP, SIDE, { ...DRAW, isActive }, MAYBE, REMOVAL],
+          "category",
+          "alphabetical",
+        );
+
+      draw(desk(false));
+      expect(headingsIn(flow())).toEqual(["Ramp", "Removal"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard", "Draw"]);
+      cleanup();
+
+      draw(desk(true));
+      expect(headingsIn(flow())).toEqual(["Ramp", "Draw", "Removal"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
+    });
+
+    /**
      * **The rail is exactly one column wide, inline, in both halves of the `flex` shorthand.**
      *
      * Asserted first against the first box beside it — one number read twice out of the DOM, which
@@ -1471,6 +1672,29 @@ describe.each(COLUMN_VIEWS)(
     });
 
     /**
+     * **And a `maxWidth` at the other end, which is what puts the rail one gutter from the deck**
+     * (added 2026-08-17).
+     *
+     * `flex-1` takes every pixel the rail leaves; a column layout spends only whole columns of it.
+     * The remainder — up to very nearly one column, and a different number at every zoom stop —
+     * used to sit inside the flowing box as dead desk in front of the rail, which is the gap the
+     * reader photographed. `flowMaxWidth` caps the box at the columns it can use, so what is
+     * between the last pile and the Sideboard is the gutter and nothing else.
+     *
+     * **What this can assert is that a cap is there and that it is the floor expression**, and
+     * that limit is jsdom's. `cssstyle` does not reject the value, it rewrites it — the real
+     * string comes back as `min(464px * , * calc(round(100% * , * down - (224px * 224px) …` — so
+     * an exact match here would pin that mangling and go red the day it is fixed. `round(` is the
+     * one substring that survives both readings. The arithmetic is asserted on the pure function
+     * in `columns.test.ts`; whether the browser then draws one gutter is a story play's, in an
+     * engine that lays out.
+     */
+    it("caps the flowing area at whole columns, so nothing is left over before the rail", () => {
+      draw();
+      expect(flow().style.maxWidth).toContain("round(");
+    });
+
+    /**
      * No `side` and no `maybe` group, no rail. A rail drawn unconditionally would hold a column's
      * width of empty space at the right edge of every deck that has neither, which reads as a
      * layout that has simply been given too much room rather than as a bug.
@@ -1484,11 +1708,16 @@ describe.each(COLUMN_VIEWS)(
      *
      * **It is also what protects every column count in this file.** The `StackView columns` block
      * packs decks of ordinary categories, and each of those counts would quietly move the day the
-     * split fired on something wider than `side` and `maybe` — `isPredefined`, say, or a name a
-     * reader typed — failing as arithmetic inside `packColumns`, a long way from the change that
-     * caused it. This says the real thing once, so that failure has somewhere to point. The two
-     * kinds it asserts *do not* rail are exactly the two `splitRail`'s doc gives a reason for
-     * leaving in the flow: a commander and a companion are one card each.
+     * split fired on something wider than it should — `isPredefined`, say, or a name a reader typed
+     * — failing as arithmetic inside `packColumns`, a long way from the change that caused it. This
+     * says the real thing once, so that failure has somewhere to point.
+     *
+     * **Every category here is switched on, and that is now part of the fixture rather than an
+     * accident of it** (2026-08-17). The switch is the split's second test, so a deck with a pile
+     * turned off has a rail; "nothing played beside it" means every pile counts and none of the
+     * three kinds present is `side` or `maybe`. The two kinds it asserts *do not* rail are exactly
+     * the two `splitRail`'s doc gives a reason for leaving in the flow — a commander and a
+     * companion are one card each — and that exemption holds only while they are on.
      */
     it("draws no rail when nothing in the deck is played beside it", () => {
       draw(
@@ -1605,12 +1834,34 @@ describe("GridView tiles", () => {
   });
 
   /**
-   * The foot and the gutter grow with the card and hold at their own size going down, and the
-   * controls sit **on** the foot at either end — which is the derivation worth pinning, because
-   * the bar's offset was a fixed utility for as long as the foot was a fixed height, and the two
-   * would have parted company at exactly the zoom nobody looks at.
+   * The tile publishes the reader's zoom as the two custom properties every mark drawn on it sizes
+   * itself against — the copy count, the tag dot, the rule break, the gem in the foot and the
+   * stepper laid over it. It is a variable rather than a prop because three of those five are also
+   * drawn in this view's table and text siblings, where nothing zooms and the `, 1` fallback is the
+   * answer. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+   *
+   * **jsdom resolves no `calc()`**, so this pins the publishing and not the result: a mark whose
+   * class was mistyped reads identically here, and a mistyped Tailwind arbitrary value emits no
+   * rule at all. The sizes are a live pass's to answer.
    */
-  it("grows the foot and the gutter with the tiles, and never shrinks them", () => {
+  it("publishes the deck's card scale to the marks on the tile", () => {
+    draw(2);
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("2");
+    expect(tile().style.getPropertyValue("--control-scale")).toBe("1.7");
+    cleanup();
+
+    draw(0.5);
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("0.5");
+    expect(tile().style.getPropertyValue("--control-scale")).toBe("0.425");
+  });
+
+  /**
+   * The foot moves with the card in **both** directions now and the gutter still holds at its own
+   * size going down, and the controls sit **on** the foot at either end — which is the derivation
+   * worth pinning, because the bar's offset was a fixed utility for as long as the foot was a fixed
+   * height, and the two would have parted company at exactly the zoom nobody looks at.
+   */
+  it("moves the foot with the tiles both ways, and floors only the gutter", () => {
     draw(2);
     expect(wall().style.gap).toBe("20px");
     expect(foot().style.height).toBe("40px");
@@ -1618,13 +1869,20 @@ describe("GridView tiles", () => {
     expect(controls().style.bottom).toBe("40px");
     cleanup();
 
-    // Half size: the card halves, and none of the three follows it down.
+    // Half size: the card halves and **the foot halves with it**, because everything standing in
+    // that foot — the gem, the price, the stepper over it — is drawn to `--mark-scale` now. It
+    // used to hold at 20px and 9px, on the argument that a 4px caption is not type; that argument
+    // was about chrome the zoom could not reach.
+    //
+    // The gutter is the one thing here that still floors, and the difference is what it measures:
+    // it is the space *between* two cards rather than anything drawn *on* one, so there is nothing
+    // for it to stay in step with, and 5px of gap is a wall that reads as a single sheet.
     draw(0.5);
     expect(tile().style.width).toBe("75px");
     expect(wall().style.gap).toBe("10px");
-    expect(foot().style.height).toBe("20px");
-    expect(foot().style.fontSize).toBe("9px");
-    expect(controls().style.bottom).toBe("20px");
+    expect(foot().style.height).toBe("10px");
+    expect(foot().style.fontSize).toBe("5px");
+    expect(controls().style.bottom).toBe("10px");
   });
 
   /**

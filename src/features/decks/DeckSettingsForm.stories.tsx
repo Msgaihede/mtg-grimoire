@@ -92,6 +92,7 @@ function Body({
   const folders = useDeckFolders();
 
   const [value, setValue] = useState<DeckSettingsValue>(() => ({
+    gameKey: row?.gameKey ?? "any",
     name: row?.name ?? "",
     formatKey: row?.formatKey ?? DEFAULT_FORMAT,
     description: row?.description ?? "",
@@ -118,17 +119,21 @@ function Body({
   const [pendingFileName, setPendingFileName] = useState<string | null>(null);
 
   /** `pickerFormats` is the **host's** call, which is why the form takes a sorted list rather
-   *  than sorting one: only a host knows whether the deck's own format has to be folded in. */
+   *  than sorting one: only a host knows whether the deck's own format has to be folded in —
+   *  and, since the game select landed, which platform to narrow the list to. Narrowed against
+   *  the **draft's** game rather than the row's, so changing the select in a story re-filters
+   *  the one beside it exactly as it does in the app. */
   const formats = useMemo(() => {
     const picker = pickerFormats(
       specs,
       row ? { key: row.formatKey, name: row.formatName ?? row.formatKey } : null,
+      value.gameKey,
     );
     // The create host's fallback, and the one launch that needs it: the seeded table has not
     // answered yet, and a select still has to say what it would make. Casual, which is
     // `decks.format_key`'s own DDL default.
     return picker.length === 0 ? [{ key: DEFAULT_FORMAT, name: "Casual" }] : picker;
-  }, [specs, row]);
+  }, [specs, row, value.gameKey]);
 
   const paths = useMemo(() => folderPaths(folders.folders), [folders.folders]);
 
@@ -269,6 +274,52 @@ export const NewDeck: Story = {
     // One press, one event: the field is not blurred, so nothing commits alongside it.
     await expect(args.onCommit).not.toHaveBeenCalled();
     await expect(name).toHaveFocus();
+  },
+};
+
+/**
+ * **The game narrows the format list, and the deck's own format survives the narrowing.**
+ *
+ * The fixture is a Modern deck. Setting the game to Arena drops every format Arena cannot play
+ * — Modern among them — and Modern is still on the list, folded back in by `pickerFormats`'
+ * `keep`. That is the whole of "setting a game never re-formats a deck", drawn: the select still
+ * shows its own value, so the reader's next unrelated change writes the format they can see.
+ *
+ * Setting it back to Any restores the full list, which is what makes this a *filter* rather than
+ * an edit — nothing was written to the deck but the one word.
+ */
+export const GameNarrowsTheFormats: Story = {
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    const game = await canvas.findByLabelText("Game");
+    await expect(game).toHaveValue("any");
+    const format = canvas.getByLabelText("Format");
+    const optionCount = () => within(format).getAllByRole("option").length;
+    // **Wait for the seeded table before measuring anything.** `format_specs` is a query, and
+    // until it lands `pickerFormats` answers the deck's own format alone — `keep` folds it in
+    // whether or not the specs arrived, so the select is a one-row list that *looks* like a
+    // narrowed one. A `wide` captured there is 1, and "fewer than 1" is unreachable.
+    await waitFor(async () => {
+      await expect(within(format).getByRole("option", { name: "Commander" })).toBeInTheDocument();
+    });
+    const wide = optionCount();
+
+    await userEvent.selectOptions(game, "arena");
+
+    await expect(args.onChange).toHaveBeenLastCalledWith({ gameKey: "arena" });
+    await waitFor(async () => {
+      await expect(optionCount()).toBeLessThan(wide);
+    });
+    // The deck's own format, kept — and still what the select is showing.
+    await expect(within(format).getByRole("option", { name: "Modern" })).toBeInTheDocument();
+    await expect(format).toHaveValue("modern");
+
+    await userEvent.selectOptions(game, "any");
+
+    await waitFor(async () => {
+      await expect(optionCount()).toBe(wide);
+    });
   },
 };
 

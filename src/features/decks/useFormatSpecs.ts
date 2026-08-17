@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ipc, type FormatSpec } from "@/lib/ipc";
+import { ipc, type DeckGame, type FormatSpec } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
 
 /** Stable identity for "no specs yet", so a consumer's `useMemo` over `specs` does not
@@ -63,6 +63,58 @@ export interface FormatOption {
 }
 
 /**
+ * A deck that has not been pinned to a platform — `decks.game_key`'s own DDL default and
+ * `deck::DEFAULT_GAME`, spelled here because the picker has to *select* something.
+ *
+ * **It is the whole of what "Any" does**: `pickerFormats` offers every format under it, so a
+ * deck nobody has answered this question for behaves exactly as it did before the control
+ * existed. That is why it is the default of the argument rather than a case inside it.
+ *
+ * Here rather than beside {@link DEFAULT_FORMAT} in `FormatSelect.tsx`, which is where the
+ * format's own default lives: this module is imported *by* that one, so a constant going the
+ * other way would be a cycle. It belongs here on its own merits too — the game is a fact about
+ * how the format list is read, and that is this module's subject.
+ */
+// `satisfies` and not a `: DeckGame` annotation, which is load-bearing rather than a style
+// choice: annotated, the constant's type widens to the whole union, and `game === ANY_GAME`
+// then narrows nothing — so `playableIn`'s `spec.games.includes(game)` would be handed a
+// `DeckGame` where a `Game` is wanted. This keeps the literal type *and* the check.
+export const ANY_GAME = "any" satisfies DeckGame;
+
+/**
+ * The four rows a game picker offers, **in the order it offers them** — `Any` first and then
+ * the three platforms.
+ *
+ * **Deliberately not through `sortOptions`**, and one of the exemptions `src/lib/options.ts`
+ * names: `Any` is a pinned row like `Any format`, and the three under it are a ladder rather
+ * than an alphabet — Paper is where nearly every deck lives, and alphabetical order would put
+ * Arena in front of it and MTGO between. It is four rows a reader learns the position of.
+ *
+ * The keys are `schema::DECK_GAMES` and the words are this list's alone: Rust stores which
+ * platform was named and has no display name to answer with, which is why {@link DeckRow}
+ * carries a `gameKey` and no `gameName`.
+ */
+export const GAME_OPTIONS: readonly { key: DeckGame; name: string }[] = [
+  { key: ANY_GAME, name: "Any" },
+  { key: "paper", name: "Paper" },
+  { key: "arena", name: "Arena" },
+  { key: "mtgo", name: "MTGO" },
+];
+
+/**
+ * What a stored `gameKey` is called on screen.
+ *
+ * Falls back to the key itself rather than to "Any", because `decks.game_key` carries no CHECK
+ * — `ALTER TABLE … ADD COLUMN` cannot add one — so a value this list has never heard of is a
+ * state that can exist, and showing it is how anybody would find out. Silently calling it
+ * "Any" would hide the one thing worth seeing. {@link DeckRow.formatName}'s `?? formatKey`
+ * rule, applied to the column beside it.
+ */
+export function gameLabel(key: string): string {
+  return GAME_OPTIONS.find((g) => g.key === key)?.name ?? key;
+}
+
+/**
  * The formats a picker offers, in the order it offers them.
  *
  * Three controls ask this question — {@link FormatSelect} (both dialogs that create a deck),
@@ -70,32 +122,62 @@ export interface FormatOption {
  * from three near-identical `useMemo`s. It is one shape here so they cannot drift into three
  * answers.
  *
- * Two rules, and neither of them is the backend's:
+ * Three rules, and none of them is the backend's:
  *
  * * `enabledInPicker` is the whole of why **Future Standard** — a format you can test a card
  *   against and cannot build for — is not offered. It is a cell of the seed, so this filters
  *   rather than naming the key.
+ * * **`game` narrows the list to the formats that platform can play**, read off the seed's
+ *   `games` cell by {@link playableIn}. `ANY_GAME` — the argument's default, and what every
+ *   deck is born on — narrows nothing, so this is a no-op for a caller that has not been
+ *   given a game. It is applied **before** `keep`, deliberately: the reader's own format is
+ *   folded back in afterwards, so setting a deck to Arena never takes Modern off the select
+ *   that is showing Modern.
  * * The order is **alphabetical by display name**, not `sortOrder`. The seed's ranking runs
  *   Standard, Future Standard, Historic, Timeless, Gladiator, Pioneer, Modern… which is the
  *   right thing for `format_specs` to say and no help at all to a reader looking for Modern,
  *   who looks under M. `src/lib/options.ts` carries the app-wide rule and the collator.
  *
- * `keep` is the deck's own format, passed by the two surfaces that edit an existing deck: a
- * select that cannot show its own value would silently re-format the deck on the first other
- * change, and `decks.format_key` is deliberately not a foreign key, so a deck whose format
- * left the seed is a state that can exist. It is added only when the picker does not already
- * carry it, and **folded into the alphabet rather than pinned first** — it is an option like
- * any other, and the `<select>`'s own `value` already marks it as the current one.
+ * `keep` is the deck's own format, passed by the surfaces that edit an existing deck: a select
+ * that cannot show its own value would silently re-format the deck on the first other change.
+ * It is added only when the picker does not already carry it, and **folded into the alphabet
+ * rather than pinned first** — it is an option like any other, and the `<select>`'s own `value`
+ * already marks it as the current one.
+ *
+ * **There are two ways a deck's format can be missing from the list, and `keep` answers both.**
+ * The old one is a format that left the seed — `decks.format_key` is deliberately not a foreign
+ * key, so that state can exist. The new one is the ordinary case rather than the edge: a Modern
+ * deck whose reader sets the game to Arena. Modern is not an Arena format, the filter drops it,
+ * and `keep` puts it back — which is the whole of what "setting a game never re-formats a deck"
+ * means on this side.
  */
 export function pickerFormats(
   specs: readonly FormatSpec[],
   keep?: FormatOption | null,
+  game: DeckGame = ANY_GAME,
 ): FormatOption[] {
   const picker = specs
-    .filter((s) => s.enabledInPicker)
+    .filter((s) => s.enabledInPicker && playableIn(s, game))
     .map((s) => ({ key: s.key, name: s.displayName }));
   return sortOptions(
     keep && !picker.some((f) => f.key === keep.key) ? [...picker, keep] : picker,
     (f) => f.name,
   );
+}
+
+/**
+ * Whether a format can be played on the platform the reader named.
+ *
+ * `ANY_GAME` is every format, which is what makes the argument's default a no-op and is why no
+ * caller that has not thought about games had to change.
+ *
+ * **`spec.games` is the seeded cell and the whole of the test** — never a list of keys spelled
+ * out here, for the reason `enabledInPicker` is read rather than naming `future`: a rule
+ * written twice is a rule that has to be corrected twice, and this one is genuinely likely to
+ * be corrected (Commander on MTGO is a judgement call the seed names as one). An **empty**
+ * `games` therefore answers `false` for every real platform, which is the fail-closed half of a
+ * fact Rust guarantees is never empty — see {@link FormatSpec.games}.
+ */
+function playableIn(spec: FormatSpec, game: DeckGame): boolean {
+  return game === ANY_GAME || spec.games.includes(game);
 }

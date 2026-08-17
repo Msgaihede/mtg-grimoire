@@ -17,7 +17,13 @@ import type {
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { dragOnto, startDrag } from "@/test-drag";
-import { CARD_BODY_ATTR, DECK_CARD_VARIANT, DECK_GROUP_ATTR, LANDED_ATTR } from "./cardControl";
+import {
+  CARD_BODY_ATTR,
+  DECK_CARD_VARIANT,
+  DECK_GROUP_ATTR,
+  LANDED_ATTR,
+  SELECTED_ATTR,
+} from "./cardControl";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
 import { card, resetRowIds, spec } from "./validation/fixtures";
@@ -153,6 +159,7 @@ const UNDOABLE = {
 };
 
 const DECK: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",
@@ -632,6 +639,43 @@ describe("DeckEditor", () => {
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual(["Casual", "Commander", "Gladiator", "Historic", "Modern"]);
+  });
+
+  /**
+   * The game select, and **the two things it does are one write and one filter**.
+   *
+   * The write is an ordinary `deckUpdate` on `gameKey` alone — no `formatKey` rides with it,
+   * which is what "setting a game never re-formats a deck" means on the wire. The filter is
+   * `pickerFormats`': Arena keeps Gladiator and Casual out of `PICKER`'s four and drops
+   * Commander, and **Modern is still there because it is this deck's own** — folded back in by
+   * `keep`, which is the whole reason a Modern deck can say Arena at all.
+   *
+   * The list is read after the write rather than in the same act, because the deck row is what
+   * feeds it: the mock has to answer before the header can redraw.
+   */
+  it("narrows the format list to the deck's game, keeping the deck's own format", async () => {
+    await open();
+    const game = screen.getByLabelText("Deck game");
+    expect(game).toHaveValue("any");
+    expect(
+      within(game)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Any", "Paper", "Arena", "MTGO"]);
+
+    deckGet.mockResolvedValue(detail({ gameKey: "arena" }, [bolt()]));
+    deckUpdate.mockResolvedValue({ ...DECK, gameKey: "arena" });
+    await userEvent.selectOptions(game, "arena");
+
+    expect(deckUpdate).toHaveBeenCalledWith(DECK.id, { gameKey: "arena" });
+    await waitFor(() =>
+      expect(
+        within(screen.getByLabelText("Deck format"))
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toEqual(["Casual", "Gladiator", "Modern"]),
+    );
+    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
   });
 
   /** The caret starts in the editor rather than on `<body>`: the gallery's New deck button —
@@ -1437,6 +1481,75 @@ describe("DeckEditor", () => {
    * same write — the property this asserts is the store's, and this is where it can be seen
    * happening between two surfaces one screen apart.
    */
+  /**
+   * **One card at a time, and a printing in two piles is two cards** — the reported defect, at
+   * the seam that produced it.
+   *
+   * `views.test.tsx` pins the four views against a slot they are handed; this pins what the
+   * editor *hands* them. The mark used to be `selectedCardId` read straight off the store, so a
+   * click on the Main deck's Bolt also marked the Sideboard's — and in Stacks, which is the view
+   * under test here, stood a card clear of two piles from one press. `paneDeckContext` is where
+   * the answer already was: it is the store's own record of which row the card came out of.
+   *
+   * Named by the slot in the DOM as well as counted, because a count of 1 would also pass if the
+   * mark had landed on the *wrong* copy.
+   */
+  it("marks one copy when the deck holds the card in two piles", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt(), bolt({ categoryKind: "side", categoryId: SIDE, quantity: 1 })]),
+    );
+
+    await open();
+    // The fixture is the claim: two drawn copies, or the count below passes for want of a
+    // second card rather than because the rule is right.
+    expect(
+      document.querySelectorAll(`[${DECK_CARD_ATTR}$="c-Lightning Bolt"]`),
+    ).toHaveLength(2);
+
+    await userEvent.click(
+      within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
+    );
+
+    const marked = [...document.querySelectorAll(`[${SELECTED_ATTR}]`)];
+    expect(marked).toHaveLength(1);
+    expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
+      DECK_CARD_ATTR,
+      deckCardSlot(MAIN, "c-Lightning Bolt"),
+    );
+  });
+
+  /**
+   * **A card opened from anywhere that is not a row of this deck marks no row of it**, which is
+   * the deliberate second half of the change above.
+   *
+   * The panel's tiles go through `setSelectedCardId`, which clears `paneDeckContext` in the same
+   * write — so there is no slot, and nothing is picked. The rule this replaced marked the deck's
+   * copy by `cardId`, which sounds like a courtesy and is the reported defect reached by a
+   * different gesture: a panel tile for a card the deck holds in two piles lit up both. There is
+   * no one slot to pick here, so the honest answer is none.
+   *
+   * The panel is searched for a card the deck already holds, which is the only shape of this
+   * that could ever have marked anything.
+   */
+  it("marks no deck row for a card opened from the docked panel", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Lightning Bolt")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(1);
+
+    await openSearchPanel();
+    const panel = screen.getByRole("region", { name: "Add cards" });
+    await userEvent.click(await within(panel).findByRole("button", { name: /^Lightning Bolt/ }));
+
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+    expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
+  });
+
   it("opens a panel tile as a card and not as a row of this deck", async () => {
     searchCards.mockResolvedValue({
       items: [found("Goblin Guide")],

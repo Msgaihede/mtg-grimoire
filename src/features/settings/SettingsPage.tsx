@@ -4,6 +4,7 @@ import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { useReleaseHistory } from "@/lib/useReleaseHistory";
 
 /**
  * Settings.
@@ -18,6 +19,12 @@ import { useMarketplace } from "@/lib/useMarketplace";
  * *here*, because nothing else in the window reads it — it is not polled, it has no
  * listener, and there is no second surface for it to race.
  *
+ * The version history is hooked up here for the error log's reason and one more of its own:
+ * it reads a row the update check already wrote, so there is nothing in flight for a second
+ * caller to race — and hooking it in `AppShell` beside `useUpdate` would fetch thirty release
+ * bodies at launch for a panel most sessions never open. It takes `lastCheckAt` so that
+ * pressing Check now moves its query key and refreshes the list.
+ *
  * The marketplace is hooked up here for the same reason arrived at from the other side. Half
  * the window reads it — every price surface asks `useMarketplace()` for its currency — and
  * that is precisely why a second call here is free: it is one TanStack Query entry with
@@ -28,10 +35,11 @@ import { useMarketplace } from "@/lib/useMarketplace";
 export function SettingsPage({ update }: { update: Update }) {
   const log = useErrorLog();
   const marketplace = useMarketplace();
+  const history = useReleaseHistory(update.status?.lastCheckAt ?? null);
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
-      <UpdatePanel update={update} />
+      <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
 

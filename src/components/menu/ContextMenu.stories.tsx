@@ -266,6 +266,7 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
 /** One deck of the gallery, filed in `Constructed › Commander` — folder 2 of the fake's seeded
  *  three, so its **Move to** really has a folder to mark `Here now`. */
 const DECK: DeckRow = {
+  gameKey: "any",
   id: 2,
   name: "Kenrith Two-Drops",
   formatKey: "commander",

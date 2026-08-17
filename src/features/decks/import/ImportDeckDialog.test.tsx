@@ -119,6 +119,7 @@ const CARDS: Record<string, ImportMatch> = {
 };
 
 const DECK: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Sisay",
   formatKey: "commander",
@@ -605,7 +606,13 @@ describe("the import deck dialog", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Import" }));
 
     await waitFor(() =>
-      expect(deckCreate).toHaveBeenCalledWith({ name: "Bant Ramp", formatKey: "casual" }),
+      expect(deckCreate).toHaveBeenCalledWith({
+        name: "Bant Ramp",
+        formatKey: "casual",
+        // The dialog's own game select, on the row it starts on: `any`, so the format list it
+        // offered was the unnarrowed one.
+        gameKey: "any",
+      }),
     );
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(MADE.id, "live", "merge", [

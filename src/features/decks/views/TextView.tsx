@@ -5,7 +5,7 @@
  * this deck" rather than "what does this card do". No art at all — a line is a quantity, a
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -29,11 +29,12 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
-import { packColumns, RAIL_ATTR, splitRail } from "./columns";
+import { flowMaxWidth, packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /** Row pitch and header height, for the packer. Read off the classes below. */
@@ -47,14 +48,24 @@ const GROUP_GAP = 16;
  * Fixed, unlike `StackView`'s: nothing here is drawn at a size the reader picked, because a line
  * of text is not a card and Ctrl+wheel never reaches this view.
  *
- * **One constant, read three times**: the packed column's width, both halves of its `flex`
- * shorthand, and the flowing area's `minWidth` — which is the number that decides whether the
- * rail fits beside the columns. A second spelling of "300px" would let the rail wrap at
+ * **One constant, read four times**: the packed column's width, both halves of its `flex`
+ * shorthand, the flowing area's `minWidth` — which is the number that decides whether the
+ * rail fits beside the columns — and the rail's own width, which {@link flowMaxWidth} subtracts to
+ * find how many columns fit beside it. A second spelling of "300px" would let the rail wrap at
  * a width the columns had stopped agreeing with, and the layout would be wrong only in the narrow
  * window nobody develops in. It stays an **inline style** rather than a Tailwind class for the
  * usual reason: the scanner reads source text, so a class built from a constant emits no rule.
  */
 const COLUMN_WIDTH = "18.75rem";
+
+/**
+ * The gutter between two columns, and between the last of them and the rail — the `gap-6` this
+ * view's two boxes both carry, written out because {@link flowMaxWidth} does arithmetic with it.
+ *
+ * A `rem` rather than the 24px it computes to, so it is the class's own value rather than a
+ * translation of it, and so it stays beside `COLUMN_WIDTH` in the unit that constant is in.
+ */
+const COLUMN_GAP = "1.5rem";
 
 /** How tall a group is here, so `packColumns` can fill a column without measuring. */
 export function groupHeight(group: CardGroup): number {
@@ -67,7 +78,7 @@ export function TextView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   columnHeight = 640,
   className,
@@ -80,9 +91,10 @@ export function TextView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
-  /** The printing the pane is open on. A line has no room for a ring around a card face, so it
-   *  says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of gold on it. */
-  selectedCardId?: string | null;
+  /** The slot the pane is open on ({@link deckCardSlot}). A line has no room for a ring around a
+   *  card face, so it says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of
+   *  gold on it. By the slot rather than the printing; `CardStack` has why. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
@@ -103,11 +115,12 @@ export function TextView({
   columnHeight?: number;
   className?: string;
 }) {
-  // The Sideboard and the Maybeboard are lifted out before anything is packed, so `packColumns` is
-  // handed a shorter list and none of its own rules change. Each is a category like any other to a
-  // greedy in-order pack, which drops it wherever it lands — usually the far end of a long run,
-  // i.e. the two piles a reader looks for by position, in the one place they can never be.
-  // {@link splitRail} has which kinds, and why the rail is not sorted here.
+  // The Sideboard, the Maybeboard and every pile the reader has switched off are lifted out before
+  // anything is packed, so `packColumns` is handed a shorter list and none of its own rules change.
+  // Each is a category like any other to a greedy in-order pack, which drops it wherever it lands —
+  // usually the far end of a long run, i.e. the piles a reader looks for by position, in the one
+  // place they can never be. {@link splitRail} has which piles, why the kind is tested before the
+  // switch, and why the rail is not sorted here.
   const { flow, rail } = splitRail(groups);
   const columns = packColumns(flow, groupHeight, columnHeight);
 
@@ -132,9 +145,15 @@ export function TextView({
     // a box taller than both, and `align-content`'s initial `normal` is a **stretch** that shares
     // the leftover height out between them, hanging the rail in the middle of the desk under a
     // short list. `items-start` aligns an item inside its line and can say nothing about this.
+    //
+    // {@link DROP_MARK_ROOM} for `StackView`'s reason — this box clips at its padding box, so with
+    // none the first column's group rings and the rail's were sliced down the edge for the length
+    // of every drag. It is the one of the three that had it on both axes at once: a wrapping box
+    // with no height of its own puts the first line's groups against the top content edge too.
     <div
       className={cn(
         "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-x-auto",
+        DROP_MARK_ROOM,
         className,
       )}
     >
@@ -145,10 +164,29 @@ export function TextView({
           that; a `ResizeObserver` could, and is refused — a view has no business observing its
           own box. `items-start` keeps a column its own height rather than its line's.
 
+          **`maxWidth` is the ceiling that pairs with it** (added 2026-08-17), and it is
+          `StackView`'s change arriving here because this box had the same defect by the same
+          route: `flex-1` takes every pixel the rail leaves, wrapped columns of a fixed width spend
+          only whole ones, and the remainder sat inside this box as dead desk between the last
+          column and the Sideboard. {@link flowMaxWidth} caps it at the columns that fit, and at
+          `columns.length` when the desk holds more of them than the pack produced — so the rail is
+          one `gap-6` from the deck at every width. It cannot disturb the narrow case above: CSS
+          resolves a `max-width` below a `min-width` in the minimum's favour. **Only while a rail is
+          drawn**, since with nothing after this box the remainder is desk nobody is looking at.
+
           It carries no `content-start`: the outer `items-start` never stretches this box, so it
           is exactly as tall as the lines inside it and an `align-content` here would have no
           free space to work in. The root above is where that rule bites. */}
-      <div style={{ minWidth: COLUMN_WIDTH }} className="flex flex-1 flex-wrap items-start gap-6">
+      <div
+        style={{
+          minWidth: COLUMN_WIDTH,
+          maxWidth:
+            rail.length > 0
+              ? flowMaxWidth(COLUMN_WIDTH, COLUMN_GAP, columns.length)
+              : undefined,
+        }}
+        className="flex flex-1 flex-wrap items-start gap-6"
+      >
         {columns.map((column, index) => (
           <div
             key={index}
@@ -163,7 +201,7 @@ export function TextView({
                 violations={violations}
                 onSelect={onSelect}
                 actions={actions}
-                selectedCardId={selectedCardId}
+                selectedSlot={selectedSlot}
                 landed={landed}
               />
             ))}
@@ -171,24 +209,33 @@ export function TextView({
         ))}
       </div>
 
-      {/* The Sideboard and the Maybeboard, in the reader's own `sortOrder` — nothing here
-          re-arranges them. Drawn for an **empty** pile too, which is the case worth stating: an
-          empty pile is where the next card of that kind goes, and a rail that appeared with the
-          first card would shove the whole layout sideways under the reader's hand mid-drag.
+      {/* The Sideboard and the Maybeboard, and under them every pile the reader has switched off —
+          both runs in the reader's own `sortOrder`, and nothing here re-arranges either. Drawn for
+          an **empty** pile too, which is the case worth stating: an empty pile is where the next
+          card of that kind goes, and a rail that appeared with the first card would shove the whole
+          layout sideways under the reader's hand mid-drag.
 
           A group in here is the same `TextGroup` as one in the flow, so its heading, its aria and
           its drop target need no second definition — the rail is where it is drawn, not what it
-          is. **That is also the whole answer to the Maybeboard being seeded switched off**: this
-          rail will routinely hold a dimmed pile, and it takes no code here, because the dimming
-          belongs to the group and travels with it. */}
+          is. **That is the whole answer to the Maybeboard being seeded switched off**: this rail
+          has always held a dimmed pile, and it takes no code here, because the dimming belongs to
+          the group and travels with it. **It is also the whole answer to the switched-off half**
+          (added 2026-08-17): those piles arrive dimmed by the same route, and switching one back on
+          returns it to the pack at its own `sortOrder`, because `splitRail` is derived per render
+          and nothing here remembers where a pile was drawn last. */}
       {rail.length > 0 && (
         <div
           {...{ [RAIL_ATTR]: "" }}
           style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
-          // `ml-auto` is a no-op while the flowing area is `flex-1` and does the whole job in the
-          // one case that matters: the rail has wrapped onto a line of its own and should still
-          // be on the right, where the reader last saw it.
-          className="ml-auto flex flex-col gap-4"
+          // **No `ml-auto`, and that absence is the change of 2026-08-17.** It pinned this box to
+          // the right edge of the *desk* rather than to the right of the deck, which meant it
+          // absorbed the whole of the flowing box's leftover width — a margin that eats free space
+          // cannot be asked to eat all but one gutter of it. The cap on that box is what holds the
+          // spacing now, and this is a plain flex child one `gap-6` after it. The wrapped line is
+          // what it costs: too narrow for a column beside the rail and the rail goes *under* the
+          // deck, at the left, where this used to hold it right. `StackView` carries the whole
+          // argument at its own rail.
+          className="flex flex-col gap-4"
         >
           {rail.map((group) => (
             <TextGroup
@@ -198,7 +245,7 @@ export function TextView({
               violations={violations}
               onSelect={onSelect}
               actions={actions}
-              selectedCardId={selectedCardId}
+              selectedSlot={selectedSlot}
               landed={landed}
             />
           ))}
@@ -216,7 +263,7 @@ function TextGroup({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
 }: {
   group: CardGroup;
@@ -225,7 +272,7 @@ function TextGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the lines — see {@link TextView}'s own props. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
@@ -264,7 +311,7 @@ function TextGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
-              selected={card.cardId === selectedCardId}
+              selected={deckCardSlot(card.categoryId, card.cardId) === selectedSlot}
               landedKey={landed?.get(card.id)}
             />
           ))}

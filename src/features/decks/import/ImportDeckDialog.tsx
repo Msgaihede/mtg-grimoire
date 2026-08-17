@@ -5,6 +5,7 @@ import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
   ipcError,
+  type DeckGame,
   type DeckVariant,
   type ImportMatch,
   type ImportMode,
@@ -15,9 +16,9 @@ import { statusLine } from "@/lib/motion";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
 import { DeckDialog } from "../DeckDialog";
-import { DEFAULT_FORMAT, FormatSelect } from "../FormatSelect";
+import { DEFAULT_FORMAT, FormatSelect, GameSelect } from "../FormatSelect";
 import { DEFAULT_VARIANT, useDeck } from "../useDeck";
-import { useFormatSpecs } from "../useFormatSpecs";
+import { ANY_GAME, useFormatSpecs } from "../useFormatSpecs";
 import { parseDecklist } from "./parse";
 import {
   buildImportPlan,
@@ -269,6 +270,15 @@ function ImportBody({
   /** What the format select starts on for a `new` target, and dead state for a `deck` one —
    *  seeded at mount, so nothing can land on top of a format the reader has picked. */
   const [formatKey, setFormatKey] = useState(defaultFormatKey);
+  /**
+   * Which platform the new deck is for, and the whole of what narrows the format select beside
+   * it. Dead state for a `deck` target, like `formatKey`.
+   *
+   * **`ANY_GAME` rather than a remembered value**, `CreateDeckDialog`'s `BLANK` rule and its
+   * reason: there is no `last_deck_game`, because a filter a reader set to find one format
+   * would otherwise open the next dialog with most of the list already hidden.
+   */
+  const [gameKey, setGameKey] = useState<DeckGame>(ANY_GAME);
   const [mode, setMode] = useState<ImportMode>("merge");
   /** The commander the reader picked out of the candidates — plural, because a partner pair is
    *  two. Only ever read when the plan is asking. */
@@ -394,7 +404,7 @@ function ImportBody({
     }
     if (trimmedName === "") return;
     importIntoNewDeck.mutate(
-      { name: trimmedName, formatKey, items },
+      { name: trimmedName, formatKey, gameKey, items },
       { onSuccess: ({ deck, outcome }) => onImported(deck.id, outcome) },
     );
   };
@@ -541,8 +551,18 @@ function ImportBody({
                 )}
               />
             </div>
+            {/* Before the format, because it narrows it — `DeckSettingsForm`'s ordering, for
+                its reason. */}
+            <div className="w-32">
+              <GameSelect id={`${id}-game`} value={gameKey} onChange={setGameKey} />
+            </div>
             <div className="w-48">
-              <FormatSelect id={`${id}-format`} value={formatKey} onChange={setFormatKey} />
+              <FormatSelect
+                id={`${id}-format`}
+                value={formatKey}
+                onChange={setFormatKey}
+                game={gameKey}
+              />
             </div>
           </div>
         )}
