@@ -128,7 +128,7 @@ Every deck-card command addresses by `(deckId, cardId, categoryId, variant)` —
 | `deck_move_card` | `finish` argument; a move keeps the finish |
 | `deck_swap_printing` | `finish` argument; a swap keeps the finish, and its existing fold now folds on the five-part grain |
 | `deck_set_card_tag` | `finish` argument in the WHERE |
-| `deck_undo::Cell::card` | the cell address grows a `finish`; `read_cells`/restore follow |
+| `deck_undo::CardRow` | grows `finish` so a restored row comes back shiny. **`Cell` does not** — see §4.1 |
 | `deck_import_commit` | `ImportItem.finish` |
 | `deck_category_delete` (move arm) | its fold is on the grain |
 | `deck_category_clear` | scoped by category, so unchanged — named here because it is the one that looks like it needs it |
@@ -136,8 +136,23 @@ Every deck-card command addresses by `(deckId, cardId, categoryId, variant)` —
 | `deck_theory_copy_from_live` | copies the finish with the row |
 | `allocate_deck` | **no change** — see §8 |
 
-`DeckCard` gains `finish: Finish | null`. `DeckCardRow`, the drag payloads in `dnd.ts`, `useDeck`'s
-mutations, `DeckEditor`'s `setQuantityAt`/`applyDrop`, and every view's row key take it with them.
+`DeckCard` gains `finish: Finish | null`. `useDeck`'s `Slot` (`{cardId, categoryId}`) — the TS-side
+spelling of the same address, used by `patchSlot`'s optimistic patch — gains it too, and the drag
+payloads in `dnd.ts`, `DeckEditor`'s `setQuantityAt`/`applyDrop` and every view's row key follow.
+
+### 4.1 The undo cell stays finish-blind, deliberately
+
+`Op::Cards` is documented as "delete exactly `scope` and insert exactly `rows`", and a `Cell` with
+a `card_id` and no finish scopes **both** rows of that printing. That is the correct scope and not
+an oversight to fix: a finish change *moves quantity between two rows of one printing*, so a scope
+naming one finish would delete half of what the write touched and restore half of what it read.
+The wide cell deletes both and puts both back.
+
+What has to grow is `CardRow`, which is what the restore re-inserts from — without the column a
+restored foil row comes back regular, which is a silent wrong answer rather than a failure.
+
+This was the one thing in this design that was drafted wrong and corrected by reading `Op::Cards`:
+the first draft grew the cell.
 
 ## 5. The new command
 
@@ -271,9 +286,9 @@ which is the same thing already true of a category there, and is stated rather t
 
 Three places where this goes wrong quietly, each getting a test rather than a promise:
 
-1. **The undo cell address.** `Cell::card` addresses by `(variant, category_id, card_id)`. Left
-   alone it would restore the wrong one of two rows that now differ only by finish — and undo is
-   the one feature whose failure the reader cannot see until it is too late to fix by hand.
+1. **The undo row, not the undo cell** (§4.1). `CardRow` without a `finish` restores a foil row as
+   regular — a silent wrong answer, in the one feature whose failure the reader cannot see until it
+   is too late to fix by hand. The *cell* is correct as it stands and must be left wide.
 2. **`move_live_into_theory`.** A bare `UPDATE … SET variant` against a grain that has grown a
    column. Its emptiness precondition is what makes the collision unreachable, and that
    precondition is load-bearing for a second reason now.
