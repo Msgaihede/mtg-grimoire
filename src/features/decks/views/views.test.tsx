@@ -10,6 +10,7 @@ import {
   ZOOM_SECTIONS,
   ZOOM_STEPS,
 } from "@/lib/cardZoom";
+import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
@@ -831,6 +832,36 @@ describe("the views that are not the table", () => {
     render(element);
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
     expect(screen.getByText("0 cards")).toBeInTheDocument();
+  });
+
+  /**
+   * **These three are the app's only scrollers whose drop targets sit flush against their own
+   * content edge, and that cost the leftmost pile its ring.** A `DROP_RING` is a box shadow and
+   * `FOCUS` is an outline, so neither is inside the box that laid the pile out — but `overflow`
+   * clips at the scroller's *padding box*, so with no padding the mark was painted in the clipped
+   * region and the reader saw a ring with a side missing for the whole length of a drag.
+   *
+   * **Written as a class sweep because jsdom cannot see the defect it guards.** There is no
+   * layout engine here, so nothing is clipped, every rect is zero and a rendering assertion would
+   * pass against a view that had lost the padding again — the same reason `focus outline inside
+   * the box that clips it` above is a sweep. The pair is asserted together on purpose: the
+   * padding is only load-bearing *because* of the `overflow`, and a view that dropped the
+   * `overflow-x-auto` would be a different change entirely (the overhang would reach the page and
+   * put an X scrollbar across the whole app, which the 1024px floor forbids).
+   *
+   * The `TableView` is deliberately not one of these: its rows are absolutely positioned inside a
+   * virtualiser, so it draws `ring-inset` and wants no room at all.
+   */
+  it.each([
+    ["StackView", <StackView key="s" groups={GROUPS} marketplace={TCG} />],
+    ["TextView", <TextView key="t" groups={GROUPS} marketplace={TCG} />],
+    ["GridView", <GridView key="g" groups={GROUPS} marketplace={TCG} />],
+  ])("%s leaves its drop marks room inside the box that clips them", (_name, element) => {
+    const { container } = render(element);
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain("overflow-x-auto");
+    expect(root?.className).toContain(DROP_MARK_ROOM);
   });
 });
 
