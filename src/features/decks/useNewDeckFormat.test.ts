@@ -72,6 +72,7 @@ describe("newDeckFormat", () => {
 });
 
 const SPECS: FormatSpec[] = PICKER.map((f, i) => ({
+  games: ["paper"],
   key: f.key,
   displayName: f.name,
   enabledInPicker: true,

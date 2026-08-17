@@ -1206,6 +1206,15 @@ export interface DeckInput {
   /** A `format_specs.key`. Validated against the table, not by a foreign key — see
    *  {@link FormatSpec}. Blank means `"casual"`. */
   formatKey: string;
+  /**
+   * Which platform the deck is for, or `"any"` for none in particular.
+   *
+   * Optional here and `#[serde(default)]` in Rust, so a caller that has not thought about it
+   * makes exactly the deck it always made: absent is blank is `"any"`, the column's own DDL
+   * default. **The format is not checked against it** — a Modern deck may say Arena, because
+   * the game narrows a *picker* and never the deck.
+   */
+  gameKey?: DeckGame;
   /** The one-line blurb the gallery tile shows — **not** {@link DeckInput.notes}. Two fields
    *  because they are two things: a caption and a notebook. The "New deck" dialog fills this
    *  now that it hosts the whole settings form; before that it sent name and format alone, and
@@ -1287,6 +1296,10 @@ export interface DeckInput {
 export interface DeckPatch {
   name?: string;
   formatKey?: string;
+  /** Which platform the deck is for. `"any"` is a value like any other and is written like
+   *  one — absent still means "leave it", which is why the column is not nullable. Setting it
+   *  moves no format, and setting a format moves no game. */
+  gameKey?: DeckGame;
   /** The one-line blurb the gallery tile shows — **not** {@link DeckPatch.notes}. Two fields
    *  because they are two things: a caption and a notebook. Both dialogs write it now: the
    *  "New deck" one through {@link DeckInput.description} at birth, the settings one through
@@ -1369,6 +1382,26 @@ export interface DeckPatch {
  */
 export type DeckCoverKind = "card_art" | "custom";
 
+/**
+ * Where a card can be played, as Scryfall spells it — `schema::GAMES`, and the vocabulary of a
+ * {@link FormatSpec.games} entry.
+ *
+ * Three words and not four: these are Scryfall's own, `cards.games` already carries them, and a
+ * fourth platform is a word no card in this database holds.
+ */
+export type Game = "paper" | "arena" | "mtgo";
+
+/**
+ * What a deck's own game answer may be — {@link Game}, plus the word for a deck that has not
+ * been pinned to a platform. `schema::DECK_GAMES`.
+ *
+ * **`"any"` is a stored value and not an absence**, which is why `decks.game_key` is `NOT NULL`
+ * with a `DEFAULT 'any'` rather than nullable: {@link DeckPatch} is written with
+ * `coalesce(?n, column)`, so a bound NULL means *leave it* and could never have said "back to
+ * Any". `decks.default_category_id`'s sentinel argument, one column over.
+ */
+export type DeckGame = Game | "any";
+
 /** One deck as the gallery shows it. */
 export interface DeckRow {
   id: number;
@@ -1377,6 +1410,15 @@ export interface DeckRow {
   /** From `format_specs`, so the gallery never re-derives a display name. `null` when the
    *  key is one the seeded table no longer carries — a LEFT JOIN, so the deck still lists. */
   formatName: string | null;
+  /**
+   * Which platform the deck is for — `"any"` on every deck that predates schema v18 or has
+   * never been asked.
+   *
+   * **No `gameName` beside it, unlike {@link DeckRow.formatName}**: a format's display name is
+   * a seeded cell the gallery would otherwise re-derive, while a game's is four words in a
+   * picker's own list (`GAME_OPTIONS`). There is no table to read one from.
+   */
+  gameKey: DeckGame;
   description: string | null;
   coverCardId: string | null;
   /** Which of the two covers is showing. See {@link DeckCoverKind} — a deck usually carries
@@ -1992,6 +2034,15 @@ export interface FormatSpec {
   allowsCompanion: boolean;
   /** The order a picker shows them in — `format_specs` is read `ORDER BY sort_order`. */
   sortOrder: number;
+  /**
+   * Which platforms the format is playable on (schema v18) — an **array**, split by Rust out
+   * of the one comma-joined cell `format_specs.games` stores.
+   *
+   * **Never empty**: a spec naming no platform would be a format no filtered picker could ever
+   * offer, and the seed writes all 25 rows. It is the only input `pickerFormats`' game filter
+   * reads, and it is a *fact* — which formats a picker then offers is the conclusion.
+   */
+  games: Game[];
 }
 
 /**

@@ -66,8 +66,32 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v17** — see
+  never reuse one. Schema is at **v18** — see
   [the ladder's history](../docs/reference/data-and-sync.md).
+- **A step that writes to a table an older *forward-built* fixture never created fails on that
+  fixture alone**, and v18 is the first one to do it. `schema.rs`'s `v1_database` and
+  `v6_deck_database` are hand-written old schemas rather than rewinds, so they carry only what
+  somebody thought to write down; v18 alters and re-seeds `format_specs`, which v5 creates and
+  the v6 fixture had never had. Four tests failed with `no such table: format_specs` and none of
+  them was about the new columns. The fix is the fixture, never the step — a "v6 database"
+  missing v5's table is a pre-v5 database wearing a v6 label, which is the same argument that
+  fixture's own comment makes about the five `cards` columns it replays.
+- **A deck's platform is `decks.game_key` and a format's is `format_specs.games`** (schema v18),
+  and neither is a rule Rust applies. `game_key` is one of `schema::DECK_GAMES`
+  (`any|paper|arena|mtgo`, `'any'` a **sentinel** for `default_category_id`'s reason — `DeckPatch`'s
+  `coalesce` reads a bound NULL as "leave it"), fenced by `deck::valid_game` because `ADD COLUMN`
+  cannot carry a CHECK. `games` is a comma-joined list of `schema::GAMES` written **only by
+  `FORMAT_SPECS_SEED`**, so it needs no fence and gets a test instead. Rust supplies both facts;
+  narrowing the format picker by them is TypeScript's, and **nothing in the crate compares the
+  two** — a Modern deck may say Arena, and refusing that pair would be refusing a deck over a
+  filter.
+- **`FORMAT_SPECS_SEED` split in two at v18 and the halves must not disagree.**
+  `FORMAT_SPECS_SEED_V5` is frozen history (`CARDS_COLUMNS`' rule — a fresh install replays v5
+  long before v18's column exists); `FORMAT_SPECS_SEED` is head and carries `games`. Keeping one
+  constant was not available in either direction: naming `games` in it fails at v5 on a new
+  machine, and *not* naming it means the next migration that corrects any cell silently resets
+  every format's platforms to the DDL default. `the_head_format_seed_agrees_with_v5_on_every_
+shared_cell` walks both into two databases and compares them column by column.
 - **`deck_categories.origin` says who made the pile** (schema v15) — `'auto'` the app, filing a
   card it had to invent a column for; `'user'` the reader pressing "New category", and the four
   seeded zones count as the reader's. TS hides an **empty** `auto` pile and always draws a `user`

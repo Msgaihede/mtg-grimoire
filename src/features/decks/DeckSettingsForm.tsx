@@ -1,11 +1,17 @@
 import type { JSX } from "react";
 import { FOCUS } from "@/lib/focus";
-import type { DeckCategory, DeckFolder } from "@/lib/ipc";
+import type { DeckCategory, DeckFolder, DeckGame } from "@/lib/ipc";
 import { compareLabels } from "@/lib/options";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, AUTO_CATEGORY_LABEL } from "./autoCategory";
 import { DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 import { CAPTION, FIELD } from "./formFields";
+// The **vocabulary**, not the control. `FormatSelect.tsx`'s `GameSelect` draws these same four
+// rows for the import dialog and is deliberately not reused here, exactly as its `FormatSelect`
+// is not: that file's labels are `text-xs text-dim` and this form's are `CAPTION`, so one
+// borrowed control would be the one row in this panel whose caption did not match its
+// neighbours. What must not be written twice is the list of games, and it is not.
+import { GAME_OPTIONS } from "./useFormatSpecs";
 
 /** How deep a folder path is walked before the walk is called a cycle. */
 const MAX_FOLDER_DEPTH = 32;
@@ -14,6 +20,16 @@ const MAX_FOLDER_DEPTH = 32;
 export interface DeckSettingsValue {
   name: string;
   formatKey: string;
+  /**
+   * Which platform the deck is for, or `"any"` for none in particular.
+   *
+   * **It is stored on the deck and it filters the format select beside it, and those are two
+   * different jobs done by one answer.** The host is what narrows the list — it calls
+   * `pickerFormats` and passes the result as {@link DeckSettingsFormProps.formats} — because
+   * only the host knows whether the deck's own format has to be folded back in. This form
+   * draws the control and reports the change.
+   */
+  gameKey: DeckGame;
   description: string;
   notes: string;
   theoryEnabled: boolean;
@@ -131,7 +147,7 @@ export interface DeckSettingsFormProps {
  * | Control | `onChange` | `onCommit` |
  * | --- | --- | --- |
  * | Name, Description, Notes | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
- * | Format, Theory deck, Folder, the cover | on the one act that settles them | never |
+ * | Game, Format, Theory deck, Folder, the cover | on the one act that settles them | never |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
  * callback to add. A text field does not, which is the whole reason the pair exists.
@@ -144,7 +160,7 @@ export interface DeckSettingsFormProps {
  *
  * | Host | Writes on |
  * | --- | --- |
- * | `DeckSettingsDialog` (edit) | `onChange` for format, theory, folder and the cover; `onCommit` for the three text fields — which is today's behaviour exactly, one write per control as it settles |
+ * | `DeckSettingsDialog` (edit) | `onChange` for game, format, theory, folder and the cover; `onCommit` for the three text fields — which is today's behaviour exactly, one write per control as it settles |
  * | `CreateDeckDialog` (create) | nothing. It merges every `onChange` into a draft and **ignores `onCommit` entirely**, then sends one `deck_create` |
  *
  * ## What it deliberately does not render
@@ -211,7 +227,7 @@ export function DeckSettingsForm({
   );
 }
 
-/** Name, format, description, notes — the four the deck carries as words. */
+/** Name, game, format, description, notes — what the deck carries as words. */
 function Fields({
   value,
   onChange,
@@ -265,6 +281,33 @@ function Fields({
             // being typed.
             className={cn(FIELD, "h-9")}
           />
+        </div>
+        {/* Before the format and not after it, because it *narrows* the format list: a reader
+            reading left to right meets the question whose answer changes the next control
+            first. Narrower than the format select — four short words against "Tiny Leaders:
+            Reborn" — and the row wraps, so on a squeezed dialog the two selects fold together
+            under the name rather than the name being crushed between them. */}
+        <div className="w-32">
+          <label htmlFor={`${id}-game`} className={cn(CAPTION, "mb-1.5")}>
+            Game
+          </label>
+          <select
+            id={`${id}-game`}
+            value={value.gameKey}
+            // The cast is `GameSelect`'s, for its reason: every option is written out of
+            // `GAME_OPTIONS`, so no other string can reach this handler.
+            onChange={(e) => onChange({ gameKey: e.target.value as DeckGame })}
+            className={cn(
+              "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
+              FOCUS,
+            )}
+          >
+            {GAME_OPTIONS.map((g) => (
+              <option key={g.key} value={g.key}>
+                {g.name}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="w-44">
           <label htmlFor={`${id}-format`} className={cn(CAPTION, "mb-1.5")}>

@@ -14,6 +14,7 @@
  */
 import { plural } from "@/lib/counts";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
+import { gameLabel } from "./useFormatSpecs";
 
 /** One line of `DeckHistoryDialog`: the sentence, and the quieter half under it. */
 export interface AuditLine {
@@ -368,6 +369,20 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       return { text: to ? `Renamed the deck to ${to}` : "Renamed the deck", detail: was };
     case "format":
       return { text: to ? `Changed the format to ${to}` : "Changed the format", detail: was };
+    // **`game`, and it must stay that word** — `deck.rs`'s `record_deck_edit` writes it, and the
+    // `default` arm below answers an unrecognised field with "Changed the deck", which is true
+    // of every deck edit and therefore never fails. That is the silent drift `xGroup` documents.
+    //
+    // The stored key is a vocabulary word rather than a name, so it is worded through
+    // `gameLabel` — `arena` reads as `Arena`, and a key that list has never heard of falls back
+    // to itself rather than being called "Any".
+    case "game": {
+      const named = text(p.to);
+      return {
+        text: named ? `Set the game to ${gameLabel(named)}` : "Changed the game",
+        detail: from ? `was ${gameLabel(from)}` : null,
+      };
+    }
     case "cover":
       // `"custom"` is the literal the backend writes for an uploaded image; anything else is
       // a card id, which is not a thing to print at a reader.

@@ -64,6 +64,19 @@ const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 /// an omitted `formatKey` means here exactly what it means in SQL.
 pub const DEFAULT_FORMAT: &str = "casual";
 
+/// What platform a deck is for when nobody says otherwise — `decks.game_key`'s own DDL default
+/// (schema v18), so an omitted `gameKey` means here exactly what it means in SQL.
+///
+/// `DECK_GAMES[0]` **by index and not by spelling**, [`LIVE`]'s discipline: [`valid_game`]'s
+/// refusal quotes that array, so a literal `"any"` here that drifted from it would leave the
+/// column's own default unreachable through the command while everything still compiled.
+///
+/// **What the word *does* is TypeScript's**, exactly as [`AUTO_CATEGORY`]'s is. Rust stores
+/// which platform the reader named and answers which platforms each format is playable on
+/// (`format_specs.games`); narrowing one list by the other is a conclusion and lives in
+/// `src/features/decks/useFormatSpecs.ts`.
+pub const DEFAULT_GAME: &str = crate::schema::DECK_GAMES[0];
+
 /// The `app_meta` key holding the format the last created deck was made in — what the New deck
 /// dialog opens on, so a reader who builds Pioneer decks stops re-picking Pioneer.
 ///
@@ -152,6 +165,17 @@ const PRINTING_GONE: &str = "That printing is not in the card database any more 
 pub struct DeckInput {
     pub name: String,
     pub format_key: String,
+    /// Which platform the deck is for, or [`DEFAULT_GAME`] for none in particular.
+    ///
+    /// Absent is blank is `any`, resolved by [`valid_game`] — so a caller written before this
+    /// field existed makes exactly the deck it used to. A `String` rather than an `Option`
+    /// for [`Self::format_key`]'s reason: the column is `NOT NULL` with a default, and the
+    /// empty string is already the way this struct says "you decide".
+    ///
+    /// **The deck's format is not checked against it, here or anywhere.** A Modern deck may
+    /// say Arena. The pair is the reader's, the game narrows a *picker* rather than a deck,
+    /// and a create that refused the combination would be refusing a deck over a filter.
+    pub game_key: String,
     /// The one-line blurb the gallery tile shows.
     pub description: Option<String>,
     /// The long-form notes — the v8 column, and **not** [`Self::description`]. Two columns
@@ -205,6 +229,17 @@ pub struct DeckInput {
 pub struct DeckPatch {
     pub name: Option<String>,
     pub format_key: Option<String>,
+    /// Which platform the deck is for — one of [`crate::schema::DECK_GAMES`], `any` included.
+    ///
+    /// **`any` is a value like every other and is why this column is not nullable**, which is
+    /// [`Self::default_category_id`]'s argument exactly: absent still means "leave it", and a
+    /// NULL would have been a second spelling of a word the reader can pick, unreachable
+    /// through the `coalesce(?n, column)` every field here is written with.
+    ///
+    /// **Independent of [`Self::format_key`], in both directions.** Setting the game does not
+    /// change the format and setting the format does not change the game; all the game does is
+    /// narrow which formats a picker offers, which is a display decision and TypeScript's.
+    pub game_key: Option<String>,
     pub description: Option<String>,
     pub cover_card_id: Option<String>,
     pub is_built: Option<bool>,
@@ -291,6 +326,14 @@ pub struct DeckRow {
     pub format_key: String,
     /// From `format_specs`, so the gallery never re-derives a display name.
     pub format_name: Option<String>,
+    /// Which platform the deck is for — one of [`crate::schema::DECK_GAMES`], and `any` on
+    /// every deck that predates schema v18 or has never been asked.
+    ///
+    /// **No `game_name` beside it, unlike [`Self::format_name`]**, and the asymmetry is the
+    /// honest one: a format's display name is a *seeded cell* the gallery would otherwise have
+    /// to re-derive, while a game's is four words in a picker's own list. There is no table to
+    /// read one from and nothing for two sources to disagree about.
+    pub game_key: String,
     pub description: Option<String>,
     pub cover_card_id: Option<String>,
     /// `card_art` | `custom` — **which of the two cover fields a tile should draw**, and the
@@ -424,6 +467,32 @@ fn valid_format<'a>(conn: &Connection, key: &'a str) -> Result<&'a str, String> 
     .ok_or_else(|| {
         format!("`{key}` is not a format this app knows. Pick one from the format list.")
     })
+}
+
+/// A platform `decks.game_key` may hold — one of [`crate::schema::DECK_GAMES`].
+///
+/// **Rust's fence in place of a CHECK the DDL cannot carry**, `decks.last_variant`'s situation
+/// at v12: the column arrives by `ALTER TABLE … ADD COLUMN`, and SQLite cannot add a constraint
+/// that way. It is owed here and not on `format_specs.games` because this is the one of the two
+/// v18 columns a command parameter reaches.
+///
+/// Blank is [`DEFAULT_GAME`] — the DDL's own default, so an omitted game is not a wrong one,
+/// which is [`valid_format`]'s rule applied to the column beside it. Unlike that one this needs
+/// no query: the vocabulary is a constant rather than a seeded table.
+fn valid_game(game: &str) -> Result<&str, String> {
+    let game = game.trim();
+    if game.is_empty() {
+        return Ok(DEFAULT_GAME);
+    }
+    crate::schema::DECK_GAMES
+        .contains(&game)
+        .then_some(game)
+        .ok_or_else(|| {
+            format!(
+                "`{game}` is not a game this app knows. Use one of: {}.",
+                crate::schema::DECK_GAMES.join(", ")
+            )
+        })
 }
 
 /// `set_code`, `collector_number`, `lang`, `name` — what a zone write copies onto its row.
@@ -591,7 +660,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
-            d.default_category_id
+            d.default_category_id, d.game_key
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -627,6 +696,12 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // `separate_x_group` was the last column, and inserting it anywhere but here would have
         // handed an `INTEGER` category id to a `bool` with nothing going red.
         default_category_id: r.get(19)?,
+        // 20, at the end of the list, for the reason written two comments up. Third proof of
+        // that rule and the cheapest one to have got wrong: `game_key` is TEXT and so is
+        // `last_variant` at 15, so a column inserted beside the format — where it *reads* like
+        // it belongs — would have handed a deck's variant to its game and back, with both
+        // fields still holding a plausible-looking string.
+        game_key: r.get(20)?,
     })
 }
 
@@ -678,16 +753,18 @@ pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, S
 pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, String> {
     let name = valid_name(&input.name)?;
     let format_key = valid_format(conn, &input.format_key)?;
+    let game_key = valid_game(&input.game_key)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let id: i64 = tx
         .query_row(
-            "INSERT INTO decks (name, format_key, description, notes, cover_card_id, folder_id,
-                                theory_enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch())
+            "INSERT INTO decks (name, format_key, game_key, description, notes, cover_card_id,
+                                folder_id, theory_enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch(), unixepoch())
              RETURNING id",
             params![
                 name,
                 format_key,
+                game_key,
                 input.description,
                 input.notes,
                 input.cover_card_id,
@@ -747,6 +824,7 @@ pub fn last_deck_format(conn: &Connection) -> Option<String> {
 struct DeckBefore {
     name: String,
     format_key: String,
+    game_key: String,
     description: Option<String>,
     cover_card_id: Option<String>,
     cover_kind: String,
@@ -795,6 +873,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         Some(k) => Some(valid_format(conn, k)?.to_owned()),
         None => None,
     };
+    let game_key = match patch.game_key.as_deref() {
+        Some(g) => Some(valid_game(g)?.to_owned()),
+        None => None,
+    };
     // One transaction, for [`allocate_deck`]'s sake: sleeving a deck up rewrites its claims
     // as a DELETE and N INSERTs, and in autocommit a reader between them would see a built
     // deck holding nothing while a failure part-way would strand a half-rebuilt claim set
@@ -809,7 +891,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         .query_row(
             "SELECT name, format_key, description, cover_card_id, cover_kind, is_built,
                     archived, folder_id, notes, theory_enabled, separate_x_group,
-                    default_category_id
+                    default_category_id, game_key
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -826,6 +908,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     theory_enabled: r.get(9)?,
                     separate_x_group: r.get(10)?,
                     default_category_id: r.get(11)?,
+                    // Last in the list, `DECK_SELECT`'s rule for its own reason: these reads
+                    // are positional too, and `game_key` is TEXT like four of the columns
+                    // above it.
+                    game_key: r.get(12)?,
                 })
             },
         )
@@ -833,7 +919,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         .map_err(|e| e.to_string())?
         .ok_or_else(|| GONE.to_owned())?;
     // The undo step's "before", read whole rather than rebuilt from [`DeckBefore`] — that
-    // struct carries the twelve columns the *history* compares and this needs all sixteen.
+    // struct carries only the columns the *history* compares and this needs every column a
+    // step may write (`deck_undo::DECK_FIELDS`).
     // `last_variant` is the one that makes the difference rather than a completeness argument:
     // the theory arm below moves it to `theory`, and it is not on `DeckBefore` at all.
     let row_before = crate::deck_undo::read_deck_row(&tx, id)?;
@@ -871,6 +958,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- list, never the next one that reads free.
                 separate_x_group = coalesce(?12, separate_x_group),
                 default_category_id = coalesce(?13, default_category_id),
+                game_key = coalesce(?14, game_key),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -887,6 +975,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 COVER_CARD_ART,
                 patch.separate_x_group,
                 patch.default_category_id,
+                game_key,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -931,6 +1020,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         patch,
         &name,
         &format_key,
+        &game_key,
         default_category_name.as_deref(),
         &before,
     )?;
@@ -996,6 +1086,10 @@ fn record_deck_edit(
     patch: &DeckPatch,
     name: &Option<String>,
     format_key: &Option<String>,
+    // Already through [`valid_game`], so a blank `gameKey` is recorded as [`DEFAULT_GAME`] —
+    // what the deck actually is, rather than what the caller failed to say. `format_key`'s rule
+    // beside it.
+    game_key: &Option<String>,
     // The name [`update_deck`]'s fence already resolved for `patch.default_category_id`, or
     // `None` where the patch names no pile *or* names [`AUTO_CATEGORY`].
     default_category_name: Option<&str>,
@@ -1022,6 +1116,14 @@ fn record_deck_edit(
     }
     if let Some(to) = format_key.as_deref().filter(|k| *k != before.format_key) {
         field("format", json!(before.format_key), json!(to))?;
+    }
+    // `game`, and the **key** rather than a display word: `auditText.ts` is the only thing that
+    // words a history row, and it is the only place that knows Paper from `paper`. The two
+    // spellings of this field name are the one thing that can drift silently — the `default`
+    // arm answers an unrecognised field with "Changed the deck", which is true of every deck
+    // edit and therefore never fails — which is the trap `xGroup` documents one arm down.
+    if let Some(to) = game_key.as_deref().filter(|g| *g != before.game_key) {
+        field("game", json!(before.game_key), json!(to))?;
     }
     if let Some(to) = patch
         .description
@@ -2592,6 +2694,19 @@ pub struct FormatSpecRow {
     pub max_mana_value: Option<i64>,
     pub allows_companion: bool,
     pub sort_order: i64,
+    /// Which platforms the format is playable on — [`crate::schema::GAMES`] words, **split
+    /// here** out of the one comma-joined cell `format_specs.games` stores.
+    ///
+    /// A list rather than the raw string because a string would make every consumer write the
+    /// same `split(',')`, and the day one of them wrote `includes()` instead it would answer
+    /// that `arena` is playable in `standardbrawl`. Rust supplies the fact as a list; which
+    /// formats a picker then offers is TypeScript's conclusion.
+    ///
+    /// **Never empty**, and the seed is the whole of that guarantee — the column's `NOT NULL`
+    /// only stops a NULL, and `''` would split to one empty word. A cell that somehow held one
+    /// would take its format out of every filtered picker with nothing on screen saying why,
+    /// which is what `a_format_spec_games_cell_holds_only_scryfall_game_words` exists to catch.
+    pub games: Vec<String>,
 }
 
 /// One deck card and every fact about it, as one row.
@@ -3136,7 +3251,7 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
             "SELECT key, display_name, enabled_in_picker, deck_min, deck_max, max_copies,
                     sideboard_max, singleton, requires_commander, commander_rule, life,
                     restricted_semantic, has_legality_data, max_mana_value, allows_companion,
-                    sort_order
+                    sort_order, games
                FROM format_specs ORDER BY sort_order",
         )
         .map_err(|e| e.to_string())?;
@@ -3159,6 +3274,16 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
                 max_mana_value: r.get(13)?,
                 allows_companion: r.get(14)?,
                 sort_order: r.get(15)?,
+                // Split here rather than by the caller, so the cell's storage shape stops at
+                // this line — see [`FormatSpecRow::games`]. `filter` over the empty string
+                // because `"".split(',')` yields one empty word, and a `games` of `[""]` is a
+                // format no filtered picker would ever offer.
+                games: r
+                    .get::<_, String>(16)?
+                    .split(',')
+                    .filter(|g| !g.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -5208,6 +5333,7 @@ mod tests {
             &DeckInput {
                 name: "  Burn  ".to_owned(),
                 format_key: "modern".to_owned(),
+                game_key: "paper".to_owned(),
                 description: Some("Fast red".to_owned()),
                 notes: Some("Skewers over Bolts in game two.".to_owned()),
                 cover_card_id: Some("bolt-lea".to_owned()),
@@ -5400,6 +5526,7 @@ mod tests {
             &DeckInput {
                 name: "Burn".to_owned(),
                 format_key: "modern".to_owned(),
+                game_key: "paper".to_owned(),
                 description: Some("Fast red".to_owned()),
                 notes: Some("Skewers over Bolts in game two.".to_owned()),
                 cover_card_id: Some("bolt-lea".to_owned()),
@@ -5777,6 +5904,7 @@ mod tests {
             name: "Burn".to_owned(),
             format_key: "modern".to_owned(),
             format_name: Some("Modern".to_owned()),
+            game_key: "paper".to_owned(),
             description: None,
             cover_card_id: Some("bolt-lea".to_owned()),
             cover_kind: "card_art".to_owned(),
@@ -5814,7 +5942,10 @@ mod tests {
                 "separateXGroup": true,
                 // A real id rather than `0`, because zero is [`AUTO_CATEGORY`] and would be the
                 // answer whether or not the column reached the wire at all.
-                "defaultCategoryId": 12
+                "defaultCategoryId": 12,
+                // A real platform rather than `"any"`, for the same reason one line up: `any` is
+                // the column's default and would read correct on a field that never left Rust.
+                "gameKey": "paper"
             })
         );
 
@@ -5831,13 +5962,18 @@ mod tests {
             input.theory_enabled.is_none(),
             "an omitted flag is absent, not `false` — `create_deck` decides what absent means"
         );
+        assert_eq!(
+            input.game_key, "",
+            "an omitted game is the empty string, which `valid_game` reads as `any` — a caller \
+             written before the field existed makes the deck it always made"
+        );
 
-        // The widened create payload in full. These seven camelCase spellings are the contract
+        // The widened create payload in full. These camelCase spellings are the contract
         // `src/lib/ipc.ts` mirrors, and a wrong one here is not a compile error on either side:
         // `#[serde(default)]` would read a misspelled field as an omitted one and the deck would
         // simply come out unconfigured.
         let whole: DeckInput = serde_json::from_str(
-            r#"{"name":"Burn","formatKey":"modern","description":"Fast red",
+            r#"{"name":"Burn","formatKey":"modern","gameKey":"arena","description":"Fast red",
                 "notes":"Sideboard plan","coverCardId":"bolt-lea","folderId":7,
                 "theoryEnabled":true}"#,
         )
@@ -5847,14 +5983,16 @@ mod tests {
         assert_eq!(whole.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(whole.folder_id, Some(7));
         assert_eq!(whole.theory_enabled, Some(true));
+        assert_eq!(whole.game_key, "arena");
 
         let patch: DeckPatch = serde_json::from_str(
-            r#"{"coverCardId":"bolt-lea","isBuilt":true,"separateXGroup":true}"#,
+            r#"{"coverCardId":"bolt-lea","isBuilt":true,"separateXGroup":true,"gameKey":"mtgo"}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(patch.is_built, Some(true));
         assert_eq!(patch.separate_x_group, Some(true));
+        assert_eq!(patch.game_key.as_deref(), Some("mtgo"));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -7419,7 +7557,106 @@ mod tests {
         assert_eq!(spec("tlr").max_mana_value, Some(3));
         assert!(!spec("future").enabled_in_picker);
         assert!(!spec("gladiator").allows_companion);
+
+        // `games` arrives **split**, which is the one cell whose storage shape and wire shape
+        // differ — see [`FormatSpecRow::games`]. The three sampled here are the three answers
+        // that are not the widest one, because the widest one is also the DDL default and would
+        // read correct on a column the re-seed had never touched.
+        assert_eq!(spec("modern").games, ["paper", "mtgo"]);
+        assert_eq!(spec("historic").games, ["arena"]);
+        assert_eq!(spec("penny").games, ["mtgo"]);
+        assert_eq!(spec("casual").games, ["paper", "arena", "mtgo"]);
+        for s in &specs {
+            assert!(
+                !s.games.is_empty(),
+                "`{}` names no platform, so no filtered picker could ever offer it",
+                s.key
+            );
+        }
     }
+
+    /// A deck carries a platform, it survives the round trip, and it is refused by name.
+    ///
+    /// **The format is not checked against it**, which is the assertion that matters most here:
+    /// a Modern deck may say Arena. The pair is the reader's and the game narrows a *picker*,
+    /// so a create or a patch that refused the combination would be refusing a deck over a
+    /// filter — and `pickerFormats`' `keep` is what keeps such a deck's own format on screen.
+    #[test]
+    fn a_deck_carries_a_game_and_an_unknown_one_is_refused_by_name() {
+        let conn = seeded();
+
+        let born = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Burn".to_owned(),
+                format_key: "modern".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            born.game_key, DEFAULT_GAME,
+            "a deck nobody asked is `any`, which is the column's own default"
+        );
+
+        let arena = update_deck(
+            &conn,
+            born.id,
+            &DeckPatch {
+                game_key: Some("arena".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(arena.game_key, "arena");
+        assert_eq!(
+            arena.format_key, "modern",
+            "setting the game moves no format — Modern is not an Arena format and the deck is \
+             still a Modern deck"
+        );
+
+        let history = crate::deck_audit::list(&conn, born.id, 10).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&history[0].payload).unwrap(),
+            serde_json::json!({ "field": "game", "from": "any", "to": "arena" }),
+            "the key, never a display word: `auditText.ts` is the only thing that words a row"
+        );
+
+        let err = update_deck(
+            &conn,
+            born.id,
+            &DeckPatch {
+                game_key: Some("gameboy".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("gameboy") && err.contains("mtgo"),
+            "the refusal names the value and quotes the vocabulary: {err}"
+        );
+        assert_eq!(
+            read_deck(&conn, born.id).unwrap().unwrap().game_key,
+            "arena",
+            "and the refused write changed nothing"
+        );
+
+        // Blank is the DDL default rather than a wrong answer — `valid_format`'s rule, applied
+        // to the column beside it, so a caller that sends `""` gets a working deck.
+        let back = update_deck(
+            &conn,
+            born.id,
+            &DeckPatch {
+                game_key: Some("  ".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(back.game_key, DEFAULT_GAME);
+    }
+
+    // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
+    // the same sweep every other deck-level column goes through.
 
     /// A category kind the schema knows and the allocator does not would sort last by
     /// accident. The two lists are deliberately in different orders — one is the DDL's, one is
@@ -7511,7 +7748,10 @@ mod tests {
                 "deckMin": 100, "deckMax": 100, "maxCopies": 1, "sideboardMax": 0,
                 "singleton": true, "requiresCommander": true, "commanderRule": "edh",
                 "life": 40, "restrictedSemantic": "max_one", "hasLegalityData": true,
-                "maxManaValue": null, "allowsCompanion": true, "sortOrder": 12
+                "maxManaValue": null, "allowsCompanion": true, "sortOrder": 12,
+                // An **array**, not the comma-joined string the column holds: the split is
+                // `list_format_specs`' and this is what pins that it happens before the wire.
+                "games": ["paper"]
             })
         );
 

@@ -32,6 +32,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { useDeckImport } from "./useDeckImport";
 
 const MADE: DeckRow = {
+  gameKey: "any",
   id: 12,
   name: "Selvala",
   formatKey: "commander",

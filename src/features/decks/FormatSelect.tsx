@@ -1,7 +1,15 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { FOCUS } from "@/lib/focus";
+import type { DeckGame } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+
+/** The one `<select>` recipe both controls in this file draw, and the settings form's third. */
+export const SELECT = cn(
+  "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
+  "disabled:opacity-60",
+  FOCUS,
+);
 
 /**
  * What a new deck's format is until the reader says otherwise — `decks.format_key`'s own DDL
@@ -40,16 +48,54 @@ export function FormatSelect({
   id,
   value,
   onChange,
+  game = ANY_GAME,
 }: {
   /** The `<select>`'s own id, so the caller can keep one `useId` prefix for its whole form. */
   id: string;
   value: string;
   onChange: (formatKey: string) => void;
+  /**
+   * Which platform to narrow the list to. Absent is {@link ANY_GAME}, which narrows nothing —
+   * so a host that has not grown a game control of its own is unchanged.
+   *
+   * **No `keep` goes with it, and that is this control's situation rather than a shortcut**:
+   * it is only ever asked before a deck exists, so there is no format already chosen for the
+   * filter to drop. The two surfaces that edit a deck pass `keep` themselves.
+   */
+  game?: DeckGame;
 }): React.JSX.Element {
   const { specs } = useFormatSpecs();
-  // No `keep` row: this control is only ever asked before a deck exists, so there is no format
-  // already chosen that the seed might no longer offer.
-  const picker = useMemo(() => pickerFormats(specs), [specs]);
+  const picker = useMemo(() => pickerFormats(specs, null, game), [specs, game]);
+
+  /**
+   * Keep the caller's value among the options.
+   *
+   * **This control owns the list, so it owns "the value has to be in it".** A controlled
+   * `<select>` whose `value` matches no option shows its *first* row while still reporting the
+   * old one — so a reader who picks Modern and then sets the game to Arena would be looking at
+   * `Alchemy` and importing into a Modern deck. Reporting the change up is what keeps the host's
+   * state and the screen the same answer.
+   *
+   * **Not while the list is empty.** That is the one launch where `format_specs` has not
+   * answered yet, the select is drawing its `Casual` fallback, and there is nothing to repair
+   * *to* — a write here would overwrite the reader's format with a placeholder.
+   *
+   * The first row rather than {@link DEFAULT_FORMAT}: it is what the select is already showing,
+   * so the value moves to agree with the screen rather than to a third answer neither showed.
+   *
+   * **`CreateDeckDialog` solves the same problem by *deriving* instead, and the difference is
+   * ownership rather than taste.** That host holds the draft *and* calls `pickerFormats` itself,
+   * so it can compute the effective format during render — which React's own lint prefers, and
+   * which is non-destructive: narrowing and un-narrowing leaves the reader's pick intact. Here
+   * the state is the host's and the list is this component's, and the host cannot see the list.
+   * Reporting up is the only way the two can agree, and the cost is the real one — a game
+   * change the reader takes back does not restore the format they had.
+   */
+  useEffect(() => {
+    if (picker.length === 0) return;
+    if (picker.some((f) => f.key === value)) return;
+    onChange(picker[0].key);
+  }, [picker, value, onChange]);
 
   return (
     <>
@@ -66,11 +112,7 @@ export function FormatSelect({
         // is right on a control that greys: there is no reader input to make it grey, and a
         // select with a single option is not a choice to keep in the tab order.
         disabled={picker.length === 0}
-        className={cn(
-          "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-          "disabled:opacity-60",
-          FOCUS,
-        )}
+        className={SELECT}
       >
         {picker.length === 0 ? (
           <option value={DEFAULT_FORMAT}>Casual</option>
@@ -81,6 +123,50 @@ export function FormatSelect({
             </option>
           ))
         )}
+      </select>
+    </>
+  );
+}
+
+/**
+ * "Which platform is this deck for" — the control that narrows every format picker beside it.
+ *
+ * Four fixed rows out of {@link GAME_OPTIONS}, so unlike {@link FormatSelect} it mounts no
+ * query and has no empty state: the vocabulary is a constant, not a seeded table. That is the
+ * whole difference between the two controls, and it is why this one never greys.
+ *
+ * **It changes no format.** Setting a game narrows a list; the deck keeps the format it has,
+ * folded back into that list by `pickerFormats`' `keep`. A control that re-formatted a deck as
+ * a side effect of a filter would be the one thing a reader could not undo by looking at it.
+ */
+export function GameSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: DeckGame;
+  onChange: (gameKey: DeckGame) => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <label htmlFor={id} className="mb-1 block text-xs text-dim">
+        Game
+      </label>
+      <select
+        id={id}
+        value={value}
+        // The cast is safe by construction and is the narrowing a native `<select>` cannot do
+        // for itself: every option below is written out of `GAME_OPTIONS`, so the only strings
+        // this handler can ever meet are that list's own keys.
+        onChange={(e) => onChange(e.target.value as DeckGame)}
+        className={SELECT}
+      >
+        {GAME_OPTIONS.map((g) => (
+          <option key={g.key} value={g.key}>
+            {g.name}
+          </option>
+        ))}
       </select>
     </>
   );
