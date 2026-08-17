@@ -8,6 +8,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ipc,
+  type DeckGame,
   type DeckRow,
   type DeckVariant,
   type ImportItem,
@@ -28,10 +29,14 @@ export interface CommitImport {
   items: ImportItem[];
 }
 
-/** A list becoming a deck of its own: the two fields `deck_create` takes, and the list. */
+/** A list becoming a deck of its own: the deck-level answers `deck_create` takes, and the
+ *  list. */
 export interface ImportAsNewDeck {
   name: string;
   formatKey: string;
+  /** Which platform the new deck is for. Optional, and absent is `"any"` in Rust — so this
+   *  hook's contract did not change for a caller that has not grown the control. */
+  gameKey?: DeckGame;
   items: ImportItem[];
 }
 
@@ -152,9 +157,10 @@ export function useDeckImport() {
     mutationFn: async ({
       name,
       formatKey,
+      gameKey,
       items,
     }: ImportAsNewDeck): Promise<{ deck: DeckRow; outcome: ImportOutcome }> => {
-      const deck = await ipc.deckCreate({ name, formatKey });
+      const deck = await ipc.deckCreate({ name, formatKey, gameKey });
       try {
         const outcome = await ipc.deckImportCommit(deck.id, DEFAULT_VARIANT, "merge", items);
         return { deck, outcome };

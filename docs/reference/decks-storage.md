@@ -385,6 +385,38 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   by what the card does"), because under Auto there is no one pile: it is decided per card. The
   `from` side is looked up at the write rather than carried on `DeckBefore`, so a rename or a cover
   change pays no join for a question nobody asked.
+- **`decks.game_key` is which platform the deck is for, and `format_specs.games` is which
+  platforms each format is playable on.** Both **schema v18**, both `TEXT NOT NULL` with a
+  default (`'any'`; `'paper,arena,mtgo'`). `game_key` rides `DeckInput`, `DeckPatch`, `DeckRow`,
+  `DeckBefore` and `DECK_SELECT` exactly as `default_category_id` does, takes the **last** index in
+  `deck_row` and the **next** `?` hole at the end of `update_deck`'s `SET` list (`?14`) — and that
+  positional discipline is sharper here than it was for the column before it, because `game_key`
+  is `TEXT` and so are four of the columns above it: inserted beside the format, where it *reads*
+  like it belongs, it would have swapped a deck's variant for its platform with both fields still
+  holding a plausible-looking string.
+  **`'any'` is a sentinel for `default_category_id`'s reason**, spelled out one bullet up: a
+  nullable column could not have said "back to Any" under `DeckPatch`'s `coalesce(?n, column)`.
+  **Neither column carries a CHECK** — `ADD COLUMN` cannot add one, `last_variant`'s situation at
+  v12 — so `deck::valid_game` is the fence on `game_key`, which is the one of the two a command
+  parameter reaches; `format_specs.games` is written only by the seed and gets a test
+  (`a_format_spec_games_cell_holds_only_scryfall_game_words`) instead of a fence.
+  **`games` is stored comma-joined and answered split**, which is the one cell whose storage shape
+  and wire shape differ: `list_format_specs` splits it, so no consumer writes `split(',')` and
+  none can reach for `includes()` on the raw string and conclude that `arena` is playable in
+  `standardbrawl`.
+  **Nothing in the crate compares the two columns**, and that is the design rather than an
+  omission: a Modern deck may say Arena. The game narrows a *picker*, `pickerFormats`' `keep`
+  folds the deck's own format back into it, and a create or a patch that refused the combination
+  would be refusing a deck over a filter.
+  **The audit word is `"game"`** — a single word, unlike `"xGroup"` and `"defaultCategory"`, but
+  under the same silent-drift rule: `auditText.ts`'s `default` arm answers an unrecognised field
+  with "Changed the deck", which is true of every deck edit and so never fails. The payload
+  carries the stored **key** on both sides (`{"field":"game","from":"any","to":"arena"}`), because
+  `auditText.ts` is the only thing that knows Paper from `paper`, and a key that list has never
+  heard of is drawn as itself rather than as "Any".
+  **`create_deck` writes no `last_deck_game` beside `last_deck_format`.** The format a reader last
+  built in is a preference; the game is a filter set to find a format, and remembering it would
+  open the next New deck dialog with most of the list already hidden.
 - **The six single-card commands, and what each takes** (the two bulk ones,
   `deck_import_commit` and `deck_category_clear`, have their own bullets below).\
   `deck_get(id, variant)`;

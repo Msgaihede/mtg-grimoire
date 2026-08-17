@@ -18,6 +18,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { useDecks } from "./useDecks";
 
 const BURN: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",

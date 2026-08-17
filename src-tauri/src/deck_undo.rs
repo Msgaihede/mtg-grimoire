@@ -87,6 +87,10 @@ pub const MISSING_ROW: &str =
 const DECK_FIELDS: &[&str] = &[
     "name",
     "format_key",
+    // Schema v18, and on the list for the same reason `format_key` is: it is a deck-level answer
+    // an ordinary `deck_update` writes and an ordinary history row records, so a Ctrl+Z that
+    // left it alone would put a deck's format back and leave the platform the same press moved.
+    "game_key",
     "description",
     "notes",
     "cover_card_id",
@@ -584,8 +588,10 @@ pub fn read_deck_fields(
     if fields.is_empty() {
         return Ok(serde_json::Map::new());
     }
-    // One statement whatever the field count: [`read_deck_row`] asks for all sixteen on every
-    // deck edit, and a query apiece would be thirty-two round trips for a rename.
+    // One statement whatever the field count: [`read_deck_row`] asks for the whole of
+    // [`DECK_FIELDS`] on every deck edit, and a query apiece would be two round trips per column
+    // for a rename. **A count stood here and went stale on the rung that added `game_key`** —
+    // the list is what answers it.
     let sql = format!("SELECT {} FROM decks WHERE id = ?1", fields.join(", "));
     conn.query_row(&sql, params![deck_id], |r| {
         let mut out = serde_json::Map::new();
@@ -599,7 +605,8 @@ pub fn read_deck_fields(
 
 /// Every column a step may write — the "before" and "after" of a deck-row edit.
 ///
-/// **All sixteen rather than the ones the patch named**, deliberately. `update_deck` writes
+/// **Every one of [`DECK_FIELDS`] rather than the ones the patch named**, deliberately.
+/// `update_deck` writes
 /// through `coalesce(?n, column)` and its theory arm changes `last_variant` as a side effect,
 /// so "which columns did this press change" has more than one answer; recording the whole row
 /// makes the step correct without anyone having to keep a second list in step with `DeckPatch`.
@@ -1436,6 +1443,20 @@ mod tests {
                     id,
                     &crate::deck::DeckPatch {
                         name: Some("Burn v2".to_owned()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }),
+            // Schema v18's column, driven here rather than trusted to ride along: [`snapshot`]
+            // sweeps [`DECK_FIELDS`], so a column added to the patch and *not* to that list
+            // would leave this case passing while the platform stayed where the press put it.
+            ("deck_update (game)", nothing, |c, id| {
+                crate::deck::update_deck(
+                    c,
+                    id,
+                    &crate::deck::DeckPatch {
+                        game_key: Some("arena".to_owned()),
                         ..Default::default()
                     },
                 )

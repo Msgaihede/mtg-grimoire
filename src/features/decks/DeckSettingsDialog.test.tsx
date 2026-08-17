@@ -40,6 +40,7 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
 
 /** A deck with a cover whose artist is known, which is the only kind that is drawn at all. */
 const BURN: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",

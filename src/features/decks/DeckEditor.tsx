@@ -19,6 +19,7 @@ import {
   type CardSummary,
   type DeckCard,
   type DeckCategory,
+  type DeckGame,
   type DeckVariant,
 } from "@/lib/ipc";
 import { PRESS, statusLine } from "@/lib/motion";
@@ -65,7 +66,7 @@ import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
-import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateDeck } from "./validation/engine";
@@ -1945,13 +1946,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.update],
   );
 
-  /** The picker, plus the deck's own format when the seed no longer offers it — a select that
-   *  cannot show its own value would silently re-format the deck on the first other change.
-   *  Both halves are `pickerFormats`', including that the deck's own row is *folded into* the
+  /** The picker narrowed to the deck's game, plus the deck's own format when that narrowing —
+   *  or a seed that no longer carries it — would leave it out. A select that cannot show its
+   *  own value would silently re-format the deck on the first other change, and switching a
+   *  Modern deck to Arena is now the ordinary way that happens rather than the edge case.
+   *  Every half is `pickerFormats`', including that the deck's own row is *folded into* the
    *  alphabet rather than pinned in front of it. */
   const formats = useMemo(
     () =>
-      pickerFormats(specs, row && { key: row.formatKey, name: row.formatName ?? row.formatKey }),
+      pickerFormats(
+        specs,
+        row && { key: row.formatKey, name: row.formatName ?? row.formatKey },
+        row?.gameKey ?? ANY_GAME,
+      ),
     [specs, row],
   );
 
@@ -2398,6 +2405,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
              * `justify-end` so a folded line stays against the edge it belongs to.
              */}
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <select
+                // "Deck game" for "Deck format"'s reason one control along: this row is beside a
+                // docked panel that filters cards, so a bare "Game" would be a second control
+                // with a name nothing distinguishes.
+                //
+                // **It sits before the format select because it narrows it.** The row is
+                // `flex-wrap` and already folds at the app's own window width, which is what
+                // makes a seventh control affordable here at all — it gives way with the rest
+                // rather than squeezing the deck's name.
+                aria-label="Deck game"
+                value={row.gameKey}
+                onChange={(e) => deck.update.mutate({ gameKey: e.target.value as DeckGame })}
+                className={cn(CONTROL, FILTER_FOCUS)}
+              >
+                {GAME_OPTIONS.map((g) => (
+                  <option key={g.key} value={g.key}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+
               <select
                 // "Deck format", not "Format": the docked search panel offers a format *filter*
                 // of its own, and two controls called Format in one view are two controls a

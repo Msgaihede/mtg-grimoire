@@ -249,6 +249,21 @@ describe("auditSentence", () => {
       text: "Changed the format to Commander",
       detail: "was casual",
     });
+    // **`game`, and the payload carries the stored *key* on both sides** — `deck.rs` writes the
+    // vocabulary word and this module is the only thing that knows Paper from `paper`. The
+    // spelling of the field name is the silent one: an unrecognised field falls through to
+    // "Changed the deck", which is true of every deck edit and so never fails.
+    expect(deck({ field: "game", from: "any", to: "arena" })).toEqual({
+      text: "Set the game to Arena",
+      detail: "was Any",
+    });
+    // A key this app has never heard of is shown as it is rather than called "Any" —
+    // `decks.game_key` carries no CHECK, so this state can exist and hiding it would hide the
+    // one thing worth seeing.
+    expect(deck({ field: "game", from: "arena", to: "gameboy" })).toEqual({
+      text: "Set the game to gameboy",
+      detail: "was Arena",
+    });
     expect(deck({ field: "cover", from: null, to: "abc" })).toEqual({
       text: "Set the deck cover",
       detail: null,

@@ -159,6 +159,7 @@ const UNDOABLE = {
 };
 
 const DECK: DeckRow = {
+  gameKey: "any",
   id: 4,
   name: "Burn",
   formatKey: "modern",
@@ -638,6 +639,43 @@ describe("DeckEditor", () => {
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual(["Casual", "Commander", "Gladiator", "Historic", "Modern"]);
+  });
+
+  /**
+   * The game select, and **the two things it does are one write and one filter**.
+   *
+   * The write is an ordinary `deckUpdate` on `gameKey` alone — no `formatKey` rides with it,
+   * which is what "setting a game never re-formats a deck" means on the wire. The filter is
+   * `pickerFormats`': Arena keeps Gladiator and Casual out of `PICKER`'s four and drops
+   * Commander, and **Modern is still there because it is this deck's own** — folded back in by
+   * `keep`, which is the whole reason a Modern deck can say Arena at all.
+   *
+   * The list is read after the write rather than in the same act, because the deck row is what
+   * feeds it: the mock has to answer before the header can redraw.
+   */
+  it("narrows the format list to the deck's game, keeping the deck's own format", async () => {
+    await open();
+    const game = screen.getByLabelText("Deck game");
+    expect(game).toHaveValue("any");
+    expect(
+      within(game)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Any", "Paper", "Arena", "MTGO"]);
+
+    deckGet.mockResolvedValue(detail({ gameKey: "arena" }, [bolt()]));
+    deckUpdate.mockResolvedValue({ ...DECK, gameKey: "arena" });
+    await userEvent.selectOptions(game, "arena");
+
+    expect(deckUpdate).toHaveBeenCalledWith(DECK.id, { gameKey: "arena" });
+    await waitFor(() =>
+      expect(
+        within(screen.getByLabelText("Deck format"))
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toEqual(["Casual", "Gladiator", "Modern"]),
+    );
+    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
   });
 
   /** The caret starts in the editor rather than on `<body>`: the gallery's New deck button —

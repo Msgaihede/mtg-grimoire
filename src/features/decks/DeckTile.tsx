@@ -29,6 +29,7 @@ import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import { RenameField } from "./metaRows";
 import type { Panel } from "./panels";
 import type { Decks } from "./useDecks";
+import { ANY_GAME, gameLabel } from "./useFormatSpecs";
 
 /**
  * Every icon control on a tile, so four of them are one row rather than four sizes.
@@ -238,8 +239,15 @@ export function DeckTile({
       >
         <Cover deck={deck} />
         <span className="mt-2 block truncate text-sm">{deck.name}</span>
+        {/* `Modern · Arena · 60 cards`, and `Modern · 60 cards` on a deck that has been given
+            no platform. **The `Any` row is deliberately not drawn**: it is what every deck is
+            born as, so printing it would put a word that says nothing on nearly every tile in
+            the gallery — and this caption already truncates in a narrow column. A deck that
+            *has* been pinned is the one worth marking, which is the same argument the LIVE /
+            THEORY badge above makes about the lists a deck keeps. */}
         <span className="mt-0.5 block truncate text-xs text-dim">
-          {deck.formatName ?? deck.formatKey} ·{" "}
+          {deck.formatName ?? deck.formatKey}
+          {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
           <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
         </span>
       </button>
