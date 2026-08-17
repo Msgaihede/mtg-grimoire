@@ -2443,7 +2443,7 @@ describe("StackView reordering", () => {
     draw({ drop });
 
     const marked = document.querySelector<HTMLElement>(
-      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
     const intoDraw = document.getElementById(`group-cat-${DRAW.id}`)!;
 
