@@ -1196,10 +1196,43 @@ price | type`). An **inactive category stays its own group in all three grouping
   switched off, reaches the rail by that route almost every time. **Nothing here sorts the rail**:
   the Sideboard sits above the Maybeboard because that is where the reader's own `sortOrder` puts
   them, and a reader who reorders their categories gets the order they chose. The split reads `kind`
-  and nothing else — not `isActive`, and never `groupBy`, which would push a deck concept into the
+  and the switch and nothing else — **never `groupBy`**, which would push a deck concept into the
   one file here whose whole discipline is not knowing what a deck is. A group in the rail is the
   same `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with
   it rather than being defined twice.
+- **Every pile the reader has switched off is railed too, under those two — and that reverses what
+  this page said** (changed 2026-08-17). `splitRail`'s second test is `!isActive`, and the old rule
+  refused it in writing: _"a switched-off pile is still that pile"_. True, and an argument about
+  identity where the question is placement. `is_active = 0` is the whole of what `maybe` ever meant
+  — the pile counts toward nothing and the allocator claims no copy for it — so it is not part of
+  the deck being laid out, and leaving it in the flow spent a column of the desk on cards the reader
+  had already said were out. The old argument survives as what the rail **preserves**: this is a
+  place and not a deletion. The pile keeps its id, its heading, its menu and its drop target, and
+  **switching it back on returns it to the flow at its own `sortOrder`** — the split is derived on
+  every render, so no state anywhere records that it was ever railed, and there is nothing to undo.
+  Three consequences, each a decision:
+  - **The kind is tested _before_ the switch, and that order is load-bearing.** The Maybeboard is
+    seeded switched off, so a switch-first test would file it with the reader's own switched-off
+    piles and sink the rail's fixed head under whatever they turned off last — in the ordinary case
+    rather than a corner. Swapping the two tests is the one edit `views.test.tsx`' rail block would
+    catch and nothing else in the suite would.
+  - **`commander` and `companion` rail when they are switched off**, and that does not weaken their
+    exemption below: "one card each, read at a glance" is an argument about a pile that is _in_ the
+    deck, and a switched-off command zone is not one.
+  - **There is no divider between the rail's two runs, and no caption over the second.** A
+    switched-off pile already says so three times — the section's `bg-surface/60` wash,
+    `GroupHeader`'s dimmed name and `INACTIVE` chip, and the stack's `opacity-60` — and the pile
+    _heading_ the rail is switched off as well, so a rule drawn under it would mark a boundary that
+    is not the one it looks like. The change is one function; neither view grew a line of drawing
+    code.
+
+  **Driven in the shipped window 2026-08-17** (debug build, 1280×800, real corpus): switching a
+  flowing pile off moved it to the rail's third slot and **the flow closed up behind it** — the
+  pile that had wrapped to the second line took the vacated masonry slot — while the rail's x and
+  its 16px gutter did not move. Switching off the pile with the deck's **lowest** `sortOrder` still
+  put it behind the Sideboard and the Maybeboard, which is the kind-before-switch order proved
+  where it can fail. Switching both back on restored the original flow order exactly. Every figure:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The rail hugs the deck, and what holds it one gutter away is a cap on the flowing box**
   (changed 2026-08-17, both column views). The flowing half is `flex-1`, so it takes every pixel the
   rail leaves, and a column layout then spends only _whole_ columns of it: the remainder sat inside
@@ -1253,12 +1286,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   longer the only thing in it. `views.test.tsx` asserts
   those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
   no other test would notice.
-- **`commander` and `companion` are still not railed, and that is not an omission** — one card
-  each, by construction, and railing either would spend a column's width on a pile that is read at
-  a glance, permanently, in every deck. What the rail prevents at the other end is a drag with no
+- **`commander` and `companion` are still not railed while they are switched on, and that is not an
+  omission** — one card each, by construction, and railing either would spend a column's width on a
+  pile that is read at a glance, permanently, in every deck. (Switched off they rail like any other
+  pile; see the switch bullet above for why that leaves this reason intact.) What the rail prevents
+  at the other end is a drag with no
   destination on screen: the two railed piles sort last, so packed they were the far end of the
   run, and a card dragged out of the main deck had nowhere to be let go of. The rail is drawn only
-  when a `side` **or** `maybe` group exists, and **that condition is real for a story and not for
+  when a `side` group, a `maybe` group **or a switched-off pile** exists, and **that condition is
+  real for a story and not for
   the app**: `PREDEFINED_CATEGORIES` seeds both into every deck, both draw whether or not anything
   is in them (neither is one of the two conditional zones, and the seed writes both `origin: 'user'`
   — a rules zone is a pile nobody has to earn), and a predefined pile cannot be deleted

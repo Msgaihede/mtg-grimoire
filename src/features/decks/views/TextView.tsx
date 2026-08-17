@@ -115,11 +115,12 @@ export function TextView({
   columnHeight?: number;
   className?: string;
 }) {
-  // The Sideboard and the Maybeboard are lifted out before anything is packed, so `packColumns` is
-  // handed a shorter list and none of its own rules change. Each is a category like any other to a
-  // greedy in-order pack, which drops it wherever it lands — usually the far end of a long run,
-  // i.e. the two piles a reader looks for by position, in the one place they can never be.
-  // {@link splitRail} has which kinds, and why the rail is not sorted here.
+  // The Sideboard, the Maybeboard and every pile the reader has switched off are lifted out before
+  // anything is packed, so `packColumns` is handed a shorter list and none of its own rules change.
+  // Each is a category like any other to a greedy in-order pack, which drops it wherever it lands —
+  // usually the far end of a long run, i.e. the piles a reader looks for by position, in the one
+  // place they can never be. {@link splitRail} has which piles, why the kind is tested before the
+  // switch, and why the rail is not sorted here.
   const { flow, rail } = splitRail(groups);
   const columns = packColumns(flow, groupHeight, columnHeight);
 
@@ -208,16 +209,20 @@ export function TextView({
         ))}
       </div>
 
-      {/* The Sideboard and the Maybeboard, in the reader's own `sortOrder` — nothing here
-          re-arranges them. Drawn for an **empty** pile too, which is the case worth stating: an
-          empty pile is where the next card of that kind goes, and a rail that appeared with the
-          first card would shove the whole layout sideways under the reader's hand mid-drag.
+      {/* The Sideboard and the Maybeboard, and under them every pile the reader has switched off —
+          both runs in the reader's own `sortOrder`, and nothing here re-arranges either. Drawn for
+          an **empty** pile too, which is the case worth stating: an empty pile is where the next
+          card of that kind goes, and a rail that appeared with the first card would shove the whole
+          layout sideways under the reader's hand mid-drag.
 
           A group in here is the same `TextGroup` as one in the flow, so its heading, its aria and
           its drop target need no second definition — the rail is where it is drawn, not what it
-          is. **That is also the whole answer to the Maybeboard being seeded switched off**: this
-          rail will routinely hold a dimmed pile, and it takes no code here, because the dimming
-          belongs to the group and travels with it. */}
+          is. **That is the whole answer to the Maybeboard being seeded switched off**: this rail
+          has always held a dimmed pile, and it takes no code here, because the dimming belongs to
+          the group and travels with it. **It is also the whole answer to the switched-off half**
+          (added 2026-08-17): those piles arrive dimmed by the same route, and switching one back on
+          returns it to the pack at its own `sortOrder`, because `splitRail` is derived per render
+          and nothing here remembers where a pile was drawn last. */}
       {rail.length > 0 && (
         <div
           {...{ [RAIL_ATTR]: "" }}
