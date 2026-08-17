@@ -67,10 +67,11 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
 /**
  * What a row says when the card is already in the pile it names.
  *
- * Two rows can carry it — the card's own category under `Move to`, and a zone row on the card
- * that fills it — and both are the same statement, so it is one string. Not a *refusal* in
- * `validation/`'s sense: nothing is wrong with the card, there is simply nothing for the press
- * to write.
+ * Two rows are greyed by it — the card's own category under `Move to`, and a zone row on the
+ * card that fills it — and both are the same statement, so it is one string. Only the first
+ * **draws** it, since 2026-08-17: a zone row greys wordlessly, for the reason on
+ * {@link zoneItem}. Not a *refusal* in `validation/`'s sense: nothing is wrong with the card,
+ * there is simply nothing for the press to write.
  */
 const ALREADY_HERE = "already here";
 
@@ -228,7 +229,8 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
 
 /**
  * **Set as commander** and **Set as companion** — present only where the format has the zone,
- * greyed with a reason where the card cannot fill it.
+ * greyed where the card cannot fill it. Greyed and **wordless**: {@link zoneItem} says why the
+ * sentence these two used to carry is not drawn.
  *
  * The presence test is the format's (`requiresCommander` / `allowsCompanion`), so neither ever
  * appears in Standard or Modern; the eligibility test is `validation/`'s, so a card this menu
@@ -241,10 +243,11 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
  * that exists only to be refused is worse than one that is not there (`categoryMenu.tsx` drops
  * its two rows on the same argument).
  *
- * A card that is **already in** the zone is greyed with `ALREADY_HERE`, exactly as its own pile
- * is under `Move to`, and for the same reason: the write would be a move from a category to
- * itself. It is the one refusal here that is not `validation/`'s, because it is not a question
- * about the card — the reigning commander is by definition an eligible one.
+ * A card that is **already in** the zone is greyed too, for the reason its own pile is greyed
+ * under `Move to`: the write would be a move from a category to itself. It is the one refusal
+ * here that is not `validation/`'s, because it is not a question about the card — the reigning
+ * commander is by definition an eligible one. `ALREADY_HERE` is what it is greyed *by* and no
+ * longer what it is greyed *with*; only `Move to` still draws that string.
  */
 function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const { spec } = deps;
@@ -310,7 +313,25 @@ function companionRefusal(card: DeckCard, deps: DeckCardMenuDeps): string | null
   return issues.find((issue) => issue.severity === "error")?.message ?? null;
 }
 
-/** One zone row: live, or greyed carrying the sentence that says why. */
+/**
+ * One zone row: live, or greyed — and **greyed silently**, which is this menu's one row that
+ * refuses without saying why (changed 2026-08-17).
+ *
+ * It carried `refusal` through to `MenuAction.reason` and drew it beside the label. The
+ * sentences are `validation/`'s, written to be read in the validation panel where a paragraph
+ * has room — "not a legendary creature", "this card has no companion ability" — and a menu row
+ * is sized by its widest content, so two of them set the width of *every* row in the panel. The
+ * reader reported the card menu as unusably wide, and these two rows were the whole of it: the
+ * card menu's own refusals are short, and `Move to`'s is `ALREADY_HERE`.
+ *
+ * **The refusal is still computed and is still what greys the row** — the rule underneath is
+ * untouched, so a card this menu offers is still a card the validation panel will accept. What
+ * is gone is only the drawing of it. Where a reader wants the sentence, the panel is where it
+ * is written at full length.
+ *
+ * `disabled` becomes `aria-disabled` on the row and never the `disabled` attribute: a greyed
+ * row stays in the tab order and stays announced.
+ */
 function zoneItem(
   id: string,
   label: string,
@@ -319,9 +340,7 @@ function zoneItem(
   onSelect: () => void,
 ): MenuAction {
   if (refusal === null) return { kind: "action", id, label, Icon, onSelect };
-  // `disabled` here becomes `aria-disabled` on the row and never the `disabled` attribute —
-  // the greyed row exists to be read, so it has to stay in the tab order.
-  return { kind: "action", id, label, Icon, disabled: true, reason: refusal, onSelect: () => {} };
+  return { kind: "action", id, label, Icon, disabled: true, onSelect: () => {} };
 }
 
 /**

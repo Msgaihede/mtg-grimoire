@@ -65,7 +65,7 @@ export const QUICK_ZONE_ATTR = "data-quick-zone";
  * the screen: the editor **is** the page scroller, so `top-0` is the top of what they can see.
  *
  * **It clears the deck, and that was measured rather than estimated.** Driven in the shipped
- * window 2026-08-15 (`npm run tauri dev`, a debug build): the bar is **58px** tall and sits over
+ * window 2026-08-15 (`npm run tauri dev`, a debug build): the bar was **58px** tall and sat over
  * the editor's own header row, clearing the desk row by **155px** at 1280×800 and by **65px** at
  * 1920×1080 — the difference being that the header wraps to two lines at 1280 and does not at
  * 1920. So nothing it draws sits over a pile a reader is aiming at. Scrolled, the deck passes
@@ -74,6 +74,15 @@ export const QUICK_ZONE_ATTR = "data-quick-zone";
  * header row and the first card were at **exactly** the coordinates they held before the drag
  * started (78 and 341.5), and with the editor scrolled to 500 the header row had gone to **−422**
  * while the bar stayed at 78.
+ *
+ * **The bar is 74px since 2026-08-17**, when the box below grew `h-10` → `h-14` to stop being
+ * missed, so those two clearances are **139px** and **49px** now. The wrapper is `h-0` and the
+ * desk row therefore does not move, so the whole of the growth comes off the gap under the bar
+ * and that arithmetic is exact rather than a second estimate. The 74 itself is measured, though
+ * not in the app — a `file://` harness against the **built** stylesheet, the app lock being held
+ * that day — and the same harness reproduced the old bar at **58px** to the pixel, which is what
+ * makes the new number worth writing down at all. **49px is the figure to watch**: it is still a
+ * whole bar clear of every pile, and it is what a fifth zone or a taller box would be spending.
  *
  * `aria-hidden`, exactly as the tray is: this is chrome for a gesture only a pointer can make,
  * and every one of the four has a click path a caret can reach — the toolbar's `Add to` select
@@ -275,6 +284,30 @@ interface Zone {
 /**
  * One box in the bar.
  *
+ * ## It is drawn to be found in a hurry, which it was not
+ *
+ * The reader's report was that the bar is easy to miss (2026-08-17), and the four things that made
+ * it so were each individually defensible and wrong together: a **40px** box holding **12px**
+ * `text-dim` type (`oklch(0.65)`) behind a **1px** dashed `border-border` hairline
+ * (`oklch(0.30)`) filled `bg-bg` (`oklch(0.16)`). The label was the second-dimmest colour in the
+ * palette, the outline was four hundredths of a step off the fill it enclosed, and all of it had
+ * to be found **during a drag** — the one moment a reader is looking at the card under their
+ * pointer rather than at the chrome, and the only moment this surface exists at all. A control
+ * that appears for two seconds cannot also be quiet.
+ *
+ * So the box is **`h-14`**, the label is `text-sm font-medium` in **`text-text`** — the app's own
+ * parchment, the same value as the deck's headings — and the outline is **2px of dashed
+ * `border-dim`**, which is exactly the colour the *label* used to be. That inverts the hierarchy
+ * on purpose: the reader now finds the box first and reads it second, which is the order a drop
+ * target is used in. **Dashed rather than solid, still**, because a dashed edge is what says
+ * *let go here* rather than *press me* — the same reason it was dashed when it was a hairline —
+ * and 2px is what makes that reading survive at arm's length.
+ *
+ * **The one colour it does not spend is gold.** `DROP_RING`/`DROP_OVER` and `border-accent` are
+ * where the card is *going*, and a resting box already wearing the accent would leave the hover
+ * state nothing to say. The whole change is therefore in the neutral half of the palette: value
+ * and size carry "there is a target here", and gold still carries "this one".
+ *
  * **Registered once, on mount, which is inside the drag** — a drop target added mid-drag is
  * picked up on the next `dragover`, which is the whole reason a surface that only exists during a
  * drag can be dropped on at all (the remove tray's effect says the same). So the two handlers are
@@ -310,8 +343,8 @@ function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElem
       ref={attach}
       {...{ [QUICK_ZONE_ATTR]: label }}
       className={cn(
-        "flex h-10 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border border-dashed",
-        "border-border bg-bg px-2 text-xs text-dim",
+        "flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border-2 border-dashed",
+        "border-dim bg-bg px-3 text-sm font-medium text-text",
         // No transition on either state, exactly as the remove tray has none: an affordance that
         // fades in during a drag is an affordance that is still arriving when the reader has let
         // go.
@@ -322,7 +355,7 @@ function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElem
         over && cn(DROP_RING, DROP_OVER, "border-accent text-accent"),
       )}
     >
-      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+      <Icon className="size-5 shrink-0" aria-hidden="true" />
       <span className="truncate">{label}</span>
     </div>
   );

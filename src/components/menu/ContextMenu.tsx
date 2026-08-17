@@ -168,8 +168,8 @@ function ActionRow({ item, run }: { item: MenuAction; run: RowsContext["run"] })
       data-menu-row={item.id}
       data-menu-row-button=""
       // `aria-disabled`, and never the `disabled` attribute. A `disabled` button leaves the tab
-      // order and stops being announced, and the greyed "Set as commander" row exists to be read:
-      // its whole job is to say why the thing the reader came for is not on offer.
+      // order and stops being announced, and a greyed row exists to be read: it is how the reader
+      // finds out that the thing they came for is not on offer *here* rather than gone.
       aria-disabled={disabled ? true : undefined}
       onClick={() => {
         if (!disabled) run(item.onSelect);
@@ -181,8 +181,14 @@ function ActionRow({ item, run }: { item: MenuAction; run: RowsContext["run"] })
       {/* `text-dim`, which is this app's only dim-text class — the retired spelling still
           compiles and paints the surface colour on the surface, and `tokens.test.ts` sweeps
           prose as eagerly as code for it, so it is not named here either. Part of the row's own
-          accessible name, deliberately: "Set as commander, not a legendary creature" is one
-          sentence and reads as one. */}
+          accessible name, deliberately: "View all printings, this pane is already showing them"
+          is one sentence and reads as one.
+
+          **Optional, and a caller that leaves it out is not being lazy.** A row is as wide as
+          its widest content, so a `reason` sets the width of every row in the panel — which is
+          why the deck menu's two zone rows grey silently and word their refusal nowhere (see
+          `deckCardMenu.tsx`'s `zoneItem`). A reason belongs here when it is a phrase; a
+          rules sentence belongs where there is room to read it. */}
       {item.reason && <span className="flex-none text-[0.7rem] text-dim">{item.reason}</span>}
     </button>
   );

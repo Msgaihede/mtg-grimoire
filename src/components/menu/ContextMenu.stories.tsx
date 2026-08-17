@@ -565,11 +565,19 @@ export const NoStoredImage: Story = {
  * The same menu **inside the deck editor**, with the four rows that only mean something about a
  * card that is in a deck — and the greyed commander this branch's spec names.
  *
- * Lightning Bolt is not a legendary creature, so `commanderIneligibility` answers a sentence and
- * the row is drawn carrying it. The presence test is the *format's* (`requiresCommander`), so
- * neither zone row appears in Modern at all; the eligibility test is `validation/`'s, so a card
- * this menu offers is a card the validation panel will accept. A looser rule here would offer a
- * card the panel then refuses, which is the one thing the deck surface must never do.
+ * Lightning Bolt is not a legendary creature, so `commanderIneligibility` refuses it and the row
+ * greys. The presence test is the *format's* (`requiresCommander`), so neither zone row appears
+ * in Modern at all; the eligibility test is `validation/`'s, so a card this menu offers is a card
+ * the validation panel will accept. A looser rule here would offer a card the panel then refuses,
+ * which is the one thing the deck surface must never do.
+ *
+ * **What this story is for now is the row's _width_** (2026-08-17). Both zone rows drew the
+ * rule's own sentence beside the label until then — "not a legendary creature", "this card has no
+ * companion ability" — and a menu row is as wide as its widest content, so those two sentences
+ * set the width of the whole panel and the card menu read as unusably wide. The rule is
+ * unchanged and only the drawing of it is gone: the refusal is still computed, still greys the
+ * row, and is still written at full length in the validation panel, where there is room to read
+ * it. This frame is where a sentence creeping back in is visible.
  */
 export const GreyedCommander: Story = {
   args: { build: (act) => buildDeckCardMenu(DECK_CARD, deckCardDeps(act)) },
@@ -580,20 +588,18 @@ export const GreyedCommander: Story = {
 
     await expect(row).toHaveAttribute("aria-disabled", "true");
     await expect(row).not.toHaveAttribute("disabled");
-    // The sentence is `validation/commanders.ts`', not one this menu wrote — asserted by its
-    // shape rather than word for word, so a reworded rule is not a story failure.
-    await expect(row.textContent).toMatch(/commander/i);
-    await expect(row.textContent?.length ?? 0).toBeGreaterThan("Set as commander".length);
+    // The label and nothing else. The row's accessible name *is* its text, so this is also what
+    // says the greying costs a screen reader no words it was getting from somewhere else.
+    await expect(row.textContent?.trim()).toBe("Set as commander");
 
     await userEvent.click(row);
     await expect(args.act).not.toHaveBeenCalled();
 
-    // Its neighbour is greyed too, and **for a different reason in different words** — which is
-    // the thing worth seeing: neither sentence was written by this menu. The commander rule is
-    // about what the card is; the companion rule is about an ability it does not print.
+    // Its neighbour is greyed on a rule of its own — the commander rule is about what the card
+    // is, the companion rule about an ability it does not print — and says just as little.
     const companion = canvas.getByRole("menuitem", { name: /Set as companion/ });
     await expect(companion).toHaveAttribute("aria-disabled", "true");
-    await expect(companion.textContent).toMatch(/companion ability/);
+    await expect(companion.textContent?.trim()).toBe("Set as companion");
   },
 };
 

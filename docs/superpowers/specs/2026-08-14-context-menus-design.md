@@ -248,8 +248,8 @@ The card menu above, plus:
 ```
 ─────────────────────
 Move to              ▸  every category of the deck, active and inactive
-Set as commander        (greyed with a reason when ineligible)
-Set as companion        (greyed with a reason when ineligible)
+Set as commander        (greyed when ineligible — silently, see below)
+Set as companion        (greyed when ineligible — silently, see below)
 Tag card             ▸  None / the deck's tags / New tag…
 ```
 
@@ -262,11 +262,18 @@ It is the replacement for that control, not a duplicate of the drag.
 
 **Set as commander / companion** — present only where `FormatSpec.requiresCommander` /
 `FormatSpec.allowsCompanion`, so they never appear in Standard or Modern. Within a format that
-allows one, an ineligible card shows the item **greyed with its reason** — "not a legendary
-creature", "colour identity outside the commander's". The reason comes from
+allows one, an ineligible card shows the item **greyed**. The refusal comes from
 `validation/commanders.ts`'s `commanderIneligibility` and `validation/companions.ts`, the same
 rules the validation panel judges a built deck by and the importer offers candidates by. A
 looser test here would offer a card the panel then refuses.
+
+**Amended 2026-08-17: the reason is computed and no longer drawn.** As shipped these two rows
+carried the rule's own sentence beside the label — "not a legendary creature", "this card has no
+companion ability" — and a menu row is as wide as its widest content, so the two of them set the
+width of every row in the card menu and the reader reported it as unusably wide. The rule
+underneath is untouched and still what greys the row; only the drawing of it is gone. The
+sentences remain in the validation panel, which is written for a paragraph and has the room. See
+`deckCardMenu.tsx`'s `zoneItem`.
 
 The write is a `moveCard` into the deck's `commander` / `companion` category.
 
