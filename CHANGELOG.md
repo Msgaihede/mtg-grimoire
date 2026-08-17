@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.10.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.9.1...v0.10.0) (2026-08-17)
+
+
+### Features
+
+* **card,decks:** the foil button writes, and the deck draws what it plays ([5f468e0](https://github.com/Msgaihede/mtg-grimoire/commit/5f468e083094378e451b7bf45e96bf54f58698d0))
+* **deck:** address a deck card by finish, and set_card_finish ([cb5a2f9](https://github.com/Msgaihede/mtg-grimoire/commit/cb5a2f94b3e7389f1aabdee285f6d187330d1475))
+* **deck:** price a deck row at the finish it names ([2bd7d6c](https://github.com/Msgaihede/mtg-grimoire/commit/2bd7d6cd7cff5c31348568cbf5f20704d459cc34))
+* **decks:** a deck card names a finish, end to end ([5172202](https://github.com/Msgaihede/mtg-grimoire/commit/51722026d34f06e9d73542636851324990bf5fc3))
+* **decks:** add a deck game type that filters the format picker ([11a739b](https://github.com/Msgaihede/mtg-grimoire/commit/11a739bd2f173937d286c87893cf305866bc7229))
+* **decks:** drag a category past its neighbours on the desk ([065bfd7](https://github.com/Msgaihede/mtg-grimoire/commit/065bfd739d4b4f996ff495d8677dddd5c1b32de5))
+* **decks:** rail every switched-off pile under the sideboard ([9302480](https://github.com/Msgaihede/mtg-grimoire/commit/9302480dff13966733a95b45b74bb14318a8b986))
+* **rust:** bind the finish vocabulary to schema::FINISHES ([26395d0](https://github.com/Msgaihede/mtg-grimoire/commit/26395d0f2545204e35629a26def61b61030c0862))
+* **schema:** v18 - deck_cards.finish, and the grain widens with it ([b9f6a01](https://github.com/Msgaihede/mtg-grimoire/commit/b9f6a0175b44cef47c30b54c9da944eb359b88ee))
+* **settings:** draw the release notes, and every version before this one ([6544c88](https://github.com/Msgaihede/mtg-grimoire/commit/6544c88997152b2aa3222d6ec3764f690b0a5cd9))
+* **settings:** draw the release notes, and every version before this one ([33dd54b](https://github.com/Msgaihede/mtg-grimoire/commit/33dd54b25c2e84b7828a878d50c8cc438831a831))
+
+
+### Bug Fixes
+
+* **decks:** attach the rail to the deck instead of the desk's right edge ([9a9e325](https://github.com/Msgaihede/mtg-grimoire/commit/9a9e3257255e382db5dd94c97d9a6180dbe80ca2))
+* **decks:** close the confirm-focus duplicate and reattach an orphaned doc ([cd956e8](https://github.com/Msgaihede/mtg-grimoire/commit/cd956e820993181e01ac60bb01eda10b5d133ba2))
+* **decks:** draw the quick zones to be found during a drag ([b2055b7](https://github.com/Msgaihede/mtg-grimoire/commit/b2055b7c8f1d307f999f5ed42f273c2a9ee9089f))
+* **decks:** draw the quick zones to be found during a drag ([50b7411](https://github.com/Msgaihede/mtg-grimoire/commit/50b741128b34236d6ea1ab86caacf1a2af15ec99))
+* **decks:** give the deck's views room for the drop ring they were clipping ([23dc537](https://github.com/Msgaihede/mtg-grimoire/commit/23dc537e271328fad372e6187cdaa9b7cd7be5be))
+* **decks:** give the deck's views room for the drop ring they were clipping ([429733c](https://github.com/Msgaihede/mtg-grimoire/commit/429733c514563e487c8ce8bcccaaf9ce848ccb5a))
+* **decks:** grey the two zone rows without a sentence beside them ([1ec6fa2](https://github.com/Msgaihede/mtg-grimoire/commit/1ec6fa28bb2b1f3d867cc751a87da9fde0aca6ee))
+* **decks:** grey the two zone rows without a sentence beside them ([5d9f7c4](https://github.com/Msgaihede/mtg-grimoire/commit/5d9f7c47c1f4c125a472fd7a0fcd8d36e968ff86))
+* **decks:** group update_deck's resolved fields into a struct ([b46d866](https://github.com/Msgaihede/mtg-grimoire/commit/b46d866a2f8de14aa546120562c0ff00dc0e89f3))
+* **decks:** pick a pile up by its heading, not by the grip button ([e1a6bbf](https://github.com/Msgaihede/mtg-grimoire/commit/e1a6bbfb52d788f4b81dc2a69706f67ded989a86))
+* **decks:** pick one deck row, not every pile holding that printing ([6cf7005](https://github.com/Msgaihede/mtg-grimoire/commit/6cf7005e7119f2a0054cf63c2cd49d341fab0200))
+* **decks:** pick one deck row, not every pile holding that printing ([6dd1beb](https://github.com/Msgaihede/mtg-grimoire/commit/6dd1beb1dd1c1765ee63450917abbbd73821a06c))
+* **decks:** re-key the gallery cover when a custom cover is replaced ([2d8e024](https://github.com/Msgaihede/mtg-grimoire/commit/2d8e024711d37e0c026250f0ed8af7eab937bf9f))
+* **decks:** the deckCardSlot call main added while its arity changed ([f8306b2](https://github.com/Msgaihede/mtg-grimoire/commit/f8306b2de88cdd788a22e72ec5554eaf059b2be3))
+* **decks:** two defects the live pass found on the deck-card finish ([c756975](https://github.com/Msgaihede/mtg-grimoire/commit/c756975d5d4e879d10d9d0fb729c8b460b927fa5))
+* **decks:** two defects the live pass found, and the findings ([3465ead](https://github.com/Msgaihede/mtg-grimoire/commit/3465ead81f7feb55b42153473346572a906fa2fd))
+* **settings:** assert presence, not visibility, inside a just-opened row ([25d635d](https://github.com/Msgaihede/mtg-grimoire/commit/25d635d2b75321fedf7dd76dee2c5c1c15fc66ed))
+* **zoom:** scale a card's marks, caption and controls with the card ([c445803](https://github.com/Msgaihede/mtg-grimoire/commit/c445803ae3727d770796589b56fe0422fcc40717))
+
 ## [0.9.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.9.0...v0.9.1) (2026-08-16)
 
 

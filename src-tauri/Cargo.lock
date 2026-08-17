@@ -2377,7 +2377,7 @@ dependencies = [
 
 [[package]]
 name = "mtg-grimoire"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "flate2",
  "futures-util",
