@@ -320,7 +320,7 @@ export function StackView({
     <div
       ref={scrollRef}
       className={cn(
-        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto",
+        "flex h-full min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto",
         DROP_MARK_ROOM,
         "pb-2",
         className,
