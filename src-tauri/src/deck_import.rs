@@ -261,8 +261,10 @@ pub struct ImportResolveRow {
 /// editor cannot come to describe a card differently. Three deliberate differences, named here
 /// so a reader diffing the two does not have to guess which are drift:
 ///
-/// * **`c.finishes` is absent** — a deck names a printing and never a finish, so that column
-///   exists for the editor's foil marking, which no preview draws.
+/// * **`c.finishes` is absent** — the column says which finishes a printing is *sold* in, which
+///   is what the editor's foil marking and its `Set as foil` row read. A preview draws neither:
+///   an imported line's own finish rides on [`ImportItem::finish`], off the file's `*F*` marker,
+///   and needs no list to be read against.
 /// * **The price column is absent**, and that is the one difference worth reading
 ///   [`ImportMatch`]'s doc for: `DECK_CARD_SELECT` builds a `unit_price` through
 ///   `sorting::price_expr` at the marketplace its query was given, and this list has no

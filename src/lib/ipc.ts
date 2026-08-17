@@ -1670,9 +1670,13 @@ export interface DeckCard {
   /**
    * What one copy of this printing costs at the marketplace the read named.
    *
-   * **A deck names a printing, not a finish** — `deck_cards` stores none — so there is no finish
-   * to price by, and the figure is the printing's own: the first finish that marketplace quotes
-   * it in, `nonfoil → foil → etched` (`sorting::printing_price_by_finish_expr`).
+   * **The row's own finish where it names one** (schema v18), at that finish and no other —
+   * the reader has said which object is in the sleeve, and quoting the plain copy's rate against
+   * a foil row would be a price nobody published.
+   *
+   * **The printing's own figure where it does not**, which is every row that predates v18 and
+   * every row a reader has not spoken about: the first finish that marketplace quotes it in,
+   * `nonfoil → foil → etched`. Both arms are `sorting::deck_card_price_expr`.
    *
    * **It was the flat nonfoil rate until 2026-08-15, and that was a bug with a reader-visible
    * shape.** 13 515 foil-only and 892 etched-only printings have no nonfoil price at *any*
@@ -1794,8 +1798,10 @@ export interface ImportResolveLine {
  * and a card already in a deck are described by the same *judgeable* facts: a preview that
  * judged legality on a narrower set of columns than the editor would show a legal deck the
  * editor then refuses. Four differences, named here so a reader diffing the two does not have to
- * guess which are drift — `finishes` is absent (a deck names a printing and never a finish, so a
- * preview draws no foil marking), **`unitPriceUsd`/`unitPriceEur` are both absent**,
+ * guess which are drift — `finishes` is absent (it says which finishes a printing is *sold* in,
+ * which is what the editor's foil marking reads; a line's own finish rides on
+ * {@link ImportItem.finish} instead, off the file's `*F*` marker), **`unitPriceUsd`/`unitPriceEur`
+ * are both absent**,
  * {@link ImportMatch.gameChanger} is a plain boolean where `DeckCard`'s is nullable, and
  * `ownedQuantity`/`printingCount` are the import's own.
  *

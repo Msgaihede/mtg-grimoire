@@ -274,8 +274,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `last_sort_by`, all `TEXT NOT NULL` with defaults `live`, `category` and `alphabetical` — so
   the deck editor reopens on whatever the reader was last looking at, per deck. Like v8, v9 and
   v11 it touches `cards` not at all, so it neither needs the `CARDS_INDEXES` replay nor takes it
-  from v11, and it owes no `cards_fts` rebuild. **`ALTER TABLE … ADD COLUMN` cannot add a CHECK**,
-  so none of the three is constrained in SQL and the fence sits where the vocabulary is owned:
+  from v11, and it owes no `cards_fts` rebuild. None of the three is constrained in SQL — **and not because
+  `ALTER TABLE … ADD COLUMN` cannot add a CHECK**, which is what this said until 2026-08-17 and
+  is false (v18's `deck_cards.finish` adds one and it is enforced). The fence sits where the
+  vocabulary is owned:
   `last_variant` against `schema::DECK_VARIANTS` in Rust, the other two narrowed in TypeScript on
   read — [decks-storage.md](decks-storage.md) has the reasoning.
   v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
@@ -308,7 +310,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v17.** v17 adds one table — `deck_undo`, the deck editor's undo journal: one step
+- **Schema is v18.** v18 adds one column and rebuilds one index — `deck_cards.finish`
+  (`NULL | 'foil' | 'etched'`, CHECKed) and `idx_deck_cards_grain` widened with
+  `coalesce(finish, '')`. **A deck card names a finish**, which reverses the rule that had held
+  since v5: foil is a *finish of a printing* in Scryfall's model rather than a printing, so
+  53 224 of 107 337 paper printings carry one under the same id and wanting the shiny copy was a
+  thing the model had no way to say. **No backfill** — the column is nullable and NULL is the
+  regular copy, which is what every existing row already meant — and the `coalesce` is
+  `COLLECTION_GRAIN`'s device for its reason: SQLite treats NULLs in a UNIQUE index as
+  *distinct*, so the bare column would have stopped every regular add folding into the row
+  already there. It is the **first rewind on this ladder that has to drop an index first**
+  (SQLite refuses `DROP COLUMN` on an indexed column), so `UNDO_V18` is three statements, and
+  `DECK_CARD_GRAIN` leaves
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` to join the two grains
+  held to their indexes by their `ON CONFLICT` targets instead. **It also settles a claim this
+  file made twice**: `ALTER TABLE … ADD COLUMN` *can* carry a CHECK, and it is enforced. The
+  whole design: [the spec](../superpowers/specs/2026-08-17-deck-card-finish-design.md).
+- v17 adds one table — `deck_undo`, the deck editor's undo journal: one step
   per deck write, keyed 1:1 to the `deck_audit` row it reverses, with a nullable `undone_at` that
   is the cursor. A **sibling** of the history rather than a column on it, because `deck_audit` is
   append-only and read whole every time the drawer opens while a step for a deleted category
@@ -436,7 +454,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
-  **`v15_database`** and v17 to **`v16_database`**. The fixtures it passes stay exactly where they are, each pinned to
+  **`v15_database`**, v17 to **`v16_database`** and v18 to **`v17_database`**. The fixtures it
+  passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
   actually run over, and `v10_database` to 10 before it, for

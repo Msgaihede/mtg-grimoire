@@ -191,10 +191,16 @@ const BRACKET = /\s+\[([^\]]+)\]$/;
 /**
  * Bracket contents that are a *finish* rather than a pile.
  *
- * `[Foil]` is decoration in the same way `*F*` is, and a deck names a printing rather than a
- * finish, so reading it as a category would put a pile called "Foil" in somebody's deck. Matched
- * whole and case-insensitively; anything else in a bracket is a category, because guessing which
- * words are "really" categories is the format detector this file exists without.
+ * Reading one as a category would put a pile called "Foil" in somebody's deck. Matched whole and
+ * case-insensitively; anything else in a bracket is a category, because guessing which words are
+ * "really" categories is the format detector this file exists without.
+ *
+ * **It is decoration and not a finish either**, which is the half that stopped being obvious
+ * when {@link FINISH_MARKER} started being read (2026-08-17). A bracket is the *category*
+ * channel: a finish that arrived there is an exporter being loose with a field, while `*F*` is
+ * the channel every format that says anything about a finish agrees on. Reading the bracket
+ * would also mean deciding, for every word in it, whether it names a pile or a treatment —
+ * which is that same detector one step further in.
  */
 const FINISH_WORDS = /^(?:foil|etched|non-?foil)$/i;
 
