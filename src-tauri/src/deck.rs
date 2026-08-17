@@ -2520,31 +2520,49 @@ pub struct DeckCardRow {
     /// Tiny Leaders' per-face MV cap and DFC commander fronts both read them.
     pub faces: Option<String>,
     pub game_changer: Option<bool>,
-    /// The finishes this printing exists in, as the JSON array `cards.finishes` stores.
+    /// The finishes this printing **is sold in**, as the JSON array `cards.finishes` stores —
+    /// a fact about the object, and the list a reader may pick [`DeckCardRow::finish`] from.
     ///
-    /// A deck names a *printing* and never a finish — the model has no opinion on whether a
-    /// copy is foil. What this answers is the narrower question the art can carry: whether
-    /// the printing itself leaves no choice, which is true of 12 366 foil-only and 892
-    /// etched-only paper printings. `None` for an orphan, whose card has left `cards`.
+    /// It also answers the narrower question the art carries on its own: whether the printing
+    /// leaves no choice at all, which is true of 12 366 foil-only and 892 etched-only paper
+    /// printings. `None` for an orphan, whose card has left `cards`.
     pub finishes: Option<String>,
     /// Printed at uncommon on **any** printing of this oracle card. Computed, not read: a
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
     pub ever_uncommon: bool,
     /// What one copy costs at the marketplace the read was given —
-    /// [`crate::sorting::printing_price_by_finish_expr`], the **printing** grain.
+    /// [`crate::sorting::deck_card_price_expr`], which is two rules told apart by
+    /// [`DeckCardRow::finish`].
     ///
-    /// A deck names a printing and never a finish, so there is no finish to price at and the row
-    /// is quoted in whichever one that marketplace sells it in: nonfoil where there is a nonfoil
-    /// price, else foil, else etched. **The literal `'nonfoil'` this used to pass was a bug** —
-    /// 13 515 foil-only and 892 etched-only printings have no nonfoil price at any marketplace,
-    /// so every one of them read `None` while the search wall quoted the same printing.
+    /// **A row that names a finish is quoted at that finish and no other.** No fallback: the
+    /// reader has said which object is in the sleeve, and a foil row quoted at the nonfoil rate
+    /// is a price nobody quoted.
+    ///
+    /// **A row that names none is quoted at the printing grain**, in whichever finish that
+    /// marketplace sells it in: nonfoil where there is a nonfoil price, else foil, else etched.
+    /// **The literal `'nonfoil'` this used to pass was a bug** — 13 515 foil-only and 892
+    /// etched-only printings have no nonfoil price at any marketplace, so every one of them
+    /// read `None` while the search wall quoted the same printing.
     ///
     /// Still never `cards.price_usd`, which is that chain precomputed for the search's `ORDER
     /// BY`: the numbers agree, and what a deck may not do is sum the display column.
-    /// The euro etched hole is unchanged, because it lives in
-    /// [`crate::sorting::price_expr`] — an etched-only printing is unpriced on Cardmarket.
+    /// The euro etched hole is unchanged in both arms, because it lives in
+    /// [`crate::sorting::price_expr`] — an etched printing is unpriced on Cardmarket.
     pub unit_price: Option<f64>,
+    /// Which object this row plays: `None` is the regular copy, `Some("foil")` or
+    /// `Some("etched")` the premium ones. Schema v18.
+    ///
+    /// **`None` is the only spelling of regular and `"nonfoil"` never appears here** —
+    /// [`normalise_finish`] maps the word away at the command boundary and the column's CHECK
+    /// makes any other path a hard error, because two spellings would be two rows on
+    /// [`crate::schema::DECK_CARD_GRAIN`] that draw identically on screen and sum apart. It is
+    /// the shape `soleFinish` already answers in on the TypeScript side, for the same reason:
+    /// nonfoil is the finish a price is assumed to be.
+    ///
+    /// It is part of the row's **address**, not just its content — a foil copy and a regular
+    /// copy of one printing in one pile are two rows, so every card command takes it.
+    pub finish: Option<String>,
     /// Copies of this oracle card the allocator secured for this deck, attributed to this
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
@@ -2623,14 +2641,20 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             c.faces, c.game_changer, c.finishes, c.set_name,
             {price} AS unit_price,
             EXISTS(SELECT 1 FROM cards u
-                    WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
+                    WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon,
+            -- **Last, and that is [`deck_row`]'s rule rather than a preference.** This read is
+            -- positional, so a column added anywhere but the end shifts every index after it
+            -- into a field of the same SQLite type, silently. `finish` is TEXT and would have
+            -- landed in `needs_review` — a sentence field — had it gone beside `lang` where it
+            -- reads best.
+            dc.finish
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN deck_tags t ON t.id = dc.tag_id
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND dc.variant = ?2
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::printing_price_by_finish_expr(marketplace)
+        price = crate::sorting::deck_card_price_expr(marketplace)
     )
 }
 
@@ -2731,6 +2755,8 @@ fn read_deck_cards(
                 set_name: r.get(31)?,
                 unit_price: r.get(32)?,
                 ever_uncommon: r.get(33)?,
+                // 34, at the end of the list, for the reason written at the column.
+                finish: r.get(34)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -6791,6 +6817,76 @@ mod tests {
         assert_eq!(price("bolt-lea", Manapool), Some(390.0));
     }
 
+    /// **A row that names a finish is priced at that finish, and one that names none keeps the
+    /// chain** — the two arms of [`crate::sorting::deck_card_price_expr`], driven through real
+    /// SQL rather than asserted about its text.
+    ///
+    /// The text-level test in `sorting.rs` checks that the expression is assembled out of the
+    /// right two pieces; this one checks that the assembled thing *runs* and answers, which is
+    /// the half a `contains()` cannot see.
+    ///
+    /// The printing is deliberately sold in **both** finishes at **different** prices, so a
+    /// wrong arm is a wrong number rather than a null — an em dash would also be produced by
+    /// the expression failing to find anything at all, and the two must not be confusable.
+    #[test]
+    fn a_deck_row_is_priced_at_the_finish_it_names_and_chained_when_it_names_none() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    finishes,prices,raw)
+               VALUES ('both','o7','Both Ways','tst','3','en','normal','["nonfoil","foil"]',
+                  '{"usd":"1.00","usd_foil":"9.00","usd_etched":null,
+                    "eur":"0.90","eur_foil":"8.10"}','{}');"#,
+        )
+        .unwrap();
+        seed_feed(
+            &conn,
+            &[
+                ("cardkingdom", "both", "nonfoil", 1.10),
+                ("cardkingdom", "both", "foil", 9.90),
+            ],
+        );
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "both", main, 1);
+
+        let price = |marketplace| {
+            get_deck(&conn, deck.id, LIVE, marketplace)
+                .unwrap()
+                .unwrap()
+                .cards
+                .iter()
+                .find(|c| c.card_id == "both")
+                .unwrap()
+                .unit_price
+        };
+        use crate::sorting::Marketplace::{Cardkingdom, Cardmarket, Tcgplayer};
+
+        // Says nothing: the chain, whose first link is the nonfoil rate.
+        assert_eq!(price(Tcgplayer), Some(1.00));
+        assert_eq!(price(Cardmarket), Some(0.90));
+        assert_eq!(price(Cardkingdom), Some(1.10));
+
+        conn.execute("UPDATE deck_cards SET finish = 'foil'", [])
+            .unwrap();
+
+        // Says foil: the foil rate, on every marketplace, out of that marketplace's own source
+        // — the blob for two of them and `marketplace_prices` for the feed.
+        assert_eq!(price(Tcgplayer), Some(9.00));
+        assert_eq!(price(Cardmarket), Some(8.10));
+        assert_eq!(price(Cardkingdom), Some(9.90));
+
+        // Says etched, on a printing sold in no such thing: **unpriced, never the nonfoil
+        // rate**. The reader has named an object this printing is not, and quoting the plain
+        // copy's price for it would be a number nobody published — the same rule the euro
+        // etched hole is kept by one module over.
+        conn.execute("UPDATE deck_cards SET finish = 'etched'", [])
+            .unwrap();
+        assert_eq!(price(Tcgplayer), None);
+        assert_eq!(price(Cardmarket), None);
+        assert_eq!(price(Cardkingdom), None);
+    }
+
     /// **A printing sold only in foil is priced at its foil rate, and this is the bug that made
     /// the rule.**
     ///
@@ -7481,6 +7577,10 @@ mod tests {
             finishes: Some(r#"["nonfoil","foil"]"#.to_owned()),
             ever_uncommon: false,
             unit_price: Some(400.0),
+            // Set rather than `None`, so the wire name is pinned by a value the frontend can
+            // tell from an absent key: `finish` is what every deck surface reads to draw the
+            // sheen and what every card command addresses by.
+            finish: Some("foil".to_owned()),
             owned_quantity: 3,
         })
         .unwrap();
@@ -7498,7 +7598,8 @@ mod tests {
                 "legalities": "{\"modern\":\"legal\"}", "power": null, "toughness": null,
                 "layout": "normal", "rarity": "common", "faces": null,
                 "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
-                "everUncommon": false, "unitPrice": 400.0, "ownedQuantity": 3
+                "everUncommon": false, "unitPrice": 400.0, "finish": "foil",
+                "ownedQuantity": 3
             })
         );
 
