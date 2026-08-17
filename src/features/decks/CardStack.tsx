@@ -5,7 +5,7 @@ import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
-import { DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
+import { cardScaleVars, DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { soleFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
@@ -125,11 +125,16 @@ export const STACK_CARD_BORDER = 1;
 /** The image's own height at {@link STACK_CARD_WIDTH}, which is the card face and nothing else. */
 export const STACK_IMAGE_HEIGHT = Math.round(STACK_CARD_WIDTH * CARD_ASPECT);
 /**
- * The data line's own height — the card's foot, standing under the face rather than over it.
+ * The data line's own height at 100% zoom — the card's foot, standing under the face rather than
+ * over it.
  *
- * **A floor under the zoom rather than a proportion of it**, for {@link stackAdvance}'s reason and
- * not for a new one: the bar holds the printing's facts in type that is already at the app's
- * legibility floor, and type does not get smaller because a card did. See {@link stackDataHeight}.
+ * **A proportion of the card since the type in it learnt to scale**, where it used to be a floor
+ * under the zoom. The old reasoning was {@link stackAdvance}'s and was correct for as long as it
+ * held: the bar carries the printing's facts in type that was fixed at 10px, so a bar scaled to
+ * 14px at 0.5× would have been shorter than the words inside it. The gem, the finish glyph and the
+ * type all follow `--mark-scale` now (`lib/cardZoom.ts`), so the bar and its contents shrink
+ * together and a floored bar would be 28px of empty felt under a 105px card. See
+ * {@link stackDataHeight}.
  */
 export const STACK_DATA_HEIGHT = 28;
 /**
@@ -147,8 +152,9 @@ export const STACK_DATA_HEIGHT = 28;
 export const STACK_DATA_RISE = 4;
 export const STACK_CARD_HEIGHT =
   STACK_IMAGE_HEIGHT + 2 * STACK_CARD_BORDER + (STACK_DATA_HEIGHT - STACK_DATA_RISE);
-/** How far one card advances the stack — its printed title bar and a sliver of art. A floor for
- *  the overlaid quantity chip, not a fraction of the card. See {@link stackAdvance}. */
+/** How far one card advances the stack at 100% zoom — its printed title bar and a sliver of art.
+ *  A fraction of the card, and a budget for the overlaid quantity tag, which is drawn to the same
+ *  fraction. See {@link stackAdvance}. */
 export const STACK_ADVANCE = 34;
 /** The collapsed bottom margin, in px. Negative: each card is pulled up over its neighbour. */
 export const STACK_COLLAPSED_MARGIN = STACK_ADVANCE - STACK_CARD_HEIGHT;
@@ -181,16 +187,18 @@ export function stackImageHeight(zoom: number): number {
 }
 
 /**
- * The data line's height at this zoom — **grown with the card, never shrunk below its base**.
+ * The data line's height at this zoom — **it moves with the card in both directions**.
  *
- * The same rule as {@link stackAdvance} and for the same reason, which is why they are the only
- * two `max`es in the file: the bar's contents are type and a mana line, not a picture, and both
- * are already at the size the app stops shrinking text at. A plain multiply would give a 14px bar
- * at 0.5× holding 11px type — the bar would be shorter than the words inside it, and the words
- * would spill over the card below.
+ * It used to floor, and the argument for the floor was sound while it lasted: the bar's contents
+ * are type and a mana line rather than a picture, both were fixed at the size the app stops
+ * shrinking text at, and a plain multiply gave a 14px bar at 0.5× holding 11px type — a bar
+ * shorter than the words inside it, spilling over the card below. What removed the floor is that
+ * the words are no longer fixed. The gem, the finish glyph and the type read the card's own
+ * `--mark-scale` (`lib/cardZoom.ts`), so the bar and everything in it are one proportion, and the
+ * floor's own failure mode has swapped ends: 28px of empty felt under a 105px card.
  */
 export function stackDataHeight(zoom: number): number {
-  return Math.max(STACK_DATA_HEIGHT, scaled(STACK_DATA_HEIGHT, zoom));
+  return scaled(STACK_DATA_HEIGHT, zoom);
 }
 
 /**
@@ -198,36 +206,40 @@ export function stackDataHeight(zoom: number): number {
  * standing under it less the 4px that foot rides up into the face.
  *
  * The rise is subtracted unscaled on purpose — see {@link STACK_DATA_RISE}. So the card is the one
- * sum here with three different behaviours in it (a scaled face, a floored foot, two fixed
- * hairlines), which is exactly what it was before the zoom existed; the zoom only made the
- * differences visible.
+ * sum here with two different behaviours in it: a scaled face and foot, and three fixed lengths
+ * (two hairlines and the rise), each fixed because the thing it is derived from — a 1px border, a
+ * 7px corner radius — is a Tailwind class that does not scale either. The foot was a third
+ * behaviour, a floor, until the type inside it started scaling; see {@link stackDataHeight}.
  */
 export function stackCardHeight(zoom: number): number {
   return stackImageHeight(zoom) + 2 * STACK_CARD_BORDER + (stackDataHeight(zoom) - STACK_DATA_RISE);
 }
 
 /**
- * How far one card advances the stack at this zoom — **it grows with the card and never shrinks
- * below {@link STACK_ADVANCE}**.
+ * How far one card advances the stack at this zoom — **a proportion of the card, in both
+ * directions**.
  *
- * The one number in this file that is not a proportion, and therefore the one place a plain
- * multiply is wrong. 34 is a *legibility floor*: the quantity chip is drawn over the reveal
- * strip and has to fit inside it, and the chip does not get smaller when the card does — it is
- * 11px type at every zoom, because 5px type is not type. Scaled linearly, a 0.5× stack would
- * reveal 17px, the chip on each card would cover the printed name of the card above it, and a
- * collapsed stack would stop being readable at exactly the zoom a reader picked in order to see
- * more of it at once.
+ * **This was a `max` and is not one any more, and the entry is kept rather than deleted because
+ * the argument it replaced is the one somebody will make again.** 34 was a *legibility floor*: the
+ * quantity tag is drawn over the reveal strip and has to fit inside it, and the tag did not get
+ * smaller when the card did — it was 22px of chip around 11px type at every zoom, because 5px type
+ * is not type. Scaled linearly, a 0.5× stack revealed 17px, the tag on each card covered the
+ * printed name of the card above it, and a collapsed stack stopped being readable at exactly the
+ * zoom a reader picked in order to see more of it at once. Every word of that was true.
  *
- * So `max(floor, scaled)`, and **please do not simplify it back to `scaled(STACK_ADVANCE, zoom)`
- * on the grounds that the `max` looks redundant** — it is doing all of the work below 1×.
+ * What changed is the premise. `QuantityTag` reads `--mark-scale` (`lib/cardZoom.ts`) now, so at
+ * 0.5× it is 11px of chip in a 17px strip — the same fraction of the same reveal it has always
+ * been. The floor would keep 34px of a 148px card, which is a fifth of the pile spent on a mark
+ * drawn to half of it. **If the tag ever stops scaling, this `max` comes back with it**; they are
+ * one decision written in two files.
  *
- * It stays far under the card at both ends — 34 of a 148px card at 0.5×, 68 of 587px at 2× — so
+ * It stays far under the card at both ends — 17 of a 159px card at 0.5×, 68 of 587px at 2× — so
  * {@link stackCollapsedMargin} is negative at every stop and every card is still painted over
  * the one before it. An advance that reached the card's height would stack the pile the wrong
  * way round with no error anywhere.
  */
 export function stackAdvance(zoom: number): number {
-  return Math.max(STACK_ADVANCE, scaled(STACK_ADVANCE, zoom));
+  return scaled(STACK_ADVANCE, zoom);
 }
 
 /** The collapsed bottom margin at this zoom, which is what pulls each card up over its
@@ -315,7 +327,14 @@ export function stackHeight(count: number, zoom: number = DEFAULT_ZOOM): number 
  * ({@link FRAME_NAME_INSET}), so the one case where the app is drawing the name itself never
  * hides a character of it.
  */
-const CARD_MARKS_STRIP = "absolute top-0 left-0 right-[5px] flex h-[27px] items-start";
+const CARD_MARKS_STRIP = cn(
+  "absolute top-0 left-0 flex items-start",
+  // 27px is the printed title bar's height **on a card at 100% zoom**, and 5px is the inset that
+  // keeps the strip off the card's own clipped corner. Both scale with the card: the strip is a
+  // scrim over a band of the picture, so a fixed 27px is most of a halved card's art and a sliver
+  // of a doubled one's. `--mark-scale` is the card's own factor — `lib/cardZoom.ts`.
+  "right-[calc(5px*var(--mark-scale,1))] h-[calc(27px*var(--mark-scale,1))]",
+);
 
 /**
  * How far the no-picture frame's name band is inset from the left, so {@link QuantityTag} never
@@ -324,6 +343,11 @@ const CARD_MARKS_STRIP = "absolute top-0 left-0 right-[5px] flex h-[27px] items-
  * A printed card's name is Wizards' to place and this component covers 34px of it knowingly
  * ({@link CARD_MARKS_STRIP}). A name this file writes is not, and there is no reason to repeat
  * the compromise where there was no constraint forcing it.
+ *
+ * **34px is what the tag covers at 100% zoom, and the tag scales**, so this is scaled at the use
+ * site rather than used raw. Left fixed it would be the inset that is wrong at both ends: a band
+ * indented 34px on a 105px card is most of the name gone for a tag drawn at 17, and 34px on a 420px
+ * card leaves a gap the tag no longer reaches across.
  */
 const FRAME_NAME_INSET = 34;
 
@@ -766,6 +790,13 @@ function StackedCard({
       // purpose — is a click on the card and not on the desk. See `CARD_BODY_ATTR`.
       {...deckCardBodyProps()}
       {...deckCardSelectedProps(selected)}
+      // Everything drawn on this card sizes itself against these two rather than taking a prop:
+      // the quantity tag, the game-changer banner, the rule break, the printed frame under the
+      // art, the gem and finish glyph in the foot, and the stepper column in the margin. Most of
+      // them are components the table and text views draw as well, where nothing zooms — so the
+      // question is answered here, once, and the `, 1` fallback answers it everywhere else. See
+      // `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+      style={cardScaleVars(zoom)}
       initial={false}
       animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : stackCollapsedMargin(zoom) }}
       transition={transition}
@@ -861,16 +892,38 @@ function StackedCard({
               consolation. The reason band is empty when there is a picture on the way — the
               frame is a backdrop then, and a backdrop should say nothing. */}
           <span className="absolute inset-0 flex flex-col bg-surface">
+            {/* Every length in the three bands is a length on a card at 100% zoom. The frame
+                stands in for the printed card, so it scales with it exactly as the picture that
+                replaces it does — a fixed 11px name inside a 420px frame is the app announcing
+                that it gave up drawing a card. The two hairline borders do not scale, for
+                `STACK_CARD_BORDER`'s reason. */}
             <span
-              style={{ background: FRAME_BAR, paddingLeft: FRAME_NAME_INSET }}
-              className="flex h-[27px] items-center gap-1.5 border-b border-border pr-1.5"
+              style={{ background: FRAME_BAR, paddingLeft: scaled(FRAME_NAME_INSET, zoom) }}
+              className={cn(
+                "flex items-center border-b border-border",
+                "h-[calc(27px*var(--mark-scale,1))] gap-[calc(0.375rem*var(--mark-scale,1))]",
+                "pr-[calc(0.375rem*var(--mark-scale,1))]",
+              )}
             >
-              <span className="min-w-0 flex-1 truncate text-[0.6875rem] font-medium">
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate font-medium",
+                  "text-[calc(0.6875rem*var(--mark-scale,1))]",
+                )}
+              >
                 {card.name}
               </span>
-              <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem] leading-none" />
+              <ManaText
+                source={card.manaCost}
+                className="shrink-0 text-[calc(0.625rem*var(--mark-scale,1))] leading-none"
+              />
             </span>
-            <span className="flex flex-1 items-center justify-center px-2 text-center text-[0.625rem] text-dim">
+            <span
+              className={cn(
+                "flex flex-1 items-center justify-center text-center text-dim",
+                "px-[calc(0.5rem*var(--mark-scale,1))] text-[calc(0.625rem*var(--mark-scale,1))]",
+              )}
+            >
               {drawing
                 ? ""
                 : face.retrying
@@ -881,7 +934,11 @@ function StackedCard({
             </span>
             <span
               style={{ background: FRAME_BAR }}
-              className="flex h-5 items-center truncate border-t border-border px-1.5 text-[0.5625rem]"
+              className={cn(
+                "flex items-center truncate border-t border-border",
+                "h-[calc(1.25rem*var(--mark-scale,1))] px-[calc(0.375rem*var(--mark-scale,1))]",
+                "text-[calc(0.5625rem*var(--mark-scale,1))]",
+              )}
             >
               {card.typeLine}
             </span>
@@ -923,7 +980,13 @@ function StackedCard({
           </span>
 
           {ruleBreakText !== null && (
-            <RuleBreakMark text={ruleBreakText} className="absolute top-1 right-[5px]" />
+            <RuleBreakMark
+              text={ruleBreakText}
+              className={cn(
+                "absolute",
+                "top-[calc(0.25rem*var(--mark-scale,1))] right-[calc(5px*var(--mark-scale,1))]",
+              )}
+            />
           )}
 
           {/* **Inside the face, which is what makes it findable in a fanned pile.** The face is
@@ -976,12 +1039,16 @@ function StackedCard({
       <span
         style={{ height: stackDataHeight(zoom), marginTop: -STACK_DATA_RISE }}
         className={cn(
-          "relative -mx-px box-border flex items-center gap-1.5 rounded-b-[7px] border-x",
-          "bg-surface pr-1.5 font-mono text-[0.625rem] text-dim",
+          "relative -mx-px box-border flex items-center rounded-b-[7px] border-x",
+          // The gutter, the right padding and the type are all sizes on a card at 100% zoom, and
+          // move with `stackDataHeight` above — the bar's height and its contents are one
+          // proportion now, which is what let that function drop its floor.
+          "gap-[calc(0.375rem*var(--mark-scale,1))] pr-[calc(0.375rem*var(--mark-scale,1))]",
+          "bg-surface font-mono text-[calc(0.625rem*var(--mark-scale,1))] text-dim",
           ruleBreakText !== null ? "border-destructive" : "border-border",
         )}
       >
-        <RarityGem rarity={card.rarity} className="ml-1.5" />
+        <RarityGem rarity={card.rarity} className="ml-[calc(0.375rem*var(--mark-scale,1))]" />
         {/* The code is what fits; the set's name is one hover away, because `PF26` is not a
             word anybody knows. `setName` comes from `cards` and is `null` for an orphan — then
             the code stands on its own rather than being annotated with a guess. */}

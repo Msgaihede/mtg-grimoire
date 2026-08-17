@@ -400,7 +400,13 @@ describe("CardGrid", () => {
     // The corner is the wall's, not the badge's: every caller hands over a plain inline mark
     // and this is the one place that decides where a mark goes, so two views cannot drift
     // into two corners.
-    expect(badge.parentElement).toHaveClass("absolute", "bottom-1", "left-1");
+    // 4px in from the corner on a card at 100% zoom, and scaled with it — a fixed inset walks the
+    // mark toward the middle of a doubled card and off the edge of a halved one.
+    expect(badge.parentElement).toHaveClass(
+      "absolute",
+      "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+      "left-[calc(0.25rem*var(--mark-scale,1))]",
+    );
   });
 
   /**
@@ -1002,7 +1008,56 @@ describe("CardGrid", () => {
    * 12px text at every zoom. The row's height is what the virtualiser positions rows from, so a
    * strip budgeted under the height of its own contents is a wall whose rows overlap.
    */
-  it("grows the caption with the tiles but never below what stands in it", () => {
+  /**
+   * **The tile is where the reader's zoom becomes something a mark can read**, and this is the only
+   * place in the suite that can say so.
+   *
+   * Every mark drawn on a card — the owned badge in the corner, the printings chip opposite it, the
+   * finish chip and crown `CardArt` lays over the art, the gem and the quick-add in the caption —
+   * sizes itself against `--mark-scale`/`--control-scale` rather than against a prop, because each
+   * of those components is *also* drawn in a table or in the card pane, where nothing zooms. Those
+   * surfaces set no variable and take the `, 1` fallback. So the wiring is: this element publishes
+   * the pair, and everything inside it inherits them.
+   *
+   * **What this cannot check is that any of it worked.** jsdom has no layout engine and resolves no
+   * `calc()`, so a mark whose class was mistyped — and a mistyped Tailwind arbitrary value emits no
+   * rule at all, silently — reads exactly like a correct one here. This pins the half a test can
+   * see: that the tile publishes the numbers, and that they are the section's own zoom rather than
+   * some other wall's.
+   */
+  it("publishes the card's scale to every mark drawn on it", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+    // The tile is the button's grandparent: the button is the art, its parent is the box the
+    // corners are positioned against, and the tile is the card — art, corners and caption.
+    const tile = () =>
+      screen.getByRole("button", { name: "Lightning Bolt" }).parentElement!.parentElement!;
+
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("1");
+    expect(tile().style.getPropertyValue("--control-scale")).toBe("0.85");
+
+    act(() => setZoom("search", 2));
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("2");
+    expect(tile().style.getPropertyValue("--control-scale")).toBe("1.7");
+
+    // Down as well as up. This is the direction the marks did not follow before — and the
+    // direction three separate budgets used to refuse to follow either.
+    act(() => setZoom("search", 0.5));
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("0.5");
+
+    // Another section's gesture is not this wall's: the value is read from `zoomSection`.
+    act(() => setZoom("collection", 2));
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe("1");
+  });
+
+  it("moves the caption with the tiles in both directions", () => {
     render(
       <CardGrid
         rows={[card("aaa", "Lightning Bolt")]}
@@ -1014,17 +1069,20 @@ describe("CardGrid", () => {
     );
     const row = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".absolute");
 
-    // A 170px card is 238px of art, under the measured 28px strip.
-    expect(row()).toHaveStyle({ height: "266px" });
+    // A 170px card is 238px of art, under a 25px strip — the quick-add trigger at `CONTROL_SHRINK`
+    // (24 × 0.85, ceiled to 21) plus the tile's own 4px gap.
+    expect(row()).toHaveStyle({ height: "263px" });
 
-    // Twice the card is twice the strip: 476 of art and 56 of caption.
+    // Twice the card is twice the strip: 476 of art and 50 of caption.
     act(() => setZoom("search", 2));
-    expect(row()).toHaveStyle({ height: "532px" });
+    expect(row()).toHaveStyle({ height: "526px" });
 
-    // Half the card is *not* half the strip: 119 of art and the same 28, because the button in
-    // the caption is 24px whatever the tiles are doing.
+    // **And half the card is half the strip**, which is the reversal: 119 of art and 13 of
+    // caption. It used to hold at 28 here, because the button and the type in that strip were
+    // fixed sizes and a halved budget would have been shorter than its own contents. Both scale
+    // now, so the floor would be 28px of strip around 6px of type on an 85px card.
     act(() => setZoom("search", 0.5));
-    expect(row()).toHaveStyle({ height: "147px" });
+    expect(row()).toHaveStyle({ height: "132px" });
   });
 
   /**

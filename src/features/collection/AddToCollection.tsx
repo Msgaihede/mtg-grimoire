@@ -145,13 +145,21 @@ export function AddToCollectionButton({
         // printings list are forty different cards, and "Add" is the same word on all of
         // them. The destination is the popup's current one, not always the collection.
         aria-label={`Add ${target.name} (${target.setCode.toUpperCase()} ${target.collectorNumber}) to ${mode}`}
+        // **24px and 14px are this trigger's size at 100% zoom, on a card.** Three surfaces draw
+        // it and only one of them zooms — the wall tile's caption, where it sits beside a rarity
+        // gem and a set code that now grow with the card, so a button that held still was the one
+        // thing in that strip out of step with the rest. `--control-scale` is the tile's own
+        // factor (`lib/cardZoom.ts`), already reduced by `CONTROL_SHRINK` for being drawn on a
+        // card; the search table's row and the card pane's printings rows set no such variable and
+        // take the `, 1` fallback, so both are exactly the 24px they have always been.
         className={cn(
-          "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
+          "grid size-[calc(1.5rem*var(--control-scale,1))] shrink-0 place-items-center",
+          "rounded-md border border-border text-dim",
           "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
           FOCUS,
         )}
       >
-        <Plus className="size-3.5" aria-hidden="true" />
+        <Plus className="size-[calc(0.875rem*var(--control-scale,1))]" aria-hidden="true" />
       </button>
       <AnimatePresence>
         {open && (

@@ -293,6 +293,50 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   resize the cards the reader just settled on. `useCardZoomGesture(ref, section)` names the section
   it is stepping. **The wishlist has no zoom because it has no card section** — it is `VirtualTable`
   only.
+- **What is drawn _on_ a card scales with it, through two inherited custom properties**
+  (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
+  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
+  the quantity tag, the Game Changer banner, the rule break, the printed no-picture frame and the
+  quick-add and stepper controls were all fixed Tailwind literals, so a doubled card carried
+  hundred-percent chrome. `SearchPage`'s own comment had already recorded the consequence — its
+  printings chip is inset 4px so it lands on the card's printed nameplate, and held at 4px it had
+  climbed into the border strip above the name by ~2×.
+  - **`--mark-scale` is the reader's zoom; `--control-scale` is that times `CONTROL_SHRINK` (0.85)**
+    — a control drawn on somebody's artwork, revealed on hover, does not need the presence a
+    table's stepper has. Both live in `src/lib/cardZoom.ts` and are published by `cardScaleVars()`.
+  - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
+    tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
+    `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper` are each
+    drawn on a card face *and* in one of the three tables or the card pane, so a prop would have to
+    be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
+    answered fifteen times by whoever adds the newest call site. Every mark reads
+    `var(--mark-scale, 1)` instead, and the fallback is what a table gets for knowing nothing.
+  - **Real geometry, never `transform: scale()`** — the standing rule, and here the caption strip is
+    what enforces it: it is *in flow*, and a transform changes no layout, so scaled text would grow
+    straight out of the strip the virtualiser sized its rows from.
+  - **What does not scale, and why**: hairline borders (1px is a hairline at every size),
+    `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
+    is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
+    stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
+    card), the banner's drop shadow, and the two walls' gutters.
+  - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build at
+    1280×800, against a real 116 712-card corpus, ctrl+wheel dispatched synthetically). Search
+    wall, 0.5× / 1× / 2×: tile **85 / 170 / 340**, caption type **6 / 12 / 24px**, rarity gem
+    **3 / 6 / 12**, quick-add **10.2 / 20.4 / 40.8**, the finish-and-crown chip **10×8 / 20×16 /
+    40×32** with its glyph **6 / 12 / 24** and its inset, padding and radius **2 / 4 / 8px**, the
+    printings chip **5 / 10 / 20px** type. That chip sat **1.7 % down the art at both 1× and 2×** —
+    the same place on the picture, which is the defect closed. Deck stack: card **105×158 /
+    210×319 / 420×639**, reveal **17 / 34 / 68**, quantity tag **12.6×11 / 25.2×22 / 50.4×44** at
+    **6 / 12 / 24px**, data line **14 / 28 / 56** at **5 / 10 / 20px**, `RULE BREAK` **9 / 18px**,
+    the Game Changer banner **117.8×12 / 235.5×24** with a **9 / 18px** crown, the stepper column
+    **20.4 / 40.8 / 81.6**. **The tag fits inside the reveal at 0.5× (11 ≤ 17)**, which is the one
+    property `stackAdvance`'s floor existed to protect and is now held by the tag scaling instead.
+    Deck grid: tile **75 / 300**, copy count **4.5 / 18px**, foot **10 / 40**, stepper **8.5 / 34**.
+    **The control case**: with the desk at 2× the deck's *table* row still read a **6px** gem and a
+    **20px** stepper with `--mark-scale` **unset**, and with the search wall at 2× beside an open
+    card pane the pane's finish glyph still read **12px**. The `85 → 340` tile at
+    `mark-scale 0.5 → 2` and `control-scale 0.425 → 1.7` was read off the tile's own computed style
+    at every stop.
 - **The rule this reversed, and why it was wrong.** It read: there is one `cardZoom` behind all of
   them, "because it is a statement about how the reader is reading cards rather than about how one
   list is configured: zoom the search wall, switch to Decks, and the cards there are already the
@@ -413,12 +457,19 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     against **`none`** under `prefers-reduced-motion: reduce` (with `transition-duration` still
     reading `0.15s`, which is the false failure this file's harness rule warns about, reproduced
     again).
-- **Anywhere a scaled budget contains unscaled chrome, the budget floors rather than scales:**
-  `max(base, scaled(base, zoom))`. Three surfaces landed on this independently. `CardGrid`'s 28px
-  caption is set by the 24px quick-add button inside it, so a plain 0.5× gives a 14px strip under a
-  28px caption and the virtualised rows overlap by the difference. `CardStack`'s 34px reveal is a
-  legibility floor for the chip laid over it, not a fraction of the card. `GridView`'s caption and
-  gutter are the same case (4.5px type at half size; tiles touching into one sheet of card backs).
+- **A scaled budget floors rather than scales only while the chrome inside it is unscaled — and
+  since 2026-08-17 almost none of it is.** The rule was `max(base, scaled(base, zoom))` and three
+  surfaces landed on it independently: `CardGrid`'s 28px caption was set by the 24px quick-add
+  button inside it, so a plain 0.5× gave a 14px strip under a 28px caption and the virtualised rows
+  overlapped by the difference; `CardStack`'s 34px reveal was a legibility floor for the 22px chip
+  laid over it; `GridView`'s caption was 4.5px type at half size. Every one of those arguments was
+  about chrome the zoom could not reach. **The marks read the card's own scale now** (below), so
+  each budget and its contents are one proportion and `atLeast` has one consumer left —
+  `GridView`'s **gutter**, which measures the space *between* two cards rather than anything drawn
+  on one, contains nothing, and would otherwise halve into a wall that reads as a single sheet of
+  card backs. `CardGrid`'s caption is also **derived** rather than written down now
+  (`ceil(24 × CONTROL_SHRINK) + 4` = 25), because the button it is a budget for is no longer 24px
+  and the two drifting apart is exactly the row overlap the constant exists to prevent.
   The stack's padding and border are the mirror rule — **added, never multiplied**, since chrome is
   not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason
   (210 + 12 + 2 = 224 at 1×, which is the `14rem` it replaced, exactly). **That border term is the

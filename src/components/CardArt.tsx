@@ -184,9 +184,22 @@ export function CardArt({
         // A frame with no art is still a card. The name is what the reader came for and it
         // is known without the image, so a rate-limited screen reads as a list of cards
         // rather than a wall of broken-image icons.
-        <span className="flex size-full flex-col items-center justify-center gap-1 px-2 text-center">
-          <span className="line-clamp-3 text-xs">{name}</span>
-          <span className="text-[0.7rem] text-dim">
+        //
+        // It is the one thing in this frame that is *content* rather than a mark, and it scales
+        // for that reason rather than in spite of it: this text stands in for the printed name on
+        // a card the reader has zoomed, so 12px inside a 340px frame reads as a caption that
+        // failed to load rather than as the card. `--mark-scale` is the tile's own factor — see
+        // `lib/cardZoom.ts` — and the `, 1` fallback covers the frames drawn at a fixed size.
+        <span
+          className={cn(
+            "flex size-full flex-col items-center justify-center text-center",
+            "gap-[calc(0.25rem*var(--mark-scale,1))] px-[calc(0.5rem*var(--mark-scale,1))]",
+          )}
+        >
+          <span className="line-clamp-3 text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]">
+            {name}
+          </span>
+          <span className="text-[calc(0.7rem*var(--mark-scale,1))] text-dim">
             {image.retrying ? "Retrying…" : cardId === null ? "No card" : "No image"}
           </span>
         </span>
@@ -314,12 +327,25 @@ export function FoilOverlay({
           inside its own — so a click on the chip bubbles and opens the card exactly as a click
           on the art does.
           `data-card-marks` is the handle a test finds it by; a hit target is otherwise
-          invisible to the DOM. */}
+          invisible to the DOM.
+
+          **The inset, the padding, the gap and the corner are all sizes at 100% zoom**, and every
+          one of them is multiplied by the card's own `--mark-scale` (`lib/cardZoom.ts`). The chip
+          is the mark this scaling was reported about: held still, it was a 20px sticker on an 85px
+          card at 0.5× and a speck in the corner of a 340px one at 2×. The inset scales with the
+          rest because 4px is the distance that keeps the chip off the art's rounded corner *at
+          this size* — the corner is `CardArt`'s own `rounded-lg`, which does not scale, so the
+          inset only has to stay proportionate to the chip it is holding in. */}
       {chip && (
         <span
           data-card-marks
           title={chipTitle}
-          className="pointer-events-auto absolute top-1 right-1 flex items-center gap-0.5 rounded bg-bg/85 px-1 py-0.5"
+          className={cn(
+            "pointer-events-auto absolute flex items-center bg-bg/85",
+            "top-[calc(0.25rem*var(--mark-scale,1))] right-[calc(0.25rem*var(--mark-scale,1))]",
+            "gap-[calc(0.125rem*var(--mark-scale,1))] rounded-[calc(0.25rem*var(--mark-scale,1))]",
+            "px-[calc(0.25rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+          )}
         >
           {gameChanger && <GameChangerMark />}
           {finish && <FinishMark finish={finish} />}

@@ -1440,16 +1440,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   two the gesture landed in — the desk's box read `top 263 / right 830` and the panel's wall
   `top 551 / right 1230`. Full figures in
   [frontend-design.md](../../../docs/reference/frontend-design.md).
-  **Two of them are floors rather than proportions and they are the ones to know**:
-  `stackAdvance` is `max(34, scaled(34, zoom))` and `stackDataHeight` is `max(28, scaled(28, zoom))`,
-  so both grow going up and **hold at their base going down**. Each measures something laid over or
-  inside the card — the quantity tag on the reveal strip, the type in the data line — and type does
-  not shrink because a card did. Scaling either linearly is the mistake the floor exists to prevent:
-  at 0.5× the reveal would be 17px under an unscaled tag, and the data bar would be 14px around 11px
-  type. The same grow-only rule governs the grid view's caption and gutter and `CardGrid`'s caption
-  strip: **anywhere a scaled budget has to contain unscaled chrome, the budget floors rather than
-  scales.** `STACK_DATA_RISE` is the third kind — 4px at every zoom, because the 7px corner radius
-  it hides the seam of is a Tailwind class that does not scale either.
+  **Two of them were floors rather than proportions, and both stopped being floors on 2026-08-17 —
+  keep the reasoning, because it will be made again.** `stackAdvance` was `max(34, scaled(34, zoom))`
+  and `stackDataHeight` `max(28, scaled(28, zoom))`, growing going up and holding at their base going
+  down. Each measures something laid over or inside the card — the quantity tag on the reveal strip,
+  the type in the data line — and type does not shrink because a card did: at 0.5× the reveal would
+  be 17px under a 22px tag, and the data bar 14px around 11px type. Every word of that was true while
+  the tag and the type were fixed sizes. **They are not**: everything drawn on a card reads
+  `--mark-scale` now (see [`src/CLAUDE.md`](../../CLAUDE.md)), so at 0.5× the tag is 11px in a 17px
+  reveal — the same fraction of the same strip — and the floor would spend a fifth of a half-size
+  pile on a mark drawn to half of it. Both are plain `scaled()` today, and **if the tag ever stops
+  scaling the `max` comes back with it**; they are one decision written in two files.
+  `GridView`'s caption and `CardGrid`'s caption strip went the same way and for the same reason;
+  `atLeast` survives in `GridView` for the **gutter alone**, which is space *between* cards rather
+  than chrome on one. `STACK_DATA_RISE` is the kind that never moved — 4px at every zoom, because
+  the 7px corner radius it hides the seam of is a Tailwind class that does not scale either.
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part

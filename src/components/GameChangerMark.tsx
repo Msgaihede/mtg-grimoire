@@ -43,13 +43,21 @@ export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commande
  * name is computed from its contents is the caller that must hide it — see `FoilOverlay`, which
  * wraps this in `aria-hidden` precisely so a wall of tiles does not become forty buttons called
  * "Rhystic Study Game changer".
+ *
+ * **The 12px is a size at 100% zoom.** Every surface that draws this draws a card the reader can
+ * zoom, so the glyph reads the card's own `--mark-scale` (`lib/cardZoom.ts`) rather than holding
+ * still while the art doubles — the crown was two pixels of gold on a 340px card. The `, 1`
+ * fallback keeps it exactly where it is anywhere the variable is not set.
  */
 export function GameChangerMark({ className }: { className?: string }) {
   return (
     <Crown
       role="img"
       aria-label={GAME_CHANGER_LABEL}
-      className={cn("inline-block size-3 shrink-0 text-pie-gold", className)}
+      className={cn(
+        "inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-pie-gold",
+        className,
+      )}
     >
       <title>{GAME_CHANGER_HINT}</title>
     </Crown>

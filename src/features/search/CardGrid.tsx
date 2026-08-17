@@ -12,7 +12,7 @@ import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
-import { scaled, type ZoomSection } from "@/lib/cardZoom";
+import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -67,17 +67,29 @@ const TILE_BASE_WIDTH = 170;
 /** Gap between tiles, matching the `gap-3` used elsewhere. */
 const GAP = 12;
 
+/** The quick-add trigger's own square at 100% zoom, before `CONTROL_SHRINK` takes its bite. */
+const CAPTION_CONTROL = 24;
+
+/** The tile's `gap-1` between the art and the strip under it, counted into the budget below. */
+const CAPTION_GAP = 4;
+
 /**
- * The caption line under each tile, plus its `gap-1`.
+ * The caption line under each tile, plus its gap.
  *
- * Set by the quick-add button in it (24px) rather than by the text beside it (16px): the
- * virtualiser positions rows from this number, and a caption taller than it is a wall whose
- * rows overlap by the difference.
+ * Set by the quick-add button in it rather than by the text beside it: the virtualiser positions
+ * rows from this number, and a caption taller than it is a wall whose rows overlap by the
+ * difference. **Derived rather than written down**, because the button it is a budget for is no
+ * longer 24px — `AddToCollectionButton` is drawn at `CONTROL_SHRINK` on a card — and the two
+ * drifting apart is exactly the overlap this constant exists to prevent. Ceiling, not round, for
+ * the same reason: 20.4px of button in 20px of strip is a wall that overlaps by 0.4px a row.
  *
- * **A measurement of what is in the strip, not a proportion of the tile** — which is why the
- * zoom grows it and never shrinks it. See where it is scaled.
+ * **It is a measurement of what is in the strip, and the strip now scales in both directions.**
+ * It used to floor — `max(base, scaled(base))` — because nothing *inside* it scaled, so a halved
+ * budget was a caption taller than the row it was positioned for. Everything in it scales now (the
+ * type, the gem, the button), so the floor would be a 28px strip around 6px of type at 0.5×. See
+ * where it is scaled.
  */
-const CAPTION_HEIGHT = 28;
+const CAPTION_HEIGHT = Math.ceil(CAPTION_CONTROL * CONTROL_SHRINK) + CAPTION_GAP;
 
 /**
  * How many tiles of `tileWidth` fit across `width`, counting the gap between them.
@@ -411,13 +423,13 @@ export function CardGrid<T extends GridCard>({
   const tileWidth = tileWidthFor(width, tileSize);
   const gutter = sideGutterFor(width, tileSize);
 
-  // The caption grows with the tiles — a card at 2× under the same 28px strip reads as a card
-  // that has outgrown its label — but never shrinks below them, and that asymmetry is arithmetic
-  // rather than taste: nothing *inside* the caption scales. It is a 24px button beside 12px text
-  // at every zoom, so a strip budgeted at 14px for a 0.5× wall would be a caption taller than the
-  // row the virtualiser positioned for it, which is exactly the overlap `CAPTION_HEIGHT` exists
-  // to prevent.
-  const captionHeight = Math.max(CAPTION_HEIGHT, scaled(CAPTION_HEIGHT, cardZoom));
+  // The caption moves with the tiles in **both** directions, and the asymmetry that used to be
+  // here was arithmetic rather than taste: nothing inside the caption scaled, so it was a 24px
+  // button beside 12px text at every zoom, and a strip budgeted at 14px for a 0.5× wall would have
+  // been a caption taller than the row the virtualiser positioned for it. Everything in the strip
+  // scales now — the type, the gem, the quick-add — so the budget scales with its contents and the
+  // floor would be the opposite fault: a 28px strip around 6px of type on a 85px card.
+  const captionHeight = scaled(CAPTION_HEIGHT, cardZoom);
   const tileHeight = Math.round(tileWidth * (7 / 5)) + captionHeight;
 
   const virtualizer = useVirtualizer({
@@ -502,6 +514,7 @@ export function CardGrid<T extends GridCard>({
                 key={`${v.index}-${i}`}
                 card={card}
                 width={tileWidth}
+                zoom={cardZoom}
                 onSelect={onSelect}
                 selected={card.id === selectedId}
                 badge={badge}
@@ -532,6 +545,7 @@ export function CardGrid<T extends GridCard>({
 function Tile<T extends GridCard>({
   card,
   width,
+  zoom,
   onSelect,
   selected,
   badge,
@@ -546,6 +560,18 @@ function Tile<T extends GridCard>({
 }: {
   card: T;
   width: number;
+  /**
+   * How large the reader is drawing cards on this wall — **not** used to size anything here, only
+   * published as the two custom properties every mark inside the tile reads.
+   *
+   * The width above is the tile's whole geometry (the art follows by aspect ratio); this is the
+   * other half of it, and it exists because the marks are *shared* components. `RarityGem`,
+   * `OwnedBadge` and `FinishMark` are each drawn in three tables and the card pane as well as on
+   * this tile, so a prop would have to be threaded to every one of them and defaulted at the ones
+   * that must hold still. An inherited variable answers it once and in the other direction — see
+   * `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+   */
+  zoom: number;
   onSelect: (id: string) => void;
   selected: boolean;
   badge?: (card: T) => ReactNode;
@@ -621,8 +647,12 @@ function Tile<T extends GridCard>({
       // ever handed back to, and a `tabIndex` that came and went with a prop would be the kind
       // of difference between two walls that nothing on screen explains.
       tabIndex={-1}
-      style={{ width }}
-      className="group flex shrink-0 flex-col gap-1"
+      // The width, and the two variables everything drawn on this card sizes itself against. They
+      // go here rather than on the row because this is the box that *is* a card — a mark inherits
+      // them wherever the caller puts it, corners and caption alike, and nothing outside a tile
+      // ever sees them.
+      style={{ width, ...cardScaleVars(zoom) }}
+      className="group flex shrink-0 flex-col gap-[calc(0.25rem*var(--mark-scale,1))]"
     >
       {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
           join the button's accessible name, and a wall of forty cards would be forty
@@ -683,7 +713,15 @@ function Tile<T extends GridCard>({
           // then it holds for every caller instead of for the ones that remembered.
           <span
             onClick={() => onSelect(card.id)}
-            className="pointer-events-auto absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden"
+            // The inset, the padding and the corner are all sizes on a card at 100% zoom, and
+            // scale with it — the mark inside already does, and a chip whose box held still would
+            // either burst at 2× or swim in its own padding at 0.5×.
+            className={cn(
+              "pointer-events-auto absolute bg-bg/85 empty:hidden",
+              "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
+              "rounded-[calc(0.25rem*var(--mark-scale,1))]",
+              "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+            )}
           >
             {mark}
           </span>
@@ -700,7 +738,17 @@ function Tile<T extends GridCard>({
           // search passes it for what that costs against the printed name.
           <span
             onClick={() => onSelect(card.id)}
-            className="pointer-events-auto absolute top-1 left-1 rounded bg-bg/85 px-1.5 py-0.5 empty:hidden"
+            // The badge's box, scaled the same way — and here the scaling pays a debt the search
+            // page's own comment recorded: this corner is 4px in so that it clears the art's
+            // rounded edge and lands on the printed nameplate, and *because it did not scale*, by
+            // 2× it had climbed out of the nameplate into the border strip above it. 4px of a
+            // doubled card is 8px, which is the same place on the picture.
+            className={cn(
+              "pointer-events-auto absolute bg-bg/85 empty:hidden",
+              "top-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
+              "rounded-[calc(0.25rem*var(--mark-scale,1))]",
+              "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+            )}
           >
             {corner}
           </span>
@@ -714,7 +762,18 @@ function Tile<T extends GridCard>({
           170px tile has to open from the tile's *left* edge, or the first column's popup
           starts left of the scroller — and left overflow, unlike right, cannot be scrolled
           back into view. */}
-      <span className="relative flex items-center gap-1.5 font-mono text-xs text-dim">
+      {/* The type and the gutter in it are sizes at 100% zoom: the strip's own height already
+          followed the card (`captionHeight`), and 12px type inside a doubled one read as a label
+          the card had outgrown — which is the whole of what the strip was budgeted to hold. The
+          leading is named beside the size deliberately, because an arbitrary `text-[…]` sets the
+          font size and nothing else. */}
+      <span
+        className={cn(
+          "relative flex items-center font-mono text-dim",
+          "gap-[calc(0.375rem*var(--mark-scale,1))]",
+          "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+        )}
+      >
         <RarityGem rarity={card.rarity} />
         <span className="min-w-0 flex-1 truncate">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
