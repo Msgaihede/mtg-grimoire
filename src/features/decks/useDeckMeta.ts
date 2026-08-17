@@ -365,7 +365,17 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
         // this bulk action's three deliberate refusals — a switched-off target, a pile the
         // reader made, a card the rule cannot place — out of TypeScript's hands and hand them
         // to `category_for_name`, which knows none of them.
-        await ipc.deckMoveCard(deck, card.cardId, card.categoryId, to, null, variant);
+        // The row's own finish: this walks `cards`, so a pile holding a printing twice is two
+        // entries here and each is moved as itself.
+        await ipc.deckMoveCard(
+          deck,
+          card.cardId,
+          card.categoryId,
+          to,
+          null,
+          variant,
+          card.finish,
+        );
         moved += 1;
       }
       return moved;

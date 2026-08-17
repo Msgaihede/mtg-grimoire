@@ -1,4 +1,5 @@
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import type { DeckFinish } from "@/lib/ipc";
 
 /**
  * What a drag is carrying, and the only shape a drop target here will act on.
@@ -52,7 +53,19 @@ import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
  */
 export type DragPayload =
   | { kind: "search-card"; cardId: string; name: string; typeLine: string | null }
-  | { kind: "deck-card"; cardId: string; name: string; fromCategoryId: number }
+  /**
+   * `finish` is part of the **address**, not extra information — a pile holds the regular copy
+   * and the foil as two rows since schema v18, and a drag of one must not move the other. It is
+   * the one field this arm carries that is not covered by the paragraph above: the editor is
+   * holding the row and could look it up, but there is nothing to look it *up by* without it.
+   */
+  | {
+      kind: "deck-card";
+      cardId: string;
+      name: string;
+      fromCategoryId: number;
+      finish: DeckFinish;
+    }
   | { kind: "card"; cardId: string; name: string; typeLine: string | null };
 
 /**
@@ -96,9 +109,9 @@ export type DeckWrite =
    * Oracle tags over IPC. `from` travels because a move needs the slot it is leaving, and the
    * type line does not, because the caller is holding the row this addresses.
    */
-  | { write: "auto-refile"; cardId: string; from: number }
-  | { write: "move"; cardId: string; from: number; to: number }
-  | { write: "remove"; cardId: string; categoryId: number };
+  | { write: "auto-refile"; cardId: string; from: number; finish: DeckFinish }
+  | { write: "move"; cardId: string; from: number; to: number; finish: DeckFinish }
+  | { write: "remove"; cardId: string; categoryId: number; finish: DeckFinish };
 
 /**
  * The mark that says a payload is one of this app's card drags, and its key.
@@ -253,7 +266,7 @@ export function cardDraggable({
  */
 export function readDragData(data: Record<string, unknown>): DragPayload | null {
   if (data[MARK_KEY] !== MARK) return null;
-  const { kind, cardId, name, fromCategoryId, typeLine } = data;
+  const { kind, cardId, name, fromCategoryId, typeLine, finish } = data;
   if (!isId(cardId) || typeof name !== "string") return null;
   if (kind === "search-card" || kind === "card") {
     // A type line is normalised to `null` rather than refused, and that is the difference
@@ -264,9 +277,22 @@ export function readDragData(data: Record<string, unknown>): DragPayload | null 
     return { kind, cardId, name, typeLine: typeof typeLine === "string" ? typeLine : null };
   }
   if (kind === "deck-card" && isCategoryId(fromCategoryId)) {
-    return { kind, cardId, name, fromCategoryId };
+    // **Normalised rather than refused, and that puts it on `typeLine`'s side of this
+    // function's split** — but for the opposite reason, which is worth saying because the
+    // conclusion looks the same. A type line only decides which pile a card lands in, and not
+    // knowing has an answer. A finish is part of the *address*, so getting it wrong writes to
+    // the wrong row — except that the wrong value here can only ever be "not one of the two
+    // words", and the row that is neither foil nor etched is the regular one. `null` is that
+    // row rather than a guess about it.
+    return { kind, cardId, name, fromCategoryId, finish: readFinish(finish) };
   }
   return null;
+}
+
+/** The drag store's `finish`, as {@link DeckFinish}. Anything that is not one of the two
+ *  premium words is the regular copy — see {@link readDragData}. */
+function readFinish(value: unknown): DeckFinish {
+  return value === "foil" || value === "etched" ? value : null;
 }
 
 /**
@@ -282,7 +308,12 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
     // the database, not a row in this deck. The tray is only drawn for a deck-card drag for
     // the same reason.
     if (payload.kind !== "deck-card") return null;
-    return { write: "remove", cardId: payload.cardId, categoryId: payload.fromCategoryId };
+    return {
+      write: "remove",
+      cardId: payload.cardId,
+      categoryId: payload.fromCategoryId,
+      finish: payload.finish,
+    };
   }
   if (target.kind === "auto") {
     // **A card already in the deck is re-filed rather than refused** (changed 2026-08-15). This
@@ -293,7 +324,12 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
     // here is the **address** of the card to re-file, and the caller supplies the fact, exactly
     // as it already does for the pile a `"move"` lands in.
     if (payload.kind === "deck-card") {
-      return { write: "auto-refile", cardId: payload.cardId, from: payload.fromCategoryId };
+      return {
+        write: "auto-refile",
+        cardId: payload.cardId,
+        from: payload.fromCategoryId,
+        finish: payload.finish,
+      };
     }
     return { write: "auto-add", cardId: payload.cardId, typeLine: payload.typeLine };
   }
@@ -312,5 +348,6 @@ export function dropWrite(payload: DragPayload, target: DropTarget): DeckWrite |
     cardId: payload.cardId,
     from: payload.fromCategoryId,
     to: target.categoryId,
+    finish: payload.finish,
   };
 }

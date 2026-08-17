@@ -56,6 +56,7 @@ const TILE: DragPayload = {
 /** A row of this deck, picked up off the desk. */
 const ROW: DragPayload = {
   kind: "deck-card",
+  finish: null,
   cardId: "c-bolt",
   name: "Lightning Bolt",
   fromCategoryId: MAIN,
@@ -162,6 +163,7 @@ describe("QuickZones", () => {
 
     expect(onDrop).toHaveBeenCalledWith({
       write: "move",
+      finish: null,
       cardId: "c-bolt",
       from: MAIN,
       to: MAYBE,
@@ -182,7 +184,12 @@ describe("QuickZones", () => {
     await held.over(zone("Auto"));
     await held.drop();
 
-    expect(onDrop).toHaveBeenCalledWith({ write: "auto-refile", cardId: "c-bolt", from: MAIN });
+    expect(onDrop).toHaveBeenCalledWith({
+      write: "auto-refile",
+      cardId: "c-bolt",
+      from: MAIN,
+      finish: null,
+    });
   });
 
   /** A row dropped on the pile it is already in is not a move — `dropWrite` says so, and the

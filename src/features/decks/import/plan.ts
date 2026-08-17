@@ -22,6 +22,7 @@
  * per line.
  */
 import type {
+  DeckFinish,
   FormatSpec,
   ImportItem,
   ImportMatch,
@@ -104,6 +105,9 @@ export interface PlannedCard {
   /** The file said this pile counts toward nothing — Archidekt's `{noDeck}`. It rides to
    *  `ImportItem.inactive`, where it switches off **only a pile the import creates**. */
   excluded: boolean;
+  /** The line's `*F*` / `*E*` marker. Carried straight through: a finish is a fact about the
+   *  object, so nothing in this module decides anything about it. */
+  finish: DeckFinish;
 }
 
 /** A line no printing answered. Quoted back, never an error: the import proceeds without it. */
@@ -374,6 +378,7 @@ export function buildImportPlan(
       quantity: line.quantity,
       categoryName: categoryFor(line, row.matched, slugs, forcedCategoryName),
       excluded: line.excluded,
+      finish: line.finish,
     });
   }
 
@@ -493,6 +498,10 @@ export function toImportItems(plan: ImportPlan, commanderIds: readonly string[])
     return {
       cardId: card.match.cardId,
       quantity: card.quantity,
+      // **Not touched by the commander choice**, unlike the pile and the `{noDeck}` flag beside
+      // it: those two are filing, which the command zone outranks, and a finish is a fact about
+      // the object. A foil commander is a foil commander.
+      finish: card.finish,
       categoryName: isCommander ? SECTION_CATEGORY.commander : card.categoryName,
       // The command zone outranks the pile, so the flag that came with the pile goes with it —
       // a commander in a switched-off category is a deck with no commander.

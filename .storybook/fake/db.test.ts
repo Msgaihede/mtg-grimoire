@@ -186,6 +186,7 @@ function deckCard(
     setCode: card?.setCode ?? "xxx",
     collectorNumber: card?.collectorNumber ?? "1",
     lang: card?.lang ?? "en",
+    finish: null,
     needsReview: null,
     ...rest,
   };
@@ -2966,10 +2967,13 @@ describe("the busy fault", () => {
     // category — so it takes the write lock like every other and belongs in the loop rather than
     // in `unlocked`.
     //
+    // `Set as foil` then added `deck_set_card_finish`, 40 → 41. Another card write: it moves
+    // copies between two rows of one printing and takes the write lock like every other.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(40);
+    expect(names).toHaveLength(41);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

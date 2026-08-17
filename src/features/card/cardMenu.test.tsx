@@ -400,7 +400,7 @@ describe("DeckTargetSubmenu", () => {
     // Through the real provider rather than a spy in its place: what a leaf is worth is the
     // write that comes out the far end, deck and variant included.
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "live", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "live", null, 1),
     );
   });
 
@@ -462,7 +462,7 @@ describe("useCardToDeck", () => {
     // No category id and a type line: `useDeck.addCard`'s `autoCategoryFor` arm, which is the
     // same rule a drag with no column under it and an imported line take.
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", null, 1),
     );
     expect(result.current.error).toBeNull();
   });
@@ -679,7 +679,7 @@ describe("the deck picker inside the real cascade", () => {
     // to be said.
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", null, 1),
     );
   });
 

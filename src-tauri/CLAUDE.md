@@ -100,7 +100,12 @@ shared_cell` walks both into two databases and compares them column by column.
   `deck_meta::create_category` (`user`), `deck_meta::ensure_predefined_categories` (`user`), and
   `deck::duplicate_deck`, which **copies** the source pile's answer — a copy has the same shape as
   its original, and defaulting there would make every auto pile in the duplicate draw empty. No
-  CHECK (`ADD COLUMN` cannot) and, unlike `last_variant`, **no Rust fence either**: no command
+  CHECK — **not because `ADD COLUMN` cannot carry one**, which is what this line claimed until
+  2026-08-17 and is false: v18's `finish` column adds one and it is enforced
+  (`the_deck_card_finish_column_refuses_nonfoil` is the proof, and SQLite's documented ADD COLUMN
+  restrictions are PRIMARY KEY, UNIQUE, a non-constant DEFAULT, NOT NULL without a default,
+  REFERENCES without a NULL default, and GENERATED STORED). It has none because no command
+  parameter reaches it — and, unlike `last_variant`, **no Rust fence either**: no command
   parameter reaches this column, so there is no untrusted value to refuse. **The reason it is a
   stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)` and
   `category_for_name` finds before it creates, so a reader's own "Ramp" keeps `'user'` forever
@@ -226,9 +231,21 @@ Full detail, with the measurements and the traps behind each rule, is in
   `deck_tags.deck_id`, `deck_audit.deck_id`, `deck_folders.parent_id`), **SET NULL** on exactly
   two — `decks.folder_id` and `deck_cards.tag_id`, because deleting a folder must not delete the
   decks in it and deleting a tag must never delete a card.
-- **The grain is `deck_id, variant, category_id, card_id`** (`schema::DECK_CARD_GRAIN`).
-  `variant` is `live` (sleeved up) or `theory` (being built toward); every card command takes
-  both. `deck_cards` has `CHECK (quantity > 0)`, so zero removes the row.
+- **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
+  (`schema::DECK_CARD_GRAIN`). `variant` is `live` (sleeved up) or `theory` (being built toward)
+  and `finish` is `NULL | 'foil' | 'etched'` (schema v18); every card command takes all of them.
+  `deck_cards` has `CHECK (quantity > 0)`, so zero removes the row.
+- **`deck_cards.finish` is NULL for the regular copy and `'nonfoil'` is never stored.**
+  `deck::normalise_finish` is the one place the word becomes NULL and the column's CHECK is what
+  makes any other path a hard error — two spellings of "regular" would be two rows on the grain
+  that draw identically on screen and sum apart. The `coalesce` is `COLLECTION_GRAIN`'s device
+  for its reason (NULLs in a UNIQUE index are distinct), which makes `DECK_CARD_GRAIN` the third
+  grain that cannot be checked through `PRAGMA index_info` and is held to its index by its
+  `ON CONFLICT` targets instead. **A deck's money follows it**:
+  `sorting::deck_card_price_expr` is two arms told apart by the column being NULL — the
+  `nonfoil → foil → etched` chain when unsaid, that finish alone when said, with no fallback
+  either way. `allocate_deck` needs **no change**, and that is worth knowing rather than
+  rediscovering: it matches on oracle id and has always ignored finish, condition and language.
 - **`deck_allocations` carries no variant column**, so a `theory` read would walk the _live_
   deck's claims — `attribute_owned` filters `variant == LIVE` explicitly. `allocate_deck` claims
   for `live` only.
@@ -258,7 +275,10 @@ Full detail, with the measurements and the traps behind each rule, is in
   `decks.last_variant`/`last_group_by`/`last_sort_by`, written by `deck_set_view_state(deckId,
 viewState)` — absent field means "leave it". It moves **no `updated_at`**, records **no
   `deck_audit` row**, reallocates nothing, and refuses an unknown deck by name (`GONE`).
-  `ALTER TABLE ADD COLUMN` cannot add a CHECK, so `last_variant` is fenced against
+  None of the three carries a CHECK — **not because `ALTER TABLE … ADD COLUMN` cannot add
+  one**, which is what this said until 2026-08-17 and is false (v18's `deck_cards.finish` adds
+  one and it is enforced); it is that the vocabulary of two of them is not the crate's to own.
+  `last_variant` is fenced against
   `DECK_VARIANTS` here (through the one `deck_meta::valid_variant`) while the other two hold a
   **TypeScript** vocabulary the crate does not know: Rust stores the reader's answer verbatim and
   refuses only a blank one (`NO_MODE`); TS narrows it on read with a fallback.

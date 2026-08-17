@@ -37,11 +37,41 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   even once ramp spells are filed into it — and "Ramp", "Draw", "Removal" and "Land" are exactly
   what a person names their own piles. The one-time backfill and why it is frozen:
   [data-and-sync.md](data-and-sync.md).
-- **The grain is `deck_id, variant, category_id, card_id`** (`schema::DECK_CARD_GRAIN`) — the
+- **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
+  (`schema::DECK_CARD_GRAIN`) — the
   same printing in two categories is two rows, added twice in one is one row with the sum, and
   `variant` widens it again: `live` is what is sleeved up, `theory` is what the deck is being
   built toward (`schema::DECK_VARIANTS`), so a change tried out in Theory can never silently
-  overwrite the deck as it stands. Every card command takes both.
+  overwrite the deck as it stands. Every card command takes all of them.
+- **`finish` is the fifth part, and it is v18's** (2026-08-17). `deck_cards.finish` is
+  `NULL | 'foil' | 'etched'`, so a pile holds `1 × Sol Ring (foil)` beside `3 × Sol Ring` as two
+  rows — which is what a reader means by picking the foil printing, since Scryfall models foil as
+  a *finish of a printing* rather than as a printing and 53 224 of 107 337 paper printings carry
+  one under the same id. Four things about it:
+  - **NULL is the regular copy and `'nonfoil'` is never stored.** `deck::normalise_finish` is the
+    one place the word becomes NULL and the column's CHECK makes any other path a hard error:
+    two spellings of "regular" would be two rows on this grain that draw identically on screen
+    and sum apart, which is the worst shape a bug in this table can have. It is the shape
+    `soleFinish` already answers in on the TypeScript side, and `wishlist_entries.
+preferred_finish`'s nullability one table over.
+  - **The `coalesce` is load-bearing**, `COLLECTION_GRAIN`'s device for its reason: SQLite treats
+    NULLs in a UNIQUE index as *distinct*, so the bare column would enforce nothing and every
+    regular add would insert a new row instead of folding into the one already there. That makes
+    `DECK_CARD_GRAIN` the third grain that cannot be checked through `PRAGMA index_info` — it
+    left `every_plain_grain_constant_names_the_index_the_head_schema_carries` and is held to its
+    index by every `ON CONFLICT` target instead, where a mismatch is a hard error at the first
+    write.
+  - **`move` and `swap` carry it across; they never write it.** Moving the foil copy to another
+    pile leaves it the foil copy, and swapping to another printing of the same card leaves it
+    foil — the reader moved a card, or chose a printing, not an object. `deck_set_card_finish` is
+    the one command whose subject it is, and the only one that checks the target against
+    `cards.finishes`.
+  - **Two things did not change and both look as though they should have.** `engine.ts` counts
+    copies by card **name** and sums across rows, so a foil row and a plain row are two copies of
+    one card; and `allocate_deck` matches on oracle id and has always ignored finish, condition
+    and language, so a foil row reserves whatever copy is free. Making a foil deck row reserve a
+    foil collection copy is a different feature with its own answer to "what happens when you own
+    three regular and play one foil".
 - **`is_active = 0` is the whole of what `maybe` used to mean.** An inactive category counts
   toward nothing — not size, not copies, not legality — and `allocate_deck` claims no copy for
   it. The Maybeboard is not a special case in five files any more; it is one seeded row with
@@ -106,8 +136,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   name (`GONE`) rather than passed over silently — the editor is exactly where a deck deleted in
   another window is discovered.
 - **`last_variant` is validated in Rust and the other two are not, which is the boundary rather
-  than an omission.** `ALTER TABLE … ADD COLUMN` cannot add a CHECK, so none of the three carries
-  one in SQL and the fence has to sit somewhere. `last_variant` is checked against
+  than an omission.** None of the three carries a CHECK in SQL, and the fence has to
+  sit somewhere. **Not because `ALTER TABLE … ADD COLUMN` cannot add one** — that is what this
+  said until 2026-08-17 and it is false, as v18's `deck_cards.finish` demonstrates. `last_variant` is checked against
   `schema::DECK_VARIANTS`, because that is a word the crate owns — the same word
   `deck_cards.variant` holds. `last_group_by` and `last_sort_by` hold a **TypeScript**
   vocabulary (`category|manaValue|type` and `alphabetical|manaCost|price|type`) the crate
@@ -760,7 +791,32 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   category list to translate an id through). It refuses same-printing, a missing from-row
   (naming the category), a raced sync (the to-printing has left `cards`), and a **different
   oracle card** — the guard is inside the transaction, because "swap this printing" must never
-  become "swap this card".
+  become "swap this card". Since v18 it also carries the row's **finish** across, and
+  deliberately does *not* check it against the target printing's `finishes`: a swap onto a
+  printing sold in no foil would then be refused outright, where what a reader wants is the
+  printing they picked.
+- **`deck_set_card_finish` is `deck_swap_printing` one axis over**, and shares its shape for the
+  reason it shares its `SwapResult`: the deck plays a different physical object of the same
+  card. It **folds** the same way — setting a row to a finish the pile already holds adds the
+  quantities and deletes the row that moved, with `tag_id` and `needs_review` the surviving
+  row's (`add_card`'s rule: the row that was already there is the one the reader labelled) — and
+  it records the same **`swap` audit kind** rather than a tenth word, because `AUDIT_KINDS` is
+  CHECK-constrained and a new word would mean rebuilding every reader's whole deck history for a
+  spelling. Three refusals, each its own sentence: `SAME_FINISH` (and `nonfoil` compares equal to
+  absent, because they are normalised first), `FINISH_NOT_SOLD` read off `cards.finishes`, and
+  `GONE` for a row that is not in that pile. **Only the target finish is checked** — the finish
+  being *left* may well be one the corpus no longer lists, and refusing to move off it would
+  strand the copies on exactly the value the reader is correcting.
+- **Undo's `Cell` is deliberately finish-blind, and `CardRow` is what grew the column.**
+  `Op::Cards` is "delete exactly `scope` and insert exactly `rows`", and a cell naming a
+  `card_id` and no finish covers **both** rows of that printing — which is the correct scope
+  rather than an oversight, because a finish change moves quantity *between* those two rows and
+  a scope naming one would delete half of what the write touched and restore half of what it
+  read. Without `CardRow.finish`, though, a restored foil row comes back regular: the row is
+  there, the count is right, and the only things wrong are what the deck says it plays and what
+  it is worth. The undo sweep's own `snapshot` did not read the column when the two finish cases
+  were added, so both would have passed vacuously — a column on `deck_cards` that a reader can
+  see is owed a place in that snapshot in the same commit.
 - **The deck has four views** — `Stacks | Table | Text | Grid`, `DeckEditor`'s `VIEWS`, crossed
   with three `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical |
 manaCost | price | type`). All twelve combinations were driven live 2026-08-11; grouping and

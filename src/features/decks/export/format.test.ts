@@ -13,6 +13,7 @@ const card = (over: Partial<ExportCard> = {}): ExportCard => ({
   quantity: 1,
   setCode: "LTC",
   collectorNumber: "285",
+  finish: null,
   categoryName: "Main deck",
   categoryKind: "main",
   categoryActive: true,
@@ -24,6 +25,7 @@ const PATHWAY = card({
   name: "Branchloft Pathway // Boulderloft Pathway",
   setCode: "znr",
   collectorNumber: "258",
+  finish: null,
 });
 
 describe("formatExport", () => {
@@ -50,7 +52,7 @@ describe("formatExport", () => {
 
   it("writes a CSV with a header row", () => {
     expect(formatExport([BOLT], "csv")).toBe(
-      "Quantity,Name,Set,Collector number,Category\n2,Lightning Bolt,lea,161,Main deck\n",
+      "Quantity,Name,Set,Collector number,Category,Finish\n2,Lightning Bolt,lea,161,Main deck,\n",
     );
   });
 
@@ -59,6 +61,7 @@ describe("formatExport", () => {
       name: 'Ach! Hans, Run! "the" card',
       setCode: "unh",
       collectorNumber: "1",
+      finish: null,
     });
     expect(formatExport([odd], "csv")).toContain('"Ach! Hans, Run! ""the"" card"');
   });
@@ -140,6 +143,7 @@ describe("formatExport", () => {
         categoryActive: false,
         setCode: "DOM",
         collectorNumber: "224",
+        finish: null,
       }),
     ];
     expect(formatExport(cards, "archidekt")).toBe(
@@ -149,7 +153,7 @@ describe("formatExport", () => {
 
   it("gives the CSV a category column", () => {
     expect(formatExport([card({ name: "Sol Ring", categoryName: "Ramp" })], "csv")).toBe(
-      "Quantity,Name,Set,Collector number,Category\n1,Sol Ring,LTC,285,Ramp\n",
+      "Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,Ramp,\n",
     );
   });
 

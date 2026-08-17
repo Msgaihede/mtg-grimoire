@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
-import type { DeckVariant } from "./ipc";
+import type { DeckFinish, DeckVariant } from "./ipc";
 
 /** The five top-level destinations in the sidebar. */
 export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
@@ -51,6 +51,19 @@ export interface PaneDeckContext {
    * only place the swap is pressed.
    */
   variant: DeckVariant;
+  /**
+   * **Which object the row plays — the fifth part of the slot** (schema v18).
+   *
+   * `variant`'s story one column over, and the same lesson: a context naming only the deck, the
+   * category, the printing and the list names four fifths of a row, because a pile can hold the
+   * regular copy and the foil as two rows. Without it the pane's swap would address whichever
+   * one the grain's `coalesce` matched first — the regular copy — so a reader who opened the
+   * foil row and picked a new printing would watch their plain copy change instead.
+   *
+   * It is also what the pane's own foil button writes against, and what makes it able to open
+   * showing the copy the deck actually plays.
+   */
+  finish: DeckFinish;
 }
 
 /** How the search results are laid out. */

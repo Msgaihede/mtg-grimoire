@@ -33,6 +33,7 @@ const exportCard = (over: Partial<ExportCard> = {}): ExportCard => ({
   quantity: 1,
   setCode: "ltc",
   collectorNumber: "285",
+  finish: null,
   categoryName: "Main deck",
   categoryKind: "main",
   categoryActive: true,
@@ -44,6 +45,7 @@ const BOLT = exportCard({
   quantity: 2,
   setCode: "lea",
   collectorNumber: "161",
+  finish: null,
 });
 
 const noop = () => {};
@@ -175,7 +177,7 @@ describe("ExportDialog", () => {
     await user.click(await screen.findByRole("radio", { name: "CSV" }));
     await user.click(screen.getByRole("button", { name: /Copy/ }));
     expect(copy).toHaveBeenCalledWith(
-      "Quantity,Name,Set,Collector number,Category\n2,Lightning Bolt,lea,161,Main deck\n",
+      "Quantity,Name,Set,Collector number,Category,Finish\n2,Lightning Bolt,lea,161,Main deck,\n",
     );
   });
 

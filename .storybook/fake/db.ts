@@ -131,6 +131,7 @@ import type {
   DeckCard,
   DeckCategory,
   DeckCoverKind,
+  DeckFinish,
   DeckFolder,
   DeckGame,
   DeckInput,
@@ -175,6 +176,7 @@ import type {
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
+import { parseFinishes } from "@/lib/finish";
 import { hasVariableCost } from "@/lib/mana";
 import {
   DEFAULT_MARKETPLACE,
@@ -506,6 +508,16 @@ export interface FakeDeckCard {
   setCode: string;
   collectorNumber: string;
   lang: string;
+  /**
+   * Which object this row plays — `deck_cards.finish`, schema v18. `null` is the regular copy,
+   * and `"nonfoil"` is never stored: the crate normalises it away at the command boundary and a
+   * CHECK makes any other path an error, because two spellings would be two rows on the grain
+   * that draw identically.
+   *
+   * **It is part of the grain**, so {@link sameDeckSlot} matches on it and a pile can hold this
+   * printing twice.
+   */
+  finish: DeckFinish;
   needsReview: string | null;
 }
 
@@ -2532,6 +2544,7 @@ function toDeckCard(
     tagName: tag?.name ?? null,
     tagColor: tag?.color ?? null,
     quantity: dc.quantity,
+    finish: dc.finish,
     name: dc.name,
     setCode: dc.setCode,
     // Off the **card**, not off the row, exactly as `deck_card_select` reads `c.set_name`:
@@ -4033,6 +4046,11 @@ const SAME_PRINTING = "That is already this printing.";
 const PRINTING_GONE =
   "That printing is not in the card database any more — a sync replaced it while the card " +
   "was open. Reopen the card for the printings it has now.";
+/** `deck::SAME_FINISH`. */
+const SAME_FINISH = "That is already this finish.";
+/** `deck::FINISH_NOT_SOLD`. Read off `cards.finishes`, so it is also what a printing that has
+ *  left the corpus answers — its finish list went with it. */
+const FINISH_NOT_SOLD = "That printing is not sold in that finish.";
 /** `collection::friendly` — the one database error that is a user's problem rather than a
  *  bug, in the app's voice rather than the index's name. */
 const GRAIN_TAKEN =
@@ -4432,13 +4450,19 @@ function wishGrain(w: FakeWish): string {
 }
 
 /**
- * `schema::DECK_CARD_GRAIN` — `(deck_id, variant, category_id, card_id)`. Every column is NOT
- * NULL, so there is nothing to coalesce.
+ * `schema::DECK_CARD_GRAIN` — `(deck_id, variant, category_id, card_id, coalesce(finish, ''))`.
  *
  * `categoryId` is in it for the zone's old reason: the same printing filed under the main deck
  * and under the Maybeboard is two intentions, not one row that moved — only now that is read
  * off a category the user can rename. `variant` widens it again: the same printing can sit in
- * the live deck and the theory one at once.
+ * the live deck and the theory one at once. And `finish` widens it a third time (v18): the
+ * regular copy and the foil are two rows, so a deck can hold `1 × Sol Ring (foil)` beside
+ * `3 × Sol Ring`.
+ *
+ * **`===` is the whole of the `coalesce` here**, because JavaScript has one null and SQLite's
+ * distinct-NULL rule is a SQL problem rather than a model one. The crate needs the wrapper for
+ * its UNIQUE index; this needs nothing, and saying so is what stops somebody adding a `?? ""`
+ * that does nothing.
  */
 function deckCardAt(
   db: FakeDb,
@@ -4446,14 +4470,29 @@ function deckCardAt(
   cardId: string,
   categoryId: number,
   variant: DeckVariant,
+  finish: DeckFinish,
 ) {
   return db.deckCards.find(
     (dc) =>
       dc.deckId === deckId &&
       dc.variant === variant &&
       dc.categoryId === categoryId &&
-      dc.cardId === cardId,
+      dc.cardId === cardId &&
+      dc.finish === finish,
   );
+}
+
+/**
+ * `deck::normalise_finish` — the one place `"nonfoil"` becomes `null`.
+ *
+ * `null` is the regular copy and `"nonfoil"` is never stored, because two spellings of one
+ * thing would be two rows on the grain above that draw identically. An unrecognised word is
+ * refused rather than filed as regular: a caller sending one has a bug.
+ */
+function normaliseFinish(raw: string | null | undefined): DeckFinish {
+  if (raw === undefined || raw === null || raw === "nonfoil") return null;
+  if (raw === "foil" || raw === "etched") return raw;
+  throw refuse(`\`${raw}\` is not a finish this app knows.`);
 }
 
 /**
@@ -5514,6 +5553,7 @@ export function writeHandlers(db: FakeDb) {
       categoryId: number | null;
       categoryName: string | null;
       variant: DeckVariant;
+      finish?: DeckFinish;
       quantity: number;
     }): EntryChange => {
       refuseIfBusy(db);
@@ -5533,7 +5573,8 @@ export function writeHandlers(db: FakeDb) {
         // of throwing something nobody can read.
         throw refuse(NO_CATEGORY);
       }
-      const existing = deckCardAt(db, args.deckId, args.cardId, category.id, variant);
+      const finish = normaliseFinish(args.finish);
+      const existing = deckCardAt(db, args.deckId, args.cardId, category.id, variant, finish);
       deck.updatedAt = stamp(db);
       if (existing) {
         // The quantities add; `tagId` and `needsReview` are left alone, because the row that
@@ -5553,6 +5594,7 @@ export function writeHandlers(db: FakeDb) {
         setCode: card.setCode,
         collectorNumber: card.collectorNumber,
         lang: card.lang,
+        finish,
         needsReview: null,
       };
       db.deckCards.push(row);
@@ -5573,6 +5615,7 @@ export function writeHandlers(db: FakeDb) {
       cardId: string;
       categoryId: number;
       variant: DeckVariant;
+      finish?: DeckFinish;
       quantity: number;
     }): EntryChange => {
       refuseIfBusy(db);
@@ -5580,7 +5623,14 @@ export function writeHandlers(db: FakeDb) {
       validQuantity(args.quantity, "deck quantity");
       const deck = requireDeck(db, args.deckId);
       const category = categoryOfDeck(db, args.deckId, args.categoryId);
-      const row = deckCardAt(db, args.deckId, args.cardId, category.id, variant);
+      const row = deckCardAt(
+        db,
+        args.deckId,
+        args.cardId,
+        category.id,
+        variant,
+        normaliseFinish(args.finish),
+      );
       if (args.quantity === 0) {
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
         deck.updatedAt = stamp(db);
@@ -5656,9 +5706,12 @@ export function writeHandlers(db: FakeDb) {
       toCategoryId: number | null;
       toCategoryName: string | null;
       variant: DeckVariant;
+      finish?: DeckFinish;
     }): number => {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
+      // Addresses the row and travels with it: moving the foil copy leaves it the foil copy.
+      const finish = normaliseFinish(args.finish);
       if (args.toCategoryId === null && args.toCategoryName === null) throw refuse(NO_CATEGORY);
       const deck = requireDeck(db, args.deckId);
       const from = categoryOfDeck(db, args.deckId, args.fromCategoryId);
@@ -5669,9 +5722,9 @@ export function writeHandlers(db: FakeDb) {
       // After the resolution, and it writes nothing at all — not even `updatedAt`, which the
       // Rust rolls back with its transaction for the same reason.
       if (from.id === to.id) return to.id;
-      const row = deckCardAt(db, args.deckId, args.cardId, from.id, variant);
+      const row = deckCardAt(db, args.deckId, args.cardId, from.id, variant, finish);
       if (!row) throw refuse(cardGone(from.name));
-      const target = deckCardAt(db, args.deckId, args.cardId, to.id, variant);
+      const target = deckCardAt(db, args.deckId, args.cardId, to.id, variant, finish);
       if (target) {
         // `needs_review` is left alone where the target row already exists, and comes across
         // with a row that lands in an empty category — the fold's rule, and the reconciler's.
@@ -5716,14 +5769,19 @@ export function writeHandlers(db: FakeDb) {
       toCardId: string;
       categoryId: number;
       variant: DeckVariant;
+      finish?: DeckFinish;
     }): SwapResult => {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
+      // Carried across: the reader is choosing a printing, not an object, so the foil copy of
+      // the old printing becomes the foil copy of the new one. Deliberately not checked against
+      // the target's `finishes` — see the crate's `swap_printing`.
+      const finish = normaliseFinish(args.finish);
       // Before anything else, so a no-op does not move `updatedAt` and resort the gallery.
       if (args.fromCardId === args.toCardId) throw refuse(SAME_PRINTING);
       const deck = requireDeck(db, args.deckId);
       const category = categoryOfDeck(db, args.deckId, args.categoryId);
-      const row = deckCardAt(db, args.deckId, args.fromCardId, category.id, variant);
+      const row = deckCardAt(db, args.deckId, args.fromCardId, category.id, variant, finish);
       if (!row) throw refuse(cardGone(category.name));
       const to = cardById(db, args.toCardId);
       if (!to) throw refuse(PRINTING_GONE);
@@ -5737,7 +5795,7 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       const quantity = row.quantity;
-      const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant);
+      const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant, finish);
       let landed: number;
       if (target) {
         target.quantity += quantity;
@@ -5759,6 +5817,7 @@ export function writeHandlers(db: FakeDb) {
           setCode: to.setCode,
           collectorNumber: to.collectorNumber,
           lang: to.lang,
+          finish,
           needsReview: null,
         });
         landed = quantity;
@@ -5768,6 +5827,54 @@ export function writeHandlers(db: FakeDb) {
       // `CHECK (quantity > 0)` means a row that was already there contributed at least one
       // copy, so the landed total is strictly greater than what moved exactly when it folded.
       return { folded: landed > quantity, quantity: landed };
+    },
+
+    /**
+     * `deck::set_card_finish` — which **object** this row plays.
+     *
+     * `deck_swap_printing` one axis over, so it answers the same `SwapResult` and **folds** the
+     * same way: setting a row to a finish the pile already holds adds the quantities and takes
+     * the row that moved away, and the surviving row keeps its own id, its tag and its sentence
+     * (`add_card`'s rule — the row that was already there is the one the reader labelled).
+     *
+     * Three refusals, and the second is the one worth having in the fake: the target finish is
+     * checked against `cards.finishes`, so a story that points this at a printing sold only in
+     * nonfoil sees what the app does with a refusal rather than a silently shiny card.
+     */
+    deck_set_card_finish: (args: {
+      deckId: number;
+      cardId: string;
+      categoryId: number;
+      variant: DeckVariant;
+      fromFinish?: DeckFinish;
+      toFinish?: DeckFinish;
+    }): SwapResult => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const from = normaliseFinish(args.fromFinish);
+      const to = normaliseFinish(args.toFinish);
+      // Before anything else, so a no-op does not move `updatedAt` and resort the gallery.
+      if (from === to) throw refuse(SAME_FINISH);
+      const deck = requireDeck(db, args.deckId);
+      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      if (to !== null) {
+        const sold = parseFinishes(cardById(db, args.cardId)?.finishes ?? null);
+        if (!sold.includes(to)) throw refuse(FINISH_NOT_SOLD);
+      }
+      const row = deckCardAt(db, args.deckId, args.cardId, category.id, variant, from);
+      if (!row) throw refuse(cardGone(category.name));
+      const target = deckCardAt(db, args.deckId, args.cardId, category.id, variant, to);
+      deck.updatedAt = stamp(db);
+      if (target) {
+        target.quantity += row.quantity;
+        db.deckCards = db.deckCards.filter((dc) => dc !== row);
+        return { folded: true, quantity: target.quantity };
+      }
+      // Nothing to fold into: the row changes finish in place and keeps everything else. No new
+      // rowid here, unlike the move and the swap above — the crate's statement is a bare
+      // `UPDATE … SET finish`, so the row does not move in the allocator's tie-break either.
+      row.finish = to;
+      return { folded: false, quantity: row.quantity };
     },
 
     /**
@@ -5894,7 +6001,11 @@ export function writeHandlers(db: FakeDb) {
           categories.set(name, category);
         }
         const card = requireCard(db, item.cardId);
-        const existing = deckCardAt(db, deck.id, item.cardId, category.id, variant);
+        // A decklist's `*F*` / `*E*` marker, carried from `parse.ts` through `plan.ts`. It is
+        // part of the grain, so a list naming the same printing foil on one line and plain on
+        // another lands as two rows rather than one summed.
+        const finish = normaliseFinish(item.finish);
+        const existing = deckCardAt(db, deck.id, item.cardId, category.id, variant, finish);
         if (existing) {
           // `DECK_CARD_GRAIN`'s `ON CONFLICT … DO UPDATE`: a list naming a card on two lines
           // lands as one row with the sum, and a merge folds onto what the deck already held.
@@ -5912,6 +6023,7 @@ export function writeHandlers(db: FakeDb) {
             setCode: card.setCode,
             collectorNumber: card.collectorNumber,
             lang: card.lang,
+            finish,
             needsReview: null,
           });
         }

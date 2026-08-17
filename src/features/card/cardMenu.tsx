@@ -277,9 +277,15 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
  *
  * A collection row's identity includes its finish, so one has to be chosen. The surface's own
  * wins where it has one (a collection row *is* a finish; a wishlist row may prefer one).
- * Where it has none — a search tile, a deck card, a printings row, because **a deck names a
- * printing and not a finish** — the printing's own list decides: one finish is no question and
- * adds silently, two or more is a submenu.
+ * Where it has none — a search tile, a printings row, a deck card — the printing's own list
+ * decides: one finish is no question and adds silently, two or more is a submenu.
+ *
+ * **A deck card carries one since schema v18 and still does not name it here**, which is a
+ * decision rather than an oversight. `deck_cards.finish` says what a *deck* plays; a collection
+ * entry says what the reader physically owns, and pre-filling the second from the first would
+ * put a foil in somebody's binder because they had planned to buy one. The deck's own menu is
+ * where that fact is edited (`deckCardMenu.tsx`'s `Set as foil`); this row asks its own
+ * question.
  *
  * `finishes` is `null` when the column is empty, which is **unknown** rather than "no
  * finishes". Nonfoil is the answer there, because it is the answer for all but a handful of

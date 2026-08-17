@@ -8,6 +8,7 @@
  * Move to              ▸  every category of the deck, in the reader's own order
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
+ * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
  * Tag card             ▸  None / the deck's tags / New tag…
  * ─────────────────────
  * Remove card             every copy, out of this pile
@@ -33,12 +34,13 @@
  * its format spec and its tags — three facts no view has.
  */
 import { useState } from "react";
-import { CircleMinus, Crown, FolderInput, Tag, UserRound } from "lucide-react";
+import { CircleMinus, Crown, FolderInput, Sparkles, Tag, UserRound } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
+import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import type { DeckCard, DeckCategory, DeckTag, FormatSpec } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckFinish, DeckTag, FormatSpec } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
 import { cn } from "@/lib/utils";
 import { commanderIneligibility } from "./validation/commanders";
@@ -102,6 +104,8 @@ export interface DeckCardMenuDeps {
   moveTo: (card: DeckCard, categoryId: number) => void;
   /** `useDeck.setTag`. `null` takes the label off. */
   setTag: (card: DeckCard, tagId: number | null) => void;
+  /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
+  setFinish: (card: DeckCard, to: DeckFinish) => void;
   /** The deck's labels, already in hand from `deck_get` — the tag body draws these rather than
    *  reading `deck_tag_list` a second time. */
   tags: readonly DeckTag[];
@@ -162,6 +166,9 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     { kind: "separator", id: "sep-deck" },
     moveItem(card, deps),
     ...zoneItems(card, deps),
+    // Beside the zone rows rather than beside `Move to`: those say what this card *is* in the
+    // deck, and so does this. `Move to` is filing.
+    finishItem(card, deps),
     { kind: "lazy", id: "tag-card", label: "Tag card", Icon: Tag, Content: TagBody },
     // A second rule, and it is the same kind of line as the first: everything above says where
     // this card goes or what it is called, and this one takes it out. A row that removes
@@ -342,6 +349,98 @@ function zoneItem(
   if (refusal === null) return { kind: "action", id, label, Icon, onSelect };
   return { kind: "action", id, label, Icon, disabled: true, onSelect: () => {} };
 }
+
+/**
+ * **Which object this row plays**, and the three shapes that question has.
+ *
+ * `cardMenu.tsx`'s `collectionItem` applied to a write rather than an add, and for its reason:
+ * **a choice with one answer is not a choice.** Sold in two finishes — nonfoil and foil, which
+ * is the overwhelming majority of printings — the row is a toggle and costs one press. Sold in
+ * three, it is a submenu of the printing's own list. Sold in one, there is nothing to pick.
+ *
+ * **The greyed row says nothing**, which is {@link zoneItem}'s precedent rather than
+ * `cardMenu.tsx`'s greyed-with-a-reason — and for the sharper half of that same argument. A
+ * sentence on a row that greys on a large minority of the cards in a deck is noise on the
+ * surface a reader uses most, and a menu row is sized by its widest content, so the sentence
+ * would set the width of every row in the panel. The row stays **present** rather than dropping
+ * out, which is `View all printings`' rule: a row that is on every other card of the surface
+ * reads as a bug when it is missing from one, and its position must not move.
+ *
+ * The finishes are offered in the **printing's own order** — Scryfall's, which is what
+ * `FINISHES` is written in — and deliberately not through `sortOptions`. The order *is* the
+ * information (plain, then the premium treatments), which is one of the two exemptions
+ * `src/CLAUDE.md` grants, and it is the same one the collection's finish picker takes.
+ */
+function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
+  const choices = finishChoices(card.finishes);
+  const label = (f: DeckFinish) =>
+    `Set as ${f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase()}`;
+
+  // Nothing to pick. The label names foil rather than the finish the printing *is*, because
+  // what the greyed row is saying is "this card has no other finish", and foil is the one a
+  // reader came looking for.
+  if (choices.length <= 1) {
+    return {
+      kind: "action",
+      id: "finish",
+      label: label("foil"),
+      Icon: Sparkles,
+      disabled: true,
+      onSelect: () => {},
+    };
+  }
+  // Two finishes is exactly one *other* finish, so the row names it outright and the press is
+  // the whole interaction — no submenu to open for a choice with one answer.
+  if (choices.length === 2) {
+    const other = choices.find((f) => f !== card.finish) ?? null;
+    return {
+      kind: "action",
+      id: "finish",
+      label: label(other),
+      Icon: Sparkles,
+      onSelect: () => deps.setFinish(card, other),
+    };
+  }
+  return {
+    kind: "submenu",
+    id: "finish",
+    label: "Finish",
+    Icon: Sparkles,
+    items: choices.map((f) => ({
+      kind: "action",
+      id: `finish-${f ?? "regular"}`,
+      label: f === null ? REGULAR : FINISH_LABEL[f],
+      // The finish the row already is, greyed — and silently, like every other refusal in this
+      // file. It is drawn rather than dropped so the list keeps its length and its positions.
+      ...(f === card.finish
+        ? { disabled: true, onSelect: () => {} }
+        : { onSelect: () => deps.setFinish(card, f) }),
+    })),
+  };
+}
+
+/**
+ * The finishes this printing can be **played** in, as this menu's values.
+ *
+ * `nonfoil` becomes `null`, which is the one spelling of the regular copy that reaches
+ * `deck_cards.finish` — see `DeckFinish`. A printing whose `finishes` column is empty or
+ * unreadable answers `[null]`, so the row greys: unknown is not a choice to offer.
+ */
+function finishChoices(finishes: string | null): DeckFinish[] {
+  const listed = parseFinishes(finishes);
+  if (listed.length === 0) return [null];
+  return listed.map((f) => (f === "nonfoil" ? null : f));
+}
+
+/**
+ * What the app calls a nonfoil copy **in the deck editor**, and it is deliberately not
+ * `FINISH_LABEL.nonfoil`.
+ *
+ * "Set as nonfoil" is not a thing anybody says. The collection's picker is choosing between
+ * three named finishes and `Nonfoil` is the right word there; here the reader is toggling one
+ * card back off foil, and the opposite of foil is a regular card.
+ */
+const REGULAR = "Regular";
 
 /**
  * The tag choices, as rows.

@@ -26,6 +26,9 @@
  */
 import { Crown } from "lucide-react";
 import { CountTag } from "@/components/CountTag";
+import { FinishMark } from "@/components/FinishMark";
+import { playedFinish } from "@/lib/finish";
+import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { tagColorCss, tagFgCss } from "./tagColors";
@@ -273,6 +276,31 @@ export function RuleBreakMark({ text, className }: { text: string; className?: s
  * first. `transparent` rather than nothing, so every row keeps the same 2px of indent and the
  * names stay in one column.
  */
+/**
+ * Which object a deck row plays, for the two views that draw **no art** — the table's rows and
+ * the text columns.
+ *
+ * The two views with a card face say this in `FoilOverlay`'s chip, in the art's top-right
+ * corner. A row of text has no corner, so it borrows the printings list's answer: the glyph
+ * beside the name.
+ *
+ * **It carries a name on one of its two surfaces and not the other, and that is this file's
+ * general rule rather than an exception to it.** `FinishMark` is a `role="img"` with the finish
+ * as its accessible name; `TableView` draws rows, where a name inside a cell is really read, so
+ * there it says itself. `TextView`'s row is a **button with an explicit `aria-label`** — which
+ * replaces its content for naming — so there it is decoration and the word is `deckCardName`'s,
+ * exactly as the `GC` badge beside it is. Neither surface has to remember which: the label
+ * carries the finish on every view, so this is free to be either.
+ *
+ * Nothing at all for the regular copy, which is the rule `soleFinish` and `FINISH_LABEL` are
+ * both written by: nonfoil is the finish a card is assumed to be.
+ */
+export function DeckFinishMark({ card }: { card: Pick<DeckCard, "finish" | "finishes"> }) {
+  const finish = playedFinish(card.finish, card.finishes);
+  if (finish === null) return null;
+  return <FinishMark finish={finish} />;
+}
+
 export function rowMarkColor(ruleBreakText: string | null, gameChanger: boolean | null): string {
   if (ruleBreakText !== null) return "var(--color-destructive)";
   return gameChanger === true ? "var(--color-pie-gold)" : "transparent";

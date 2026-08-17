@@ -200,7 +200,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -274,8 +274,15 @@ pub const PREDEFINED_CATEGORIES: [(&str, &str, bool); 4] = [
 ///
 /// Written once for [`COLLECTION_GRAIN`]'s reason — the UNIQUE index and every
 /// `ON CONFLICT(…)` target must match verbatim, and a target that matches no index is a
-/// runtime error at the first quick-add rather than a compile error. No `coalesce` is
-/// needed here: every column is `NOT NULL`, so none of them can go distinct-by-NULL.
+/// runtime error at the first quick-add rather than a compile error.
+///
+/// **`coalesce(finish, '')` is [`COLLECTION_GRAIN`]'s device, for its reason** (v19).
+/// `deck_cards.finish` is nullable — NULL is the regular copy, and `'nonfoil'` is never
+/// stored — and SQLite treats NULLs in a UNIQUE index as *distinct*, so the bare column
+/// would enforce nothing at all: every regular add would insert a new row rather than
+/// folding into the one already there. It is the third widening of this grain, for
+/// `category_id`'s and `variant`'s reason — a foil copy and a regular copy of one printing
+/// are two intentions, not one row that changed.
 ///
 /// `category_id` is *in* the grain for exactly `zone`'s old reason: the same printing filed
 /// under the main deck and under the Maybeboard is two intentions, not one row that moved —
@@ -292,7 +299,7 @@ pub const PREDEFINED_CATEGORIES: [(&str, &str, bool); 4] = [
 /// `every_plain_grain_constant_names_the_index_the_head_schema_carries`, plus every
 /// `ON CONFLICT ({DECK_CARD_GRAIN})` target in [`crate::deck`], [`crate::deck_meta`] and
 /// [`crate::deck_theory`] — a target matching no index is a runtime error at the first write.
-pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id";
+pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id, coalesce(finish, '')";
 
 /// What makes two category rows the same row: one name per deck. This is a different
 /// uniqueness question from [`PREDEFINED_CATEGORIES`]'s "at most one predefined row per
@@ -1706,11 +1713,12 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // simply not pick. The floor rather than an error, which is the rule the Oracle tags are
         // already read under.
         //
-        // **No CHECK on either**, because `ALTER TABLE … ADD COLUMN` cannot add one — v12's
-        // `last_variant` met this first. `decks.game_key` gets the Rust fence that column got
+        // **No CHECK on either.** `decks.game_key` gets the Rust fence `last_variant` has
         // ([`crate::deck::valid_game`], over [`DECK_GAMES`]), because a command parameter
         // reaches it. `format_specs.games` gets none and needs none: no caller can write it, it
-        // is this constant's alone, and a test walks the cells against [`GAMES`].
+        // is this constant's alone, and a test walks the cells against [`GAMES`]. (The reason
+        // written here until v19 was that `ADD COLUMN` cannot carry a CHECK — see the step
+        // below, which adds one.)
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
         // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid is
@@ -1727,6 +1735,57 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch(FORMAT_SPECS_SEED)?;
         // Literal `18`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 18;")?;
+        tx.commit()?;
+    }
+    if v < 19 {
+        let tx = conn.unchecked_transaction()?;
+        // **A deck card names a finish**, which reverses "a deck names a printing and never a
+        // finish". Scryfall models foil as a finish *of* a printing rather than as a printing
+        // — 53 224 of 107 337 paper printings carry one under the same id — so wanting the
+        // foil copy was a thing the model had no way to say.
+        //
+        // **This step was written as v18 and landed as v19**, which is the collision this
+        // ladder's own doc predicts: v18 (the game columns) was written on another branch
+        // against the same head of 17 and merged first. Renumbering on the way in is the whole
+        // of the rule — a version that has shipped is spent.
+        //
+        // **Nullable, and NULL is the regular copy, so there is no backfill**: every row that
+        // predates this step already means what it now says. `'nonfoil'` is deliberately not
+        // in the vocabulary — two spellings of "regular" would be two rows on the grain below
+        // that draw identically on screen and sum apart, which is the worst shape a bug in
+        // this table can have. `deck::normalise_finish` maps an incoming `nonfoil` to NULL at
+        // the one command boundary; this CHECK is what makes any other path a hard error
+        // rather than a quiet second row.
+        //
+        // **`ALTER TABLE … ADD COLUMN … CHECK (…)` is accepted and enforced**, which contradicts
+        // what `src-tauri/CLAUDE.md` said twice (`deck_categories.origin` and
+        // `decks.last_variant` both went unfenced on the belief that it could not be done, and
+        // `last_variant` grew a Rust fence instead). Verified rather than assumed: an inserted
+        // `'nonfoil'` raises `CHECK constraint failed` — see
+        // `the_deck_card_finish_column_refuses_nonfoil`. SQLite's documented ADD COLUMN
+        // restrictions are PRIMARY KEY, UNIQUE, a non-constant DEFAULT, NOT NULL without a
+        // default, REFERENCES without a NULL default, and GENERATED STORED. A CHECK is not
+        // among them.
+        //
+        // **The grain widens a third time** (v5 created it, v8 added `variant`), and the index
+        // is a literal rather than `{DECK_CARD_GRAIN}` for the reason every step above writes
+        // its own: a step is history the day it ships, and this one must keep building the
+        // index it built today however the constant reads later. `coalesce(finish, '')` is
+        // `COLLECTION_GRAIN`'s device — SQLite treats NULLs in a UNIQUE index as distinct, so
+        // the bare column would stop every regular add from folding into the row already there.
+        //
+        // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
+        // replay; nothing is FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild
+        // is owed either.
+        tx.execute_batch(
+            "ALTER TABLE deck_cards ADD COLUMN finish TEXT
+                CHECK (finish IS NULL OR finish IN ('foil','etched'));
+             DROP INDEX IF EXISTS idx_deck_cards_grain;
+             CREATE UNIQUE INDEX idx_deck_cards_grain
+                ON deck_cards (deck_id, variant, category_id, card_id, coalesce(finish, ''));",
+        )?;
+        // Literal `19`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 19;")?;
         tx.commit()?;
     }
     Ok(())
@@ -2173,21 +2232,23 @@ pub(crate) mod tests {
     /// is a constant that can drift from the index it claims to describe without anything
     /// saying so. [`COLLECTION_GRAIN`], [`WISHLIST_GRAIN`] and [`DECK_CARD_GRAIN`] are held
     /// to their indexes by their `ON CONFLICT` targets (the test above, and every deck-card
-    /// upsert); these four are held here.
+    /// upsert); these three are held here.
     ///
     /// Read through `PRAGMA index_info` rather than by comparing DDL text, which is the whole
     /// point: it answers the *parsed* column list, so the literal in the migration is free to
-    /// be wrapped and indented however it reads best. The two grains with `coalesce(…)` in
+    /// be wrapped and indented however it reads best. The three grains with `coalesce(…)` in
     /// them cannot be checked this way — an expression column comes back with a NULL name —
     /// and do not need to be, since a mismatched conflict target is a hard error at the first
-    /// write.
+    /// write. **[`DECK_CARD_GRAIN`] became the third of those in v19**, when `finish` joined
+    /// it; it left this list rather than losing its fence, since every
+    /// `ON CONFLICT ({DECK_CARD_GRAIN})` in [`crate::deck`], [`crate::deck_meta`] and
+    /// [`crate::deck_theory`] still fails loudly at the first write if it drifts.
     #[test]
     fn every_plain_grain_constant_names_the_index_the_head_schema_carries() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
 
         for (index, grain) in [
-            ("idx_deck_cards_grain", DECK_CARD_GRAIN),
             ("idx_deck_categories_grain", DECK_CATEGORY_GRAIN),
             ("idx_deck_tags_grain", DECK_TAG_GRAIN),
             ("idx_deck_allocations_grain", ALLOCATION_GRAIN),
@@ -4593,6 +4654,25 @@ pub(crate) mod tests {
     const UNDO_V18: &str = "ALTER TABLE format_specs DROP COLUMN games;
          ALTER TABLE decks DROP COLUMN game_key;";
 
+    /// And v19's finish column on `deck_cards` — **three statements, because the column is in
+    /// an index**.
+    ///
+    /// Owed for [`UNDO_V13`]'s reason: the DDL is `ALTER TABLE … ADD COLUMN`, so a fixture
+    /// that forgot it could not migrate at all — v19 would answer `duplicate column name` over
+    /// a table already carrying the column, a failure no real upgrade can produce.
+    ///
+    /// **This is the first rewind on this ladder that has to take an index down first, and it
+    /// is exactly the trap [`UNDO_V12`]'s doc names as the reason a rewind through v8 would be
+    /// dishonest.** SQLite refuses `DROP COLUMN` on a column any index references, and
+    /// `finish` is the fifth term of `idx_deck_cards_grain`. So: drop the index, drop the
+    /// column, and **put the v18-era index back** — the four-column one, spelled out as a
+    /// literal rather than built from [`DECK_CARD_GRAIN`], because what this restores is what
+    /// v8 built and the constant now describes head.
+    const UNDO_V19: &str = "DROP INDEX idx_deck_cards_grain;
+         ALTER TABLE deck_cards DROP COLUMN finish;
+         CREATE UNIQUE INDEX idx_deck_cards_grain
+            ON deck_cards (deck_id, variant, category_id, card_id);";
+
     /// A database that stopped at version 9 — the last version below the step that replays
     /// [`CARDS_INDEXES`], which is the property this fixture exists for.
     ///
@@ -4641,6 +4721,7 @@ pub(crate) mod tests {
              {UNDO_V16}
              {UNDO_V17}
              {UNDO_V18}
+             {UNDO_V19}
              PRAGMA user_version = 9;",
         ))
         .unwrap();
@@ -4840,6 +4921,7 @@ pub(crate) mod tests {
              {UNDO_V16}
              {UNDO_V17}
              {UNDO_V18}
+             {UNDO_V19}
              PRAGMA user_version = 10;",
         ))
         .unwrap();
@@ -4860,7 +4942,7 @@ pub(crate) mod tests {
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
-             PRAGMA user_version = 11;"
+             {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
         conn
@@ -4934,7 +5016,7 @@ pub(crate) mod tests {
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
-             PRAGMA user_version = 12;"
+             {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
         conn
@@ -5247,7 +5329,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} PRAGMA user_version = 13;"
+            "{UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -5554,7 +5636,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} PRAGMA user_version = 14;"
+            "{UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -5729,7 +5811,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V16} {UNDO_V17} {UNDO_V18} PRAGMA user_version = 15;"
+            "{UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -5745,13 +5827,16 @@ pub(crate) mod tests {
     /// — the trap [`v9_database`] documents on `legal_mask`, which this rung does not have.
     ///
     /// **It held the "one step below head" title and has handed it on** — to
-    /// [`v17_database`], as [`v15_database`] handed it to this one. That line has moved with
-    /// every rung and is left here as the record of which fixture the title belonged to.
+    /// [`v17_database`], as [`v15_database`] handed it to this one, and v19 has since moved it
+    /// on again to [`v18_database`]. That line has moved with every rung and is left here as
+    /// the record of which fixture the title belonged to.
     fn v16_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V17} {UNDO_V18} PRAGMA user_version = 16;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -5825,27 +5910,107 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    /// [`v17_database`] must really sit one step below head, or the tests below it are a fresh
+    // ---- v19: a deck card names a finish ---------------------------------------------
+
+    /// A database at version 18: everything v18 left behind, and none of v19.
+    ///
+    /// Honest for [`UNDO_V13`]'s reason rather than [`UNDO_V17`]'s — v19's DDL is
+    /// `ALTER TABLE … ADD COLUMN`, so a fixture that forgot the rewind could not migrate at
+    /// all. It is the "one step below head" fixture now, the title [`v17_database`] held.
+    fn v18_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V19} PRAGMA user_version = 18;"))
+            .unwrap();
+        conn
+    }
+
+    /// `deck_cards` columns with this name — 0 or 1.
+    fn has_column(conn: &Connection, table: &str, column: &str) -> i64 {
+        conn.query_row(
+            &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+            rusqlite::params![column],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The v19 step over a v18 database: the column arrives, every existing row reads regular,
+    /// and the grain index comes back carrying the expression.
+    ///
+    /// **The index half is the one worth driving.** The step drops and recreates
+    /// `idx_deck_cards_grain`, and a widening that is a silent no-op on exactly the machines
+    /// that need it is what `src-tauri/CLAUDE.md` warns a changed index definition costs. Read
+    /// off `sqlite_master` rather than `PRAGMA index_info`, which answers a NULL name for an
+    /// expression column and so cannot see the thing that changed.
+    #[test]
+    fn the_v19_step_adds_the_finish_column_over_a_v18_database() {
+        let conn = v18_database();
+        assert_eq!(
+            has_column(&conn, "deck_cards", "finish"),
+            0,
+            "a v18 database may not already carry v19's column"
+        );
+        let deck_id = deck(&conn, "Old");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+        deck_card(&conn, deck_id, "c1", cat, 2);
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(has_column(&conn, "deck_cards", "finish"), 1);
+        let finish: Option<String> = conn
+            .query_row("SELECT finish FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            finish, None,
+            "a row that predates the step is the regular copy"
+        );
+
+        let ddl: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'idx_deck_cards_grain'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            ddl.contains("coalesce(finish, '')"),
+            "the grain index has to be rebuilt, not left at its v8 shape: {ddl}"
+        );
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// [`v18_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     ///
-    /// **The fixture named here has changed four times** — v14's, then v15's, then v16's, now
-    /// v17's — and each move was this assertion going red, which is the whole reason it is
-    /// written against `SCHEMA_VERSION - 1` rather than a number.
+    /// **The fixture named here has changed five times** — v14's, then v15's, then v16's,
+    /// then v17's, now v18's — and each move was this assertion going red, which is the whole
+    /// reason it is written against `SCHEMA_VERSION - 1` rather than a number.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v17_database();
+        let conn = v18_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
-        assert!(
-            !deck_columns(&conn).contains(&"game_key".to_owned()),
-            "v18's column must not be there yet"
+        assert_eq!(
+            has_column(&conn, "deck_cards", "finish"),
+            0,
+            "the v19 column must not be there yet"
         );
 
-        // v17's own table is standing, because this fixture undoes one rung rather than two.
+        // v18's own columns are standing, because this fixture undoes one rung rather than
+        // two — and v17's table below them with it.
+        assert!(
+            deck_columns(&conn).contains(&"game_key".to_owned()),
+            "v18's column belongs to this version and must survive the rewind"
+        );
         assert_eq!(
             table_count(&conn, "deck_undo"),
             1,
@@ -5866,7 +6031,7 @@ pub(crate) mod tests {
     fn v17_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V18} PRAGMA user_version = 17;"))
+        conn.execute_batch(&format!("{UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"))
             .unwrap();
         conn
     }
@@ -6099,14 +6264,121 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_eighteen() {
+    fn the_schema_version_is_nineteen() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 18);
+        assert_eq!(SCHEMA_VERSION, 19);
+    }
+
+    /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular
+    /// copy of one printing, in one pile of one list, are **two rows** — and each folds on
+    /// its own.
+    ///
+    /// The second half is what `coalesce(finish, '')` buys. SQLite treats NULLs in a UNIQUE
+    /// index as *distinct*, so the bare nullable column would enforce nothing: every regular
+    /// add would insert a new row instead of adding to the one already there, and a deck
+    /// would fill up with `1 × Sol Ring` rows. Driven through the real `ON CONFLICT
+    /// ({DECK_CARD_GRAIN})` an upsert uses, because a conflict target that matches no index
+    /// is a runtime error rather than a compile one.
+    #[test]
+    fn a_foil_row_and_a_regular_row_of_one_printing_are_two_rows_that_fold_apart() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let deck_id = deck(&conn, "Foils");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+
+        let sql = format!(
+            "INSERT INTO deck_cards
+                (deck_id,category_id,variant,card_id,set_code,collector_number,lang,name,
+                 finish,quantity,created_at,updated_at)
+             VALUES (?1,?2,'live','c1','lea','161','en','Sol Ring',?3,1,
+                     unixepoch(),unixepoch())
+             ON CONFLICT({grain}) DO UPDATE SET
+                quantity = deck_cards.quantity + excluded.quantity",
+            grain = DECK_CARD_GRAIN
+        );
+        for finish in [None, None, None, Some("foil")] {
+            conn.execute(&sql, rusqlite::params![deck_id, cat, finish])
+                .unwrap();
+        }
+
+        let mut stmt = conn
+            .prepare("SELECT finish, quantity FROM deck_cards ORDER BY coalesce(finish, '')")
+            .unwrap();
+        let rows: Vec<(Option<String>, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(None, 3), (Some("foil".to_owned()), 1)],
+            "three regular adds fold into one row of three; the foil add is its own row"
+        );
+    }
+
+    /// `'nonfoil'` is **never stored** — NULL is the only spelling of the regular copy.
+    ///
+    /// Two spellings would be two rows on [`DECK_CARD_GRAIN`] that draw identically on screen
+    /// and sum apart, which is the worst shape a bug in this table can have.
+    /// `deck::normalise_finish` is the enforcement at the command boundary; this CHECK is what
+    /// makes any *other* path a hard error rather than a quiet second row.
+    ///
+    /// **It also settles a claim `src-tauri/CLAUDE.md` made twice** — that `ALTER TABLE ADD
+    /// COLUMN` cannot carry a CHECK, which is why `deck_categories.origin` has none and
+    /// `decks.last_variant` grew a Rust fence instead. It can. SQLite's documented ADD COLUMN
+    /// restrictions are PRIMARY KEY, UNIQUE, a non-constant DEFAULT, NOT NULL without a
+    /// default, REFERENCES without a NULL default, and GENERATED STORED; a CHECK is not among
+    /// them. This test is the proof, and it fails loudly the day that stops being true.
+    #[test]
+    fn the_deck_card_finish_column_refuses_nonfoil() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let deck_id = deck(&conn, "Foils");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+
+        let insert = "INSERT INTO deck_cards
+                (deck_id,category_id,variant,card_id,set_code,collector_number,lang,name,
+                 finish,quantity,created_at,updated_at)
+             VALUES (?1,?2,'live','c1','lea','161','en','Sol Ring',?3,1,
+                     unixepoch(),unixepoch())";
+
+        let err = conn
+            .execute(insert, rusqlite::params![deck_id, cat, "nonfoil"])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("CHECK constraint failed"),
+            "the column's vocabulary is the database's, not a convention: {err}"
+        );
+
+        for good in [None, Some("foil"), Some("etched")] {
+            conn.execute("DELETE FROM deck_cards", []).unwrap();
+            conn.execute(insert, rusqlite::params![deck_id, cat, good])
+                .expect("NULL, foil and etched are the three the column takes");
+        }
+    }
+
+    /// Every deck that predates v19 reads regular, which is what it already meant — so the
+    /// step carries **no backfill** and no deck's totals move on the upgrade.
+    ///
+    /// Driven through the `deck_card` helper, which writes no `finish` at all, exactly as
+    /// every row written before this version did.
+    #[test]
+    fn a_deck_row_that_names_no_finish_is_the_regular_copy() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let deck_id = deck(&conn, "Old");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+        deck_card(&conn, deck_id, "c1", cat, 2);
+
+        let finish: Option<String> = conn
+            .query_row("SELECT finish FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(finish, None, "a row that says nothing is the regular copy");
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole

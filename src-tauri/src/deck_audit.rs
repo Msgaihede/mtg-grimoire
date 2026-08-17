@@ -444,8 +444,10 @@ mod tests {
                 quantity,
                 category_name: category.to_owned(),
                 // An ordinary, counted pile: this sweep is about which commands write history,
-                // and switching a pile off is not one of the effects it counts.
+                // and switching a pile off is not one of the effects it counts. The finish is
+                // out of scope for the same reason.
                 inactive: false,
+                finish: None,
             }
         }
 
@@ -497,10 +499,19 @@ mod tests {
                 "deck_update (theory)",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 4)
                         .unwrap();
-                    crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", 2)
-                        .unwrap();
+                    crate::deck::add_card(
+                        &conn,
+                        id,
+                        "serra-lea",
+                        Some(main),
+                        None,
+                        "live",
+                        None,
+                        2,
+                    )
+                    .unwrap();
                     clear(&conn);
                     crate::deck::update_deck(
                         &conn,
@@ -517,7 +528,7 @@ mod tests {
                 "deck_theory_copy_from_live",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 4)
                         .unwrap();
                     clear(&conn);
                     crate::deck_theory::copy_from_live(&conn, id).unwrap();
@@ -550,7 +561,7 @@ mod tests {
                 "deck_add_card",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
                 }),
             ),
@@ -558,56 +569,77 @@ mod tests {
                 "deck_set_card_quantity",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
                     clear(&conn);
-                    crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", 3).unwrap();
+                    crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", None, 3)
+                        .unwrap();
                 }),
             ),
             (
                 "deck_set_card_quantity (zero)",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
                     clear(&conn);
-                    crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", 0).unwrap();
+                    crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", None, 0)
+                        .unwrap();
                 }),
             ),
             (
                 "deck_move_card",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
                     clear(&conn);
-                    crate::deck::move_card(&conn, id, "bolt-lea", main, Some(side), None, "live")
-                        .unwrap();
+                    crate::deck::move_card(
+                        &conn,
+                        id,
+                        "bolt-lea",
+                        main,
+                        Some(side),
+                        None,
+                        "live",
+                        None,
+                    )
+                    .unwrap();
                 }),
             ),
             (
                 "deck_swap_printing",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
                     clear(&conn);
-                    crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, "live")
-                        .unwrap();
+                    crate::deck::swap_printing(
+                        &conn, id, "bolt-lea", "bolt-m10", main, "live", None,
+                    )
+                    .unwrap();
                 }),
             ),
             (
                 "deck_card_set_tag",
                 1,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
                     let tag = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", Some(tag))
-                        .unwrap();
+                    crate::deck_meta::set_card_tag(
+                        &conn,
+                        id,
+                        "bolt-lea",
+                        main,
+                        "live",
+                        None,
+                        Some(tag),
+                    )
+                    .unwrap();
                 }),
             ),
             (
@@ -727,7 +759,7 @@ mod tests {
                 "deck_import_commit (replace)",
                 2,
                 Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 6)
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 6)
                         .unwrap();
                     clear(&conn);
                     crate::deck_import::commit_import(
@@ -767,7 +799,7 @@ mod tests {
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
 
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, ADD);
@@ -786,7 +818,17 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
 
-        crate::deck::add_card(&conn, id, "bolt-lea", None, Some("  Ramp  "), "live", 3).unwrap();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "bolt-lea",
+            None,
+            Some("  Ramp  "),
+            "live",
+            None,
+            3,
+        )
+        .unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.delta, 3);
@@ -802,9 +844,9 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 2).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2).unwrap();
 
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", 0).unwrap();
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", None, 0).unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, REMOVE);
@@ -828,7 +870,7 @@ mod tests {
         let main = category(&conn, id, "Ramp");
         conn.execute("DELETE FROM deck_audit", []).unwrap();
 
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", 0).unwrap();
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", None, 0).unwrap();
 
         assert_eq!(rows(&conn, id), 0);
     }
@@ -838,9 +880,9 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
 
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", 2).unwrap();
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, "live", None, 2).unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, QUANTITY);
@@ -854,9 +896,19 @@ mod tests {
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Creature");
         let maybe = kind_of(&conn, id, "maybe");
-        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", None, 1).unwrap();
 
-        crate::deck::move_card(&conn, id, "serra-lea", main, Some(maybe), None, "live").unwrap();
+        crate::deck::move_card(
+            &conn,
+            id,
+            "serra-lea",
+            main,
+            Some(maybe),
+            None,
+            "live",
+            None,
+        )
+        .unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, MOVE);
@@ -870,9 +922,9 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
 
-        crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, "live").unwrap();
+        crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, "live", None).unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, SWAP);
@@ -890,8 +942,8 @@ mod tests {
 
         // The other half of `folded`: the target category already holds that printing, so the
         // two rows become one and the history says so.
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
-        crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, "live").unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
+        crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, "live", None).unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(payload["folded"], json!(true));
     }
@@ -901,7 +953,7 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
         let cut = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
             .unwrap()
             .id;
@@ -909,7 +961,8 @@ mod tests {
             .unwrap()
             .id;
 
-        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", Some(cut)).unwrap();
+        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None, Some(cut))
+            .unwrap();
 
         let (row, payload) = newest(&conn, id);
         assert_eq!(row.kind, TAG);
@@ -919,14 +972,15 @@ mod tests {
 
         // Replacing one label with another, and then clearing it: `previous` is what makes
         // either readable, and `tag: null` is how the row says the card wears nothing now.
-        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", Some(keep)).unwrap();
+        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None, Some(keep))
+            .unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
             json!({ "tag": "Keep", "previous": "Cut candidate" })
         );
 
-        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None).unwrap();
+        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None, None).unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(payload, json!({ "tag": null, "previous": "Keep" }));
     }
@@ -1005,8 +1059,8 @@ mod tests {
         // A delete says how many copies went with it, which is the number the confirm dialog
         // warned about and the only part of the category a reader cannot get back.
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 4).unwrap();
-        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "theory", 3).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 4).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "theory", None, 3).unwrap();
         crate::deck_meta::delete_category(&conn, main, None).unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
@@ -1244,13 +1298,14 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
         conn.execute("DELETE FROM deck_audit", []).unwrap();
 
         // Another printing of another card: refused inside the transaction, after `touch_deck`
         // and the category fence have both already written.
-        let refused = crate::deck::swap_printing(&conn, id, "bolt-lea", "serra-lea", main, "live")
-            .unwrap_err();
+        let refused =
+            crate::deck::swap_printing(&conn, id, "bolt-lea", "serra-lea", main, "live", None)
+                .unwrap_err();
 
         assert!(refused.contains("not another printing"), "{refused}");
         assert_eq!(
@@ -1268,7 +1323,7 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
         assert!(rows(&conn, id) > 0);
 
         crate::deck::delete_deck(&conn, id, None).unwrap();
@@ -1287,8 +1342,8 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
-        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", None, 1).unwrap();
 
         let names: Vec<Option<String>> = history(&conn, id)
             .into_iter()
@@ -1313,7 +1368,8 @@ mod tests {
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
         for _ in 0..4 {
-            crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", 1).unwrap();
+            crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1)
+                .unwrap();
         }
 
         assert_eq!(list(&conn, id, 0).unwrap().len(), 1, "0 is not `no limit`");

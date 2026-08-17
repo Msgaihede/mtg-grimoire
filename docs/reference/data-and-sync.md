@@ -274,8 +274,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `last_sort_by`, all `TEXT NOT NULL` with defaults `live`, `category` and `alphabetical` — so
   the deck editor reopens on whatever the reader was last looking at, per deck. Like v8, v9 and
   v11 it touches `cards` not at all, so it neither needs the `CARDS_INDEXES` replay nor takes it
-  from v11, and it owes no `cards_fts` rebuild. **`ALTER TABLE … ADD COLUMN` cannot add a CHECK**,
-  so none of the three is constrained in SQL and the fence sits where the vocabulary is owned:
+  from v11, and it owes no `cards_fts` rebuild. None of the three is constrained in SQL — **and not because
+  `ALTER TABLE … ADD COLUMN` cannot add a CHECK**, which is what this said until 2026-08-17 and
+  is false (v18's `deck_cards.finish` adds one and it is enforced). The fence sits where the
+  vocabulary is owned:
   `last_variant` against `schema::DECK_VARIANTS` in Rust, the other two narrowed in TypeScript on
   read — [decks-storage.md](decks-storage.md) has the reasoning.
   v11 adds `marketplace_prices` (`marketplace, card_id, finish, price`,
@@ -308,7 +310,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v18.** v18 adds two columns and re-seeds one table —
+- **Schema is v19.** v19 adds one column and rebuilds one index — `deck_cards.finish`
+  (`NULL | 'foil' | 'etched'`, CHECKed) and `idx_deck_cards_grain` widened with
+  `coalesce(finish, '')`. **A deck card names a finish**, which reverses the rule that had held
+  since v5: foil is a *finish of a printing* in Scryfall's model rather than a printing, so
+  53 224 of 107 337 paper printings carry one under the same id and wanting the shiny copy was a
+  thing the model had no way to say. **No backfill** — the column is nullable and NULL is the
+  regular copy, which is what every existing row already meant — and the `coalesce` is
+  `COLLECTION_GRAIN`'s device for its reason: SQLite treats NULLs in a UNIQUE index as
+  *distinct*, so the bare column would have stopped every regular add folding into the row
+  already there. It is the **first rewind on this ladder that has to drop an index first**
+  (SQLite refuses `DROP COLUMN` on an indexed column), so `UNDO_V19` is three statements, and
+  `DECK_CARD_GRAIN` leaves
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` to join the two grains
+  held to their indexes by their `ON CONFLICT` targets instead. **It also settles a claim this
+  file made twice**: `ALTER TABLE … ADD COLUMN` *can* carry a CHECK, and it is enforced — which
+  is why the v18 entry below no longer gives that as the reason its own two columns have none.
+  **It was written as v18 and landed as v19**, which is this ladder's own collision rule doing
+  its job: the game columns were written on another branch against the same head of 17 and
+  merged first. The whole design:
+  [the spec](../superpowers/specs/2026-08-17-deck-card-finish-design.md).
+- **v18 adds two columns and re-seeds one table** —
   `format_specs.games TEXT NOT NULL DEFAULT 'paper,arena,mtgo'` (which platforms each format is
   playable on, a comma-joined list of `schema::GAMES`) and
   `decks.game_key TEXT NOT NULL DEFAULT 'any'` (which platform a deck is for, `schema::DECK_GAMES`).
@@ -318,9 +340,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   no conclusion; the narrowing is `src/features/decks/useFormatSpecs.ts`'s.
   **`'any'` is a stored sentinel rather than a NULL**, `default_category_id`'s argument one rung
   down: `DeckPatch` writes `coalesce(?n, column)`, so a bound NULL means *leave it* and a
-  nullable column could never say "back to Any". Neither column carries a CHECK — `ADD COLUMN`
-  cannot add one — so `deck::valid_game` is Rust's fence on the one of the two a command
-  parameter reaches, and `format_specs.games` needs none because only the seed writes it.
+  nullable column could never say "back to Any". Neither column carries a CHECK — not because
+  `ADD COLUMN` cannot add one, which is what this said until v19 and is false, but because the
+  fence belongs where a caller can reach: `deck::valid_game` is Rust's on the one of the two a
+  command parameter reaches, and `format_specs.games` needs none because only the seed writes it.
   **The step also forced the format seed to split in two.** `FORMAT_SPECS_SEED_V5` is now frozen
   history — what v5 wrote, replayed by every fresh install long before this column exists — and
   `FORMAT_SPECS_SEED` is head, carrying `games`, re-run here with `INSERT OR REPLACE`. Leaving

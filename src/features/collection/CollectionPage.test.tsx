@@ -1099,7 +1099,7 @@ describe("the card menu", () => {
     // so the app's own `autoCategoryFor` files the card, and the type line is what it files it
     // by. That is the arm a drag with no column under it and an imported line both take.
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(7, "c1", null, "Instant", "live", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(7, "c1", null, "Instant", "live", null, 1),
     );
   });
 

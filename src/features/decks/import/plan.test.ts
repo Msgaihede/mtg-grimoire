@@ -548,7 +548,13 @@ describe("filing an imported line by the pile its file named", () => {
 
     expect(plan.cards[0].excluded).toBe(true);
     expect(toImportItems(plan, [])).toEqual([
-      { cardId: SOL_RING.cardId, quantity: 1, categoryName: "(New) Maybeboard", inactive: true },
+      {
+        cardId: SOL_RING.cardId,
+        quantity: 1,
+        finish: null,
+        categoryName: "(New) Maybeboard",
+        inactive: true,
+      },
     ]);
   });
 
@@ -563,7 +569,13 @@ describe("filing an imported line by the pile its file named", () => {
 
     expect(plan.commander).toEqual({ kind: "automatic", cardIds: [SISAY.cardId] });
     expect(toImportItems(plan, [SISAY.cardId])).toEqual([
-      { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander", inactive: false },
+      {
+        cardId: SISAY.cardId,
+        quantity: 1,
+        finish: null,
+        categoryName: "Commander",
+        inactive: false,
+      },
     ]);
   });
 
@@ -771,6 +783,9 @@ Deck
     expect(toImportItems(plan, [SELVALA.cardId])[0]).toEqual({
       cardId: SELVALA.cardId,
       quantity: 1,
+      // Untouched by the commander choice, unlike the pile and the flag beside it: those two
+      // are filing, which the command zone outranks, and a finish is a fact about the object.
+      finish: null,
       categoryName: "Commander",
       inactive: false,
     });
@@ -829,9 +844,21 @@ describe("toImportItems", () => {
     // field is optional on the wire so an older caller still deserialises, not so this one may
     // leave it out.
     expect(toImportItems(plan, [SISAY.cardId])).toEqual([
-      { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander", inactive: false },
-      { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
-      { cardId: FOREST.cardId, quantity: 6, categoryName: "Land", inactive: false },
+      {
+        cardId: SISAY.cardId,
+        quantity: 1,
+        finish: null,
+        categoryName: "Commander",
+        inactive: false,
+      },
+      {
+        cardId: SOL_RING.cardId,
+        quantity: 1,
+        finish: null,
+        categoryName: "Artifact",
+        inactive: false,
+      },
+      { cardId: FOREST.cardId, quantity: 6, finish: null, categoryName: "Land", inactive: false },
     ]);
   });
 
@@ -848,7 +875,7 @@ describe("toImportItems", () => {
     const plan = planFor("6 Forest", { Forest: FOREST });
 
     expect(toImportItems(plan, [])).toEqual([
-      { cardId: FOREST.cardId, quantity: 6, categoryName: "Land", inactive: false },
+      { cardId: FOREST.cardId, quantity: 6, finish: null, categoryName: "Land", inactive: false },
     ]);
   });
 });

@@ -17,6 +17,9 @@
  * never aborts the parse. The only lines that leave no trace are the ones making no claim —
  * blanks and comments.
  */
+// The only import here, and it is a **type**. This file stays text in, data out: no React, no
+// hook, no IPC — which is what lets `parse.test.ts` drive every rule as a pure function.
+import type { DeckFinish } from "@/lib/ipc";
 
 /**
  * Which of the deck's four zones a line is in — **the fixed word the rules read**, beside
@@ -53,6 +56,18 @@ export interface ParsedLine {
    * lands here.
    */
   categoryName: string | null;
+  /**
+   * Which object the file said this line is — the `*F*` / `*E*` marker, `null` for the regular
+   * copy. Carried since 2026-08-17; it used to be stripped and discarded.
+   *
+   * **`[Foil]` in a bracket is still decoration and never reaches this**, which looks like an
+   * inconsistency and is not. A bracket is the *category* channel: a finish that arrived there
+   * is an exporter being loose with a field, while `*F*` is the channel every format that says
+   * anything about a finish agrees on. Reading the bracket would also mean deciding, for every
+   * word in it, whether it is a pile or a treatment — which is the format detector this file
+   * exists without.
+   */
+  finish: DeckFinish;
   /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's
    *  `is_active = 0`. */
   excluded: boolean;
@@ -157,16 +172,35 @@ const LINE =
  */
 const MARKERS = [/\s+\*[A-Z]\*$/, /\s+\^[^^]*\^$/, /\s+#\S+$/];
 
+/**
+ * The `*F*` / `*E*` marker, **read** rather than merely stripped (2026-08-17).
+ *
+ * It was thrown away for as long as a deck named a printing and never a finish. Schema v18 gave
+ * `deck_cards` a `finish`, so the line has somewhere to put it, and this is the channel every
+ * format that says anything about a finish agrees on.
+ *
+ * The letter is the whole of it: `*F*` is foil and `*E*` is etched, and any other letter is a
+ * marker this app does not read — which is why {@link MARKERS} still strips the general shape
+ * and this only recognises two. `null` for a line carrying neither, which is the regular copy.
+ */
+const FINISH_MARKER = /\s+\*([FE])\*$/;
+
 /** A trailing `[…]`, anchored like every {@link MARKERS} pattern. */
 const BRACKET = /\s+\[([^\]]+)\]$/;
 
 /**
  * Bracket contents that are a *finish* rather than a pile.
  *
- * `[Foil]` is decoration in the same way `*F*` is, and a deck names a printing rather than a
- * finish, so reading it as a category would put a pile called "Foil" in somebody's deck. Matched
- * whole and case-insensitively; anything else in a bracket is a category, because guessing which
- * words are "really" categories is the format detector this file exists without.
+ * Reading one as a category would put a pile called "Foil" in somebody's deck. Matched whole and
+ * case-insensitively; anything else in a bracket is a category, because guessing which words are
+ * "really" categories is the format detector this file exists without.
+ *
+ * **It is decoration and not a finish either**, which is the half that stopped being obvious
+ * when {@link FINISH_MARKER} started being read (2026-08-17). A bracket is the *category*
+ * channel: a finish that arrived there is an exporter being loose with a field, while `*F*` is
+ * the channel every format that says anything about a finish agrees on. Reading the bracket
+ * would also mean deciding, for every word in it, whether it names a pile or a treatment —
+ * which is that same detector one step further in.
  */
 const FINISH_WORDS = /^(?:foil|etched|non-?foil)$/i;
 
@@ -208,6 +242,8 @@ interface Decorations {
   body: string;
   /** Verbatim, flags and all — {@link bracketCategory} is what reads it. */
   bracket: string | null;
+  /** The `*F*` / `*E*` marker as a finish, or `null` for the regular copy. */
+  finish: DeckFinish;
 }
 
 /**
@@ -225,6 +261,7 @@ interface Decorations {
 function stripDecorations(line: string): Decorations {
   let body = line;
   let bracket: string | null = null;
+  let finish: DeckFinish = null;
   for (;;) {
     const before = body;
     const found = BRACKET.exec(body);
@@ -232,8 +269,13 @@ function stripDecorations(line: string): Decorations {
       bracket ??= found[1];
       body = body.slice(0, found.index);
     }
+    // Read before the general strip below takes it off, and **first wins** like the bracket —
+    // which is the rightmost marker on the line, for the same reason: no export in scope writes
+    // two, and a line that did would be naming a finish twice.
+    const marked = FINISH_MARKER.exec(body);
+    if (marked !== null) finish ??= marked[1] === "F" ? "foil" : "etched";
     for (const marker of MARKERS) body = body.replace(marker, "");
-    if (body === before) return { body, bracket };
+    if (body === before) return { body, bracket, finish };
   }
 }
 
@@ -459,6 +501,7 @@ export function parseDecklist(text: string): ParsedList {
       collectorNumber: groups.cn ?? null,
       section: lineSection,
       categoryName,
+      finish: decorated.finish,
       excluded,
     });
   }

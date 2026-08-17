@@ -294,6 +294,44 @@ reader to configure the deck they had just made; it now asks all of them.
   started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
   _different_ one from the dialog's — TanStack shares a query's cache between observers and a
   mutation's state with nobody — so this banner speaks only for presses made out here.
+- **A deck card names a finish, and the grain says so** (schema v18, 2026-08-17). This reverses
+  "a deck names a printing and never a finish", which was true for as long as Scryfall's model
+  went unread: foil is a **finish of a printing** rather than a printing, so 53 224 of 107 337
+  paper printings carry one under the same id and wanting the shiny copy was a thing the model
+  had no way to say. `deck_cards.finish` is `NULL | 'foil' | 'etched'` — **NULL is the regular
+  copy and `'nonfoil'` is never stored**, normalised in `deck::normalise_finish` and CHECKed
+  away, because two spellings of "regular" would be two rows on the grain that draw identically
+  on screen and sum apart. `DECK_CARD_GRAIN` carries `coalesce(finish, '')` for
+  `COLLECTION_GRAIN`'s reason: SQLite treats NULLs in a UNIQUE index as *distinct*, so the bare
+  column would stop every regular add folding into the row already there. **A pile therefore
+  holds `1 × Sol Ring (foil)` beside `3 × Sol Ring` as two rows**, and every card command takes
+  the finish in its address — `move` and `swap` carry it across rather than writing it, because
+  the reader moved a card or chose a printing, not an object.
+  **Two rules did not change and both look as though they should have.** `engine.ts` counts
+  copies by card **name** and sums across rows, so `1 foil + 3 regular` is four copies — the
+  rules have never heard of a finish, and `engine.test.ts` pins it. And `allocate_deck` matches
+  on oracle id and has always ignored finish, condition and language, so a foil row reserves
+  whatever copy is free. **The undo `Cell` is deliberately finish-blind** too: a finish change
+  moves quantity *between* two rows of one printing, so a scope naming one would restore half of
+  what it read — `deck_undo::CardRow` is what grew the column instead.
+- **`Set as foil` is one row with three shapes, and it greys _silently_.** `deckCardMenu.tsx`'s
+  `finishItem` follows `cardMenu.tsx`'s `collectionItem`: sold in two finishes it is a toggle
+  (one press, `Set as foil` / `Set as regular`), in three a `Finish ▸` submenu in Scryfall's own
+  order, in one a greyed row. **No `reason` on the greyed row**, which is this menu's own
+  precedent (`zoneItem`) rather than `cardMenu.tsx`'s greyed-with-a-sentence — a menu row is
+  sized by its widest content, so a sentence on a row that greys on a large minority of cards
+  would set the width of every row in the panel. The row stays *present* so its position never
+  moves. The card pane's foil button is the second entrance: inside the editor, on a card the
+  deck holds, it **writes** and says `Set as foil`; anywhere else it stays the view toggle it has
+  always been and says `View as foil`.
+- **What a deck card is drawn as is `playedFinish(card.finish, card.finishes)`** — the reader's
+  own statement first, `soleFinish`'s second. The order carries the argument: `soleFinish` says
+  what the *object* is and deliberately says nothing about a printing sold in both (a sheen on
+  61 % of a wall is decoration), while a stored finish is the different claim *this deck plays
+  the shiny one*. Written once in `src/lib/finish.ts` because two card-face views draw it; the
+  table and the text columns have no art to hang a chip on and use `CardMarks`' `DeckFinishMark`
+  instead, and `deckCardName` says the finish in words on **all four**, because on three of them
+  the mark is decoration once the control is named.
 - **There is no remove mutation.** The tray's drop, the stepper's zero **and the card menu's
   `Remove card`** are all `setQuantity(…, 0)`, because zero removes a deck row. That third caller
   (2026-08-15) is what makes the rule worth restating: a menu row called "Remove card" is exactly
@@ -449,9 +487,12 @@ reader to configure the deck they had just made; it now asks all of them.
   therefore never fails. **Deriving it from the column gives `separateX`, which is wrong** — the
   Storybook fake guessed exactly that before it was corrected — so `auditText.test.ts` pins the
   right word _and_ the wrong-but-plausible one. Copy the word from `deck.rs`; never re-derive it.
-- **A deck card's unit price is what that printing costs at the selected marketplace, in
-  whichever finish it is _sold_ in** — `nonfoil → foil → etched`, `sorting::printing_price_by_
-finish_expr`. A deck names a printing and not a finish, so there is no finish to price at; the
+- **A deck card's unit price is what that printing costs at the finish the row names, and at the
+  finish it is _sold_ in where the row names none** — `sorting::deck_card_price_expr`, two arms
+  told apart by `deck_cards.finish` being NULL. The set arm has **no fallback**: a foil row
+  quoted at the nonfoil rate is a price nobody published. The unsaid arm is
+  `printing_price_by_finish_expr`'s `nonfoil → foil → etched`, and it is the arm every row that
+  predates schema v18 takes; the
   rule was the flat **nonfoil** rate until 2026-08-15 and that was a bug, because **13 515
   foil-only and 892 etched-only printings have no nonfoil price at any marketplace**. An
   Invocation or a Secret Lair drew an em dash on its card foot, was left out of its pile's
@@ -550,11 +591,15 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   cards. Both halves are re-derived rather than remembered: `parse.test.ts` counts the 33
   `setCode: null` lines out of 88, and the branch that sets the flag is `deck_import.rs`'s. **Not
   yet driven in the shipped window.**
-- **`[Foil]` is decoration and never a pile.** `FINISH_WORDS` matches `foil`/`etched`/`non-foil`
-  whole and case-insensitively, because a deck names a printing rather than a finish and reading
-  one as a category would put a pile called "Foil" in somebody's deck. **Anything else in a bracket
+- **`[Foil]` is decoration and never a pile — and never a _finish_ either.** `FINISH_WORDS`
+  matches `foil`/`etched`/`non-foil` whole and case-insensitively, because reading one as a
+  category would put a pile called "Foil" in somebody's deck. **Anything else in a bracket
   is a category** — guessing which words are "really" categories is the format detector this file
-  exists without.
+  exists without. Since 2026-08-17 a line's `*F*`/`*E*` **is** read (`FINISH_MARKER` →
+  `ParsedLine.finish` → `ImportItem.finish`), which makes the second half worth stating: a
+  bracket is the *category* channel, so a finish that arrived there is an exporter being loose
+  with a field, while `*F*` is the channel every format that says anything about a finish agrees
+  on.
 - **`//` is a comment only at the _start_ of a line.** `1 Branchloft Pathway // Boulderloft
 Pathway` is one card and there are seven such names in the reference list alone, so a `//` found
   anywhere else is part of the name and must never be cut.

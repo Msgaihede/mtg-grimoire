@@ -111,6 +111,9 @@ function exportCardsFor(text: string): ExportCard[] {
     quantity: card.quantity,
     setCode: card.match.setCode,
     collectorNumber: card.match.collectorNumber,
+    // Straight off the parsed line, which is what makes the finish part of the round trip this
+    // file measures rather than a constant it asserts about.
+    finish: card.finish,
     categoryName: card.categoryName,
     categoryKind: SEEDED_KIND[card.categoryName] ?? "main",
     categoryActive: !inactive.has(card.categoryName),

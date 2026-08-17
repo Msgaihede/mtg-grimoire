@@ -54,9 +54,14 @@ pub struct TheoryDiffRow {
     /// many of is not on this list at all, and one it has *more* of is a cut, not a purchase.
     pub quantity: i64,
     /// What one copy costs at the marketplace the read was given —
-    /// `DeckCardRow::unit_price`'s rule, [`crate::sorting::printing_price_by_finish_expr`], so a
-    /// foil-only printing is quoted at its foil rate rather than reading as unpriced. Never
-    /// `cards.price_usd`, which is that chain precomputed for the search's sort.
+    /// `DeckCardRow::unit_price`'s rule, [`crate::sorting::deck_card_price_expr`]: the theory
+    /// row's own finish where it names one, and the `nonfoil → foil → etched` chain where it
+    /// does not, so a foil-only printing is quoted at its foil rate rather than reading as
+    /// unpriced. Never `cards.price_usd`, which is that chain precomputed for the search's sort.
+    ///
+    /// **The finish is part of what is being bought.** A plan that calls for the foil is a
+    /// shopping list for the foil, and quoting the plain copy's price against it would understate
+    /// the row by whatever the premium is.
     ///
     /// `None` where that marketplace does not price the printing, which is a fact about the
     /// shop rather than a hole: a shopping list quoting a price from somewhere the reader is
@@ -126,7 +131,7 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND cat.is_active = 1
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::printing_price_by_finish_expr(marketplace)
+        price = crate::sorting::deck_card_price_expr(marketplace)
     )
 }
 
@@ -296,11 +301,14 @@ fn grouped_diff(
 /// a line and a copy is a card, and this app counts decks in cards everywhere else.
 pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, String> {
     let sql = format!(
+        // `finish` comes across with the row: the plan is what is sleeved up, and a plan that
+        // quietly turned every foil into a regular copy would price differently from the deck
+        // it was copied from.
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             tag_id, quantity, needs_review, created_at, updated_at)
+             tag_id, quantity, needs_review, finish, created_at, updated_at)
          SELECT deck_id, category_id, ?2, card_id, set_code, collector_number, lang, name,
-                tag_id, quantity, needs_review, unixepoch(), unixepoch()
+                tag_id, quantity, needs_review, finish, unixepoch(), unixepoch()
            FROM deck_cards
           WHERE deck_id = ?1 AND variant = ?3
          ON CONFLICT({grain}) DO NOTHING",
@@ -586,7 +594,17 @@ mod tests {
     }
 
     fn add(conn: &Connection, deck_id: i64, card: &str, cat: i64, variant: &str, quantity: i64) {
-        crate::deck::add_card(conn, deck_id, card, Some(cat), None, variant, quantity).unwrap();
+        crate::deck::add_card(
+            conn,
+            deck_id,
+            card,
+            Some(cat),
+            None,
+            variant,
+            None,
+            quantity,
+        )
+        .unwrap();
     }
 
     fn set_theory(conn: &Connection, deck_id: i64, on: bool) {
@@ -833,7 +851,7 @@ mod tests {
 
         // The same comparison from the other side: swapping the live printing for the other
         // one changes nothing, because the card is the same card.
-        crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, LIVE).unwrap();
+        crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
         assert_eq!(theory_diff(&conn, id, ANY_MARKET).unwrap()[0].quantity, 1);
     }
 

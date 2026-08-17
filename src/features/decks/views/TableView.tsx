@@ -27,7 +27,7 @@ import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
+import { DeckFinishMark, GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
 import {
   deckCardProps,
   deckCardSelectedProps,
@@ -184,6 +184,9 @@ export function TableView({
               title={row.ruleBreakText ?? undefined}
             >
               <span className="min-w-0 truncate">{row.card.name}</span>
+              {/* Which object this row plays, where there is no art to hang a chip on. Unlike
+                  the two below it needs no `sr-only` twin — see {@link DeckFinishMark}. */}
+              <DeckFinishMark card={row.card} />
               {/* The badge and the stripe are both `aria-hidden` decoration; this is where
                   the table says the two facts in words. It works here and not on the other
                   three views because a row is not an `aria-label`-ed button — a cell's text
