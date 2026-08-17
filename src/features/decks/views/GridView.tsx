@@ -36,6 +36,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -89,7 +90,7 @@ export function GridView({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   className,
 }: {
@@ -101,9 +102,10 @@ export function GridView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
-  /** The printing the pane is open on, so its tile wears the same gold ring a search tile does.
-   *  By `cardId`, so a printing filed in two piles is marked in both — `CardStack` has why. */
-  selectedCardId?: string | null;
+  /** The slot the pane is open on ({@link deckCardSlot}), so its tile wears the same gold ring a
+   *  search tile does. By the slot rather than the printing, so a card filed in two piles is
+   *  marked in the one the reader clicked — `CardStack` has why. */
+  selectedSlot?: string | null;
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
@@ -155,7 +157,7 @@ export function GridView({
           violations={violations}
           onSelect={onSelect}
           actions={actions}
-          selectedCardId={selectedCardId}
+          selectedSlot={selectedSlot}
           landed={landed}
           zoom={cardZoom}
         />
@@ -172,7 +174,7 @@ function GridGroup({
   violations,
   onSelect,
   actions,
-  selectedCardId,
+  selectedSlot,
   landed,
   zoom,
 }: {
@@ -182,7 +184,7 @@ function GridGroup({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
   /** How large the reader is drawing cards, from the wall above. */
   zoom: number;
@@ -236,7 +238,7 @@ function GridGroup({
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               onSelect={onSelect}
               actions={actions}
-              selected={card.cardId === selectedCardId}
+              selected={deckCardSlot(card.categoryId, card.cardId) === selectedSlot}
               landedKey={landed?.get(card.id)}
               zoom={zoom}
             />

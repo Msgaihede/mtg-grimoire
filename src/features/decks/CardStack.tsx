@@ -31,6 +31,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "./cardControl";
+import { deckCardSlot } from "./dnd";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -534,20 +535,23 @@ export interface CardStackProps {
    */
   zoom?: number;
   /**
-   * The printing the card pane is open on, or `null` — which is both "no card is open" and "the
-   * open one came from somewhere that is not this deck".
+   * The **slot** the card pane is open on — {@link deckCardSlot} — or `null`, which is both "no
+   * card is open" and "the open one came from somewhere that is not a row of this deck".
    *
    * It does two things here, and the second is the interesting one. The card wears
    * {@link SELECTED_CARD}, as a tile on the search wall does; and **it is the stack's resting
    * state** — see {@link CardStack} for what that replaced and why the pile still only ever
    * holds one card open.
    *
-   * By `cardId` rather than by the row's own id, which is `TableView`'s rule and the store's: a
-   * pane is open on a *printing*. A deck holds one row per `(category, card)`, so at most one
-   * card of any one pile can match, and a printing filed in two piles is picked in both — which
-   * is the honest answer to "which card is the pane about".
+   * **By the slot rather than by the printing, and that reverses this prop's original rule**
+   * (changed 2026-08-17). It used to be a bare `cardId`, on the argument that a pane is open on
+   * a *printing* — so a printing filed in two piles was picked in both, which was called the
+   * honest answer to "which card is the pane about". It is not: the reader clicked **one** card,
+   * and in this view the mark is also what the pile rests open on, so one click stood a card
+   * clear of the stack in two piles at once. A deck row is `(category, card)` and the click
+   * names one of them, so the mark is addressed the way every deck *write* already is.
    */
-  selectedCardId?: string | null;
+  selectedSlot?: string | null;
   /**
    * Which cards have just been added, as `deck_cards.id` → the nonce that add was given.
    *
@@ -604,7 +608,7 @@ export function CardStack({
   onSelect,
   actions,
   zoom = DEFAULT_ZOOM,
-  selectedCardId = null,
+  selectedSlot = null,
   landed = NONE_LANDED,
   className,
 }: CardStackProps) {
@@ -614,7 +618,13 @@ export function CardStack({
 
   // `-1` for a pile that does not hold the picked card, which is every pile but one — folded to
   // `null` here so the `??` below reads as the sentence it is rather than as an index test.
-  const picked = selectedCardId === null ? -1 : cards.findIndex((c) => c.cardId === selectedCardId);
+  //
+  // **One card in the whole deck can match, not one per pile**: the slot carries the category,
+  // so a printing filed in two piles answers `-1` in the one the reader did not click.
+  const picked =
+    selectedSlot === null
+      ? -1
+      : cards.findIndex((c) => deckCardSlot(c.categoryId, c.cardId) === selectedSlot);
   const open = openIndex ?? (picked === -1 ? null : picked);
 
   return (
