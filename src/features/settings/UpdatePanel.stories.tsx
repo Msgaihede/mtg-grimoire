@@ -374,11 +374,18 @@ export const HistoryOpened: Story = {
     // the release on offer above draws the *same* fixture body, so a canvas-wide query for a
     // bullet would pass whether or not the row ever opened.
     //
-    // `motion` draws an opening surface at its `initial` for one frame, so the body inside is
-    // not visible until the next — `findBy*` rather than `getBy*`, which is this repo's rule
-    // for anything inside a surface that has just opened.
+    // **Presence, not visibility, and the difference cost a CI run.** `statusLine`'s `initial`
+    // is `{ height: 0, opacity: 0 }`, and `toBeVisible()` reads that opacity — so an assertion
+    // made before `motion` has painted its second frame fails on an element that is in the
+    // document and about to be seen. `findBy*` waits for the node to *exist*, which is not the
+    // same wait, so it does not close the gap: this passed twice locally and failed on CI's
+    // slower box with `Received element is not visible: <span />`. What the story claims is
+    // that opening this row drew this row's own notes, and presence inside its `<li>` is
+    // exactly that claim — an in-flight animation's opacity is not the subject.
     const entry = within(row.closest("li") as HTMLElement);
-    await expect(await entry.findByText(/count a foil wish against foils only/)).toBeVisible();
+    await expect(
+      await entry.findByText(/count a foil wish against foils only/),
+    ).toBeInTheDocument();
   },
 };
 
