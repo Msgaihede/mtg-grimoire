@@ -177,6 +177,13 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   under `tauri dev` Vite serves and transforms those, so bare specifiers inside them resolve and
   the module works — which is also the cheapest way to get `ipc` and a fixture into the page
   without quoting a 2 500-character string through PowerShell.
+- **Every `eval` lands in the same execution context, so a top-level `const` outlives the call
+  that declared it.** The second `eval` reusing a name throws
+  `SyntaxError: Identifier 'row' has already been declared` — which reads as a broken
+  expression rather than as the previous command still being in scope, and it arrives on the
+  *reuse*, so the pass that introduced the name looked fine. Wrap anything with a binding in an
+  IIFE — `(() => { const row = …; return row.innerText; })()` — which also makes each command
+  independent of the order the others ran in. Measured 2026-08-17.
 
 Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug/data/mtg.db`
 **while the app holds it** (WAL allows it). Delete every seeded row afterwards — `data/` is

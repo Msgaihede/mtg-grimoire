@@ -98,7 +98,7 @@
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
-import { CURRENT_VERSION, NEXT_VERSION, release } from "./fixtures";
+import { CURRENT_VERSION, NEXT_VERSION, release, releaseHistory } from "./fixtures";
 import {
   DEFAULT_PRINTING_GROUP_BY,
   PRINTING_GROUP_BY_OPTIONS,
@@ -156,6 +156,7 @@ import type {
   Printing,
   PrintingTags,
   ReleaseInfo,
+  ReleaseNote,
   SearchRequest,
   SearchSortKey,
   SetSummary,
@@ -509,15 +510,16 @@ export interface FakeDeckCard {
 }
 
 /**
- * What the updater knows, which is **two `app_meta` rows and one piece of process state** —
+ * What the updater knows, which is **three `app_meta` rows and one piece of process state** —
  * plus the one thing the app cannot see, which is what GitHub would answer.
  *
- * `update.rs` keeps `update_last_check_at` and `update_latest_seen` in `app_meta` (the
- * release cached **whether or not** it is newer, so that `status` can re-compare it against
- * the running build on every read and the notice clears itself after an update lands), and
- * `Updater::staged`/`Updater::kind` in memory. Every field of `UpdateStatus` is derived from
- * those by {@link toUpdateStatus} — nothing here stores an `available`, an `asset` or a
- * `staged` boolean, for the reason this file's header gives about `ownedQuantity`.
+ * `update.rs` keeps `update_last_check_at`, `update_latest_seen` and
+ * `update_release_history` in `app_meta` (the release cached **whether or not** it is newer,
+ * so that `status` can re-compare it against the running build on every read and the notice
+ * clears itself after an update lands), and `Updater::staged`/`Updater::kind` in memory.
+ * Every field of `UpdateStatus` is derived from those by {@link toUpdateStatus} — nothing
+ * here stores an `available`, an `asset` or a `staged` boolean, for the reason this file's
+ * header gives about `ownedQuantity`.
  */
 export interface FakeUpdate {
   /** `Updater::kind`. Decides which asset a download would pick, and whether there is one. */
@@ -527,10 +529,22 @@ export interface FakeUpdate {
   lastCheckAt: string | null;
   /** `app_meta.update_latest_seen` — the release the last check saw, newer or not. */
   latestSeen: ReleaseInfo | null;
+  /**
+   * `app_meta.update_release_history` — every release that check's one page carried.
+   *
+   * Written by the same check that writes `latestSeen`, which is the whole design: one
+   * request to `/repos/…/releases` answers both "is there an update" and "what changed
+   * before now", so expanding the version history costs nothing out of GitHub's 60 an hour.
+   * `[]` is what an install that has never checked has, and the panel says so.
+   */
+  history: ReleaseNote[];
   /** **Not a row the app has**: the release `api.github.com` would answer the next check
    *  with. It is the other end of the wire, and it is what makes `update_check` do
    *  something a story can watch. */
   remote: ReleaseInfo | null;
+  /** **Not a row either** — the page `/releases` would answer, which is what a check copies
+   *  into {@link FakeUpdate.history}. */
+  remoteHistory: ReleaseNote[];
   /** `Updater::staged` — a verified build on disk, one restart away. */
   staged: { version: string } | null;
 }
@@ -2818,15 +2832,21 @@ export function defaultUpdate(): FakeUpdate {
     installKind: "portable",
     lastCheckAt: String(CLOCK_BASE),
     latestSeen: release(CURRENT_VERSION),
+    // The history a check that saw `CURRENT_VERSION` would have cached: the page **without**
+    // the release published since. Pressing Check now brings that one in, which is the
+    // difference a story can watch.
+    history: releaseHistory().filter((r) => r.version !== NEXT_VERSION),
     remote: release(NEXT_VERSION),
+    remoteHistory: releaseHistory(),
     staged: null,
   };
 }
 
 /** An install that has never asked. `seeds.ts`'s `empty` world — a first run has synced
- *  nothing and checked nothing, and `lastCheckAt: null` is the only thing that says so. */
+ *  nothing and checked nothing, and `lastCheckAt: null` is the only thing that says so.
+ *  Its history is empty for the same reason: nothing has fetched a page to cache. */
 export function neverCheckedUpdate(): FakeUpdate {
-  return { ...defaultUpdate(), lastCheckAt: null, latestSeen: null };
+  return { ...defaultUpdate(), lastCheckAt: null, latestSeen: null, history: [] };
 }
 
 /**
@@ -3813,11 +3833,22 @@ export function readHandlers(db: FakeDb) {
     }),
 
     /**
-     * `update::status`, and the one update command that is a **read** — it touches `app_meta`
-     * and the process's own state and makes no network call, which is why the ribbon can poll
-     * it. Annotated for {@link sync_status}' reason.
+     * `update::status`, one of the two update commands that are **reads** — it touches
+     * `app_meta` and the process's own state and makes no network call, which is why the
+     * ribbon can poll it. Annotated for {@link sync_status}' reason.
      */
     update_status: (): UpdateStatus => toUpdateStatus(db),
+
+    /**
+     * `lib::update_history` — the page the last check cached, newest first. The other read.
+     *
+     * **Never a request of its own**, which is the design rather than a shortcut here:
+     * `update_check` fetches one page of `/repos/…/releases` to decide whether an update
+     * exists and stores the whole thing, so a reader expanding the version history spends
+     * nothing out of GitHub's 60 requests an hour. An install that has never checked answers
+     * `[]` — `neverCheckedUpdate`'s world, and the sentence the panel has for it.
+     */
+    update_history: (): ReleaseNote[] => db.update.history,
 
     /**
      * `marketplace::get_marketplace` — the stored id, or the default.
@@ -6620,6 +6651,9 @@ export function writeHandlers(db: FakeDb) {
       if (db.fault === "updateError") throw refuse(UPDATE_RATE_LIMITED);
       db.update.lastCheckAt = String(CLOCK_BASE);
       db.update.latestSeen = db.update.remote;
+      // The same one page, cached whole — `check_inner` writes both keys from one response,
+      // which is why a check is what refreshes the version history and nothing else is.
+      db.update.history = db.update.remoteHistory;
       return toUpdateStatus(db);
     },
 

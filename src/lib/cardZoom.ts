@@ -143,3 +143,79 @@ export function formatZoom(zoom: number): string {
 export function scaled(base: number, zoom: number): number {
   return Math.round(base * zoom);
 }
+
+/**
+ * The custom property every mark laid on a card reads to size itself: the reader's zoom, as a
+ * bare number, inherited down from the card's own root element.
+ *
+ * ## Why a CSS variable and not a prop
+ *
+ * The marks are shared components and **most of their call sites must not scale**. `RarityGem` is
+ * drawn on a wall tile, in a deck tile's foot, in the stack's data line — and in the search table,
+ * the collection table, the wishlist table and the card pane twice. `OwnedBadge`, `FinishMark`,
+ * `TagDot` and `QuantityStepper` are each split the same way. A prop would have to be threaded to
+ * every one of them and *defaulted* at the ones that stay still, which makes "does this scale?" a
+ * question answered fifteen times, silently, by whoever added the newest call site.
+ *
+ * An inherited custom property answers it once, in the other direction: a mark reads
+ * `var(--mark-scale, 1)`, and the fallback is what every surface that is not a card gets **without
+ * knowing this variable exists**. Three elements set it — `CardGrid`'s tile, `GridView`'s tile and
+ * `CardStack`'s card — and nothing else in the app has to be touched for a table to keep drawing
+ * a 12px gem.
+ *
+ * It is also the reason this is not a `transform: scale()` on the overlay layer, which would have
+ * been one line per corner: the caption strip under a wall tile is **in flow**, and a transform
+ * changes no layout at all — the text would grow straight out of the strip the virtualiser sized
+ * its rows from. Real geometry is the standing rule here (`src/CLAUDE.md`) and it is the only one
+ * that works for both halves of a tile.
+ *
+ * ## It scales in both directions, unlike the budgets that hold it
+ *
+ * There is no floor. That is a deliberate reversal of `atLeast` — the `max(base, scaled(base))`
+ * rule that governed `CardGrid`'s caption, `GridView`'s foot, `stackAdvance` and
+ * `stackDataHeight` — and the reversal is what those floors were *for*: each one existed because
+ * the chrome inside it could not shrink, so the budget had to refuse to. Now that the chrome
+ * shrinks with the card, a floored budget is a 28px strip around 6px of type. The floors that
+ * remain are the ones measuring space **between** cards rather than chrome **on** them — the two
+ * walls' gutters — where nothing is being contained and the old argument still holds.
+ */
+export const MARK_SCALE_VAR = "--mark-scale";
+
+/**
+ * The same idea for the controls drawn on a card — the wall tile's quick-add, the deck tile's
+ * stepper, the stack card's stepper column — kept a **separate** number because they are drawn a
+ * little smaller than their panel-sized twins.
+ *
+ * One variable could not say this. The stepper's `xs` size is drawn in a deck tile's foot *and* in
+ * the table and text views' rows, and the quick-add trigger is drawn in a wall tile's caption *and*
+ * in the search table *and* in the card pane's printings rows — so baking {@link CONTROL_SHRINK}
+ * into the control's own base would shrink four surfaces nobody asked about. Carried as a second
+ * variable it reaches exactly the three roots that set it, and everywhere else the `, 1` fallback
+ * leaves the control the size it has always been.
+ */
+export const CONTROL_SCALE_VAR = "--control-scale";
+
+/**
+ * How much smaller a control is when it is drawn **on a card** rather than in a panel or a row.
+ *
+ * A control on a card is competing with somebody's artwork for the same two square centimetres,
+ * and it is revealed on hover rather than resident — so it does not have to hold the presence a
+ * table's stepper does. 85% is the largest reduction that leaves the wall tile's quick-add above
+ * 20px at 1×, which is the smallest square this app asks anyone to hit.
+ */
+export const CONTROL_SHRINK = 0.85;
+
+/**
+ * The two variables above, as the `style` object a card's root element carries.
+ *
+ * Written as one function rather than spelled at three call sites because the pair has to move
+ * together: a mark and the control beside it in the same caption reading two different zooms is
+ * the kind of drift that looks like a rendering fault. The cast is `CSSProperties`' doing — React
+ * types custom properties as unknown keys, and there is no narrower way to say "these two".
+ */
+export function cardScaleVars(zoom: number): Record<string, string> {
+  return {
+    [MARK_SCALE_VAR]: String(zoom),
+    [CONTROL_SCALE_VAR]: String(zoom * CONTROL_SHRINK),
+  };
+}

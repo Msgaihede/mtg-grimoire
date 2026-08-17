@@ -482,13 +482,22 @@ function Results({ search }: { search: CardSearch }) {
             // tile, and this box sits on the card's own name. It is as high as `CardGrid`'s
             // corner goes (4px in, clear of the art's rounded corner) — at the default zoom that
             // is 4–18px against a printed nameplate at roughly 8–22px, so the box clears the
-            // card's top border and overlaps the name; the mark does not scale with the zoom, so
-            // by ~2× it sits in the border strip above the name outright.
+            // card's top border and overlaps the name.
+            //
+            // **All three of those figures are figures at 100% zoom, and the mark holds its place
+            // at every other stop now.** It did not: the type was a fixed 10px and the corner a
+            // fixed 4px inset, so by ~2× the box had climbed out of the nameplate into the border
+            // strip above it and the words in it were a fifth the height of the name they sat on.
+            // It reads `--mark-scale` — the tile's own factor, `lib/cardZoom.ts` — so 10px on a
+            // doubled card is 20px on a doubled nameplate, which is the same reading.
             topLeft={(card) =>
               card.printings > 1 ? (
                 <span
                   title={`${card.printings} printings matched these filters`}
-                  className="block whitespace-nowrap text-[10px] leading-none tabular-nums text-text"
+                  className={cn(
+                    "block whitespace-nowrap tabular-nums text-text",
+                    "text-[calc(10px*var(--mark-scale,1))] leading-none",
+                  )}
                 >
                   {card.printings} printings
                 </span>

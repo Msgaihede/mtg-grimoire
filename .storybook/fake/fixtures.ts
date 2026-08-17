@@ -37,6 +37,7 @@ import type {
   DeckCard,
   DeckCategory,
   ReleaseInfo,
+  ReleaseNote,
   UpdateAsset,
 } from "@/lib/ipc";
 
@@ -353,11 +354,21 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
  * before the switch existed keeps the grouping it was written against. It is a `manaValue` rule
  * and inert under the other two groupings, so a story asking for the split passes both — the
  * pair `("manaValue", …, true)` is the only combination that draws anything new.
+ *
+ * `switchedOff` names **one of the two piles of the reader's own** — `"Ramp"` or `"Removal"` — to
+ * seed with `is_active = 0`, the pile that counts toward nothing. It is last and optional for
+ * `separateX`'s reason: absent, this is the deck every existing story was written against. It is a
+ * name rather than an id because a story naming a heading is naming what a reader would recognise,
+ * and it takes one pile rather than a list because the thing it serves — where a switched-off pile
+ * is *drawn* — is answered by one as well as by five. **The two seeded zones are deliberately out
+ * of its reach**: the Maybeboard is already seeded off and the Sideboard's switch is its own
+ * story's subject, so pointing this at either would make one fixture say two things.
  */
 export function deckGroups(
   groupBy: GroupBy = "category",
   sortBy: SortBy = "alphabetical",
   separateX = false,
+  switchedOff?: "Ramp" | "Removal",
 ) {
   const commander = deckCategory("commander");
   // The seeded Sideboard sorts at 2 and the reader's own two piles are ahead of it here, so
@@ -371,8 +382,24 @@ export function deckGroups(
   // `deck_categories.origin`, written by whichever path made the row: `category_for_name` finds
   // a pile of this name before it creates one, so filing a ramp spell into the reader's "Ramp"
   // leaves it theirs.
-  const ramp: DeckCategory = { ...deckCategory("main"), id: 10, name: "Ramp", sortOrder: 1 };
-  const removal: DeckCategory = { ...deckCategory("main"), id: 11, name: "Removal", sortOrder: 2 };
+  // `isActive` is written from the argument rather than left to `deckCategory`'s default, so that
+  // the switch is a property of the *category row* and reaches the cards through `inPile` below —
+  // a group whose `isActive` was flipped after `buildGroups` had run would draw the same wash over
+  // rows still claiming to count.
+  const ramp: DeckCategory = {
+    ...deckCategory("main"),
+    id: 10,
+    name: "Ramp",
+    sortOrder: 1,
+    isActive: switchedOff !== "Ramp",
+  };
+  const removal: DeckCategory = {
+    ...deckCategory("main"),
+    id: 11,
+    name: "Removal",
+    sortOrder: 2,
+    isActive: switchedOff !== "Removal",
+  };
 
   const inPile = (pile: DeckCategory, row: DeckCard): DeckCard => ({
     ...row,
@@ -502,18 +529,78 @@ export function release(version: string): ReleaseInfo {
   return {
     version,
     tag: `v${version}`,
-    // Plain text, as written — and the `###` below is the point of it. `UpdatePanel` shows a
-    // release body verbatim in a `<pre>`, because this app has no markdown renderer and
-    // half-rendered markdown reads worse than none.
-    notes:
-      "### Features\n" +
-      "* the deck editor takes a card from anywhere in the window\n" +
-      "* Settings, with the update panel you are reading\n\n" +
-      "### Bug Fixes\n" +
-      "* the wishlist counts a foil wish against foils only",
+    notes: notesFor(version),
     publishedAt: "2026-08-09T04:02:20Z",
     // `update::REPO`, which is where an install that cannot update itself is sent.
     htmlUrl: `https://github.com/Msgaihede/mtg-grimoire/releases/tag/v${version}`,
     assets,
   };
+}
+
+/**
+ * A release body in **release-please's own shape**, which is the only shape this app ever
+ * shows.
+ *
+ * Every element `src/lib/releaseNotes.ts` has a rule for is here on purpose, because a
+ * fixture that omitted one would let the renderer regress with every story still green:
+ *
+ * * the **version heading** each body opens with, which the reader is drawn under a row that
+ *   already says the version — so the parser drops it, and a fixture without one could not
+ *   show that;
+ * * the **commit trailer**, which is stripped;
+ * * a **repeated bullet**, differing only by SHA, which is what the panel's bug report was
+ *   actually about — one message landed on two branches, and release-please writes both;
+ * * `**scope:**` bold, inline code, and one real link, which survive.
+ */
+function notesFor(version: string): string {
+  const commit = (sha: string) =>
+    `([${sha}](https://github.com/Msgaihede/mtg-grimoire/commit/${sha}0e4c3f8d6b2a19e0f7c4d3b8a5))`;
+  return [
+    `## [${version}](https://github.com/Msgaihede/mtg-grimoire/compare/v0.2.0...v${version}) (2026-08-09)`,
+    "",
+    "### Features",
+    "",
+    `* **decks:** take a card from anywhere in the window ${commit("23d15d5")}`,
+    `* **settings:** the update panel you are reading ${commit("4aeff6b")}`,
+    `* **settings:** the update panel you are reading ${commit("be1a54a")}`,
+    "",
+    "### Bug Fixes",
+    "",
+    `* **wishlist:** count a foil wish against foils only ${commit("c13073e")}`,
+    `* **sync:** read \`oracle_tags\` weekly, not daily — [the research](https://github.com/Msgaihede/mtg-grimoire/blob/main/docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md) ${commit("bf9ca58")}`,
+  ].join("\n");
+}
+
+/**
+ * The versions behind {@link CURRENT_VERSION}, newest first — one page of `/releases`.
+ *
+ * Four rather than thirty (`update::HISTORY_PER_PAGE`): the list is a scroller either way,
+ * and a fixture's job is to show the shape rather than to reach the cap. The **last** one
+ * carries an empty body, which is a real thing a release can publish and the one state
+ * `ReleaseNotes` has a sentence of its own for.
+ */
+const PAST_VERSIONS = ["0.2.0", "0.1.1", "0.1.0"];
+
+/**
+ * `update_history`'s answer: every release the last check saw, newest first.
+ *
+ * Built from {@link release} rather than written out, so a history entry and the release the
+ * panel offers cannot disagree about what a release body looks like — the same argument that
+ * keeps `db.ts` and `UpdatePanel.stories.tsx` on one `release()`.
+ *
+ * It **includes the running version and the one on offer**, because the real one does: Rust
+ * caches the whole page and concludes nothing about which entries the reader has passed.
+ */
+export function releaseHistory(): ReleaseNote[] {
+  const note = (version: string, publishedAt: string, notes?: string): ReleaseNote => {
+    const { tag, htmlUrl } = release(version);
+    return { version, tag, notes: notes ?? notesFor(version), publishedAt, htmlUrl };
+  };
+  return [
+    note(NEXT_VERSION, "2026-08-09T04:02:20Z"),
+    note(CURRENT_VERSION, "2026-08-04T09:15:00Z"),
+    note(PAST_VERSIONS[0], "2026-07-28T18:40:00Z"),
+    note(PAST_VERSIONS[1], "2026-07-21T11:05:00Z"),
+    note(PAST_VERSIONS[2], "2026-07-14T08:00:00Z", ""),
+  ];
 }

@@ -98,6 +98,13 @@ export function QuantityStepper({
    * reads as a chip at `rounded-md` and as a button at `rounded-lg`, and this is the one place
    * the reader has to tell those apart on top of art. `rounded-lg` did not double with the box:
    * 8px on 48px still reads as a button, and 16px would read as a pill.
+   *
+   * **Both of those figures are now sizes at 100% zoom, and neither is what the app draws at
+   * rest.** `xs` and `card` are the two sizes drawn on a card face, so they follow the reader's
+   * zoom through `--control-scale` and are reduced by `CONTROL_SHRINK` (85%) for being on one —
+   * `card` rests at ~41px and reaches 24 and 82 at the ends of the ladder. The 48 and the 24 it
+   * replaced are still the argument for the *ratio*; what changed is that the ratio is now held
+   * against a card whose size the reader chooses. See the `box` map below and `lib/cardZoom.ts`.
    */
   size?: "xs" | "card" | "sm" | "md";
   /** Which side of the control's own edge the focus outline is drawn on. `inset` for a stepper
@@ -117,29 +124,55 @@ export function QuantityStepper({
   tone?: "panel" | "art";
 }) {
   const vertical = orientation === "vertical";
-  // `rounded-lg` rides along with `card` and wins over `BUTTON`'s own `rounded-md` because
-  // tailwind-merge keeps the last of two conflicting radii and this is passed after it.
+  /**
+   * **`xs` and `card` are the two sizes drawn on a card face, and they are the two that scale.**
+   *
+   * Every number in them is the size at 100% zoom, multiplied by `--control-scale` — the card's own
+   * factor, set by whichever tile the control is drawn in (`lib/cardZoom.ts`). It is a *second*
+   * variable rather than `--mark-scale` for two reasons, and both are visible here: a control on a
+   * card is drawn a little smaller than its panel twin (`CONTROL_SHRINK`), and `xs` is **also** the
+   * size the deck's table and text views draw in their rows — where no card is being zoomed, the
+   * `, 1` fallback applies, and those rows are left at exactly the 20px they have always been.
+   * `sm` and `md` are panel and dialog sizes and take no part in any of it.
+   *
+   * `rounded-lg` rides along with `card` and wins over `BUTTON`'s own `rounded-md` because
+   * tailwind-merge keeps the last of two conflicting radii and this is passed after it. It does not
+   * scale: 8px is what separates "a button" from "a chip" at the sizes this box actually reaches,
+   * and the doc on {@link size} carries why that reading is the thing being protected.
+   */
   const box =
     size === "xs"
-      ? "size-5"
+      ? "size-[calc(1.25rem*var(--control-scale,1))]"
       : size === "card"
-        ? "size-12 rounded-lg"
+        ? "size-[calc(3rem*var(--control-scale,1))] rounded-lg"
         : size === "sm"
           ? "size-7"
           : "size-9";
   const text =
     size === "xs"
-      ? "text-[0.625rem]"
+      ? "text-[calc(0.625rem*var(--control-scale,1))]"
       : size === "card"
-        ? "text-[1.375rem]"
+        ? "text-[calc(1.375rem*var(--control-scale,1))]"
         : size === "sm"
           ? "text-xs"
           : "text-sm";
-  const wide = size === "xs" ? "h-5 w-8" : size === "sm" ? "h-7 w-12" : "h-9 w-14";
+  const wide =
+    size === "xs"
+      ? "h-[calc(1.25rem*var(--control-scale,1))] w-[calc(2rem*var(--control-scale,1))]"
+      : size === "sm"
+        ? "h-7 w-12"
+        : "h-9 w-14";
   const field = cn(vertical ? box : wide, text);
   // The glyph is a fixed fraction of its button — 14/24 at `card`, doubled with the box, so a
-  // 48px button is not a 14px sign in the middle of an empty square.
-  const icon = size === "xs" ? "size-3" : size === "card" ? "size-7" : "size-3.5";
+  // 48px button is not a 14px sign in the middle of an empty square. That fraction is what makes
+  // the two card sizes scale here too: a glyph left at 12px inside a box the zoom halved is a
+  // sign wider than the button holding it.
+  const icon =
+    size === "xs"
+      ? "size-[calc(0.75rem*var(--control-scale,1))]"
+      : size === "card"
+        ? "size-[calc(1.75rem*var(--control-scale,1))]"
+        : "size-3.5";
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);
   const clamp = (n: number) => Math.min(max, Math.max(min, n));
@@ -247,7 +280,15 @@ export function QuantityStepper({
   // Increase first when the column stands on end, because up is more. Horizontally the
   // number keeps the middle, where `−` and `+` bracket it the way every stepper does.
   return (
-    <span className={cn("inline-flex items-center gap-1", vertical && "flex-col")}>
+    // The gutter between the three controls scales with them, and does so at every size: outside a
+    // card `--control-scale` is unset and the `, 1` fallback is the 4px it has always been, so this
+    // one expression serves the two card sizes and the two panel ones without a branch.
+    <span
+      className={cn(
+        "inline-flex items-center gap-[calc(0.25rem*var(--control-scale,1))]",
+        vertical && "flex-col",
+      )}
+    >
       {vertical ? (
         <>
           {increase}
