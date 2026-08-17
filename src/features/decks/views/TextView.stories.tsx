@@ -180,6 +180,57 @@ export const Rail: Story = {
   },
 };
 
+/**
+ * A pile the reader switched off, drawn in the rail **under** the Sideboard and the Maybeboard —
+ * `StackView`'s change of 2026-08-17 arriving here, because both views split their groups through
+ * the same `splitRail`.
+ *
+ * `is_active = 0` is the whole of what `maybe` ever meant: the pile counts toward nothing — not
+ * size, not copy limits, not legality — so it is not part of the deck being written down, and a
+ * packed column spent on it was a column spent on cards the reader had already said were out.
+ * `Removal` here is the pile they switched off, and the pack is handed the two that are left.
+ *
+ * **The order is what to read.** Sideboard, Maybeboard, then Removal — even though Removal's
+ * `sortOrder` is 2 and the Maybeboard's is 4. The kind is tested before the switch, so the two
+ * piles played beside the deck head the rail whatever their own switches say; test it the other way
+ * round and the Maybeboard, which is seeded off, would sink under whatever the reader turned off
+ * most recently.
+ *
+ * **Two dimmed piles, and neither costs this view a line.** The Maybeboard and Removal are dimmed
+ * by the group rather than by the rail — a group in here is the same `TextGroup` as one in the
+ * flow — which is also why there is no divider above the switched-off run: the pile heading the
+ * rail is switched off too, so a rule under it would mark a boundary that is not the one it looks
+ * like.
+ */
+export const SwitchedOffPile: Story = {
+  args: { groups: deckGroups("category", "alphabetical", false, "Removal") },
+  decorators: [
+    // {@link Rail}'s desk, for its reason.
+    (Story) => (
+      <div className="flex w-[52rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${RAIL_ATTR}]`);
+    expect([...rail.querySelectorAll('[id^="text-group-"]')].map((h) => h.textContent)).toEqual([
+      "Sideboard",
+      "Maybeboard",
+      "Removal",
+    ]);
+    // The flow is what is left, and the gap Removal left closed up rather than being held open.
+    const flow = rail.previousElementSibling as HTMLElement;
+    expect([...flow.querySelectorAll('[id^="text-group-"]')].map((h) => h.textContent)).toEqual([
+      "Commander",
+      "Ramp",
+    ]);
+    // Both switched-off piles wear the chip, and both are in the rail: it travels with the group,
+    // so a rail holding a lighter definition of a pile would lose them.
+    expect(within(rail).getAllByText("INACTIVE")).toHaveLength(2);
+  },
+};
+
 /** Grouped by mana value: the curve from the active cards, with the switched-off pile appended
  *  as itself — and, being `kind: "maybe"`, drawn in the rail rather than at the tail of the
  *  curve. The Sideboard is not here at all: it is empty *and* switched on, so a derived grouping

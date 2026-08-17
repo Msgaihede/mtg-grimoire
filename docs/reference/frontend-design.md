@@ -471,7 +471,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   on the first pass and the figure above needed a card moved into it first. The wash and
   `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
   the argument for having three.
-- **The sideboard and the maybeboard are a rail, not part of the flow — and the rail is a plain
+- **The sideboard, the maybeboard and every switched-off pile are a rail, not part of the flow —
+  and the rail is a plain
   flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
   before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
   it, at the same inline width and `flex` basis. **Nothing positions that box** — since 2026-08-17
@@ -490,7 +491,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   sweep that counts the deck's own piles must not find them; the name is unprefixed because
   `TextView` draws the same rail, and it
   is spelled for the _rail_ rather than for the Sideboard because the Sideboard is no longer the
-  only thing in it. It is rendered only when a `side` **or** `maybe` group exists, which is a real
+  only thing in it. It is rendered only when a `side` group, a `maybe` group **or a switched-off
+  pile** exists, which is a real
   condition for a story or a test and **not** one for the app: `schema::PREDEFINED_CATEGORIES`
   seeds both into every deck, an empty category group is drawn for each (neither of them is one of
   the two conditional zones, and the seed writes both `origin: 'user'` — see `grouping.ts`'s
@@ -502,6 +504,21 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   is the wrap in the entry further down. **Those widths are unchanged by the Maybeboard joining**:
   the two piles share one rail one column wide, so the second costs height and nothing else, and
   the height is the one thing here that has not been driven in the window.
+- **The switch is `splitRail`'s second test, and the kind is tested first** (added 2026-08-17).
+  Every pile the reader has switched off joins the rail underneath the two played beside the deck;
+  switching one back on returns it to the flow at its own `sortOrder`, because the split is derived
+  on every render and nothing records where a pile was drawn last. `is_active = 0` means the pile
+  counts toward nothing — not size, not copy limits, not legality — so it is not part of the deck
+  being laid out, and a column of desk spent on it was a column spent on cards the reader had said
+  were out. **Testing the kind first is what keeps the rail's head still**: the Maybeboard is seeded
+  switched off, so a switch-first split would sink it under whatever the reader turned off last.
+  **It cost neither view a line of drawing code and it draws no divider** — a switched-off pile
+  already carries the section wash, the dimmed heading, the `INACTIVE` chip and the stack's
+  `opacity-60`, and the pile heading the rail is switched off too, so a rule under it would mark a
+  boundary that is not the one it looks like. The width is unchanged for the Maybeboard's reason:
+  the rail is one column wide however many piles are in it, and each one costs height. **Nothing
+  here has been driven in the shipped window**; the arithmetic is `columns.test.ts`, the placement
+  `views.test.tsx` in both views, and the picture the `SwitchedOffPile` story in each of them.
 - **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
   shipped window.** Against `.storybook/fake`, reading each group's accessible name off
   `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no

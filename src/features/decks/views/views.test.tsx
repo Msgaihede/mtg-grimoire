@@ -1231,13 +1231,17 @@ describe("StackView flow", () => {
    *
    * **Both kinds, because for the Maybeboard this is the ordinary case rather than the corner
    * one.** A sideboard is switched off by a reader who chose to; the Maybeboard is seeded off, so
-   * under a derived grouping it arrives by this route almost every time. If the split ever grew an
-   * `isActive` check the Sideboard would lose the rail only for readers who had turned it off, and
-   * the Maybeboard would lose it for everybody.
+   * under a derived grouping it arrives by this route almost every time.
    *
-   * Without this, `StackView` could grow a `groupBy` check — or a `group.isActive` one — and
-   * every assertion in this file would stay green while a reader who switched their sideboard
-   * off and grouped by curve lost the rail.
+   * **Both reach the rail by the _kind_ test and not by the switch**, which is why this pair is
+   * still worth its own case now that a switched-off pile is railed anyway (2026-08-17). The two
+   * tests would agree about these two groups whichever ran first, so the assertion cannot tell
+   * them apart — what it can still tell is that the split has not learned about `groupBy`. The
+   * ordering of the two tests is asserted where it can fail: the case below, where the reader's own
+   * switched-off pile lands under a Maybeboard that is switched off too.
+   *
+   * Without this, `StackView` could grow a `groupBy` check and every assertion in this file would
+   * stay green while a reader who switched their sideboard off and grouped by curve lost the rail.
    */
   it.each([
     { kind: "side", name: "Sideboard", id: 2, sortOrder: 2, cardName: "Blood Moon" },
@@ -1503,6 +1507,86 @@ describe.each(COLUMN_VIEWS)(
     });
 
     /**
+     * **A pile the reader switched off is drawn in the rail, under the Sideboard and the
+     * Maybeboard** — the change of 2026-08-17, in both views.
+     *
+     * `is_active = 0` is the whole of what `maybe` ever meant: the pile counts toward nothing —
+     * not size, not copies, not legality — so it is not part of the deck being laid out, and a
+     * column of the desk spent on it was a column spent on cards the reader had already said were
+     * out. The unit half of this is `columns.test.ts`; what only a render can say is that the pile
+     * arrives in the rail's own box, with its heading and its cards, rather than being dropped
+     * somewhere between the two.
+     *
+     * **The order is the assertion that can fail.** `Draw` is `sortOrder` 3, ahead of the
+     * Maybeboard's 4, and it comes out **last** — so `splitRail` really does test the kind before
+     * the switch, and the rail's head stays the two beside-the-deck piles whatever their own
+     * switches say. That matters in the ordinary case rather than a corner: the Maybeboard is
+     * seeded off, so a switch-first split would sink the rail's fixed head under whatever the
+     * reader turned off most recently. Swap those two tests and this is the only thing in the suite
+     * that goes red — every other assertion here answers the same set of headings either way.
+     *
+     * The card is asserted present as well: "Draw is not in the flow" is equally true of a view
+     * that dropped the pile on the floor, and seeing what is in a pile is the whole affordance for
+     * deciding to switch it back on.
+     */
+    it("rails a pile the reader switched off, under the two played beside the deck", () => {
+      const off = { ...DRAW, isActive: false };
+      draw(
+        buildGroups(
+          [
+            card({ name: "Sol Ring" }),
+            card({
+              name: "Rhystic Study",
+              categoryId: off.id,
+              categoryName: off.name,
+              categoryActive: false,
+            }),
+            card({ name: "Rest in Peace", categoryKind: "side" }),
+          ],
+          [RAMP, SIDE, off, MAYBE],
+          "category",
+          "alphabetical",
+        ),
+      );
+
+      expect(headingsIn(flow())).toEqual(["Ramp"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard", "Draw"]);
+      expect(within(rail()!).getByText(/Rhystic Study/)).toBeInTheDocument();
+    });
+
+    /**
+     * **Switching it back on returns it to the flow, in its own place in it.**
+     *
+     * The second half of what the change is for, and the half with nothing behind it: the split is
+     * derived per render, so there is no state to restore and no journey to reverse. Asserted
+     * anyway, because "it comes back" is the promise — and a later edit that cached the rail's
+     * contents, to save re-splitting on every render, would break exactly this and nothing else.
+     *
+     * **`Draw` returns _between_ Ramp and Removal rather than at either end**, which is the part a
+     * cache or a `useState` would get wrong even while it got the membership right. `sortOrder` is
+     * the reader's own arrangement, and the flow is in it.
+     */
+    it("returns a switched-off pile to the flow when it is switched back on", () => {
+      const REMOVAL = category({ id: 7, name: "Removal", kind: "main", sortOrder: 5 });
+      const desk = (isActive: boolean) =>
+        buildGroups(
+          [card({ name: "Sol Ring" }), card({ name: "Rest in Peace", categoryKind: "side" })],
+          [RAMP, SIDE, { ...DRAW, isActive }, MAYBE, REMOVAL],
+          "category",
+          "alphabetical",
+        );
+
+      draw(desk(false));
+      expect(headingsIn(flow())).toEqual(["Ramp", "Removal"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard", "Draw"]);
+      cleanup();
+
+      draw(desk(true));
+      expect(headingsIn(flow())).toEqual(["Ramp", "Draw", "Removal"]);
+      expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
+    });
+
+    /**
      * **The rail is exactly one column wide, inline, in both halves of the `flex` shorthand.**
      *
      * Asserted first against the first box beside it — one number read twice out of the DOM, which
@@ -1585,11 +1669,16 @@ describe.each(COLUMN_VIEWS)(
      *
      * **It is also what protects every column count in this file.** The `StackView columns` block
      * packs decks of ordinary categories, and each of those counts would quietly move the day the
-     * split fired on something wider than `side` and `maybe` — `isPredefined`, say, or a name a
-     * reader typed — failing as arithmetic inside `packColumns`, a long way from the change that
-     * caused it. This says the real thing once, so that failure has somewhere to point. The two
-     * kinds it asserts *do not* rail are exactly the two `splitRail`'s doc gives a reason for
-     * leaving in the flow: a commander and a companion are one card each.
+     * split fired on something wider than it should — `isPredefined`, say, or a name a reader typed
+     * — failing as arithmetic inside `packColumns`, a long way from the change that caused it. This
+     * says the real thing once, so that failure has somewhere to point.
+     *
+     * **Every category here is switched on, and that is now part of the fixture rather than an
+     * accident of it** (2026-08-17). The switch is the split's second test, so a deck with a pile
+     * turned off has a rail; "nothing played beside it" means every pile counts and none of the
+     * three kinds present is `side` or `maybe`. The two kinds it asserts *do not* rail are exactly
+     * the two `splitRail`'s doc gives a reason for leaving in the flow — a commander and a
+     * companion are one card each — and that exemption holds only while they are on.
      */
     it("draws no rail when nothing in the deck is played beside it", () => {
       draw(
