@@ -1049,6 +1049,22 @@ price | type`). An **inactive category stays its own group in all three grouping
   which. `overflow-x-auto` survives on all three for the one case the wrapping bullets below
   reserve, and costs nothing: it implies `overflow-y: auto`, which can never find anything to
   scroll in a box with no height of its own.
+  **It did cost one thing, and it took until 2026-08-17 to name it: the drop ring, sliced off at
+  the edge of the desk.** An `overflow` clips at the box's **padding box**, and all three of these
+  roots had no padding — so a pile flush against the content edge had its `DROP_RING` painted
+  entirely in the clipped region and lost that side for the whole length of a drag. The leftmost
+  pile in Stacks and the rail on the right were the reader's own report; the first line of Text and
+  every group in Grid (a group there is as wide as the desk, so it lost the ring down **both**
+  sides) are the same defect. The fix is `DROP_MARK_ROOM` from `src/lib/dropMarks.ts` — `p-1.5`, on
+  all three roots — and **6px rather than the ring's 2**, because the same sections carry `FOCUS`,
+  which stands 4px proud, and a focus mark clipped to half its width is a WCAG 2.4.7 failure rather
+  than a cosmetic one. `pb-2` still wins Stacks' bottom edge: Tailwind emits the `padding`
+  shorthand before the `padding-bottom` longhand (`.p-1\.5` at 29 557 against `.pb-2` at 31 795 in
+  the built sheet), whatever order the two classes are written in. **`TableView` needs none of it**
+  — its rows are absolutely positioned inside a virtualiser, so it draws `ring-inset` and always
+  has. Photographed before and after against the built stylesheet; the sweep that keeps it is
+  `views.test.tsx`'s `leaves its drop marks room inside the box that clips them`, written as a
+  class assertion because **jsdom has no layout engine and therefore no clip at all**.
   **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
   `VirtualTable` mounts the rows in view and holds a spacer open for the rest; a scrollport is
   what it _is_, and given no height it draws its own scrollbar **and** the page's. So the desk row

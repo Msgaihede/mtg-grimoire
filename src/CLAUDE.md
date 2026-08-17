@@ -262,6 +262,20 @@ Every one of these has its measurement and its story in
   fix — `relative` on `main` instead moved the phantom scroll into `main` (`scrollHeight`
   742 → 1646) rather than removing it. Both figures, and the four-view scrollbar count after:
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **A scroller has to leave room for the marks its own targets draw _outside_ their border box,
+  because `overflow` clips at the scroller's padding box.** A ring is a box shadow and a focus
+  outline is painted outside the border box, so neither is part of the box that laid the target
+  out — a target flush against the scroller's content edge simply loses that side of its mark, and
+  nothing in the box tree is wrong. It shipped in the deck builder: the three grow-views are
+  `overflow-x-auto` with no padding, so the leftmost pile lost the left 2px of its `DROP_RING` for
+  the whole length of a drag and the rail lost its right. `DROP_MARK_ROOM` in
+  `src/lib/dropMarks.ts` is the padding, and it is **6px rather than 2** because the same boxes
+  carry `FOCUS` — `outline-2 outline-offset-2`, 4px proud — and half a focus indicator is a WCAG
+  2.4.7 failure. It goes on the box carrying the `overflow`; one level in is not the same fix,
+  since the ring is then drawn outside _that_ child and lands back on the clip. The alternative is
+  `ring-inset`, which is what `TableView` draws for rows absolutely positioned inside a
+  virtualiser. **jsdom has no layout engine and therefore no clip**, so nothing here is visible to
+  the suite — `views.test.tsx` sweeps the class instead.
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against

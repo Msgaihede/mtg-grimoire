@@ -5,7 +5,7 @@
  * this deck" rather than "what does this card do". No art at all — a line is a quantity, a
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -144,9 +144,15 @@ export function TextView({
     // a box taller than both, and `align-content`'s initial `normal` is a **stretch** that shares
     // the leftover height out between them, hanging the rail in the middle of the desk under a
     // short list. `items-start` aligns an item inside its line and can say nothing about this.
+    //
+    // {@link DROP_MARK_ROOM} for `StackView`'s reason — this box clips at its padding box, so with
+    // none the first column's group rings and the rail's were sliced down the edge for the length
+    // of every drag. It is the one of the three that had it on both axes at once: a wrapping box
+    // with no height of its own puts the first line's groups against the top content edge too.
     <div
       className={cn(
         "flex min-w-0 flex-1 flex-wrap content-start items-start gap-6 overflow-x-auto",
+        DROP_MARK_ROOM,
         className,
       )}
     >
