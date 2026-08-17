@@ -271,6 +271,32 @@ describe("copy limits", () => {
   });
 
   /**
+   * **A foil copy and a regular copy of one card are two copies of one card**, and this pins a
+   * rule that deliberately did *not* change when schema v18 split them into two rows.
+   *
+   * Copies are counted by card **name** and summed across rows, so the split is invisible here
+   * — which is right, because the rules have never heard of a finish. It needs a test all the
+   * same: "the finish split the copy count" is the first thing anybody will suspect the day a
+   * four-of validation reads wrong, and nothing else in this file would notice.
+   */
+  it("counts a foil copy and a regular copy as copies of one card", () => {
+    const deck = padTo(100, [
+      commander(),
+      card({ name: "Sol Ring", finish: "foil", quantity: 1 }),
+      card({ name: "Sol Ring", quantity: 1 }),
+    ]);
+
+    expect(validateDeck(deck, spec("commander"))).toEqual([
+      {
+        severity: "error",
+        code: "singleton",
+        message: "Commander decks are singleton: max 1 copy of Sol Ring; you have 2.",
+        cardIds: ["c-Sol Ring"],
+      },
+    ]);
+  });
+
+  /**
    * The commander is one of the 100 (CR 903.5a), and CR 903.5b's different-name rule is
    * about the deck those 100 cards are — so a card in the command zone and the same card
    * in the main deck is two copies of it, a state the category model allows because

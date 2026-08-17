@@ -328,13 +328,14 @@ describe("ipc argument names match the Rust command signatures", () => {
   it("addresses every card write by deck, card and category, and the wishlist push by `deckId`", async () => {
     invoke.mockResolvedValue({ id: 9, quantity: 4, removed: false });
 
-    await ipc.deckAddCard(4, "p1", 7, null, "live", 4);
+    await ipc.deckAddCard(4, "p1", 7, null, "live", null, 4);
     expect(invoke).toHaveBeenCalledWith("deck_add_card", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       categoryName: null,
       variant: "live",
+      finish: null,
       quantity: 4,
     });
 
@@ -343,22 +344,24 @@ describe("ipc argument names match the Rust command signatures", () => {
     // found-or-created. **Both keys travel either way** — the unused one as an explicit
     // `null`, because Tauri fills parameters by name and an absent key is a refusal rather
     // than a default.
-    await ipc.deckAddCard(4, "p1", null, "Main deck", "live", 1);
+    await ipc.deckAddCard(4, "p1", null, "Main deck", "live", null, 1);
     expect(invoke).toHaveBeenCalledWith("deck_add_card", {
       deckId: 4,
       cardId: "p1",
       categoryId: null,
       categoryName: "Main deck",
       variant: "live",
+      finish: null,
       quantity: 1,
     });
 
-    await ipc.deckSetCardQuantity(4, "p1", 7, "live", 0);
+    await ipc.deckSetCardQuantity(4, "p1", 7, "live", null, 0);
     expect(invoke).toHaveBeenCalledWith("deck_set_card_quantity", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
+      finish: null,
       quantity: 0,
     });
 
@@ -366,7 +369,7 @@ describe("ipc argument names match the Rust command signatures", () => {
     // the way its siblings do — and `from`/`to` alone, which is what the zones took, would
     // deserialize into neither parameter.
     invoke.mockResolvedValue(2);
-    await ipc.deckMoveCard(4, "p1", 9, 2, null, "live");
+    await ipc.deckMoveCard(4, "p1", 9, 2, null, "live", null);
     expect(invoke).toHaveBeenCalledWith("deck_move_card", {
       deckId: 4,
       cardId: "p1",
@@ -374,6 +377,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       toCategoryId: 2,
       toCategoryName: null,
       variant: "live",
+      finish: null,
     });
 
     // The **name** arm — the quick zones' `Auto`, where the pile is `autoCategoryFor`'s answer
@@ -382,7 +386,7 @@ describe("ipc argument names match the Rust command signatures", () => {
     // right one. It answers the category the copies are now in, which is the only way this
     // caller learns what was found or made.
     invoke.mockResolvedValue(31);
-    expect(await ipc.deckMoveCard(4, "p1", 9, null, "Removal", "live")).toBe(31);
+    expect(await ipc.deckMoveCard(4, "p1", 9, null, "Removal", "live", null)).toBe(31);
     expect(invoke).toHaveBeenCalledWith("deck_move_card", {
       deckId: 4,
       cardId: "p1",
@@ -390,6 +394,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       toCategoryId: null,
       toCategoryName: "Removal",
       variant: "live",
+      finish: null,
     });
 
     // The one card write that names **two** cards, so it spells neither of them `cardId` the
@@ -397,13 +402,14 @@ describe("ipc argument names match the Rust command signatures", () => {
     // The answer is read back too: `folded` is the server's arithmetic, and a mirror typed
     // `void` would throw away the one thing the UI has to say about a swap.
     invoke.mockResolvedValue({ folded: true, quantity: 5 });
-    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", 7, "live");
+    const swapped = await ipc.deckSwapPrinting(4, "p1", "p2", 7, "live", null);
     expect(invoke).toHaveBeenCalledWith("deck_swap_printing", {
       deckId: 4,
       fromCardId: "p1",
       toCardId: "p2",
       categoryId: 7,
       variant: "live",
+      finish: null,
     });
     expect(swapped).toEqual({ folded: true, quantity: 5 });
 
@@ -563,23 +569,25 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(palette).toEqual([{ name: "Cut candidate", color: "ember" }]);
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckCardSetTag(4, "p1", 7, "live", 3);
+    await ipc.deckCardSetTag(4, "p1", 7, "live", null, 3);
     expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
+      finish: null,
       tagId: 3,
     });
 
     // Untagging is the same command with `null`, not a second one — `deck_cards.tag_id` is a
     // nullable column and clearing it is a write to it.
-    await ipc.deckCardSetTag(4, "p1", 7, "live", null);
+    await ipc.deckCardSetTag(4, "p1", 7, "live", null, null);
     expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
+      finish: null,
       tagId: null,
     });
   });

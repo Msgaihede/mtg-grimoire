@@ -1153,7 +1153,7 @@ describe("DeckEditor", () => {
     await open();
     await userEvent.click(screen.getByRole("button", { name: `Decrease ${COPIES}` }));
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 0);
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument(),
     );
@@ -1176,7 +1176,8 @@ describe("DeckEditor", () => {
     await userEvent.click(up);
     await userEvent.click(up);
 
-    expect(deckSetCardQuantity.mock.calls.map((c) => c[4])).toEqual([5, 6, 7]);
+    // `c[5]` is the quantity: `finish` joined the address at `c[4]` in schema v18.
+    expect(deckSetCardQuantity.mock.calls.map((c) => c[5])).toEqual([5, 6, 7]);
   });
 
   /**
@@ -1478,6 +1479,9 @@ describe("DeckEditor", () => {
       categoryName: "Main deck",
       cardId: "c-Lightning Bolt",
       variant: "live",
+      // The fifth part of the slot: the pane's swap and its foil button both write to one of
+      // the two rows a pile can hold of this printing.
+      finish: null,
     });
   });
 
@@ -1675,7 +1679,7 @@ describe("DeckEditor", () => {
     await userEvent.type(screen.getByLabelText("Quick add a card"), "goblin guide{Enter}");
 
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", null, 1),
     );
     // Cleared on a hit, because the next action is the next card.
     expect(screen.getByLabelText("Quick add a card")).toHaveValue("");
@@ -1706,7 +1710,7 @@ describe("DeckEditor", () => {
     );
 
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", SIDE, null, "live", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", SIDE, null, "live", null, 1),
     );
   });
 
@@ -1885,7 +1889,7 @@ describe("DeckEditor", () => {
       await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     );
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", null, 1);
   });
 
   /** Every category the deck has, in the order the groups are drawn — one list, one source —
@@ -2625,7 +2629,13 @@ describe("DeckEditor", () => {
     // here even though `ImportItem` makes it so.
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "theory", "merge", [
-        { cardId: "sol-ring", quantity: 1, categoryName: "Artifact", inactive: false },
+        {
+          cardId: "sol-ring",
+          quantity: 1,
+          finish: null,
+          categoryName: "Artifact",
+          inactive: false,
+        },
       ]),
     );
   });
@@ -3116,7 +3126,7 @@ describe("DeckEditor drag and drop", () => {
 
     await dragOnto(await tile(), group("Main deck"));
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", null, 1);
     expect(deckUpdate).not.toHaveBeenCalled();
   });
 
@@ -3132,7 +3142,7 @@ describe("DeckEditor drag and drop", () => {
     await dragOnto(card_("Lightning Bolt"), group("Sideboard"));
 
     await waitFor(() =>
-      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live"),
+      expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live", null),
     );
     await waitFor(() => expect(group("Sideboard")).toHaveFocus());
   });
@@ -3151,7 +3161,7 @@ describe("DeckEditor drag and drop", () => {
     expect(screen.getByText("Remove Lightning Bolt from deck")).toBeInTheDocument();
     await held.drop();
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 0);
     await waitFor(() => expect(screen.queryByText(/remove/i)).not.toBeInTheDocument());
   });
 
@@ -3241,6 +3251,7 @@ describe("DeckEditor drag and drop", () => {
           null,
           expect.any(String),
           "live",
+          null,
           1,
         ),
       );
@@ -3256,7 +3267,7 @@ describe("DeckEditor drag and drop", () => {
       await held.drop();
 
       await waitFor(() =>
-        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live"),
+        expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live", null),
       );
     });
 
@@ -3287,8 +3298,7 @@ describe("DeckEditor drag and drop", () => {
           MAIN,
           null,
           "Removal",
-          "live",
-        ),
+          "live", null),
       );
     });
 
@@ -3342,7 +3352,7 @@ describe("DeckEditor drag and drop", () => {
       await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Removal"));
       // The id the create answered with, not the name — the second write addresses a row.
       await waitFor(() =>
-        expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", 9, null, "live", 1),
+        expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", 9, null, "live", null, 1),
       );
       await waitFor(() =>
         expect(screen.queryByRole("dialog", { name: "New category" })).not.toBeInTheDocument(),
@@ -3564,7 +3574,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Remove card" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 0);
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 0);
     await waitFor(() =>
       expect(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)).toHaveFocus(),
     );
@@ -3599,8 +3609,7 @@ describe("DeckEditor — a card's menu", () => {
       MAIN,
       RECURSION.id,
       null,
-      "live",
-    );
+      "live", null);
   });
 
   /**
@@ -3627,8 +3636,7 @@ describe("DeckEditor — a card's menu", () => {
       MAIN,
       RECURSION.id,
       null,
-      "live",
-    );
+      "live", null);
   });
 
   /**
@@ -3730,8 +3738,7 @@ describe("DeckEditor — a card's menu", () => {
       MAIN,
       CATEGORIES[2].id,
       null,
-      "live",
-    );
+      "live", null);
   });
 
   /** A deck card wears at most one tag, so the rows are radios and the card's own is ticked. */
@@ -3762,7 +3769,7 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Tag card/);
     await userEvent.click(await screen.findByRole("menuitemradio", { name: "Budget swap" }));
 
-    expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 8);
+    expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8);
   });
 
   /**
@@ -3790,7 +3797,7 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() => expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "gold"));
     // …and the chain's second half runs with the panel long gone.
     await waitFor(() =>
-      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
     );
   });
 
@@ -3824,7 +3831,7 @@ describe("DeckEditor — a card's menu", () => {
     landed({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
 
     await waitFor(() =>
-      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", 12),
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
     );
   });
 

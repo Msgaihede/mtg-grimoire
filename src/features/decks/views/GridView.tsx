@@ -9,7 +9,7 @@ import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
 import { cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
-import { soleFinish } from "@/lib/finish";
+import { playedFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Currency, Marketplace } from "@/lib/marketplace";
@@ -392,7 +392,7 @@ function GridCard({
             name={card.name}
             // The whole card, the same `grid` variant the stack draws.
             variant={DECK_CARD_VARIANT}
-            finish={soleFinish(card.finishes)}
+            finish={playedFinish(card.finish, card.finishes)}
             // The crown, in the same chip as the finish and in the same corner the search wall
             // puts it — which is why this view no longer draws `GameChangerBadge`'s `GC`. The
             // two abbreviations of one fact are still right where there is no room for a glyph

@@ -305,6 +305,9 @@ function deckCard(
     setCode: card.setCode,
     collectorNumber: card.collectorNumber,
     lang: card.lang,
+    // The regular copy. A seed that wanted a foil row would have to pick a printing whose
+    // `finishes` lists one, or the finish menu greys on the very card it seeded.
+    finish: null,
     needsReview: null,
     ...over,
   };
@@ -638,7 +641,18 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
     // --- deck 1: 20 lands + 40 spells --------------------------------------------------
     main(1, printing("unf", "239"), 10),
     main(1, printing("lea", "288"), 6),
-    main(1, printing("mh2", "259"), 4),
+    // **The one seeded foil row**, and it is deliberately *beside* three regular copies of the
+    // same printing: `deck_cards.finish` is part of the grain, so this is what a pile holding a
+    // printing twice looks like — and it is the state every foil story needs and no story can
+    // build for itself, since a seed is the world.
+    //
+    // Urza's Saga because MH2 printed one (`finishes: '["nonfoil","foil"]'` in the corpus), and
+    // the finish menu greys on a printing sold in one — a foil row seeded on a nonfoil-only
+    // card would draw the sheen over a control that refuses to change it.
+    deckCard(next(), 1, printing("mh2", "259"), categoryOf(categories, 1, "main"), 1, {
+      finish: "foil",
+    }),
+    main(1, printing("mh2", "259"), 3),
     main(1, printing("2x2", "117"), 4),
     main(1, printing("mh2", "138"), 4),
     main(1, printing("fut", "153"), 4),

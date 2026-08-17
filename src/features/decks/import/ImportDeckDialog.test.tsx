@@ -254,25 +254,21 @@ async function piles(): Promise<[string, string][]> {
 }
 
 beforeEach(() => {
-  deckImportResolve
-    .mockReset()
-    .mockImplementation((lines: ImportResolveLine[]) =>
-      Promise.resolve(
-        lines.map((line, index) => ({
-          index,
-          matched: CARDS[line.name] ?? null,
-          hintMissed: false,
-        })),
-      ),
-    );
+  deckImportResolve.mockReset().mockImplementation((lines: ImportResolveLine[]) =>
+    Promise.resolve(
+      lines.map((line, index) => ({
+        index,
+        matched: CARDS[line.name] ?? null,
+        hintMissed: false,
+      })),
+    ),
+  );
   deckImportCommit.mockReset().mockResolvedValue(OUTCOME);
   deckImportReadFile.mockReset().mockResolvedValue("");
   deckCreate.mockReset().mockResolvedValue(MADE);
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckGet.mockReset().mockResolvedValue(DETAIL);
-  formatSpecs
-    .mockReset()
-    .mockResolvedValue([spec("commander"), spec("modern"), spec("casual")]);
+  formatSpecs.mockReset().mockResolvedValue([spec("commander"), spec("modern"), spec("casual")]);
   syncStatus.mockReset().mockResolvedValue(IDLE);
   // **No tags by default, and that is the app before its first taxonomy download** — a
   // supported way to run it, and the state every claim below about a type-line pile is made
@@ -335,9 +331,7 @@ describe("the import deck dialog", () => {
     await preview("1 Sol Ring (XYZ) 999");
 
     // Capitals, as a card prints a set code — `cards.set_code` holds it lowercase.
-    expect(
-      await screen.findByText("line 1 · Sol Ring — used LTC 285 instead"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("line 1 · Sol Ring — used LTC 285 instead")).toBeInTheDocument();
   });
 
   /**
@@ -412,9 +406,7 @@ describe("the import deck dialog", () => {
     wrap(<Harness target={INTO_DECK} />);
     await preview("1 Captain Sisay\n1 Sol Ring");
 
-    expect(
-      await screen.findByText("Captain Sisay goes in the command zone."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Captain Sisay goes in the command zone.")).toBeInTheDocument();
     expect(await piles()).toEqual([
       ["Commander", "1"],
       ["Artifact", "1"],
@@ -432,10 +424,28 @@ describe("the import deck dialog", () => {
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
         // `inactive` is on every item: this list said nothing about a switched-off pile, which
         // is what `false` says. Only an Archidekt `{noDeck}` bracket makes it `true`.
-        { cardId: SISAY.cardId, quantity: 1, categoryName: "Commander", inactive: false },
+        {
+          cardId: SISAY.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Commander",
+          inactive: false,
+        },
         // The one not picked keeps the pile its type line filed it in.
-        { cardId: KENRITH.cardId, quantity: 1, categoryName: "Creature", inactive: false },
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
+        {
+          cardId: KENRITH.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Creature",
+          inactive: false,
+        },
+        {
+          cardId: SOL_RING.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Artifact",
+          inactive: false,
+        },
       ] satisfies ImportItem[]),
     );
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(4, OUTCOME));
@@ -510,9 +520,27 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
-        { cardId: BOLT.cardId, quantity: 1, categoryName: "Instant", inactive: false },
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
-        { cardId: ELVES.cardId, quantity: 2, categoryName: "Creature", inactive: false },
+        {
+          cardId: BOLT.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Instant",
+          inactive: false,
+        },
+        {
+          cardId: SOL_RING.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Artifact",
+          inactive: false,
+        },
+        {
+          cardId: ELVES.cardId,
+          quantity: 2,
+          finish: null,
+          categoryName: "Creature",
+          inactive: false,
+        },
       ] satisfies ImportItem[]),
     );
   });
@@ -544,8 +572,20 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "merge", [
-        { cardId: SELVALA.cardId, quantity: 1, categoryName: "Commander", inactive: false },
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Ramp", inactive: false },
+        {
+          cardId: SELVALA.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Commander",
+          inactive: false,
+        },
+        {
+          cardId: SOL_RING.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Ramp",
+          inactive: false,
+        },
       ] satisfies ImportItem[]),
     );
   });
@@ -576,9 +616,27 @@ describe("the import deck dialog", () => {
     );
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(MADE.id, "live", "merge", [
-        { cardId: ELVES.cardId, quantity: 4, categoryName: "Creature", inactive: false },
-        { cardId: BOLT.cardId, quantity: 2, categoryName: "Instant", inactive: false },
-        { cardId: DURESS.cardId, quantity: 2, categoryName: "Sideboard", inactive: false },
+        {
+          cardId: ELVES.cardId,
+          quantity: 4,
+          finish: null,
+          categoryName: "Creature",
+          inactive: false,
+        },
+        {
+          cardId: BOLT.cardId,
+          quantity: 2,
+          finish: null,
+          categoryName: "Instant",
+          inactive: false,
+        },
+        {
+          cardId: DURESS.cardId,
+          quantity: 2,
+          finish: null,
+          categoryName: "Sideboard",
+          inactive: false,
+        },
       ]),
     );
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(MADE.id, OUTCOME));
@@ -591,9 +649,7 @@ describe("the import deck dialog", () => {
     const go = await preview("1 Sol Ring");
 
     await waitFor(() => expect(go).toBeDisabled());
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Go back and name the deck first.",
-    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Go back and name the deck first.");
     expect(deckCreate).not.toHaveBeenCalled();
   });
 
@@ -661,7 +717,13 @@ describe("the import deck dialog", () => {
 
     await waitFor(() =>
       expect(deckImportCommit).toHaveBeenCalledWith(4, "live", "replace", [
-        { cardId: SOL_RING.cardId, quantity: 1, categoryName: "Artifact", inactive: false },
+        {
+          cardId: SOL_RING.cardId,
+          quantity: 1,
+          finish: null,
+          categoryName: "Artifact",
+          inactive: false,
+        },
       ]),
     );
   });

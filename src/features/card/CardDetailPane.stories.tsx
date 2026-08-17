@@ -121,6 +121,9 @@ function Pane({
         // The list the editor would have been drawing. `live` is what every seeded deck's rows
         // are in, and it is the variant the swap below is addressed to.
         variant: "live",
+        // The regular copy, which is what every seeded row is. A story about the pane's foil
+        // button on a deck row would seed a foil one and point this at it.
+        finish: null,
       });
     }
   });

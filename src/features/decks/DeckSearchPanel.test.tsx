@@ -482,7 +482,7 @@ describe("DeckSearchPanel", () => {
       await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
     );
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "1", MAIN.id, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "1", MAIN.id, null, "live", null, 1);
   });
 
   it("adds to whichever category is picked, and says so on the button", async () => {
@@ -492,7 +492,7 @@ describe("DeckSearchPanel", () => {
     view.retarget(SIDE.id);
     await userEvent.click(screen.getByRole("button", { name: "Add Lightning Bolt to Sideboard" }));
 
-    expect(deckAddCard).toHaveBeenCalledWith(4, "1", SIDE.id, null, "live", 1);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "1", SIDE.id, null, "live", null, 1);
   });
 
   /**

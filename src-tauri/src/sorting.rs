@@ -226,8 +226,13 @@ pub(crate) fn finish_literals() -> [String; 3] {
 /// is quoted nonfoil, and one that exists only in foil is quoted at its foil rate instead of
 /// reading as unpriced.
 ///
-/// **This is the deck's figure, and passing the literal `'nonfoil'` instead was a bug.**
-/// `deck_cards`' grain names a printing and stops there, so there is no finish to price at — but
+/// **This is the deck's figure for a row that names no finish**, which since schema v18 is one
+/// of the two arms of [`deck_card_price_expr`] rather than the whole answer. `deck_cards.finish`
+/// is NULL on every row that predates that version and on every row a reader has not spoken
+/// about, and this chain is what such a row has always been priced at.
+///
+/// **Passing the literal `'nonfoil'` instead was a bug.** Before v18 `deck_cards`' grain named a
+/// printing and stopped there, so there was no finish to price at — but
 /// "no finish" was read as "nonfoil", and **13 515 foil-only and 892 etched-only printings have
 /// no nonfoil price at any marketplace**. Measured against a synced corpus on 2026-08-15: all
 /// 13 515 have a null `$.usd` and 11 860 of them a real `$.usd_foil`, so a foil-only card in a
@@ -249,6 +254,34 @@ pub fn printing_price_by_finish_expr(market: Marketplace) -> String {
         .map(|finish| price_expr(market, &finish))
         .join(",\n");
     format!("coalesce({links})")
+}
+
+/// What one copy of a **deck row** costs at `market` — the deck's figure since schema v18.
+///
+/// Two arms, told apart by whether the row names a finish:
+///
+/// * **NULL** — the row has not said, which is every row that predates v18 and every row a
+///   reader has not spoken about. That is [`printing_price_by_finish_expr`]'s chain,
+///   `nonfoil → foil → etched`, **quoted rather than respelled**, so each marketplace's own
+///   holes travel with it and a foil-only printing is quoted at its foil rate instead of
+///   reading as unpriced.
+/// * **`'foil'` / `'etched'`** — [`price_expr`] at that finish and no other. **No fallback of
+///   any kind**, which is this crate's rule wherever a finish is named: a foil row quoted at
+///   the nonfoil rate is a price nobody quoted, and the reader has said which object is in the
+///   sleeve. The em dash a null answer draws means "this marketplace does not quote this
+///   printing in this finish", never "look somewhere else".
+///
+/// Cardmarket's `eur_etched` hole survives into both arms for free, because it lives in
+/// [`price_expr`] rather than here: an etched row is unpriced in euros and priced at every
+/// marketplace that does quote it.
+///
+/// `dc` is the caller's alias for `deck_cards`, which is [`crate::deck`]'s throughout.
+pub fn deck_card_price_expr(market: Marketplace) -> String {
+    format!(
+        "CASE WHEN dc.finish IS NULL THEN {chain} ELSE {named} END",
+        chain = printing_price_by_finish_expr(market),
+        named = price_expr(market, "dc.finish"),
+    )
 }
 
 /// What a **printing** costs at `market`, with no finish to price it at.
@@ -568,6 +601,44 @@ mod tests {
             assert!(!sql.contains("json_extract"), "{sql}");
             assert!(!sql.contains("coalesce"), "{sql}");
         }
+    }
+
+    /// A deck row's figure since v18, which is two rules rather than one.
+    ///
+    /// **Unsaid is the chain**, unchanged and quoted rather than respelled — the arm every row
+    /// that predates v18 takes. **Said is that finish alone**, with no fallback at either end:
+    /// a foil row quoted at the nonfoil rate is a price nobody quoted.
+    #[test]
+    fn a_deck_card_prices_at_its_own_finish_and_falls_back_only_when_it_has_none() {
+        for market in [
+            Marketplace::Tcgplayer,
+            Marketplace::Cardmarket,
+            Marketplace::Cardkingdom,
+            Marketplace::Manapool,
+        ] {
+            let sql = deck_card_price_expr(market);
+            assert!(
+                sql.contains("dc.finish IS NULL"),
+                "the two arms are told apart by the column itself, never by a coalesce that \
+                 would price an unsaid row as nonfoil: {sql}"
+            );
+            assert!(
+                sql.contains(&printing_price_by_finish_expr(market)),
+                "the unsaid arm must be `printing_price_by_finish_expr`'s own text, so each \
+                 marketplace's holes travel with it: {sql}"
+            );
+            assert!(
+                sql.contains(&price_expr(market, "dc.finish")),
+                "the said arm must be `price_expr` reading the row's own column, exactly as \
+                 the collection passes `e.finish`: {sql}"
+            );
+        }
+
+        // Cardmarket's `eur_etched` hole reaches both arms rather than being papered over with
+        // the nonfoil rate — it lives in `price_expr`, so it is inherited and never restated.
+        let cm = deck_card_price_expr(Marketplace::Cardmarket);
+        assert!(cm.contains("WHEN 'etched' THEN NULL"), "{cm}");
+        assert!(!cm.contains("eur_etched"), "{cm}");
     }
 
     /// The printing-level chain, which is the search's figure. Same `nonfoil → foil → etched`

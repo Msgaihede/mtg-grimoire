@@ -554,7 +554,12 @@ describe("the seeded rows agree with the cards they name", () => {
       // `schema::DECK_CARD_GRAIN`, and the category has to be one of this deck's — nothing in
       // the DDL enforces that half, so a seed is exactly where it could go wrong unnoticed.
       expect(categories.get(row.categoryId)?.deckId).toBe(row.deckId);
-      const key = `${row.deckId}|${row.variant}|${row.categoryId}|${row.cardId}`;
+      // **`finish` is the fifth part since v18**, and the starter seed leans on it: deck 1 holds
+      // one foil Urza's Saga beside three regular ones, which is a repeat on every *other*
+      // column and the shape this whole feature is for. A key that forgot the finish would call
+      // that a duplicate — and, worse, would have gone on passing on a seed that had no foil row
+      // in it at all.
+      const key = `${row.deckId}|${row.variant}|${row.categoryId}|${row.cardId}|${row.finish ?? ""}`;
       expect(grain.has(key)).toBe(false);
       grain.add(key);
     }

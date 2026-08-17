@@ -314,6 +314,7 @@ pub fn run() {
             deck::deck_category_clear,
             deck::deck_move_card,
             deck::deck_swap_printing,
+            deck::deck_set_card_finish,
             deck::deck_missing_to_wishlist,
             deck_import::deck_import_resolve,
             deck_import::deck_import_commit,

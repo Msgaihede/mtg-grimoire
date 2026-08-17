@@ -481,7 +481,7 @@ describe("the sidebar's drop targets", () => {
    * so it files by `autoCategoryFor` — and both payloads these tests drop carry `Instant`, which
    * is where the word comes from. It used to be a found-or-created "Main deck" for everything.
    */
-  const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Instant", "live", 1];
+  const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Instant", "live", null, 1];
 
   const entry = (label: string) => screen.getByRole("button", { name: label });
   /** The entry's own live region — the line under its button, where a drop reports. */
@@ -592,6 +592,7 @@ describe("the sidebar's drop targets", () => {
   it("takes a card dragged out of a deck row too", async () => {
     const held = await pickUp({
       kind: "deck-card",
+      finish: null,
       cardId: "c-bolt",
       name: "Lightning Bolt",
       // A `deck_categories.id`, which is what a deck row carries since schema v8 — and it has
@@ -633,6 +634,7 @@ describe("the sidebar's drop targets", () => {
     openDeck(7, "Burn");
     const held = await pickUp({
       kind: "deck-card",
+      finish: null,
       cardId: "c-bolt",
       name: "Lightning Bolt",
       fromCategoryId: 2,
@@ -641,7 +643,7 @@ describe("the sidebar's drop targets", () => {
     await held.over(entry("Decks"));
     await held.drop();
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", 2, null, "live", 1));
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", 2, null, "live", null, 1));
   });
 
   /**
@@ -774,7 +776,7 @@ describe("the card menu's deck write", () => {
     // drag with no column under it takes. Reaching this at all is half the assertion — without
     // the provider on this shell `useAddCardToDeck` throws and the view never renders.
     await waitFor(() =>
-      expect(deckAddCard).toHaveBeenCalledWith(4, "c-bolt", null, "Instant", "live", 1),
+      expect(deckAddCard).toHaveBeenCalledWith(4, "c-bolt", null, "Instant", "live", null, 1),
     );
   });
 

@@ -128,6 +128,18 @@ pub struct CardRow {
     pub tag_id: Option<i64>,
     pub quantity: i64,
     pub needs_review: Option<String>,
+    /// Which object the row played — `None` the regular copy, `Some("foil")`/`Some("etched")`
+    /// the premium ones. Schema v18.
+    ///
+    /// **Without it a restored foil row comes back regular**, which is a silent wrong answer
+    /// rather than a failure: the row is there, the count is right, and the only thing that has
+    /// changed is what the deck says it plays and what that copy is worth. Undo is the one
+    /// feature whose mistakes the reader cannot see in time to fix by hand.
+    ///
+    /// `#[serde(default)]`, so a step written before v18 still deserialises — and reads as the
+    /// regular copy, which is exactly what a pre-v18 deck row was.
+    #[serde(default)]
+    pub finish: Option<String>,
 }
 
 /// One slot of `deck_cards` a step is about — the unit a scope is built from.
@@ -136,6 +148,14 @@ pub struct CardRow {
 /// pile and a deleted category need. Spelling it as an absent id rather than as a second op kind
 /// is what keeps [`Op::Cards`] one arm: a clear is a scope of one wide cell, and a quantity
 /// change is a scope of one narrow one.
+///
+/// **A cell names no finish, on purpose** (schema v18). A printing can be two rows in one pile
+/// now — the regular copy and the foil — and a cell with a `card_id` covers **both**. That is
+/// the correct scope rather than an omission to tidy: `crate::deck::set_card_finish` *moves
+/// quantity between* those two rows, so a scope naming one finish would delete half of what the
+/// write touched and restore half of what it read. The wide cell deletes both and puts both
+/// back, which is exactly what "delete exactly `scope` and insert exactly `rows`" already
+/// promised — the fact that has to travel is on [`CardRow::finish`], not here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cell {
@@ -436,7 +456,7 @@ pub fn read_cells(conn: &Connection, deck_id: i64, cells: &[Cell]) -> Result<Vec
         let mut stmt = conn
             .prepare(
                 "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
-                        tag_id, quantity, needs_review
+                        tag_id, quantity, needs_review, finish
                    FROM deck_cards
                   WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3
                     AND (?4 IS NULL OR card_id = ?4)",
@@ -464,7 +484,7 @@ pub fn read_variant(
     let mut stmt = conn
         .prepare(
             "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
-                    tag_id, quantity, needs_review
+                    tag_id, quantity, needs_review, finish
                FROM deck_cards
               WHERE deck_id = ?1 AND variant = ?2",
         )
@@ -488,6 +508,7 @@ fn card_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
         tag_id: r.get(7)?,
         quantity: r.get(8)?,
         needs_review: r.get(9)?,
+        finish: r.get(10)?,
     })
 }
 
@@ -790,8 +811,9 @@ fn insert_cards(
         tx.execute(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, tag_id, quantity, needs_review, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, unixepoch(), unixepoch())",
+                 name, tag_id, quantity, needs_review, finish, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                     unixepoch(), unixepoch())",
             params![
                 deck_id,
                 remap.category(row.category_id),
@@ -803,7 +825,8 @@ fn insert_cards(
                 row.name,
                 remap.tag(row.tag_id),
                 row.quantity,
-                row.needs_review
+                row.needs_review,
+                row.finish
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1167,14 +1190,14 @@ mod tests {
         crate::schema::migrate(&conn).unwrap();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
-                    rarity,mana_cost,cmc,type_line,prices,raw)
+                    rarity,mana_cost,cmc,type_line,prices,finishes,raw)
                VALUES
                  ('bolt-lea','o1','Lightning Bolt','lea','161','en','normal','common',
-                  '{R}',1.0,'Instant','{"usd":"400.00"}','{}'),
+                  '{R}',1.0,'Instant','{"usd":"400.00"}','["nonfoil"]','{}'),
                  ('bolt-m10','o1','Lightning Bolt','m10','146','en','normal','common',
-                  '{R}',1.5,'Instant','{"usd":"1.50"}','{}'),
+                  '{R}',1.5,'Instant','{"usd":"1.50"}','["nonfoil","foil"]','{}'),
                  ('serra-lea','o2','Serra Angel','lea','175','en','normal','uncommon',
-                  '{3}{W}{W}',5.0,'Creature — Angel','{"usd":"120.00"}','{}');"#,
+                  '{3}{W}{W}',5.0,'Creature — Angel','{"usd":"120.00"}','["nonfoil"]','{}');"#,
         )
         .unwrap();
         conn
@@ -1215,12 +1238,19 @@ mod tests {
     /// would assert the one thing this design says is not promised. Everything a reader can
     /// see is in here — including `tag_id` and `needs_review`, which are the two columns an
     /// "obvious" reversal built out of the audit payload would silently drop.
+    ///
+    /// **`finish` is a third column of exactly that kind, and it joined this list late** (v18).
+    /// A sweep that did not read it would report every finish case below as passing while undo
+    /// restored the right count in the wrong object — the assertion would be there and would be
+    /// checking nothing. A column added to `deck_cards` that a reader can see is owed a place
+    /// here in the same commit.
     fn snapshot(conn: &Connection, deck_id: i64) -> Vec<String> {
         let mut out = Vec::new();
         let mut cards = conn
             .prepare(
                 "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
-                        coalesce(tag_id, -1), quantity, coalesce(needs_review, '')
+                        coalesce(tag_id, -1), quantity, coalesce(needs_review, ''),
+                        coalesce(finish, '')
                    FROM deck_cards WHERE deck_id = ?1",
             )
             .unwrap();
@@ -1228,7 +1258,7 @@ mod tests {
             cards
                 .query_map(params![deck_id], |r| {
                     Ok(format!(
-                        "card {}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                        "card {}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                         r.get::<_, i64>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
@@ -1239,6 +1269,7 @@ mod tests {
                         r.get::<_, i64>(7)?,
                         r.get::<_, i64>(8)?,
                         r.get::<_, String>(9)?,
+                        r.get::<_, String>(10)?,
                     ))
                 })
                 .unwrap()
@@ -1318,13 +1349,14 @@ mod tests {
         let id = deck(&conn, "Burn");
         let ramp = category(&conn, id, "Ramp");
         let draw = category(&conn, id, "Draw");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", 2).unwrap();
-        crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", 1).unwrap();
-        crate::deck::add_card(&conn, id, "bolt-m10", Some(ramp), None, "theory", 3).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", None, 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-m10", Some(ramp), None, "theory", None, 3).unwrap();
         let tag = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
             .unwrap()
             .id;
-        crate::deck_meta::set_card_tag(&conn, id, "serra-lea", draw, "live", Some(tag)).unwrap();
+        crate::deck_meta::set_card_tag(&conn, id, "serra-lea", draw, "live", None, Some(tag))
+            .unwrap();
         (conn, id)
     }
 
@@ -1340,18 +1372,20 @@ mod tests {
     fn card_write_cases() -> Vec<Case> {
         vec![
             ("deck_add_card", nothing, |c, id| {
-                crate::deck::add_card(c, id, "serra-lea", Some(ramp(c, id)), None, "live", 4)
+                crate::deck::add_card(c, id, "serra-lea", Some(ramp(c, id)), None, "live", None, 4)
                     .unwrap();
             }),
             ("deck_add_card (folding onto a row)", nothing, |c, id| {
-                crate::deck::add_card(c, id, "bolt-lea", Some(ramp(c, id)), None, "live", 3)
+                crate::deck::add_card(c, id, "bolt-lea", Some(ramp(c, id)), None, "live", None, 3)
                     .unwrap();
             }),
             ("deck_set_card_quantity", nothing, |c, id| {
-                crate::deck::set_card_quantity(c, id, "bolt-lea", ramp(c, id), "live", 7).unwrap();
+                crate::deck::set_card_quantity(c, id, "bolt-lea", ramp(c, id), "live", None, 7)
+                    .unwrap();
             }),
             ("deck_set_card_quantity (zero)", nothing, |c, id| {
-                crate::deck::set_card_quantity(c, id, "bolt-lea", ramp(c, id), "live", 0).unwrap();
+                crate::deck::set_card_quantity(c, id, "bolt-lea", ramp(c, id), "live", None, 0)
+                    .unwrap();
             }),
             (
                 // The tag and the `needs_review` sentence are what a reversal rebuilt from the
@@ -1360,25 +1394,60 @@ mod tests {
                 "deck_set_card_quantity (zero, a tagged row)",
                 nothing,
                 |c, id| {
-                    crate::deck::set_card_quantity(c, id, "serra-lea", draw(c, id), "live", 0)
-                        .unwrap();
+                    crate::deck::set_card_quantity(
+                        c,
+                        id,
+                        "serra-lea",
+                        draw(c, id),
+                        "live",
+                        None,
+                        0,
+                    )
+                    .unwrap();
                 },
             ),
             ("deck_move_card", nothing, |c, id| {
                 let to = draw(c, id);
-                crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), Some(to), None, "live")
-                    .unwrap();
+                crate::deck::move_card(
+                    c,
+                    id,
+                    "bolt-lea",
+                    ramp(c, id),
+                    Some(to),
+                    None,
+                    "live",
+                    None,
+                )
+                .unwrap();
             }),
             (
                 "deck_move_card (folding onto a row)",
                 |c, id| {
-                    crate::deck::add_card(c, id, "bolt-lea", Some(draw(c, id)), None, "live", 5)
-                        .unwrap();
+                    crate::deck::add_card(
+                        c,
+                        id,
+                        "bolt-lea",
+                        Some(draw(c, id)),
+                        None,
+                        "live",
+                        None,
+                        5,
+                    )
+                    .unwrap();
                 },
                 |c, id| {
                     let to = draw(c, id);
-                    crate::deck::move_card(c, id, "bolt-lea", ramp(c, id), Some(to), None, "live")
-                        .unwrap();
+                    crate::deck::move_card(
+                        c,
+                        id,
+                        "bolt-lea",
+                        ramp(c, id),
+                        Some(to),
+                        None,
+                        "live",
+                        None,
+                    )
+                    .unwrap();
                 },
             ),
             (
@@ -1397,23 +1466,116 @@ mod tests {
                         None,
                         Some("Landfall"),
                         "live",
+                        None,
                     )
                     .unwrap();
                 },
             ),
             ("deck_swap_printing", nothing, |c, id| {
-                crate::deck::swap_printing(c, id, "bolt-lea", "bolt-m10", ramp(c, id), "live")
-                    .unwrap();
+                crate::deck::swap_printing(
+                    c,
+                    id,
+                    "bolt-lea",
+                    "bolt-m10",
+                    ramp(c, id),
+                    "live",
+                    None,
+                )
+                .unwrap();
             }),
+            (
+                // **The row comes back at the finish it had, or undo is a silent data loss.**
+                // `CardRow::finish` is the whole of what makes this pass; without it the row is
+                // restored with the right count in the wrong object, which nothing on screen
+                // announces and no other assertion here would catch.
+                "deck_set_card_finish",
+                // `bolt-m10` rather than `bolt-lea`, because Alpha printed no foils and
+                // `set_card_finish` reads `cards.finishes` — the fixture's lists are the real
+                // ones. `fresh` files this printing under `theory`, so the live row is made here.
+                |c, id| {
+                    crate::deck::add_card(
+                        c,
+                        id,
+                        "bolt-m10",
+                        Some(ramp(c, id)),
+                        None,
+                        "live",
+                        None,
+                        2,
+                    )
+                    .unwrap();
+                },
+                |c, id| {
+                    crate::deck::set_card_finish(
+                        c,
+                        id,
+                        "bolt-m10",
+                        ramp(c, id),
+                        "live",
+                        None,
+                        Some("foil"),
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                // The fold, which is the half a boolean in the audit payload cannot reverse:
+                // two rows became one, and only the recorded rows say what the two were.
+                "deck_set_card_finish (folding onto a row)",
+                |c, id| {
+                    for finish in [None, Some("foil")] {
+                        crate::deck::add_card(
+                            c,
+                            id,
+                            "bolt-m10",
+                            Some(ramp(c, id)),
+                            None,
+                            "live",
+                            finish,
+                            5,
+                        )
+                        .unwrap();
+                    }
+                },
+                |c, id| {
+                    crate::deck::set_card_finish(
+                        c,
+                        id,
+                        "bolt-m10",
+                        ramp(c, id),
+                        "live",
+                        None,
+                        Some("foil"),
+                    )
+                    .unwrap();
+                },
+            ),
             (
                 "deck_swap_printing (folding onto a row)",
                 |c, id| {
-                    crate::deck::add_card(c, id, "bolt-m10", Some(ramp(c, id)), None, "live", 6)
-                        .unwrap();
+                    crate::deck::add_card(
+                        c,
+                        id,
+                        "bolt-m10",
+                        Some(ramp(c, id)),
+                        None,
+                        "live",
+                        None,
+                        6,
+                    )
+                    .unwrap();
                 },
                 |c, id| {
-                    crate::deck::swap_printing(c, id, "bolt-lea", "bolt-m10", ramp(c, id), "live")
-                        .unwrap();
+                    crate::deck::swap_printing(
+                        c,
+                        id,
+                        "bolt-lea",
+                        "bolt-m10",
+                        ramp(c, id),
+                        "live",
+                        None,
+                    )
+                    .unwrap();
                 },
             ),
             ("deck_category_clear", nothing, |c, id| {
@@ -1427,8 +1589,17 @@ mod tests {
                 "deck_add_card (inventing a category by name)",
                 nothing,
                 |c, id| {
-                    crate::deck::add_card(c, id, "serra-lea", None, Some("Landfall"), "live", 2)
-                        .unwrap();
+                    crate::deck::add_card(
+                        c,
+                        id,
+                        "serra-lea",
+                        None,
+                        Some("Landfall"),
+                        "live",
+                        None,
+                        2,
+                    )
+                    .unwrap();
                 },
             ),
         ]
@@ -1594,8 +1765,17 @@ mod tests {
                 // category a reader cannot get back".
                 "deck_category_delete (cascading its cards)",
                 |c, id| {
-                    crate::deck::add_card(c, id, "serra-lea", Some(ramp(c, id)), None, "theory", 2)
-                        .unwrap();
+                    crate::deck::add_card(
+                        c,
+                        id,
+                        "serra-lea",
+                        Some(ramp(c, id)),
+                        None,
+                        "theory",
+                        None,
+                        2,
+                    )
+                    .unwrap();
                 },
                 |c, id| {
                     crate::deck_meta::delete_category(c, ramp(c, id), None).unwrap();
@@ -1606,8 +1786,17 @@ mod tests {
                 // step has to carry the target's rows too, or undoing gains the deck cards.
                 "deck_category_delete (moving its cards, folding)",
                 |c, id| {
-                    crate::deck::add_card(c, id, "bolt-lea", Some(draw(c, id)), None, "live", 5)
-                        .unwrap();
+                    crate::deck::add_card(
+                        c,
+                        id,
+                        "bolt-lea",
+                        Some(draw(c, id)),
+                        None,
+                        "live",
+                        None,
+                        5,
+                    )
+                    .unwrap();
                 },
                 |c, id| {
                     crate::deck_meta::delete_category(c, ramp(c, id), Some(draw(c, id))).unwrap();
@@ -1655,11 +1844,19 @@ mod tests {
             ),
             ("deck_card_set_tag", nothing, |c, id| {
                 let tag = tag_id(c, id);
-                crate::deck_meta::set_card_tag(c, id, "bolt-lea", ramp(c, id), "live", Some(tag))
-                    .unwrap();
+                crate::deck_meta::set_card_tag(
+                    c,
+                    id,
+                    "bolt-lea",
+                    ramp(c, id),
+                    "live",
+                    None,
+                    Some(tag),
+                )
+                .unwrap();
             }),
             ("deck_card_set_tag (clearing one)", nothing, |c, id| {
-                crate::deck_meta::set_card_tag(c, id, "serra-lea", draw(c, id), "live", None)
+                crate::deck_meta::set_card_tag(c, id, "serra-lea", draw(c, id), "live", None, None)
                     .unwrap();
             }),
         ]
@@ -1683,8 +1880,9 @@ mod tests {
             category_name: category.to_owned(),
             // An ordinary counted pile, which is what an import has always made. The flag says
             // the *file* called this pile a maybeboard (Archidekt's `{noDeck}`); a journal test
-            // about restoring rows has no opinion about that.
+            // about restoring rows has no opinion about that, nor about the finish.
             inactive: false,
+            finish: None,
         }
     }
 
@@ -1754,12 +1952,12 @@ mod tests {
         let id = deck(&conn, "Burn");
         let ramp = category(&conn, id, "Ramp");
         let draw = category(&conn, id, "Draw");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", 2).unwrap();
-        crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", None, 1).unwrap();
 
         let scope = vec![Cell::card("live", ramp, "bolt-lea")];
         let before = read_cells(&conn, id, &scope).unwrap();
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", ramp, "live", 5).unwrap();
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", ramp, "live", None, 5).unwrap();
         assert_eq!(quantity(&conn, id, ramp, "bolt-lea"), 5);
 
         apply(
@@ -1792,9 +1990,9 @@ mod tests {
         let id = deck(&conn, "Burn");
         let ramp = category(&conn, id, "Ramp");
         let draw = category(&conn, id, "Draw");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", 2).unwrap();
-        crate::deck::add_card(&conn, id, "serra-lea", Some(ramp), None, "live", 3).unwrap();
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(draw), None, "live", 1).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(ramp), None, "live", None, 3).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(draw), None, "live", None, 1).unwrap();
 
         let scope = vec![Cell::pile("live", ramp)];
         let before = read_cells(&conn, id, &scope).unwrap();
@@ -1827,7 +2025,7 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let ramp = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", 4).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 4).unwrap();
 
         let row = read_category(&conn, ramp).unwrap().unwrap();
         let cards = read_cells(&conn, id, &[Cell::pile("live", ramp)]).unwrap();
@@ -1865,7 +2063,7 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let ramp = category(&conn, id, "Ramp");
-        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", 4).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 4).unwrap();
 
         let row = read_category(&conn, ramp).unwrap().unwrap();
         let cards = read_cells(&conn, id, &[Cell::pile("live", ramp)]).unwrap();
@@ -2021,6 +2219,7 @@ mod tests {
             Some(ramp(&conn, id)),
             None,
             "live",
+            None,
             1,
         )
         .unwrap();
@@ -2063,6 +2262,7 @@ mod tests {
             Some(ramp(&conn, id)),
             None,
             "live",
+            None,
             2,
         )
         .unwrap();
@@ -2101,6 +2301,7 @@ mod tests {
             Some(ramp(&conn, id)),
             None,
             "live",
+            None,
             1,
         )
         .unwrap();
@@ -2112,6 +2313,7 @@ mod tests {
             Some(ramp(&conn, id)),
             None,
             "live",
+            None,
             1,
         )
         .unwrap();
@@ -2135,6 +2337,7 @@ mod tests {
             Some(ramp(&conn, id)),
             None,
             "live",
+            None,
             1,
         )
         .unwrap();
@@ -2151,7 +2354,17 @@ mod tests {
         let (conn, burn) = fresh();
         let angels = deck(&conn, "Angels");
         let pile = category(&conn, angels, "Ramp");
-        crate::deck::add_card(&conn, angels, "serra-lea", Some(pile), None, "live", 1).unwrap();
+        crate::deck::add_card(
+            &conn,
+            angels,
+            "serra-lea",
+            Some(pile),
+            None,
+            "live",
+            None,
+            1,
+        )
+        .unwrap();
         let theirs = next_undo(&conn, angels).unwrap().unwrap();
 
         let refused = apply_reversal(&conn, burn, theirs, true).unwrap_err();
@@ -2171,6 +2384,7 @@ mod tests {
             Some(ramp(&conn, id)),
             None,
             "live",
+            None,
             1,
         )
         .unwrap();
