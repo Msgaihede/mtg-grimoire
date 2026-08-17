@@ -4,6 +4,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { CardStack, STACK_OPEN_ATTR, stackHeight } from "./CardStack";
 import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
+import { deckCardSlot } from "./dnd";
 import type { ValidationIssue } from "./validation/types";
 
 /**
@@ -326,7 +327,7 @@ export const LongStack: Story = {
  * Still exactly one card open, which the geometry at the top of `CardStack.tsx` depends on.
  */
 export const PickedCard: Story = {
-  args: { selectedCardId: RAMP[2].cardId },
+  args: { selectedSlot: deckCardSlot(RAMP[2].categoryId, RAMP[2].cardId) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const list = canvas.getByRole("list", { name: "Ramp" });
@@ -385,5 +386,8 @@ export const JustLanded: Story = {
  * long as the pane is open on it.
  */
 export const PickedAndJustLanded: Story = {
-  args: { selectedCardId: RAMP[2].cardId, landed: new Map([[RAMP[2].id, 1]]) },
+  args: {
+    selectedSlot: deckCardSlot(RAMP[2].categoryId, RAMP[2].cardId),
+    landed: new Map([[RAMP[2].id, 1]]),
+  },
 };
