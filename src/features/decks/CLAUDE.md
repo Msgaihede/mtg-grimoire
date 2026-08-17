@@ -1184,10 +1184,36 @@ price | type`). An **inactive category stays its own group in all three grouping
   one file here whose whole discipline is not knowing what a deck is. A group in the rail is the
   same `StackGroup`/`TextGroup` as a group in the flow, so its `aria` and its drop target come with
   it rather than being defined twice.
+- **The rail hugs the deck, and what holds it one gutter away is a cap on the flowing box**
+  (changed 2026-08-17, both column views). The flowing half is `flex-1`, so it takes every pixel the
+  rail leaves, and a column layout then spends only _whole_ columns of it: the remainder sat inside
+  that box as blank desk between the last pile and the Sideboard. **It is not a fixed cost** — it is
+  whatever the desk's width leaves over, up to very nearly a whole column, and it moves with
+  `stackColumnWidth`, so every zoom step changed it and the reader met it as a zoom bug. Measured on
+  the screenshot that reported it: a 1606px flowing box at 224px columns uses 1424, so the Sideboard
+  stood **198px** from the deck where two piles are 16 apart. `flowMaxWidth` (`views/columns.ts`,
+  shared by both views) caps the box at
+  `min(<columns the deck has>, round(down, 100% − <one column>, <column + gap>) − <gap>)` —
+  **`round(down, …)` is CSS's own floor**, so the count is still the browser's and this file's rule
+  that nothing here measures the desk survives whole. Verified in Chromium 151, the WebView2
+  runtime's version, before it was written: `round()` takes a percentage and resolves it against the
+  flex container at layout. The second term is the one that matters on a wide desk — a freshly
+  created deck flows two piles, and the first term alone would hand it seven columns of box.
+  **`ml-auto` is gone from both rails and its absence _is_ the fix**: a margin that eats free space
+  cannot be asked to eat all but 16px of it, so it was pinning the rail to the right edge of the
+  desk rather than to the right of the deck. What that costs is the wrapped line — see the bullet
+  below. **jsdom cannot check any of this**: `cssstyle` does not reject the value, it rewrites it
+  (`min(464px * , * calc(round(100% * , * down − …`), so `columns.test.ts` asserts the expression on
+  the pure function, the view suites assert only that a cap is present and that it goes with the
+  rail, and the gutter itself is a live claim.
 - **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
   column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
-  own `flex-wrap` drops the rail onto the next line — `ml-auto` is what keeps it on the right when
-  it lands there, and a no-op at every other width. `min-w-0`/`flex-1` cannot say this, because a
+  own `flex-wrap` drops the rail onto the next line — and since 2026-08-17 it lands at the **left**,
+  under the first column, where `ml-auto` used to hold it right. That is deliberate and was the
+  reader's call: once the rail is _under_ the deck there is no "right of the deck" left to be at,
+  and everything else in both views starts at the left edge. **A `max-width` cannot disturb this** —
+  CSS resolves one below a `min-width` in the minimum's favour, so the wrap is decided before the
+  cap is consulted. `min-w-0`/`flex-1` cannot say this, because a
   flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
   **this view has no business observing its own box** — the rule that outlived
   `DEFAULT_COLUMN_HEIGHT`, and which the masonry above does **not** weaken: what that observes is
@@ -1201,8 +1227,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   `LAYER.raised` with a leftward seam shadow, and all four existed for a single reason: to hold the
   rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
   downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
-  shadow draws a permanent divider across a layout in which nothing moves. `ml-auto` is the whole
-  mechanism that is left. The rail therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
+  shadow draws a permanent divider across a layout in which nothing moves. **`ml-auto` was the last
+  mechanism it had and it went on 2026-08-17** — see the cap bullet above — so the rail is now a
+  plain flex child in document order after the deck, with no positioning of its own at all. The rail
+  therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
   `STACK_ATTR` means "a pile drawn in the flow", and the rail's piles are by construction the ones
   that never reach it, so a sweep counting the deck's own piles goes on counting those. The
   constant is spelled for the _rail_ rather than for the Sideboard, because the Sideboard is no
@@ -1274,14 +1302,36 @@ price | type`). An **inactive category stays its own group in all three grouping
   pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character
   `components/CardArt`'s `selected` recipe, because the deck is answering the same question the
   search wall answers and a reader must not have to learn two vocabularies two clicks apart. Landed
-  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed the
-  way the question is asked: picked by `cardId` (a pane is open on a _printing_, so a card filed in
-  two piles is marked in both — `TableView` already did this and the other three now agree), landed
-  by `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
+  is a card the reader has just added, for **five seconds, fading the whole way**. Both are keyed by
+  the **row**, not by the printing: picked by `deckCardSlot(categoryId, cardId)`, landed by
+  `deck_cards.id`, because `deck_add_card` **folds** and the row the write landed in is the one
   worth pointing at. `TextView` says picked as `SELECTED_ROW` and `TableView` keeps
   `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
   agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
   sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
+- **Picked is keyed by the _slot_, and that reversed the rule this file used to state**
+  (2026-08-17). It was `cardId` alone, argued as "a pane is open on a _printing_, so a card filed
+  in two piles is marked in both — which is the honest answer to which card the pane is about".
+  It was not honest, it was a **reported bug**: a deck holding one card in the Main deck and the
+  Sideboard marked both copies from one click, and in `StackView` — where the mark is also the
+  pile's **resting state** — one press stood a card clear of two stacks at once, which the
+  geometry note at the top of `CardStack.tsx` is arithmetic against. A `deck_cards` row is
+  `(deck, card, category, variant)` and a click names one row, so the mark is addressed the way
+  every deck _write_ already is, through the `deckCardSlot` spelling `DECK_CARD_ATTR` was
+  already stamping. **`DeckEditor` derives it from `paneDeckContext`** — the store's own record of
+  which row the open card came out of — so no new state was added, and the `variant` test in that
+  derivation is the one that can actually fail: the toolbar switches `live`/`theory` without
+  touching an open pane, which is exactly the case `useSwapFromPane` was once caught rewriting
+  the wrong half of.
+- **The other half of that change: a card opened from anywhere that is not a row of this deck now
+  marks _no_ row of it.** It used to mark every copy of that printing in the deck, which sounds
+  like a courtesy and is the same defect reached by a different gesture — a docked-panel tile for
+  a card the deck holds twice lit up both. Every opener but the deck's own cards goes through
+  `setSelectedCardId`, which clears `paneDeckContext` in the same write, so there is no slot and
+  nothing is picked. **Browsing printings in the pane keeps the mark**, which is new and is right:
+  `viewPrinting` deliberately leaves the context alone, so the row stays picked while the reader
+  flips through — where the old rule dropped the card back into its pile the moment they moved
+  off the printing the deck holds.
 - **The landed mark is gold with a glow since 2026-08-15, and it was parchment before that — but
   the half that is a _requirement_ is that it is drawn _inside_ the card's face.** The old rule
   read gold as taken four times over on this one surface — focus, the picked ring, and both halves
