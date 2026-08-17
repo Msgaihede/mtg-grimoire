@@ -421,6 +421,22 @@ export interface DeckCardActions {
    * `GroupHeader`'s own `actions` prop takes and for the same reason.
    */
   renameCategory?: (categoryId: number | null) => ReactNode;
+  /**
+   * Put the pile `categoryId` where the pile `targetId` is — the reader dragging a column of
+   * their deck past another one.
+   *
+   * **Two ids and never an index**, which is the whole reason this member exists rather than a
+   * view calling `reorderCategories` for itself. `deck_category_reorder` writes `sort_order`
+   * from position over **every** category of the deck, and the piles a view is drawing are a
+   * subset of that list: `splitRail` takes the Sideboard and the Maybeboard out, and
+   * `drawsWhenEmpty` never builds the empty auto ones. So a position in the flow is not a
+   * position in the list the command is sent, and only the editor holds both.
+   *
+   * **Absent is the off switch, and the editor uses it.** It hands this down only while the deck
+   * is grouped by category: under Mana value or Type the headings on the desk are buckets rather
+   * than piles, so there is no order of the reader's to change. A view draws no grip without it.
+   */
+  moveCategory?: (categoryId: number, targetId: number) => void;
 }
 
 /** The rename field for this pile, or nothing — `null` is a derived heading, which is not a

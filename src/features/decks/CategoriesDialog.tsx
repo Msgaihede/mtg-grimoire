@@ -63,6 +63,9 @@ import type { Marketplace } from "@/lib/marketplace";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
+// The gesture itself is `categoryDrag.ts`, shared with the deck's own piles: this dialog and
+// `StackView` draw a category completely differently and mean exactly the same write.
+import { categoryDragData, movedTo, readCategoryDrag } from "./categoryDrag";
 import { DeckDialog } from "./DeckDialog";
 import type { CardGroup } from "./grouping";
 import {
@@ -78,50 +81,6 @@ import {
 import { useDeck } from "./useDeck";
 import { useDeckMeta, type DeckMeta } from "./useDeckMeta";
 import { GroupHeader } from "./views/GroupHeader";
-
-/* ------------------------------------------------------------------ reordering ------- */
-
-/**
- * The mark that says a drag is *this* dialog reordering its own list, and nothing else.
- *
- * A key of its own rather than `dnd.ts`'s, because the two carry different things and must not
- * be mistaken for each other: that one carries a **card** between categories, this one carries
- * a **category** past its neighbours. `readDragData` refuses anything without its own mark, so
- * a category picked up here can never be dropped into a zone column, and a card dragged from
- * the search wall can never land on a row in this dialog.
- */
-const CATEGORY_MARK = "mtg-grimoire/category-order";
-
-function categoryDragData(id: number): Record<string, unknown> {
-  return { [CATEGORY_MARK]: true, categoryId: id };
-}
-
-/** The category a drag is carrying, or `null` for every other drag in the window. Field by
- *  field, like `dnd.ts`'s reader: the library's store is untyped by construction. */
-function readCategoryDrag(data: Record<string, unknown>): number | null {
-  if (data[CATEGORY_MARK] !== true) return null;
-  const id = data.categoryId;
-  return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : null;
-}
-
-/**
- * One id moved to one position — the whole of what a reorder is, as a pure function.
- *
- * `deck_category_reorder` takes **every** id and writes `sortOrder` from position, so a move is
- * expressed as the list it produces rather than as a from/to pair. Total: an id the list does
- * not hold, and a position off either end, both answer a copy of the list they were given
- * rather than throwing — a reorder that raced a delete still lands somewhere sensible.
- */
-export function movedTo(ids: readonly number[], id: number, to: number): number[] {
-  const next = [...ids];
-  const from = next.indexOf(id);
-  if (from < 0) return next;
-  const target = Math.max(0, Math.min(next.length - 1, to));
-  if (from === target) return next;
-  next.splice(from, 1);
-  next.splice(target, 0, id);
-  return next;
-}
 
 /* ----------------------------------------------------------------------- shell ------- */
 

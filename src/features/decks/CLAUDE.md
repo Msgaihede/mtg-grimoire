@@ -337,6 +337,42 @@ reader to configure the deck they had just made; it now asks all of them.
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
     the bar has no accessible name and two of its labels are also headings on the desk behind it.
+- **A pile can be dragged past its neighbours on the desk, and only in `StackView`'s flow**
+  (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
+  source and the arrow keys on it are the keyboard's whole path — `CategoriesDialog`'s rule, kept
+  verbatim, position in the accessible name included. Six decisions, each of which is the reason
+  something is where it is:
+  - **The gesture lives in `categoryDrag.ts`, shared with the Categories dialog**, because the two
+    surfaces draw a category completely differently and mean exactly the same write. Its mark is
+    **not** `dnd.ts`'s: that one carries a **card** between piles, this one carries a **pile** past
+    other piles, and each reader refuses anything without its own — so a card can never land as a
+    reorder and a pile can never land as an add.
+  - **The rail is out, and the fence is `StackGroup`'s existing `flowWidth`** rather than a second
+    kind check. Where the Sideboard and the Maybeboard are drawn is decided by their `kind`
+    (`splitRail`), so their position is not an arrangement anybody made; the Categories dialog is
+    where those two are reordered against each other, and it draws every row.
+  - **The drop target is a wrapper `<div>` inside the section, not the section**, and that is
+    pdnd's constraint rather than a layout choice: one drop target per element, and the section is
+    already the card one. Because the wrapper is an **ancestor** of the heading and of every card,
+    a card drag hits it, is refused by `canDrop`, and pdnd walks to `element.parentElement` — the
+    section — exactly as before; a category drag is accepted anywhere in the pile. So the whole
+    column is the target with no monitor, no overlay and no z-index. The section's own 6px rim is
+    outside it and is the one dead spot.
+  - **The `<button>` is the draggable, not the pile.** The dialog registers its whole row and
+    remembers the press at `mousedown`; that is wrong here twice over — a pile *contains* draggable
+    cards, and a pile is 300–1 500px tall, so dragging the section would hand the reader a drag
+    preview the height of the window.
+  - **A move is two ids and never an index**, which is the whole of why `DeckCardActions
+    .moveCategory` exists instead of the view calling `reorderCategories`. `deck_category_reorder`
+    writes `sort_order` from position over **every** category, and the flow is a subset — the rail
+    taken out, the empty auto piles never built — so only `DeckEditor` holds both lists. It reads
+    them through a **ref** so the callback stays stable: it is a dependency of every pile's drop
+    registration.
+  - **The editor draws the new order before the write answers** (`localCategoryOrder`, the dialog's
+    state in the dialog's shape), and **re-stamps `sortOrder` from position** — handing `buildGroups`
+    a reordered array alone changes nothing, because it sorts by that field. Dropped on a refusal
+    and whenever the id set stops matching. `moveCategory` is handed down **only under
+    `groupBy === "category"`**; absent is the off switch and a view draws no grip without it.
 - **A move has two routes: a drag, and the card's right-click `Move to`** (changed 2026-08-14, and
   again later the same day). Every deck card used to carry a native `Move…` `<select>` beside its
   stepper, listing every other category of the deck; it was removed whole, which left `moveCard`

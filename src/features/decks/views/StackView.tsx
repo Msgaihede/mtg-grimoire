@@ -3,6 +3,7 @@
  * built around.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { GripVertical } from "lucide-react";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
@@ -18,6 +19,7 @@ import {
   useCategoryDrop,
   type DeckCardActions,
 } from "../cardControl";
+import { useCategoryDragHandle, useCategoryReorderDrop } from "../categoryDrag";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
@@ -278,6 +280,15 @@ export function StackView({
   // out of the answer. Which kinds are railed, why the rail is not sorted here, and why there is
   // no grouping-mode check beside the kind: {@link splitRail}.
   const { flow, rail } = splitRail(groups);
+  // **Every pile a reader may drag, in the order they are drawn** — the flow's own, so the rail
+  // is out by construction rather than by a second test, and a derived heading ("Mana value 3")
+  // is out because it has no id to move.
+  //
+  // It is what the grip's `n of N` counts and what the arrow keys step through, and it is
+  // deliberately the *drawn* order rather than the deck's: a reader pressing ArrowRight is asking
+  // for the pile they can see to the right, and the piles the deck holds that this desk is not
+  // drawing are the editor's to thread back in ({@link DeckCardActions.moveCategory}).
+  const flowIds = flow.flatMap((group) => (group.categoryId === null ? [] : [group.categoryId]));
 
   return (
     // Scrolls **down**, and that is the whole of this layout. A pile that will not fit opens
@@ -413,6 +424,7 @@ export function StackView({
             landed={landed}
             zoom={cardZoom}
             flowWidth={columnWidth}
+            flowIds={flowIds}
           />
         ))}
       </div>
@@ -491,6 +503,7 @@ function StackGroup({
   landed,
   zoom,
   flowWidth,
+  flowIds,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
@@ -513,9 +526,24 @@ function StackGroup({
    * different kind of pile.
    */
   flowWidth?: number;
+  /** Every draggable pile of the flow, in the order they are drawn — see {@link StackView}. The
+   *  rail is handed none, which is the other half of what `flowWidth` says. */
+  flowIds?: readonly number[];
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
   const inFlow = flowWidth !== undefined;
+  // **Only a pile in the flow may be moved**, and the fence is the same prop that says it is one
+  // — the reader's Sideboard and Maybeboard stay where the rail puts them. `undefined` here is
+  // `useCategoryReorderDrop`'s own off switch, so a railed pile registers nothing at all.
+  const moveCategory = inFlow ? actions?.moveCategory : undefined;
+  // Destructured under names of its own rather than kept as one object, for `useCategoryDrop`'s
+  // reason one line up: React's ref lint reads a hook result whose `attach` reaches a `ref=` as a
+  // ref, and every read of a sibling field beside it as a ref access during render.
+  const {
+    attach: attachReorder,
+    over: reorderOver,
+    eligible: reorderEligible,
+  } = useCategoryReorderDrop(group.categoryId, moveCategory);
   const { elementRef, span } = useFlowRowSpan(inFlow);
   // One `ref` for two consumers — the drop target and the measurement — because a `<section>` has
   // one. It returns a cleanup, which React 19 takes *instead of* calling the callback with `null`,
@@ -591,51 +619,157 @@ function StackGroup({
         // invisible. Said out loud because it is the first thing a reader will suspect: taking an
         // outline away from a drop target looks exactly like the change that would have broken
         // one, and this is not it.
-        eligible && DROP_RING,
-        over && DROP_OVER,
+        // **The two drags share one pair of marks, because only one of them is ever in the
+        // air.** A card being dragged and a pile being dragged are the same two questions —
+        // "could this pile take what you are holding" and "is it this one" — so a second
+        // colour would be a second vocabulary for one gesture. `useCategoryReorderDrop`
+        // refuses every card drag and `useCategoryDrop` refuses every category drag, so the
+        // two pairs can never both be true.
+        (eligible || reorderEligible) && DROP_RING,
+        (over || reorderOver) && DROP_OVER,
       )}
     >
-      {/* The app's own drop mark, the same one the deck's columns used to draw. */}
-      {over && <DropIndicator />}
-      <GroupHeader
-        group={group}
-        marketplace={marketplace}
-        layout="stacked"
-        id={`group-${group.key}`}
-        className="px-1 pb-1.5"
-      />
-      {deckGroupRename(group.categoryId, actions)}
-      {group.cards.length === 0 ? (
-        // An empty category is a place as well as a heading — this is where the next card
-        // goes, and saying so is what makes the empty column worth drawing.
-        <p className="px-1 pb-1 text-xs text-dim">Nothing here yet.</p>
-      ) : (
-        <CardStack
-          cards={group.cards}
-          label={group.name}
-          currency={marketplace.currency}
-          violations={violations}
-          onSelect={onSelect}
-          actions={actions}
-          selectedSlot={selectedSlot}
-          landed={landed}
-          zoom={zoom}
-          // The third of the three signals a switched-off pile carries — the wash on the section
-          // and `GroupHeader`'s dimmed name and `INACTIVE` chip are the other two. Card art is the
-          // loudest thing in this view by a wide margin, so a pile whose *chrome* says "not in
-          // the deck" while its cards read at full strength says it twice as quietly as it meant
-          // to. 60 % is far enough back to sort at a glance and near enough to still read.
-          //
-          // **`opacity` below 1 makes this `<ul>` a stacking context**, and that `<ul>` is exactly
-          // the element that takes `LAYER.raised` when a card in it opens. The lift survives it —
-          // what comes forward over the groups below is the whole raised list, and the raised
-          // list *is* this new context's root, so it moves as one — but this is the first thing
-          // to check if that lift ever regresses on an inactive pile. It is the only place in
-          // this view where a stacking context appears out of a property that is not a z-index,
-          // and `layers.ts`' sweep cannot see it.
-          className={group.isActive ? undefined : "opacity-60"}
+      {/* The app's own drop mark, the same one the deck's columns used to draw. Outside the
+          reorder wrapper below because it is absolutely positioned against *this* section. */}
+      {(over || reorderOver) && <DropIndicator />}
+      {/* **The whole pile is where a dragged pile may be let go, and this wrapper is how.**
+          pdnd allows one drop target per element and the `<section>` is already the card one,
+          so this is a second element rather than a second registration — and it is an
+          **ancestor** of everything in the pile rather than an overlay over it, which is what
+          makes it free in both directions. A *card* drag hits it, is refused by `canDrop`, and
+          pdnd walks up to `element.parentElement` — this section — exactly as it did before this
+          wrapper existed. A *category* drag is accepted anywhere inside the pile, so the target
+          is the column a reader is aiming at rather than the 34px of heading they grabbed it by.
+          A plain block child of a block section: it draws nothing, measures nothing, and
+          `useFlowRowSpan` still reads the section. */}
+      <div ref={attachReorder}>
+        <GroupHeader
+          group={group}
+          marketplace={marketplace}
+          layout="stacked"
+          id={`group-${group.key}`}
+          className="px-1 pb-1.5"
+          handle={
+            moveCategory && group.categoryId !== null && flowIds !== undefined ? (
+              <CategoryGrip
+                categoryId={group.categoryId}
+                name={group.name}
+                flowIds={flowIds}
+                onMove={moveCategory}
+              />
+            ) : undefined
+          }
         />
-      )}
+        {deckGroupRename(group.categoryId, actions)}
+        {group.cards.length === 0 ? (
+          // An empty category is a place as well as a heading — this is where the next card
+          // goes, and saying so is what makes the empty column worth drawing.
+          <p className="px-1 pb-1 text-xs text-dim">Nothing here yet.</p>
+        ) : (
+          <CardStack
+            cards={group.cards}
+            label={group.name}
+            currency={marketplace.currency}
+            violations={violations}
+            onSelect={onSelect}
+            actions={actions}
+            selectedSlot={selectedSlot}
+            landed={landed}
+            zoom={zoom}
+            // The third of the three signals a switched-off pile carries — the wash on the
+            // section and `GroupHeader`'s dimmed name and `INACTIVE` chip are the other two. Card
+            // art is the loudest thing in this view by a wide margin, so a pile whose *chrome*
+            // says "not in the deck" while its cards read at full strength says it twice as
+            // quietly as it meant to. 60 % is far enough back to sort at a glance and near enough
+            // to still read.
+            //
+            // **`opacity` below 1 makes this `<ul>` a stacking context**, and that `<ul>` is
+            // exactly the element that takes `LAYER.raised` when a card in it opens. The lift
+            // survives it — what comes forward over the groups below is the whole raised list,
+            // and the raised list *is* this new context's root, so it moves as one — but this is
+            // the first thing to check if that lift ever regresses on an inactive pile. It is the
+            // only place in this view where a stacking context appears out of a property that is
+            // not a z-index, and `layers.ts`' sweep cannot see it.
+            className={group.isActive ? undefined : "opacity-60"}
+          />
+        )}
+      </div>
     </section>
+  );
+}
+
+/**
+ * How a test — or a live pass — finds one pile's grip. An attribute rather than a role, because
+ * every one of these is a `button` with an accessible name of its own and the sweep that wants
+ * them all wants "the piles that can be moved" rather than any particular name.
+ *
+ * `deckGroupProps`' `DECK_GROUP_ATTR` and `STACK_ATTR` are the same idea for the same reason.
+ */
+export const GRIP_ATTR = "data-category-grip";
+
+/**
+ * The grip a pile is picked up by — **and the whole of the keyboard's way to move one.**
+ *
+ * A handle a mouse can drag and a keyboard cannot is a reorder half the readers do not have.
+ * That is `CategoriesDialog`'s rule and it is kept verbatim here, including the position in the
+ * accessible name: the only other way to know where a pile landed is to look at it, and a reader
+ * pressing the arrow keys is the one reader who may not be able to.
+ *
+ * **All four arrows, and they mean "one place earlier" and "one place later" rather than a
+ * direction on the desk.** The flow is a masonry — a pile wraps to the foot of the pile above it
+ * — so "the pile below" is a fact about how much room the window had, not about the order. Left
+ * and Up are the same press, Right and Down are the same press, and both are the move
+ * `movedTo` makes.
+ *
+ * **The neighbour is named rather than counted**, because {@link DeckCardActions.moveCategory}
+ * takes two ids: the flow is a subset of the deck's categories, so a position here is not a
+ * position in the list `deck_category_reorder` is sent, and the editor is the only thing holding
+ * both. Stepping past either end sends nothing at all — `movedTo` would clamp it to a no-op
+ * write, and a round trip that changes nothing is still a round trip.
+ */
+function CategoryGrip({
+  categoryId,
+  name,
+  flowIds,
+  onMove,
+}: {
+  categoryId: number;
+  /** The pile's own heading, so a deck of fifteen grips is fifteen addressable controls rather
+   *  than one repeated fifteen times. */
+  name: string;
+  flowIds: readonly number[];
+  onMove: (categoryId: number, targetId: number) => void;
+}) {
+  const attach = useCategoryDragHandle(categoryId);
+  const index = flowIds.indexOf(categoryId);
+  const step = (to: number) => {
+    const target = flowIds[to];
+    if (target !== undefined) onMove(categoryId, target);
+  };
+
+  return (
+    <button
+      ref={attach}
+      type="button"
+      {...{ [GRIP_ATTR]: "" }}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+          e.preventDefault();
+          step(index - 1);
+        } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+          e.preventDefault();
+          step(index + 1);
+        }
+      }}
+      aria-label={`Move ${name}, ${index + 1} of ${flowIds.length}`}
+      title="Drag to reorder, or press the arrow keys"
+      className={cn(
+        "shrink-0 cursor-grab rounded-sm text-dim",
+        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+        FOCUS,
+      )}
+    >
+      <GripVertical className="size-3.5" aria-hidden="true" />
+    </button>
   );
 }
