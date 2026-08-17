@@ -2094,6 +2094,17 @@ describe("StackView reordering", () => {
   const grip = (name: string, position: string) =>
     screen.getByRole("button", { name: `Move ${name}, ${position}` });
   /**
+   * What is actually picked up: the **heading**, with the grip marking where the press has to
+   * start.
+   *
+   * The grip is not the drag source — it marks where the press has to land, so that what travels
+   * under the pointer is the heading rather than a 14px glyph. `startDrag` splits exactly those
+   * two things, which is what `pressOn` is for, and a test that dragged the grip would be
+   * addressing a registration that does not exist.
+   */
+  const headingOf = (name: string, position: string) =>
+    grip(name, position).closest("[draggable]")!;
+  /**
    * Where a dragged pile is let go, and it is deliberately **not** the `<section>`.
    *
    * The section is the *card* drop target and pdnd allows one per element, so the reorder target
@@ -2167,13 +2178,25 @@ describe("StackView reordering", () => {
     expect(moveCategory).not.toHaveBeenCalled();
   });
 
-  /** The drag, over the library's real code path — `test-drag.ts` has why that is possible in
-   *  jsdom. A drop **lands the dragged pile where the target pile is**, which is the same move
-   *  the arrow keys make. */
-  it("moves a pile onto the pile it was dropped on", async () => {
+  /**
+   * The drag, over the library's real code path — `test-drag.ts` has why that is possible in
+   * jsdom. A drop **lands the dragged pile where the target pile is**, which is the same move the
+   * arrow keys make.
+   *
+   * **And only from the grip**, asserted first: the heading holds the pile's name, its markers
+   * and its two numbers, and a press anywhere on it plus five pixels of travel must not carry the
+   * column away.
+   */
+  it("moves a pile onto the pile it was dropped on, and only from the grip", async () => {
     const moveCategory = draw();
 
-    const held = await startDrag(grip("Draw", "3 of 3"));
+    const refused = await startDrag(headingOf("Draw", "3 of 3"));
+    expect(refused.started).toBe(false);
+    await refused.cancel();
+
+    const held = await startDrag(headingOf("Draw", "3 of 3"), {
+      pressOn: grip("Draw", "3 of 3"),
+    });
     try {
       expect(held.started).toBe(true);
       await held.over(bodyOf(piles[0]));
@@ -2191,7 +2214,8 @@ describe("StackView reordering", () => {
   it("refuses a drop on itself and a drop on the rail", async () => {
     const moveCategory = draw();
 
-    const held = await startDrag(grip("Ramp", "2 of 3"));
+    const press = { pressOn: grip("Ramp", "2 of 3") };
+    const held = await startDrag(headingOf("Ramp", "2 of 3"), press);
     try {
       await held.over(bodyOf(piles[1]));
       await held.drop();
@@ -2199,7 +2223,7 @@ describe("StackView reordering", () => {
       await held.cancel();
     }
 
-    const onRail = await startDrag(grip("Ramp", "2 of 3"));
+    const onRail = await startDrag(headingOf("Ramp", "2 of 3"), press);
     try {
       await onRail.over(bodyOf(piles.find((g) => g.categoryId === SIDE.id)!));
       await onRail.drop();

@@ -20,7 +20,7 @@
  * — and the command needs the deck's whole list. See {@link useCategoryReorderDrop}'s note on
  * addressing a move by **ids**.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   dropTargetForElements,
   draggable,
@@ -151,32 +151,68 @@ export function useCategoryReorderDrop(
 }
 
 /**
- * The handle a pile is picked up by, as a registration — **the button is the drag source, not
- * the pile**.
+ * A pile as something that can be picked up: **the heading is the drag source and the grip
+ * inside it is the only place a press may start**.
  *
- * That is the one thing this does differently from `CategoriesDialog`, which registers its whole
- * row and remembers at `mousedown` whether the press started on the handle. Two reasons, and
- * both are about where this one is drawn. A pile on the desk **contains draggable cards**:
- * `draggable="true"` on the section would make the browser target the innermost draggable
- * ancestor of the press, which is still the card — so nothing would break — but it would also
- * take text selection away from the heading and put a second `canDrag` in front of every card
- * drag in the deck for no gain. And a pile is 300–1 500px tall, so dragging the *section* would
- * hand the reader a drag preview the height of the window; a handle's preview is the glyph.
+ * `CategoriesDialog`'s arrangement exactly — a `mousedown` remembered in the **capture** phase,
+ * so a control that stops the press cannot hide it from this, and `canDrag` reading the flag at
+ * `dragstart`, which is handed the pointer's *coordinates* rather than what it pressed.
  *
- * No `canDrag` and no `mousedown` listener follow from that: the button holds nothing but
- * itself, so a press on it is always this gesture.
+ * **The reason is the drag preview, and it is a choice rather than a constraint.** Registering the
+ * grip `<button>` itself works — measured in the shipped window on 2026-08-17, a pdnd `draggable`
+ * on the button starts a real Chromium drag — and it is the simpler code by a wide margin. What it
+ * hands the reader is a 14px ghost of the glyph they grabbed, on a gesture that moves a whole
+ * column across the desk; every other drag in this app previews the thing being moved (a card
+ * previews the card, the dialog's row previews the row). The heading is the smallest box that says
+ * which pile is in the air: its name and its two numbers.
  *
- * A hook rather than a bare factory because the callback has to be **stable**: React 19 takes
- * the function a ref callback returns as its cleanup, so a new one each render would unregister
- * and re-register the draggable on every re-render of the deck — including the ones a drag it
- * started is causing.
+ * (**That measurement replaced the opposite claim, which is why it is written down.** The first
+ * live attempt failed with *"the browser never started a drag"* and read exactly like Chromium
+ * refusing a form control. It was not: the pile being aimed at was **scrolled out of the editor's
+ * own scroller**, so the coordinates `getBoundingClientRect` answered with landed on `<main>` and
+ * the press never reached the grip. `elementFromPoint` at the rect's centre is the cheap check,
+ * and a CDP drag pass owes it before concluding anything about a source.)
+ *
+ * **The heading rather than the whole section**, which is the one place this parts company with
+ * the dialog: a pile is 300–1 500px tall, so dragging the section would hand back the preview
+ * problem an order of magnitude worse. It also keeps this gesture and the card drags underneath it
+ * in two disjoint subtrees, so neither `canDrag` is ever asked about the other's press.
+ *
+ * Both callbacks are stable, which matters twice: React 19 takes what a ref callback returns as
+ * its cleanup, so a new function each render would unregister and re-register the draggable on
+ * every re-render of the deck — including the ones a drag it started is causing.
  */
-export function useCategoryDragHandle(id: number | null) {
-  return useCallback(
+export function useCategoryDragSource(id: number | null) {
+  const handleRef = useRef<HTMLElement | null>(null);
+
+  const attachHandle = useCallback((element: HTMLElement | null) => {
+    handleRef.current = element;
+    return () => {
+      handleRef.current = null;
+    };
+  }, []);
+
+  const attachSource = useCallback(
     (element: HTMLElement | null) => {
       if (!element || id === null) return;
-      return draggable({ element, getInitialData: () => categoryDragData(id) });
+      let fromHandle = false;
+      const press = (event: Event) => {
+        fromHandle =
+          event.target instanceof Node && handleRef.current?.contains(event.target) === true;
+      };
+      element.addEventListener("mousedown", press, true);
+      const stop = draggable({
+        element,
+        canDrag: () => fromHandle,
+        getInitialData: () => categoryDragData(id),
+      });
+      return () => {
+        element.removeEventListener("mousedown", press, true);
+        stop();
+      };
     },
     [id],
   );
+
+  return { attachSource, attachHandle };
 }

@@ -358,10 +358,21 @@ reader to configure the deck they had just made; it now asks all of them.
     section — exactly as before; a category drag is accepted anywhere in the pile. So the whole
     column is the target with no monitor, no overlay and no z-index. The section's own 6px rim is
     outside it and is the one dead spot.
-  - **The `<button>` is the draggable, not the pile.** The dialog registers its whole row and
-    remembers the press at `mousedown`; that is wrong here twice over — a pile *contains* draggable
-    cards, and a pile is 300–1 500px tall, so dragging the section would hand the reader a drag
-    preview the height of the window.
+  - **The heading is the draggable and the grip only says where the press may start** — the
+    dialog's `mousedown`-in-capture plus `canDrag` arrangement, kept verbatim. **It is a choice
+    about the drag preview, not a constraint**: a pdnd `draggable` on the grip `<button>` starts a
+    real Chromium drag (measured in the shipped window, 2026-08-17) and is much the simpler code;
+    what it hands the reader is a 14px ghost of the glyph, on a gesture that moves a whole column
+    across the desk, where every other drag in this app previews the thing being moved. The
+    heading is the smallest box that says which pile is in the air. Not the whole `<section>`,
+    which is 300–1 500px tall and would hand back the same problem an order of magnitude worse.
+  - **A live drag pass owes `elementFromPoint` before it concludes anything**, and this is the
+    session that paid for that line. The first attempt answered _"the browser never started a
+    drag"_ and read exactly like Chromium refusing a form control — a real, documented-sounding
+    defect that was written up before it was checked. It was the **scroller**: the pile being
+    aimed at was scrolled out of `DeckEditor`'s own `overflow-y-auto` section, so the viewport
+    coordinates `getBoundingClientRect` answered with landed on `<main>` and the press never
+    reached the grip. `cdp.mjs drag` presses at the rect's centre and cannot know the difference.
   - **A move is two ids and never an index**, which is the whole of why `DeckCardActions
     .moveCategory` exists instead of the view calling `reorderCategories`. `deck_category_reorder`
     writes `sort_order` from position over **every** category, and the flow is a subset — the rail

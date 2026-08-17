@@ -19,7 +19,7 @@ import {
   useCategoryDrop,
   type DeckCardActions,
 } from "../cardControl";
-import { useCategoryDragHandle, useCategoryReorderDrop } from "../categoryDrag";
+import { useCategoryDragSource, useCategoryReorderDrop } from "../categoryDrag";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
@@ -544,6 +544,11 @@ function StackGroup({
     over: reorderOver,
     eligible: reorderEligible,
   } = useCategoryReorderDrop(group.categoryId, moveCategory);
+  // The heading is what a pile is picked up by, and the grip inside it is where the press has to
+  // start. `null` in the rail and under a derived grouping, which registers nothing.
+  const { attachSource, attachHandle } = useCategoryDragSource(
+    moveCategory ? group.categoryId : null,
+  );
   const { elementRef, span } = useFlowRowSpan(inFlow);
   // One `ref` for two consumers — the drop target and the measurement — because a `<section>` has
   // one. It returns a cleanup, which React 19 takes *instead of* calling the callback with `null`,
@@ -643,23 +648,31 @@ function StackGroup({
           A plain block child of a block section: it draws nothing, measures nothing, and
           `useFlowRowSpan` still reads the section. */}
       <div ref={attachReorder}>
-        <GroupHeader
-          group={group}
-          marketplace={marketplace}
-          layout="stacked"
-          id={`group-${group.key}`}
-          className="px-1 pb-1.5"
-          handle={
-            moveCategory && group.categoryId !== null && flowIds !== undefined ? (
-              <CategoryGrip
-                categoryId={group.categoryId}
-                name={group.name}
-                flowIds={flowIds}
-                onMove={moveCategory}
-              />
-            ) : undefined
-          }
-        />
+        {/* **The heading is the drag source and the grip only says where the press may start.**
+            What travels under the pointer is then the pile's name and its two numbers rather than
+            a 14px ghost of the glyph — every other drag in this app previews the thing being
+            moved. Registering the button itself works and is simpler; {@link useCategoryDragSource}
+            carries the measurement and the trade. */}
+        <div ref={attachSource}>
+          <GroupHeader
+            group={group}
+            marketplace={marketplace}
+            layout="stacked"
+            id={`group-${group.key}`}
+            className="px-1 pb-1.5"
+            handle={
+              moveCategory && group.categoryId !== null && flowIds !== undefined ? (
+                <CategoryGrip
+                  ref={attachHandle}
+                  categoryId={group.categoryId}
+                  name={group.name}
+                  flowIds={flowIds}
+                  onMove={moveCategory}
+                />
+              ) : undefined
+            }
+          />
+        </div>
         {deckGroupRename(group.categoryId, actions)}
         {group.cards.length === 0 ? (
           // An empty category is a place as well as a heading — this is where the next card
@@ -710,6 +723,10 @@ export const GRIP_ATTR = "data-category-grip";
 /**
  * The grip a pile is picked up by — **and the whole of the keyboard's way to move one.**
  *
+ * **It registers no drag of its own**: what it marks is where a press has to land, and the
+ * heading around it is the draggable ({@link useCategoryDragSource}, which has why). `ref` is that
+ * source's `attachHandle`, which is how the `mousedown` listener knows the press was this one.
+ *
  * A handle a mouse can drag and a keyboard cannot is a reorder half the readers do not have.
  * That is `CategoriesDialog`'s rule and it is kept verbatim here, including the position in the
  * accessible name: the only other way to know where a pile landed is to look at it, and a reader
@@ -728,11 +745,15 @@ export const GRIP_ATTR = "data-category-grip";
  * write, and a round trip that changes nothing is still a round trip.
  */
 function CategoryGrip({
+  ref,
   categoryId,
   name,
   flowIds,
   onMove,
 }: {
+  /** {@link useCategoryDragSource}'s `attachHandle` — the press this grip takes is the one the
+   *  heading above it is allowed to be dragged by. */
+  ref: (element: HTMLElement | null) => void;
   categoryId: number;
   /** The pile's own heading, so a deck of fifteen grips is fifteen addressable controls rather
    *  than one repeated fifteen times. */
@@ -740,7 +761,6 @@ function CategoryGrip({
   flowIds: readonly number[];
   onMove: (categoryId: number, targetId: number) => void;
 }) {
-  const attach = useCategoryDragHandle(categoryId);
   const index = flowIds.indexOf(categoryId);
   const step = (to: number) => {
     const target = flowIds[to];
@@ -749,7 +769,7 @@ function CategoryGrip({
 
   return (
     <button
-      ref={attach}
+      ref={ref}
       type="button"
       {...{ [GRIP_ATTR]: "" }}
       onKeyDown={(e) => {
