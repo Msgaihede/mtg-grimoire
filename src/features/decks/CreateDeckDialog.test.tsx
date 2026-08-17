@@ -59,6 +59,7 @@ const FOLDERS: DeckFolder[] = [
 ];
 
 const MADE: DeckRow = {
+  gameKey: "any",
   id: 9,
   name: "Sunday burn",
   formatKey: "modern",
@@ -301,6 +302,9 @@ describe("the create deck dialog", () => {
         // way so the deck is named what the reader can see they typed.
         name: "Sunday burn",
         formatKey: "modern",
+        // Always sent, and always `any` unless the reader picked a platform: the game has no
+        // remembered value to start from, unlike the format.
+        gameKey: "any",
         description: "Twenty damage, quickly.",
         notes: "Sideboard plan lives in the maybeboard.",
         coverCardId: "s-Shivan Dragon",
@@ -336,8 +340,16 @@ describe("the create deck dialog", () => {
     expect(sent.folderId).toBeUndefined();
     // The wire, and not just the object: `invoke` serialises with JSON, which drops an
     // `undefined` value — so serde sees an absent field rather than a null one.
+    // `gameKey` is in the list because it is **not** one of the fields left empty: `any` is a
+    // real answer the column stores, exactly as `theoryEnabled: false` is, and neither is the
+    // absence this test is about.
     expect(JSON.stringify(sent)).toBe(
-      JSON.stringify({ name: "Sunday burn", formatKey: "casual", theoryEnabled: false }),
+      JSON.stringify({
+        name: "Sunday burn",
+        formatKey: "casual",
+        gameKey: "any",
+        theoryEnabled: false,
+      }),
     );
   });
 

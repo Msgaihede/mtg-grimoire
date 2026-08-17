@@ -8,7 +8,7 @@ import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSet
 import { useDeck } from "./useDeck";
 import { useDeckField } from "./useDeckField";
 import { useDeckFolders } from "./useDeckFolders";
-import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+import { ANY_GAME, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 
 export interface DeckSettingsDialogProps {
   deckId: number;
@@ -162,16 +162,23 @@ function Settings({ deckId }: { deckId: number }) {
 
   const formatKey = row?.formatKey ?? null;
   const formatName = row?.formatName ?? null;
-  /** The picker, plus the deck's own format when the seed no longer offers it — `DeckEditor`'s
-   *  rule and `pickerFormats`' code, so the header select and this one cannot come to two
-   *  answers about the same deck. Alphabetical, with the deck's own row folded in rather than
-   *  pinned first. Computed **here** and not in the form, which mounts no `useFormatSpecs`. */
+  const gameKey = row?.gameKey ?? ANY_GAME;
+  /** The picker narrowed to the deck's game, plus the deck's own format when that narrowing —
+   *  or a seed that no longer carries it — would leave it out. `DeckEditor`'s rule and
+   *  `pickerFormats`' code, so the header select and this one cannot come to two answers about
+   *  the same deck. Alphabetical, with the deck's own row folded in rather than pinned first.
+   *  Computed **here** and not in the form, which mounts no `useFormatSpecs`.
+   *
+   *  **`keep` is what makes the game a filter rather than an edit**: a Modern deck switched to
+   *  Arena still shows Modern, so nothing about setting a game can re-format a deck. This host
+   *  needs no draft-repair effect for it, unlike the create dialog — the value is the row's,
+   *  and the row only changes when a write does. */
   const formats = useMemo(
     () =>
       formatKey === null
         ? []
-        : pickerFormats(specs, { key: formatKey, name: formatName ?? formatKey }),
-    [specs, formatKey, formatName],
+        : pickerFormats(specs, { key: formatKey, name: formatName ?? formatKey }, gameKey),
+    [specs, formatKey, formatName, gameKey],
   );
 
   /** Same division of labour: the rows are this host's query, the paths are what the select
@@ -191,6 +198,9 @@ function Settings({ deckId }: { deckId: number }) {
     if (patch.description !== undefined) description.onChange(patch.description);
     if (patch.notes !== undefined) notes.onChange(patch.notes);
     if (patch.formatKey !== undefined) update({ formatKey: patch.formatKey });
+    // One write and one field: the game narrows the format list on the next render and touches
+    // `format_key` neither here nor in Rust.
+    if (patch.gameKey !== undefined) update({ gameKey: patch.gameKey });
     if (patch.theoryEnabled !== undefined) update({ theoryEnabled: patch.theoryEnabled });
     // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
@@ -240,6 +250,7 @@ function Settings({ deckId }: { deckId: number }) {
             value={{
               name: name.value,
               formatKey: row.formatKey,
+              gameKey: row.gameKey,
               description: description.value,
               notes: notes.value,
               theoryEnabled: row.theoryEnabled,

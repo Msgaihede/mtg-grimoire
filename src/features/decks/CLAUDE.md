@@ -151,6 +151,49 @@ folder, theory, and **where an unfiled add lands** — is **one component, `Deck
 drawn by two hosts** (2026-08-14). The "New deck" dialog used to ask two questions and leave the
 reader to configure the deck they had just made; it now asks all of them.
 
+- **The game is a filter that is also a stored field, and both halves are deliberate**
+  (2026-08-17). `decks.game_key` (schema v18) is `any | paper | arena | mtgo`, drawn as a select
+  on **every surface that picks a format** — `DeckSettingsForm` (so both dialogs), the import
+  dialog's `FormatSelect`, and the editor header's `Deck game` — and the only thing it *does* is
+  narrow that format list to the formats whose seeded `games` cell carries it. Five rules hold it:
+  - **The narrowing is one function.** `pickerFormats(specs, keep, game)` — the third argument
+    defaults to `ANY_GAME`, which narrows nothing, so no caller that had not thought about games
+    changed. `playableIn` reads `spec.games`, the seeded cell, and never a list of keys spelled
+    out in TypeScript: that mapping is genuinely likely to be corrected (Commander on MTGO is a
+    judgement call the seed names as one), and a rule written twice is a rule corrected twice.
+  - **Setting a game never re-formats a deck**, and `keep` is the whole of it. A Modern deck
+    switched to Arena still shows Modern, folded back into the alphabet by the same argument that
+    already covered a format which had left the seed. That old case was the edge one; this is now
+    the ordinary way a deck's format falls out of its own picker.
+  - **Except where the format is a draft rather than a row**, which is the create path and the
+    import path. There the value is `useState` and *can* be left pointing at a format no option
+    carries — a controlled `<select>` then shows its **first** row while still reporting the old
+    value, so the deck would be made in Modern while the dialog read Alchemy. Both repair with an
+    effect, to the first row of the narrowed list, and **both guard on the real picker rather than
+    on the fallback**: on the launch where `format_specs` has not answered, the list is a one-row
+    `Casual` and repairing against it overwrites the format the host resolved. That shipped for
+    one test run in `CreateDeckDialog`.
+  - **There is no `last_deck_game` beside `last_deck_format`.** The format a reader last built in
+    is a preference worth carrying; the game is a filter they set to *find* a format, and
+    remembering it would open the next New deck dialog with most of the list already hidden for a
+    reason nothing on screen explains. Every deck is born on `Any`.
+  - **The tile draws it only when it is not `Any`** — `Modern · Arena · 60 cards` against
+    `Modern · 60 cards`. `Any` is what every deck is born as, so printing it would put a word that
+    says nothing on nearly every tile, in a caption that already truncates.
+  - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build,
+    1280×800, against a freshly synced 116 712-card corpus). The counts are the useful part,
+    because a filter that answered "everything" passes every assertion that only names one
+    format: the New deck dialog offered **24** formats on `Any` (25 seeded minus Future
+    Standard), **10** on Arena, **17** on Paper and **9** on MTGO. Narrowing to Arena moved the
+    select off Commander to Alchemy and **going back to Any restored Commander** — the property
+    the derived answer has and the effect it replaced did not. A Timeless deck switched to Paper
+    kept **Timeless in the list, between Standard and Tiny Leaders**, with the select still
+    reading `timeless`: the deck was not re-formatted. The history read **"Set the game to
+    Paper · was Arena"** (the words, not the keys), Undo was labelled with that same sentence and
+    put the deck back on Arena with the list back at 10, and the two tiles read `Timeless ·
+    Arena · 0 cards` against `Timeless · 0 cards`. **One thing only the live pass showed**: the
+    second New deck dialog opened on the *remembered* Timeless with the game back at `Any`,
+    which is `last_deck_format` existing and `last_deck_game` deliberately not.
 - **`defaultCategoryId` is the one field of `DeckSettingsValue` the two hosts do not both ask
   about, and the asymmetry is the honest one** (2026-08-15). The row is drawn only when a
   `categories` prop arrives, and `CreateDeckDialog` passes none: `deck_create` seeds the four
