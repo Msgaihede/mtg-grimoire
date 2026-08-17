@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import {
@@ -642,3 +642,50 @@ export const ByManaValue: Story = {
 /** Grouped by type, which is the same vocabulary the add path files an uncategorized card by
  *  — one list, so a sort and a grouping cannot disagree about what a type is. */
 export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
+
+/**
+ * **The reader arranging their own columns** — a grip in every flowing heading, and none in the
+ * rail.
+ *
+ * The gesture is a drag from the grip onto another pile, and the arrow keys on that same grip
+ * are the whole of the keyboard's way to make the same move: a handle a mouse can drag and a
+ * keyboard cannot is a reorder half the readers do not have.
+ *
+ * **Where a pile is drawn and where a pile *sits* are two questions, and only the second is the
+ * reader's to answer here.** The Sideboard and the Maybeboard are held against the right edge by
+ * their `kind`, so their position is not an arrangement anybody made — which is why they carry no
+ * grip even though they carry a `sortOrder` like every other pile. The Categories dialog is where
+ * *those* two are reordered relative to each other, and it draws every row of the deck.
+ *
+ * `moveCategory` is what the editor hands down only while the deck is grouped by category; a view
+ * given none draws no grip at all, which is every other story in this file.
+ */
+export const Reorderable: Story = {
+  args: { groups: wideGroups(), actions: { moveCategory: fn() } },
+  decorators: [
+    (Story) => (
+      <div className="flex w-[52rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${RAIL_ATTR}]`);
+
+    // Six flowing piles, six grips — and the count in each name is the flow's rather than the
+    // deck's eight, because the two railed piles are not part of the order this moves things in.
+    const grips = canvas.getAllByRole("button", { name: /^Move / });
+    expect(grips).toHaveLength(6);
+    expect(within(rail).queryByRole("button", { name: /^Move / })).toBeNull();
+    expect(grips[0]).toHaveAccessibleName("Move Commander, 1 of 6");
+
+    // The keyboard's own move, and the assertion is the **pair of ids**: `deck_category_reorder`
+    // is sent every id in a new order, so a view that answered with a position in its own flow
+    // would have to be resolved by something that could not see the rail.
+    const ramp = canvas.getByRole("button", { name: "Move Ramp, 2 of 6" });
+    ramp.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(args.actions?.moveCategory).toHaveBeenCalledWith(10, 11);
+  },
+};

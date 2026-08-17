@@ -16,7 +16,7 @@ import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
-import { dragOnto } from "@/test-drag";
+import { dragOnto, startDrag } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
 import { stackCardWidth } from "../CardStack";
@@ -2251,5 +2251,213 @@ describe("TableView", () => {
     );
 
     expect(screen.queryByText("4 in your collection")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **Reordering the deck's own piles by dragging one past another** — `StackView`'s alone, because
+ * it is the view whose flow *is* the reader's order laid out on the desk.
+ *
+ * The write behind it is `deck_category_reorder`, which takes every id and writes `sort_order`
+ * from position — so what this view says is which pile moved and whose place it took, and the
+ * editor resolves both against the deck's whole list. Every assertion here is therefore about a
+ * **pair of ids**, never about an index.
+ */
+describe("StackView reordering", () => {
+  /**
+   * `GROUPS`' deck with the rail's two piles and an empty one of the reader's own.
+   *
+   * The flow comes out `Commander(3) · Ramp(1) · Draw(6)` and the rail `Sideboard(2) ·
+   * Maybeboard(5)`, which is the fixture this whole block turns on: the ids that flow are **not
+   * contiguous** in the deck's own list, so a view quietly doing index arithmetic of its own
+   * would answer every case below wrongly.
+   */
+  const piles = buildGroups(
+    [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
+    [COMMANDER, RAMP, SIDE, DRAW, MAYBE],
+    "category",
+    "alphabetical",
+  );
+
+  const draw = (over: Partial<DeckCardActions> = {}) => {
+    const moveCategory = vi.fn();
+    render(<StackView groups={piles} marketplace={TCG} actions={{ moveCategory, ...over }} />);
+    return moveCategory;
+  };
+
+  const grip = (name: string, position: string) =>
+    screen.getByRole("button", { name: `Move ${name}, ${position}` });
+  /**
+   * What is actually picked up: the **heading**, with the grip marking where the press has to
+   * start.
+   *
+   * The grip is not the drag source — it marks where the press has to land, so that what travels
+   * under the pointer is the heading rather than a 14px glyph. `startDrag` splits exactly those
+   * two things, which is what `pressOn` is for, and a test that dragged the grip would be
+   * addressing a registration that does not exist.
+   */
+  const headingOf = (name: string, position: string) =>
+    grip(name, position).closest("[draggable]")!;
+  /**
+   * Where a dragged pile is let go, and it is deliberately **not** the `<section>`.
+   *
+   * The section is the *card* drop target and pdnd allows one per element, so the reorder target
+   * is a wrapper inside it — an ancestor of the heading and of every card, which is what makes
+   * the whole column the target while a card drag still walks up to the section. Aiming at the
+   * heading is how a test lands inside that wrapper; a real pointer lands inside it anywhere but
+   * the section's own 6px rim.
+   */
+  const bodyOf = (group: CardGroup) => document.getElementById(`group-${group.key}`)!;
+
+  /** **Only the flow.** The Sideboard and the Maybeboard are held against the right edge, and
+   *  where they sit is not an order the reader arranged — so they carry no grip and the count in
+   *  every other grip's name is the flow's three rather than the deck's five. */
+  it("gives every flowing pile a grip and the railed ones none", () => {
+    draw();
+
+    expect(screen.getAllByRole("button", { name: /^Move / })).toHaveLength(3);
+    expect(grip("Commander", "1 of 3")).toBeInTheDocument();
+    expect(grip("Ramp", "2 of 3")).toBeInTheDocument();
+    expect(grip("Draw", "3 of 3")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Move Sideboard/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Move Maybeboard/ })).not.toBeInTheDocument();
+  });
+
+  /** Absent is the off switch the editor uses under `Group by mana value` — and the state every
+   *  story and every other host of this view is in. No grip, and no drop target either. */
+  it("draws no grip at all when the host offers no reorder", () => {
+    render(<StackView groups={piles} marketplace={TCG} />);
+    expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The keyboard's whole path, and the case the id-pair signature exists for: one step to the
+   * right of Ramp is **Draw**, whose id is 6 — three past Ramp's own in the deck's list, with the
+   * Sideboard in between. An index would have said 2.
+   *
+   * All four arrows, because the flow is a masonry: a pile that wraps sits under the pile above
+   * it, so "down" is a fact about how much room the window had rather than about the order.
+   */
+  it("steps a pile one place along with the arrow keys, naming its neighbour", async () => {
+    const moveCategory = draw();
+    const user = userEvent.setup();
+
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
+
+    moveCategory.mockClear();
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowUp}");
+    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, COMMANDER.id);
+
+    moveCategory.mockClear();
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowDown}");
+    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
+  });
+
+  /** Stepping past either end sends nothing rather than a reorder that would land where it
+   *  started: `movedTo` clamps, so the write would be legal, and a round trip and a re-read of
+   *  the whole deck to change nothing is still a round trip. */
+  it("sends nothing when there is no neighbour that way", async () => {
+    const moveCategory = draw();
+    const user = userEvent.setup();
+
+    grip("Commander", "1 of 3").focus();
+    await user.keyboard("{ArrowLeft}");
+    grip("Draw", "3 of 3").focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(moveCategory).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The drag, over the library's real code path — `test-drag.ts` has why that is possible in
+   * jsdom. A drop **lands the dragged pile where the target pile is**, which is the same move the
+   * arrow keys make.
+   *
+   * **And only from the grip**, asserted first: the heading holds the pile's name, its markers
+   * and its two numbers, and a press anywhere on it plus five pixels of travel must not carry the
+   * column away.
+   */
+  it("moves a pile onto the pile it was dropped on, and only from the grip", async () => {
+    const moveCategory = draw();
+
+    const refused = await startDrag(headingOf("Draw", "3 of 3"));
+    expect(refused.started).toBe(false);
+    await refused.cancel();
+
+    const held = await startDrag(headingOf("Draw", "3 of 3"), {
+      pressOn: grip("Draw", "3 of 3"),
+    });
+    try {
+      expect(held.started).toBe(true);
+      await held.over(bodyOf(piles[0]));
+      await held.drop();
+    } finally {
+      await held.cancel();
+    }
+
+    expect(moveCategory).toHaveBeenCalledWith(DRAW.id, COMMANDER.id);
+  });
+
+  /** A pile dropped on itself is not a move. The railed piles refuse for a different reason and
+   *  it is worth pinning beside this one: they register no target at all, so a pile dragged over
+   *  the Sideboard falls through to nothing. */
+  it("refuses a drop on itself and a drop on the rail", async () => {
+    const moveCategory = draw();
+
+    const press = { pressOn: grip("Ramp", "2 of 3") };
+    const held = await startDrag(headingOf("Ramp", "2 of 3"), press);
+    try {
+      await held.over(bodyOf(piles[1]));
+      await held.drop();
+    } finally {
+      await held.cancel();
+    }
+
+    const onRail = await startDrag(headingOf("Ramp", "2 of 3"), press);
+    try {
+      await onRail.over(bodyOf(piles.find((g) => g.categoryId === SIDE.id)!));
+      await onRail.drop();
+    } finally {
+      await onRail.cancel();
+    }
+
+    expect(moveCategory).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The card drop the reorder target sits inside still works**, and this is the regression the
+   * wrapper element could cause and nothing else would catch.
+   *
+   * A card let go over a pile hits that wrapper first — it is an ancestor of every card in the
+   * column — and is refused by its `canDrop`; pdnd then walks to `element.parentElement`, which is
+   * the `<section>` that has taken card drops all along. Dropping **on the card** rather than on
+   * the section is the whole point of the case: aimed at the section, the wrapper is never in the
+   * chain and a broken `canDrop` would pass.
+   */
+  it("still lets a card be dropped into a pile through the reorder target", async () => {
+    const drop = vi.fn();
+    draw({ drop });
+
+    const marked = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring")}"]`,
+    )!;
+    const intoDraw = document.getElementById(`group-cat-${DRAW.id}`)!;
+
+    await dragOnto(marked.closest("li") ?? marked, intoDraw);
+
+    // The whole write, spelled as the sibling case above spells it: this is a claim that the
+    // card drop is **untouched** by the reorder target sitting inside its section, so a field
+    // quietly lost on the way through would be exactly the regression to catch.
+    expect(drop).toHaveBeenCalledWith({
+      write: "move",
+      finish: null,
+      cardId: "c-Sol Ring",
+      from: RAMP.id,
+      to: DRAW.id,
+    });
   });
 });

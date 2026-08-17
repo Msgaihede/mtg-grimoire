@@ -65,6 +65,9 @@ const deckCategoryCreate = vi.hoisted(() => vi.fn());
 // state every install is in until the taxonomy has been downloaded, and the type-line fallback
 // is what these tests then exercise.
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+/** The write a pile dragged past its neighbours on the desk makes — `useDeckMeta`'s, and the one
+ *  category command with no menu row anywhere: the grip in a heading is its only caller here. */
+const deckCategoryReorder = vi.hoisted(() => vi.fn());
 // The three category writes a pile's right-click reaches, through `useDeckMeta`.
 const deckCategoryRename = vi.hoisted(() => vi.fn());
 const deckCategorySetActive = vi.hoisted(() => vi.fn());
@@ -124,6 +127,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionAdd,
     deckCategoryCreate,
     oracleTagsForPrintings,
+    deckCategoryReorder,
     deckCategoryRename,
     deckCategorySetActive,
     deckCategoryDelete,
@@ -539,6 +543,10 @@ beforeEach(() => {
   collectionAdd.mockReset().mockResolvedValue(undefined);
   deckCategoryCreate.mockReset().mockResolvedValue(category(9, "Removal", "main"));
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
+  // The whole list back, which is what `deck_category_reorder` answers. Nothing here reads it —
+  // the desk shows the order it sent and the query refetch is what settles it — so the value is
+  // only the shape.
+  deckCategoryReorder.mockReset().mockResolvedValue(CATEGORIES);
   deckCategoryRename.mockReset().mockResolvedValue(CATEGORIES[0]);
   deckCategorySetActive.mockReset().mockResolvedValue(CATEGORIES[0]);
   deckCategoryDelete.mockReset().mockResolvedValue(undefined);
@@ -1329,8 +1337,11 @@ describe("DeckEditor", () => {
    *  because a decklist is read by name. */
   it("sorts inside each group from the toolbar", async () => {
     await open();
+    // The **stack**, not the whole section: the heading above it carries a button of its own —
+    // the grip a pile is dragged past its neighbours by — and a section-wide sweep would read
+    // that as the first card. The list is what the order is a claim about anyway.
     const names = () =>
-      within(group("Main deck"))
+      within(screen.getByRole("list", { name: "Main deck" }))
         .getAllByRole("button")
         .map((b) => b.getAttribute("aria-label"));
 
@@ -4388,5 +4399,103 @@ describe("exportFileName", () => {
   it("falls back to a word rather than to nothing, or to a bare separator", () => {
     expect(exportFileName("", "")).toBe("decklist");
     expect(exportFileName(":", "?")).toBe("decklist");
+  });
+});
+
+/**
+ * **A pile dragged past its neighbours on the desk**, which is the half of the gesture the view
+ * cannot do for itself.
+ *
+ * `StackView` says which pile moved and whose place it took, both as ids; `deck_category_reorder`
+ * takes **every** id and writes `sort_order` from position. Resolving one into the other is this
+ * component's, and the fixture below is chosen so that a component doing index arithmetic instead
+ * would be wrong: the piles that flow are ids 1, 6 and 7, with the railed Sideboard sitting
+ * between them in the deck's own list.
+ */
+describe("DeckEditor reordering the deck's piles", () => {
+  /** Three piles of the reader's own and the two the rail takes — in `sortOrder`, which is the
+   *  order `deck_category_list` and `deck_get` both answer in. */
+  const PILES: DeckCategory[] = [
+    category(1, "Main deck", "main", { sortOrder: 0 }),
+    category(6, "Ramp", "main", { sortOrder: 1 }),
+    category(2, "Sideboard", "side", { sortOrder: 2 }),
+    category(7, "Removal", "main", { sortOrder: 3 }),
+    category(5, "Maybeboard", "maybe", { sortOrder: 4 }),
+  ];
+
+  const openWithPiles = async (deck: Partial<DeckRow> = {}) => {
+    deckGet.mockResolvedValue(detail(deck, [bolt()], PILES));
+    deckCategoryList.mockResolvedValue(PILES);
+    return open();
+  };
+
+  const grip = (name: string, position: string) =>
+    screen.getByRole("button", { name: `Move ${name}, ${position}` });
+
+  /**
+   * The whole rule in one press. The deck's list is `[1, 6, 2, 7, 5]`; Ramp's neighbour **on the
+   * desk** is Removal, two rows further down it with the railed Sideboard in between. So Ramp (6)
+   * lands at Removal's index in *that* list and comes out `[1, 2, 7, 6, 5]` — every id, the two
+   * railed piles keeping their places relative to everything they were already behind.
+   *
+   * That answer is only reachable from the whole list: a component counting the flow's own three
+   * positions would have sent three ids and dropped the rail out of the deck.
+   */
+  it("sends every category id, with the dragged pile in the target's place", async () => {
+    await openWithPiles();
+    const user = userEvent.setup();
+
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(deckCategoryReorder).toHaveBeenCalledWith(4, [1, 2, 7, 6, 5]);
+  });
+
+  /**
+   * **And the pile moves before the answer comes back.** A reorder is a round trip *and* a re-read
+   * of the whole deck; a column that only moved once `deck_get` had answered would snap back under
+   * the reader's hand and travel a moment later, which is the shape of a broken control.
+   *
+   * Read off the grips' own names, because that is the one thing on screen that states a position.
+   */
+  it("draws the new order before the write has answered", async () => {
+    await openWithPiles();
+    const user = userEvent.setup();
+
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(await screen.findByRole("button", { name: "Move Ramp, 3 of 3" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move Removal, 2 of 3" })).toBeInTheDocument();
+  });
+
+  /** A lie about what the deck's columns look like must not outlive the write that failed — and
+   *  the banner is what says why, which is the whole reason `reorderCategories` is in the
+   *  editor's `writes` family. */
+  it("puts the order back and says so when the reorder is refused", async () => {
+    deckCategoryReorder.mockRejectedValue("The database is busy with a sync.");
+    await openWithPiles();
+    const user = userEvent.setup();
+
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync.");
+    expect(screen.getByRole("button", { name: "Move Ramp, 2 of 3" })).toBeInTheDocument();
+  });
+
+  /**
+   * **Nothing to reorder under a derived grouping.** The headings on the desk are then buckets the
+   * app made — "Mana value 1" is not a pile and has no id — so there is no order of the reader's
+   * on screen to change, and the grip is not drawn at all.
+   *
+   * The deck is opened *on* that grouping rather than switched to it, because `lastGroupBy` is
+   * what the editor restores and this is the state a reader who left it there comes back to.
+   */
+  it("offers no grip when the deck is not grouped by category", async () => {
+    await openWithPiles({ lastGroupBy: "manaValue" });
+    await screen.findByRole("region", { name: "Mana value 1" });
+
+    expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
   });
 });

@@ -60,7 +60,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { CategoriesDialog, movedTo } from "./CategoriesDialog";
+import { CategoriesDialog } from "./CategoriesDialog";
 import { TagsDialog } from "./TagsDialog";
 
 /* --------------------------------------------------------------------- fixtures ------- */
@@ -227,32 +227,6 @@ beforeEach(() => {
   // Nothing tagged: the shape of a database that has never ingested the taxonomy, which is a
   // supported way to run this app and not a failure. The tests about tags say otherwise.
   oracleTagsForPrintings.mockResolvedValue([]);
-});
-
-/* ------------------------------------------------------------------- the reorder ------- */
-
-describe("movedTo", () => {
-  it("moves an id to a position, closing the gap it left", () => {
-    expect(movedTo([1, 2, 3, 4], 2, 0)).toEqual([2, 1, 3, 4]);
-    expect(movedTo([1, 2, 3, 4], 2, 3)).toEqual([1, 3, 4, 2]);
-  });
-
-  /**
-   * The keyboard asks for `index - 1` on the first row and `index + 1` on the last, every time
-   * the reader presses one more than there is list. Clamping there is what makes the handler a
-   * two-line `onKeyDown` instead of a bounds check at each of the two call sites — and what
-   * keeps `splice` from being handed a `-1`, which inserts from the *other* end.
-   */
-  it("clamps a position off either end rather than wrapping", () => {
-    expect(movedTo([1, 2, 3], 1, -1)).toEqual([1, 2, 3]);
-    expect(movedTo([1, 2, 3], 3, 9)).toEqual([1, 2, 3]);
-  });
-
-  it("answers a copy for an id the list does not hold", () => {
-    const ids = [1, 2, 3];
-    expect(movedTo(ids, 99, 0)).toEqual(ids);
-    expect(movedTo(ids, 99, 0)).not.toBe(ids);
-  });
 });
 
 /* ----------------------------------------------------------------------- shell ------- */
