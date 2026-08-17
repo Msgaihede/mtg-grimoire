@@ -183,6 +183,14 @@ export const Default: Story = {
  * rail. Neither the Sideboard nor the Maybeboard is in any of it — `splitRail` pins both kinds, so
  * both are taken out of the list before the flow is drawn, and drawn in the rail after.
  *
+ * **The flowing box is 464 rather than 528, which is the change of 2026-08-17** (`flowMaxWidth`).
+ * The 64px between those two numbers is the remainder — the part of the desk too narrow to hold a
+ * third box — and it used to sit inside the flowing box as blank desk in front of the rail, so the
+ * Sideboard stood 80px from the deck instead of 16. It is at the far right of the canvas now,
+ * past the rail, where nothing is drawn. This story is the one to look at for it: the remainder is
+ * whatever the desk's width leaves over, so it is a different number at every canvas and at every
+ * zoom stop, which is why the reader met it as a zoom bug.
+ *
  * **Six of six, at any desk height, which is what changed on 2026-08-14.** The flow used to be
  * `packColumns`' answer, and this story's count was arithmetic about the *height* the meta's
  * decorator declares: two piles never shared a 640px column, so six piles were six columns by

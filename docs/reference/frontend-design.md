@@ -474,7 +474,10 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - **The sideboard and the maybeboard are a rail, not part of the flow — and the rail is a plain
   flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
   before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
-  it, at the same inline width and `flex` basis, held right by `ml-auto`. The failure it
+  it, at the same inline width and `flex` basis. **Nothing positions that box** — since 2026-08-17
+  it is document order and a gutter, the `ml-auto` that used to hold it against the desk's right
+  edge having been the cause of the gap between the deck and the rail rather than the end of the
+  fix; what keeps the spacing even is `flowMaxWidth`'s cap on the flowing half. The failure it
   prevents is a drag with no destination on screen: both piles sort last, so packed they were the
   far end of the run, and a card dragged out of the main deck had nowhere to be let go of. The
   Maybeboard earns the rail on the same three counts as the Sideboard — played beside the deck
@@ -865,7 +868,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   is room for that rail is decided by
   the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
   the desk holds two columns and the gap between them the rail sits beside the flow, and below
-  that width it wraps onto its own line, where `ml-auto` keeps it on the right. **`content-start`
+  that width it wraps onto its own line — at the **left**, under the first column, since
+  2026-08-17. **`content-start`
   belongs on the view's root and nowhere else**, and it is what keeps a wrapped rail immediately
   under the flow: that root is a `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as
   the scroller rather than as tall as its content, and `align-content`'s initial `normal` behaves
@@ -895,7 +899,10 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     884, and the rail wrapped there too, still with no sideways scroll.
   - **`ml-auto` is what puts a wrapped rail back on the right**, and it does: at 1024 the rail
     took its own line with its right edge on the flow's, 15px of scrollbar in from the
-    scroller's own edge.
+    scroller's own edge. **Superseded 2026-08-17** — `ml-auto` is gone from both rails and a
+    wrapped rail lands at the left now. The reading stands as what that build did; it is not what
+    the current one does, and it is kept because the *rest* of this pass's figures were taken on
+    the same run.
   - **The sticky machinery really is gone** — the rail computes `position: static`,
     `box-shadow: none`, `z-index: auto` and a transparent background — and **`content-start`
     is on the box that has a height**: the view root computes `align-content: flex-start`.
