@@ -8,7 +8,7 @@ import { useRef } from "react";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
 import { scaled } from "@/lib/cardZoom";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { soleFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
@@ -141,9 +141,19 @@ export function GridView({
     // reach the page, where it would be an X scrollbar across the whole app. It implies
     // `overflow-y: auto`, which can never find anything to scroll in a box with no height of
     // its own.
+    //
+    // {@link DROP_MARK_ROOM} for `StackView`'s reason and it is the same defect, not a matching
+    // spacing choice: a group's ring is painted outside its border box, this box clips at its
+    // padding box, and with no padding every group in the wall lost the ring down both of its
+    // sides — the full height of the group rather than a corner, since a group here is as wide as
+    // the desk.
     <div
       ref={scrollRef}
-      className={cn("flex min-w-0 flex-1 flex-col gap-5 overflow-x-auto", className)}
+      className={cn(
+        "flex min-w-0 flex-1 flex-col gap-5 overflow-x-auto",
+        DROP_MARK_ROOM,
+        className,
+      )}
     >
       {groups.map((group) => (
         <GridGroup

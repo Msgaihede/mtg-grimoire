@@ -3,7 +3,7 @@
  * built around.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -309,10 +309,20 @@ export function StackView({
     // `flex-1` is inert in the editor for the same reason — the page hands this view a plain
     // block to fill — and is kept because it is the sentence a host in a *row* reads: it is how
     // the view takes its share of the width, which is the axis this box has ever shared.
+    //
+    // **{@link DROP_MARK_ROOM} is the padding, and it is what keeps a drag's own affordance on
+    // screen.** This box clips at its padding box, so with none the leftmost pile's `DROP_RING`
+    // and the rail's were each sliced down the edge for the whole length of a drag, and a pile's
+    // focus outline with them. `pb-2` outlives it and still wins the bottom edge — Tailwind emits
+    // the `padding` shorthand before the `padding-bottom` longhand, whatever order the two are
+    // written in here — because the foot of a column is the one edge that was never clipped and
+    // 8px is what the layout was drawn with.
     <div
       ref={scrollRef}
       className={cn(
-        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto pb-2",
+        "flex min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto",
+        DROP_MARK_ROOM,
+        "pb-2",
         className,
       )}
     >
