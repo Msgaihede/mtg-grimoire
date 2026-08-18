@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.11.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.10.0...v0.11.0) (2026-08-18)
+
+
+### Features
+
+* **card:** open every printing in a filterable modal ([eedec49](https://github.com/Msgaihede/mtg-grimoire/commit/eedec4974f83a40e3f70127aae975660bf8384ac))
+* **decks:** a TCGplayer export, and a decklist preview that opens shut ([4af5592](https://github.com/Msgaihede/mtg-grimoire/commit/4af559230f112c118dd6d06d0a91af7c7b2a5773))
+* **decks:** draw the format check as an icon button with a count bubble ([4082d56](https://github.com/Msgaihede/mtg-grimoire/commit/4082d56b661d6afa465a0a52cca4fc24ee0f9e7d))
+* **decks:** draw the format check as an icon button with a count bubble ([90d8e24](https://github.com/Msgaihede/mtg-grimoire/commit/90d8e24be8c5430f9548aefd71b503bc11cc5e96))
+* **nav:** walk the card walls, the deck's stacks and the printings modal with the arrow keys ([80146fc](https://github.com/Msgaihede/mtg-grimoire/commit/80146fce0da93487b0547d9ec89883ef00563932))
+
+
+### Bug Fixes
+
+* **decks:** clamp a dialog panel to the window so its body can scroll ([4ea77d6](https://github.com/Msgaihede/mtg-grimoire/commit/4ea77d664e48d5ad7e776e4310af6f39506c1093))
+* **decks:** keep the card picked when its finish is set ([f7c2c7e](https://github.com/Msgaihede/mtg-grimoire/commit/f7c2c7efcdbd97282afaa23a2fc0e09d0ddb4846))
+* **decks:** keep the card picked when its finish is set ([db33877](https://github.com/Msgaihede/mtg-grimoire/commit/db33877edc708242fb1d08c7a0f3865cf2dd9e4b))
+* **decks:** pin the sideboard rail to the right of the deck view ([0befa3d](https://github.com/Msgaihede/mtg-grimoire/commit/0befa3dd1bd98a67d6ce3d27a872f85e0832e02c))
+* **decks:** pin the sideboard rail to the right of the deck view ([e18b00f](https://github.com/Msgaihede/mtg-grimoire/commit/e18b00fa397858f2488861916230861024d0736e))
+* **decks:** size the drag drop zones to the ribbon they replace ([715a17a](https://github.com/Msgaihede/mtg-grimoire/commit/715a17a21e0247a044b9dcfad30c94ef30fe0764))
+* **decks:** size the drag drop zones to the ribbon they replace ([fafa86e](https://github.com/Msgaihede/mtg-grimoire/commit/fafa86eb6a378a239b603adae42c9f2426f755b6))
+* **nav:** keep the caret on a card that was pressed, not only one arrowed to ([a2f7c08](https://github.com/Msgaihede/mtg-grimoire/commit/a2f7c08d9f00ab102fdf633ccdc66c1b8f9a7c4c))
+* **nav:** keep the caret on a card that was pressed, not only one arrowed to ([22072f5](https://github.com/Msgaihede/mtg-grimoire/commit/22072f54bb732d436e0667b687fff24ec3aa4ae8))
+* **nav:** keep the caret on the thing being walked, and clear the focus ring's edge ([8f3d201](https://github.com/Msgaihede/mtg-grimoire/commit/8f3d20173dc5148fa5a5cc59e44238b32530dd1c))
+
 ## [0.10.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.9.1...v0.10.0) (2026-08-17)
 
 
