@@ -1636,3 +1636,102 @@ Island 829, Plains 821**; the largest non-land is Sol Ring at 132. `card.rs`'s o
 862 / 840 / 832 / 827 / 818 from 2026-08-05, so these lists grow by a handful of rows a fortnight —
 which is the argument for `MAX_PRINTINGS_HARD = 1000` being headroom rather than a fitted number,
 and for the caption keeping its `N of M` wording for a cap nothing currently reaches.
+
+
+## The arrow keys, and the caret the card pane kept taking
+
+Driven in the shipped window **2026-08-18** (`npm run tauri dev`, a **debug** build, 1280×800 and
+1024×768, against a real synced corpus). Three surfaces walk with the arrow keys — the search and
+collection walls, the deck's piles, and the printings modal stepping along the open deck — and the
+live pass found one defect behind all three, plus one the suite could not see.
+
+### One cause, three surfaces: the walk was exactly one press long
+
+`CardDetailPane` renders `<Body key={cardId}>` and that body's mount effect focuses the pane —
+"focus moves in when it opens, and Escape hands it back to whatever opened it", which is the right
+contract for a card a reader *pressed*. The arrow keys make the same store write for a different
+reason, so **every** press re-keyed the body and pulled the caret out of whatever was being walked:
+
+| Surface | One press left `document.activeElement` at |
+| --- | --- |
+| Search wall | `<aside aria-label="Card details">`, with no `[data-grid-index]` ancestor |
+| Deck stacks | the same, out of the pile the reader was in |
+| Printings modal | the same — **outside an `aria-modal` dialog**, past its own scrim |
+
+The third is the worst of them and is the one the reader reported: `trapTab` cycles Tab within the
+panel, so a caret that has left the panel is one it cannot get back — Tab carried on through the
+page under the scrim, and the modal's own keydown never fired again.
+
+The fix is `src/lib/caretWalk.ts`: a note saying *this selection was walked to, so the caret is
+already where it belongs*, written by the three walkers immediately before their store write and
+read by the pane's mount effect. The pane still records the opener — during a walk the active
+element **is** the right thing for Escape to hand back to — and skips only the focus.
+
+**The first spelling of that note was wrong in a way only a debug build could show.** It cleared
+itself on read, the way `handover` does one screen up in the same file; `main.tsx` wraps the app in
+`React.StrictMode`, which invokes a mount effect **twice** in development, so the first invocation
+consumed the note and the second took the caret anyway. The walk was still one card long and the
+fix looked like a fix. It is idempotent now — the same card answers the same way however many times
+it is asked, and any *other* card discards the note. Worth carrying because the asymmetry runs the
+wrong way: **a release build would have passed a test this could not**, StrictMode's double
+invocation being development-only.
+
+### The wall's tile parked 2px past its own scrollport
+
+Arrowing down a 117k-card browse, the focused tile's foot sat **2px past the scroller's padding
+box** at every step. Two things were behind it and the second is the general one:
+
+- The effect scrolled **the art button** into view rather than the tile around it. The button is
+  the art alone, so the caption strip under it hung past the scrollport.
+- `scrollIntoView({ block: "nearest" })` parks an element **flush** against the scrollport, and a
+  scrollport is the *padding box* — so the wall's own `p-3` buys nothing at an intermediate scroll
+  offset, and the `FOCUS` ring, which paints 4px proud of the border box, lands in the clipped
+  region. That is `DROP_MARK_ROOM`'s rule (`src/lib/dropMarks.ts`) arriving by a different road,
+  and half a focus indicator is a WCAG 2.4.7 failure rather than a cosmetic one.
+
+A `scroll-m-1.5` on the tile — **6px, that constant's own number, so the two cannot drift** — plus
+scrolling the tile rather than the button lands it a measured **6px clear** of the scrollport at
+every step. A scroll margin rather than more padding, because padding does not move where
+`scrollIntoView` stops.
+
+### The flanked modal, at both widths
+
+The chevrons live **inside** the panel, absolutely positioned into columns the scrim reserves.
+Inside, because `trapTab` cycles within the panel and a button outside its DOM would be
+pointer-only; into reserved columns, because at the app's 1024px floor the panel is already
+full-width and anything hung off its edge would sit off-window.
+
+| | 1280×800 | 1024×768 |
+| --- | --- | --- |
+| Panel | x 80 → 1200 (**1120** wide, 32 narrower than the 1152 it drew before) | x 80 → 944 (**864**) |
+| Chevrons | 37–73 and 1207–1243 | 37–73 and 951–987 |
+| `documentElement.scrollWidth` | 1280 = `clientWidth` | 1024 = `clientWidth` |
+
+Both are 36px discs on the panel's vertical centre (`cy` 400 against the panel's own 400 at
+1280×800), and `elementFromPoint` at each centre hits the chevron rather than the scrim — the check
+this repo's drag pass learnt to make before concluding anything about a control.
+
+### What the walk does, confirmed live
+
+- **Wall**: 0 → 1 → 2 by ArrowRight, then ArrowDown landing on 5 — the column count having dropped
+  **5 → 3** on the first press, because selecting opens the 384px pane and `columnsFor` divides
+  what is left. The absolute index is what survives that re-flow; a tile's row and column do not.
+- **Deck**: right, down, down, right walks pile to pile and card to card, and exactly **one**
+  `[data-deck-card-selected]` is in the DOM afterwards — on the focused card. The gold ring
+  follows the caret rather than trailing it.
+- **Modal**: four consecutive ArrowRights step four cards with the caret inside the dialog every
+  time. The chevron works as a button and steps the same way. At the first card the previous
+  chevron is really `disabled` and drops the neighbour's name from its label; there is no wrapping.
+  ArrowUp and ArrowDown change nothing, so the wall keeps its native scrolling.
+- **One card filed in two piles is two stops**, and the walk proves it rather than merely claiming
+  it: stepping off the end of the Artifact pile reached `"Lifetime" Pass Holder` a second time, as
+  the Creature pile's first row. Two `deck_cards` rows, two addresses, two stops.
+- **Closing the modal leaves the deck on the card walked to** — the ring and the pane both.
+
+### One thing this pass did not fix
+
+Escape out of the modal drops the caret to `<body>`. That is `DeckDialog`'s behaviour for **every**
+dialog on the shell rather than anything this work introduced — the shell focuses its panel on
+mount and restores nothing on close — so it is recorded here and left alone. It is more visible now
+than it was: a reader who walks the deck from inside the modal and then closes it has to Tab back
+from the top of the app to carry on walking the desk.

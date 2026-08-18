@@ -21,6 +21,7 @@ import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dn
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
+import { consumeWalkNote } from "@/lib/caretWalk";
 import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
@@ -463,7 +464,21 @@ function Body({
     if (active !== document.body && !paneRef.current?.contains(active)) {
       openerRef.current = active;
     }
-    paneRef.current?.focus();
+    /**
+     * **The caret moves in only when the card was _opened_, not when it was walked to.**
+     *
+     * The arrow keys write `selectedCardId` exactly as a press does — that is what makes the
+     * pane follow a walk across the search wall, the deck's piles or the printings modal — but
+     * the reader is standing on a tile, a deck card or a modal that has to keep the next press.
+     * Taking the caret here ends the walk after one card, which is what it did on all three
+     * surfaces until 2026-08-18; `caretWalk.ts` carries the three live readings.
+     *
+     * **The opener is still recorded above, and deliberately.** During a walk the active element
+     * *is* the right thing for Escape to hand back to — the tile the reader is on — so the note
+     * suppresses the focus and nothing else. What the pane must not do is take a caret it was
+     * not given.
+     */
+    if (!consumeWalkNote(cardId)) paneRef.current?.focus();
     // `cardId` is this body's identity — the pane keys on it — so this list is constant for the
     // life of the component and the effect still runs exactly once. `paneRef` is the box's own
     // ref, stable for as long as any card is open, and changes nothing about that.

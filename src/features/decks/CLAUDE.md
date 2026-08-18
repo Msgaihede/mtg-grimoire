@@ -442,6 +442,26 @@ reader to configure the deck they had just made; it now asks all of them.
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
     the bar has no accessible name and two of its labels are also headings on the desk behind it.
+- **The arrow keys walk the desk, and the printings modal walks the deck** (2026-08-18).
+  In `StackView`, up/down move within a pile and left/right to the neighbouring pile's **top**
+  card — the reader's own choice over "same depth, clamped" — with empty piles skipped and both
+  ends clamped rather than wrapped. The order is `splitRail`'s, `flow` then `rail`, which is what
+  the desk draws, so the keys and the layout cannot disagree. **It yields to `CategoryGrip`**,
+  whose arrows already reorder the piles and `preventDefault`, through the same `defaultPrevented`
+  handshake `useDismissOnEscape` runs on; that is the one thing here most easily broken by a tidy.
+  `onSelect` is `openCardFromDeck`, so the gold ring and the card pane follow the caret — one
+  `[data-deck-card-selected]` in the DOM, on the focused card, confirmed live.
+- **The printings modal steps along the deck, and the order reaches it through the store because
+  it cannot be recomputed anywhere else.** `AllPrintingsDialog` is drawn at `App` level, outside
+  this editor, and the order depends on three things that are the editor's own — `groupBy` and
+  `sortBy` are `useState` here, and the rows are `shown`, narrowed by a live text box and tag
+  chips. So `DeckEditor` **publishes** `deckWalkStops(groups, deckId)` as `store.deckWalk` and the
+  modal reads it; `deckWalk.ts` derives the order through the same `splitRail`, so the desk's own
+  arrow keys and the modal's chevrons are one answer rather than two that agree today. A row with
+  no `oracleId` is not a stop — an orphan has no printings to walk to — and **one card filed in two
+  piles is two stops**, which is right rather than a duplicate: two `deck_cards` rows, two
+  addresses, and a press in the modal writes to one of them. `[]` on the editor's unmount, or a
+  stale walk would step a modal opened from the Collection into somebody's Sideboard.
 - **A pile can be dragged past its neighbours on the desk, and only in `StackView`'s flow**
   (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
   source and the arrow keys on it are the keyboard's whole path — `CategoriesDialog`'s rule, kept

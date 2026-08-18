@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { GripVertical } from "lucide-react";
+import { walkingToCard } from "@/lib/caretWalk";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
@@ -415,6 +416,10 @@ export function StackView({
     // button focused here is the same node afterwards and keeps the caret. `StackedCard`'s own
     // `onFocus` opens the card it is on, which is the intended half of that: the card the caret
     // lands on stands out of its pile.
+    // And said before *that*, for the same reason one file over in `CardGrid`: `onSelect` here is
+    // `openCardFromDeck`, so it mounts the card pane's body, and that body focuses itself as it
+    // opens. Unannounced, the caret is the pane's after one press and the walk cannot continue.
+    walkingToCard(target.cardId);
     onSelect?.(target);
     // `e.currentTarget` is the view's own root — the element this handler is attached to — which
     // is both the right scope for the lookup and one fewer read of `scrollRef`. It is only valid

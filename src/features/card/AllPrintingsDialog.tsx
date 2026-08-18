@@ -69,6 +69,7 @@ import { sameDeckSlot, type DeckWalkStop } from "@/features/decks/deckWalk";
 import { DeckDialog, type DeckDialogFlanks } from "@/features/decks/DeckDialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
+import { walkingToCard } from "@/lib/caretWalk";
 import { plural } from "@/lib/counts";
 import { soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -313,6 +314,18 @@ export function AllPrintingsDialog() {
    */
   const step = useCallback(
     (stop: DeckWalkStop) => {
+      /**
+       * **Said before either write, and this surface is where it matters most.**
+       *
+       * `openCardFromDeck` re-keys the card pane behind the scrim, and that pane's body focuses
+       * itself as it mounts — so a step used to move the caret *out of an `aria-modal` dialog*
+       * and into the view behind it. Not merely "the walk stops after one press", which is what
+       * it costs the two walls: `trapTab` cannot reach a caret that is no longer inside the
+       * panel, so Tab carried on through the page under the scrim and the modal's own keydown
+       * never fired again. Reported by the reader and measured in the shipped window the same
+       * day. See `caretWalk.ts`.
+       */
+      walkingToCard(stop.deck.cardId);
       openAllPrintings(stop);
       openCardFromDeck(stop.deck);
     },

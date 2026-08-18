@@ -13,6 +13,7 @@ import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
+import { walkingToCard } from "@/lib/caretWalk";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -622,7 +623,14 @@ export function CardGrid<T extends GridCard>({
     }
     const caret = tile.querySelector<HTMLElement>(CARET_SELECTOR) ?? tile;
     caret.focus({ preventScroll: true });
-    caret.scrollIntoView?.({ block: "nearest" });
+    // **The tile is what is scrolled, and the button inside it is what takes the caret.** They
+    // are not the same box and scrolling the wrong one is measurable: the button is the art
+    // alone, so bringing *it* into view leaves the caption strip under it hanging past the
+    // scrollport, and the scroll margin that makes room for the focus ring is on the tile and
+    // does not reach a descendant. Measured 2026-08-18 in the shipped window arrowing down a
+    // 117k-card browse: the tile's foot sat **2px** past the scroller's padding box every step,
+    // where scrolling the tile lands it the intended **6px** clear.
+    tile.scrollIntoView?.({ block: "nearest" });
     setPendingIndex(null);
   }, [pendingIndex, virtualRows, columns, rows.length, virtualizer]);
 
@@ -680,6 +688,11 @@ export function CardGrid<T extends GridCard>({
     if (next === null) return;
 
     e.preventDefault();
+    // Said **before** the write, because the write is what mounts the card pane's body and that
+    // body focuses itself as it opens. Unannounced, the pane takes the caret on the first press
+    // and every later one lands on the pane rather than on a tile — measured in the shipped
+    // window, and the whole reason this note exists.
+    walkingToCard(rows[next].id);
     onSelect(rows[next].id);
     // Scroll first, focus later. The tile may not be drawn yet — see `pendingIndex` — and the
     // virtualiser is the only thing that can put it on screen, since it owns this scroller's
@@ -896,7 +909,24 @@ function Tile<T extends GridCard>({
       // them wherever the caller puts it, corners and caption alike, and nothing outside a tile
       // ever sees them.
       style={{ width, ...cardScaleVars(zoom) }}
-      className="group flex shrink-0 flex-col gap-[calc(0.25rem*var(--mark-scale,1))]"
+      // **`scroll-m-1.5` is room for the focus ring, and it is the arrow walk that needs it.**
+      //
+      // `scrollIntoView({ block: "nearest" })` parks a tile flush against the scrollport's edge,
+      // and a scrollport is the **padding box** — so the wall's own `p-3` buys nothing at an
+      // intermediate scroll position, and the ring `FOCUS` paints 4px proud of the tile's border
+      // box lands in the clipped region. That is `DROP_MARK_ROOM`'s rule
+      // (`src/lib/dropMarks.ts`) arriving by a different road: a scroller has to leave room for
+      // the marks its own targets draw outside their border box, and half a focus indicator is
+      // a WCAG 2.4.7 failure rather than a cosmetic one. **6px rather than 4** is that constant's
+      // own choice, kept so the two numbers cannot drift.
+      //
+      // A scroll margin rather than more padding, because padding does not move where
+      // `scrollIntoView` stops. It also absorbs the **2px** the walk was measured overshooting
+      // by (2026-08-18, debug build, 1280×800, arrowing down a 117k-card browse): the virtualiser
+      // owns this scroller's offset and the tile's final transform lands in the same commit the
+      // scroll is computed in, so the correction is a fraction of the ring's room rather than
+      // something needing a frame of its own.
+      className="group flex shrink-0 scroll-m-1.5 flex-col gap-[calc(0.25rem*var(--mark-scale,1))]"
     >
       {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
           join the button's accessible name, and a wall of forty cards would be forty
