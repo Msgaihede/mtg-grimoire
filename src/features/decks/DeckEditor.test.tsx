@@ -2592,6 +2592,9 @@ describe("DeckEditor", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Export deck" }));
 
     const dialog = await screen.findByRole("dialog", { name: 'Export "Burn"' });
+    // The preview opens shut and is **unmounted** while it is — the press is what a reader makes
+    // to read the text, and this suite has to make it too. See `ExportDialog.tsx`.
+    await userEvent.click(within(dialog).getByRole("button", { name: /Show decklist/ }));
     expect(within(dialog).getByText(/Lightning Bolt/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Sol Ring/)).toBeInTheDocument();
   });

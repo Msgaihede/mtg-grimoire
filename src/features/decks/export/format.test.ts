@@ -151,6 +151,34 @@ describe("formatExport", () => {
     );
   });
 
+  it("writes TCGplayer's bracketed printing, flat and uppercased", () => {
+    const cards = [
+      card({ name: "Sol Ring", categoryName: "Ramp", categoryKind: "commander" }),
+      BOLT,
+    ];
+    // No heading over either row, though one of these is a commander and the other is not:
+    // Mass Entry reads every line as one item, so a heading would be read as a card.
+    expect(formatExport(cards, "tcgplayer")).toBe(
+      "1 Sol Ring [LTC] 285\n2 Lightning Bolt [LEA] 161\n",
+    );
+  });
+
+  it("writes a switched-off pile into TCGplayer, and leaves nothing out", () => {
+    // The one flat format that keeps a maybeboard: a Mass Entry list is a cart, and the pile a
+    // reader switched off is usually exactly what they still have to buy. Arena and MTGO cut it.
+    const cards = [card({ name: "Forest", quantity: 6, categoryActive: false })];
+    expect(formatExport(cards, "tcgplayer")).toBe("6 Forest [LTC] 285\n");
+    expect(omittedCount(cards, "tcgplayer")).toBe(0);
+    expect(omittedCount(cards, "arena")).toBe(6);
+  });
+
+  it("writes no finish marker into TCGplayer", () => {
+    // A printing's foil is chosen in the cart rather than named in the text, so `*F*` here would
+    // be a word Mass Entry reads as part of the card's name.
+    expect(formatExport([card({ finish: "foil" })], "tcgplayer")).toBe("1 Sol Ring [LTC] 285\n");
+    expect(formatExport([card({ finish: "foil" })], "plain")).toBe("1 Sol Ring *F*\n");
+  });
+
   it("gives the CSV a category column", () => {
     expect(formatExport([card({ name: "Sol Ring", categoryName: "Ramp" })], "csv")).toBe(
       "Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,Ramp,\n",
@@ -178,10 +206,14 @@ describe("formatExport", () => {
       card({ name: "Branchloft Pathway // Boulderloft Pathway", categoryName: "Land" }),
       card({ name: "Duress", categoryName: "Sideboard", categoryKind: "side" }),
     ];
-    // CSV is **write-only and stays so** — nothing in `parse.ts` reads a comma-separated
-    // decklist, and adding one would be a second grammar rather than a rule inside the one
-    // there is. Asserted by name so the gap cannot read as an oversight.
-    const readable = EXPORT_FORMATS.filter((f) => f !== "csv");
+    // **Two formats are write-only, and each for its own reason.** CSV, because nothing in
+    // `parse.ts` reads a comma-separated decklist and adding one would be a second grammar
+    // rather than a rule inside the one there is. TCGplayer, because its line is aimed at a
+    // cart rather than at us: `parse.ts`'s `BRACKET` is anchored to the end of the line, so a
+    // bracket with a collector number after it is not a bracket to that parser and the whole
+    // tail lands in the name — see the next test, which pins that rather than leaving it as a
+    // claim. Both are excluded **by name** so neither gap can read as an oversight.
+    const readable = EXPORT_FORMATS.filter((f) => f !== "csv" && f !== "tcgplayer");
     expect(readable).toEqual(["plain", "mtgo", "arena", "moxfield", "archidekt"]);
     for (const f of readable) {
       const back = parseDecklist(formatExport(cards, f));
@@ -189,6 +221,15 @@ describe("formatExport", () => {
       expect(back.lines.map((l) => l.name).sort(), f).toEqual(cards.map((c) => c.name).sort());
       expect(back.totalCards, f).toBe(3);
     }
+  });
+
+  it("does not round-trip TCGplayer, and this is where that is measured", () => {
+    // The reason TCGplayer sits beside CSV in the exclusion above, pinned rather than asserted
+    // in prose: the copies survive and the **name does not**. If `parse.ts` ever learns to read
+    // an unanchored bracket, this test fails and the exclusion is the thing to revisit.
+    const back = parseDecklist(formatExport([BOLT], "tcgplayer"));
+    expect(back.lines.map((l) => l.name)).toEqual(["Lightning Bolt [LEA] 161"]);
+    expect(back.lines.map((l) => l.quantity)).toEqual([2]);
   });
 
   it("round-trips the piles through the formats that carry them", () => {

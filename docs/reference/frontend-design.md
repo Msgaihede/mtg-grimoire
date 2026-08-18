@@ -766,6 +766,28 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   which is what lets each body start its queries and its state clean on every open. The shell
   does not own the body's scroller — the history body has a sticky roll-up inside its own — so
   each body renders its own `min-h-0 flex-1 overflow-y-auto`.
+  **A body's scroller only works if the panel above it is clamped, and for two days it was not**
+  (2026-08-18). The panel's `max-h-full` is a percentage against its *grid area*, and the scrim's
+  `grid place-items-center` gave it an **implicit** row — which is `auto`, and an `auto` row sizes
+  to its own content, so the clamp was circular and clamped nothing. Measured in a headless
+  browser at a 708px viewport with a 140-line export: the panel drew **2963px**, the body's
+  `overflow-y-auto` never scrolled because it had every pixel it asked for, and the dialog's
+  buttons sat at y≈2930 — off the window, reachable by neither pointer nor wheel. The scrim now
+  names one explicit `grid-rows-[minmax(0,1fr)]` row; the same panel draws **660px**, the preview
+  scrolls its own 2754px, and the buttons are on screen. `minmax(0,` is load-bearing: a bare `1fr`
+  is `minmax(auto, 1fr)`, whose `auto` floor is the content again. It reached every dialog on the
+  shell and was reported against one of them, and **jsdom can see none of it** — no layout engine,
+  every box 0px — so the suite pins the two classes and the numbers come from a browser.
+
+  **A dialog's tallest block opens shut when it is not what the reader came for** (2026-08-18),
+  which is `DeckSearchPanel`'s collapsed default one rung down. `ExportDialog`'s decklist preview
+  is a disclosure starting closed: the presses that do the work are Copy and Save as…, and a
+  whole-deck export put both of them a screenful of text away from the format that chose them.
+  Shut, the dialog is the format row, whatever that format leaves out, the toggle and the
+  buttons. The toggle's own label carries the line count, so "nothing is showing" is never
+  mistaken for "nothing is there" — and the block is **unmounted** rather than hidden, because a
+  hidden `<pre>` still holding the text is the shape that lets a test assert a line no reader can
+  see.
   **The argument is width, and it is the desk row's own number.** At the app's own 1280×800 with
   the card pane docked that row measures **602px** (`DeckEditor`'s `DECK_FLOOR`), so the 384px
   search panel plus its 16px gap leave the deck **202px** — one stack column. A drawer that is

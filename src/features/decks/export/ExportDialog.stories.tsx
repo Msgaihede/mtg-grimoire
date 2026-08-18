@@ -25,6 +25,18 @@ function preview(canvasElement: HTMLElement): HTMLElement {
 }
 
 /**
+ * Open the preview, which every story arrives with **shut** — see {@link ShutByDefault}.
+ *
+ * Every play below that reads a rendered line goes through this first, because the `<pre>` is
+ * unmounted while the disclosure is shut rather than merely hidden. That is the point: a hidden
+ * block still holding the text is exactly what lets a play assert a line no reader can see, and
+ * {@link preview} would have found it and passed.
+ */
+async function expand(canvasElement: HTMLElement): Promise<void> {
+  await userEvent.click(await within(canvasElement).findByRole("button", { name: /Show decklist/ }));
+}
+
+/**
  * The pile being exported: printings out of the generated corpus rather than names typed here.
  *
  * Two in the pile, and with different set codes, because that is the smallest list that tells the
@@ -166,7 +178,7 @@ type Story = StoryObj<typeof meta>;
  * **Plain text**, which is what the dialog opens on — `quantity name`, and nothing about the
  * printing.
  *
- * The six formats are drawn in `EXPORT_FORMATS`' own order and deliberately **not** through
+ * The formats are drawn in `EXPORT_FORMATS`' own order and deliberately **not** through
  * `sortOptions`: plain first is the one most readers want, the same kind of deliberate order the
  * app's option-list rule exempts a grade scale for. They are a `radiogroup`, because picking one
  * is picking *instead of* the others and the preview under them is a single answer. The row
@@ -189,10 +201,12 @@ export const PlainText: Story = {
       "Arena",
       "Moxfield",
       "Archidekt",
+      "TCGplayer",
       "CSV",
     ]);
     await expect(formats[0]).toHaveAttribute("aria-checked", "true");
 
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
   },
 };
@@ -220,6 +234,7 @@ export const Mtgo: Story = {
       "aria-checked",
       "true",
     );
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
     // No set code anywhere in it — the whole of what makes this format different from Moxfield's.
     await expect(preview(canvasElement).textContent).not.toMatch(/2X2|C21/);
@@ -249,6 +264,7 @@ export const Moxfield: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
     );
@@ -277,9 +293,55 @@ export const Archidekt: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] 1x Sol Ring (c21) 263 [Ramp]",
     );
+  },
+};
+
+/**
+ * **TCGplayer Mass Entry** — `quantity name [SET] collectorNumber`, which is a **cart** rather
+ * than a decklist, and that is what decides all three of the ways it differs from the writers
+ * above it.
+ *
+ * Mass Entry reads every line as one item and has no section vocabulary at all, so this format
+ * writes a **flat** list: a heading here would be read as a card nobody sells. It has nowhere to
+ * put a maybeboard either — and unlike Arena and MTGO it does not *lose* one, because a pile the
+ * reader switched off is usually exactly the half they still have to buy. So every row is
+ * written and the omission line never fires for this format; {@link SwitchedOffPile} is where
+ * the two other flat formats answer differently.
+ *
+ * The set code goes in **square brackets** with the collector number bare after it, which is the
+ * most specific of the three shapes TCGplayer documents — the cart then lands on the printing the
+ * deck names rather than on whatever art is cheapest. There is no finish marker: a printing's
+ * foil is chosen in the cart, so `*F*` here would be a word Mass Entry read as part of the name.
+ *
+ * **Write-only, and the second such format after CSV** — measured rather than assumed, in
+ * `format.test.ts`. Our own parser's bracket is anchored to the end of the line, so a bracket
+ * with a number after it is not a bracket to it and the whole tail lands in the card's name.
+ */
+export const Tcgplayer: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(
+      async () => await expect(canvas.getByRole("radio", { name: "TCGplayer" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    await userEvent.click(canvas.getByRole("radio", { name: "TCGplayer" }));
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "2 Lightning Bolt [2X2] 117 1 Sol Ring [C21] 263",
+    );
+
+    // The switched-off pile is in the cart with everything else, and nothing is said about
+    // omissions because nothing was omitted.
+    await expect(preview(canvasElement)).toHaveTextContent("6 Forest [UNF] 239");
+    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    // Flat: not one of the section words the grouped formats write.
+    await expect(preview(canvasElement).textContent).not.toMatch(/Deck|Maybeboard|Cuts/);
   },
 };
 
@@ -307,6 +369,7 @@ export const Csv: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "CSV" }));
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Quantity,Name,Set,Collector number,Category",
     );
@@ -318,8 +381,8 @@ export const Csv: Story = {
 };
 
 /**
- * A deck with a **switched-off pile** in it, and the one sentence two of the six formats owe the
- * reader because of it.
+ * A deck with a **switched-off pile** in it, and the one sentence Arena and MTGO owe the reader
+ * because of it.
  *
  * `is_active = 0` is the whole of what a maybeboard is here, and the formats divide on whether
  * they have anywhere to put one. **Arena and MTGO do not** — writing a maybeboard into an Arena
@@ -346,6 +409,12 @@ export const SwitchedOffPile: Story = {
     await expect(
       canvas.getByText("6 cards in switched-off piles are not written in this format."),
     ).toBeVisible();
+    // **The sentence is on screen with the preview still shut**, which is the whole of why it is
+    // said beside the format rather than over the text: a reader who never opens the decklist can
+    // still press Copy, and this is the only thing that tells them what the file will be missing.
+    await expect(canvas.getByRole("button", { name: /Show decklist/ })).toBeVisible();
+
+    await expand(canvasElement);
     // Said before Copy could be pressed, and true of the text on screen: no Forest in it.
     await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
 
@@ -433,6 +502,7 @@ export const Saved: Story = {
     // A saved export does not close the dialog either — the reader may want another format.
     await expect(args.onDismiss).not.toHaveBeenCalled();
     await expect(canvas.getByRole("dialog", { name: 'Export "Ramp"' })).toBeVisible();
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt");
   },
 };
@@ -467,6 +537,7 @@ export const SaveRefused: Story = {
 
     // Everything the reader could still act on is untouched.
     await expect(args.onDismiss).not.toHaveBeenCalled();
+    await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt");
     await expect(canvas.getByRole("button", { name: "Copy" })).toBeVisible();
   },
@@ -487,9 +558,57 @@ export const EmptyPile: Story = {
     const dialog = await canvas.findByRole("dialog", { name: 'Export "Sideboard"' });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
+    // The toggle says so before it is pressed: nothing is showing *and* there is nothing there.
+    await expect(canvas.getByRole("button", { name: /decklist/ })).toHaveTextContent(
+      "Show decklist (0 lines)",
+    );
+
+    await expand(canvasElement);
     await expect(preview(canvasElement).textContent).toBe("");
     await userEvent.click(canvas.getByRole("radio", { name: "CSV" }));
     await expect(preview(canvasElement).textContent).toBe("");
+  },
+};
+
+/**
+ * **The preview opens shut**, which is what this dialog looks like the moment it is opened.
+ *
+ * A decklist is the tallest thing here and the least of what a reader came for: the two presses
+ * that do the work are Copy and Save as…, and a whole-deck export put both of them a screenful
+ * of text away from the format that chose them. Shut, the dialog is the format row, whatever the
+ * format leaves out, the toggle and the buttons — and the **count in the toggle's own label** is
+ * what a shut preview still owes the reader, so "nothing is showing" is never mistaken for
+ * "nothing is there".
+ *
+ * It really is shut and not hidden: the `<pre>` is **unmounted**, which is why every play on this
+ * page presses this button before reading a line. A hidden block still holding the text is
+ * exactly the shape that lets a play assert a line no reader can see.
+ */
+export const ShutByDefault: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const toggle = await canvas.findByRole("button", { name: /Show decklist/ });
+    await waitFor(async () => await expect(toggle).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveTextContent("Show decklist (3 lines)");
+    await expect(canvasElement.querySelector("pre")).toBeNull();
+    // The presses that do the work are on screen with it — which is the point of the whole
+    // change, since they were the two a tall export pushed out of reach.
+    await expect(canvas.getByRole("button", { name: "Copy" })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Save as…" })).toBeVisible();
+
+    await userEvent.click(toggle);
+    await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt");
+    const open = canvas.getByRole("button", { name: /Hide decklist/ });
+    await expect(open).toHaveAttribute("aria-expanded", "true");
+    // The pair is announced: while there is something to control, the button names it.
+    await expect(open.getAttribute("aria-controls")).toBe(preview(canvasElement).id);
+
+    // And it shuts again, taking the block back out of the tree rather than hiding it.
+    await userEvent.click(open);
+    await expect(canvasElement.querySelector("pre")).toBeNull();
   },
 };
 
