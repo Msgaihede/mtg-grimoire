@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fireEvent, fn, within } from "storybook/test";
+import { expect, fireEvent, fn, userEvent, within } from "storybook/test";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import type { DragPayload } from "@/features/decks/dnd";
@@ -150,7 +150,12 @@ const meta = {
           "rows and the collection's know different things. The two the stories below lean on " +
           "are `badge`, a mark over the art's bottom-left corner, and `action`, one control at " +
           "the end of the caption; the corner, its felt backing and the `empty:hidden` guard " +
-          "belong to the wall, so two views cannot drift into two shades. Switch the **Art** " +
+          "belong to the wall, so two views cannot drift into two shades.\n\n" +
+          "**`arrowNav` is the one behaviour that is opt-in rather than answered per card.** It " +
+          "makes the arrow keys walk the wall and move the *selection* with them, which two of " +
+          "the four callers want and two must not have — the printings modal reads left and " +
+          "right as a step through a card's printings, and the deck editor's docked column sits " +
+          "beside a deck the arrows belong to. Switch the **Art** " +
           "toolbar to Live to see real Scryfall images instead of the offline placeholders.",
       },
     },
@@ -340,6 +345,53 @@ export const GameChangers: Story = {
  * would be forty buttons called "Lightning Bolt 3 in your collection".
  */
 export const Selected: Story = { args: { selectedId: BOLT_ALPHA.id } };
+
+/**
+ * The arrow keys walking the wall — and **the selection walking with them**.
+ *
+ * Opt-in, through `arrowNav`, and only the search page and the collection page pass it. Every
+ * press calls `onSelect`, which on both of those *is* the store's `selectedCardId` and therefore
+ * what the docked card pane reads: the reader asked for the next card to be selected, not merely
+ * outlined, and a ring that moved while the pane held still would be a wall with two carets on
+ * it. The printings modal draws this same component and must never take the prop — left and
+ * right *there* step through a card's printings, and one key cannot mean two things on one
+ * screen.
+ *
+ * Left and right are linear across row boundaries (the last tile of a row steps to the first of
+ * the next, because a wall of results is one list that happens to be wrapped); up and down move a
+ * whole row; neither end wraps. **None of which this canvas can show under Vitest**, where
+ * `ResizeObserver` is a no-op, the wall measures 0px and `columnsFor` floors at one column — so
+ * the `play` below asserts only what a single column can answer, and `gridNav.test.ts` holds the
+ * grid cases.
+ *
+ * The caret lands on the tile's **art button**, not on the tile's root: the root is
+ * `tabIndex={-1}` so a closing menu can hand focus back to it, and it wears no ring. Both tiles
+ * are found here through `data-grid-index` — a tile's absolute place in the list, which is the
+ * number every step of a move is keyed off, because selecting a card opens a 384px pane and
+ * re-flows the wall to fewer columns as a *result* of the press being handled.
+ */
+export const ArrowKeys: Story = {
+  args: { arrowNav: true },
+  play: async ({ canvasElement, args }) => {
+    const caretOn = (index: number) =>
+      canvasElement.querySelector<HTMLElement>(`[data-grid-index="${index}"] button`);
+    const first = caretOn(0);
+    await expect(first).not.toBeNull();
+
+    // Placed by hand and checked, rather than typed into: `userEvent.type` focuses whatever
+    // element it is handed, so a focus assertion after it passes for the wrong reason.
+    first?.focus();
+    await expect(first).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    await expect(args.onSelect).toHaveBeenLastCalledWith(ALL[1].id);
+    await expect(caretOn(1)).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    await expect(args.onSelect).toHaveBeenLastCalledWith(ALL[0].id);
+    await expect(caretOn(0)).toHaveFocus();
+  },
+};
 
 /**
  * A wall whose tiles can be carried to a deck — spec §1's first drag source.

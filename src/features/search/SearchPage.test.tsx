@@ -1452,6 +1452,35 @@ describe("the card menu", () => {
 });
 
 /**
+ * The arrow keys on the art wall — and the one thing this page contributes to them.
+ *
+ * The mechanism belongs to `CardGrid` and is pinned there and in `gridNav.test.ts`. But
+ * `arrowNav` **is a prop**, and three of that component's four callers are deliberately built
+ * without it — the printings modal reads left and right as a step through a card's printings —
+ * so a wall can be given the whole feature and say nothing about it. The claim here is that this
+ * page passes it, and that a press therefore moves the field the docked card pane reads rather
+ * than only an outline on the wall.
+ *
+ * One column, because jsdom measures the wall at 0px — so ArrowRight is the honest key to press.
+ * `userEvent.keyboard` on a caret placed by hand, never `type`, which focuses what it is handed
+ * and would make the focus assertion pass for the wrong reason.
+ */
+describe("the arrow-key walk", () => {
+  it("selects the next card along, which is the card the pane is showing", async () => {
+    searchCards.mockResolvedValue(page(cards(3)));
+    useAppStore.setState({ searchView: "grid" });
+    wrap(<SearchPage />);
+
+    const first = await screen.findByRole("button", { name: "Card 0" });
+    first.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+    expect(screen.getByRole("button", { name: "Card 1" })).toHaveFocus();
+  });
+});
+
+/**
  * The pager's arithmetic, tested away from the component: jsdom gives the virtualizer no
  * layout, so the scroll that would drive it in a real window cannot happen here.
  */

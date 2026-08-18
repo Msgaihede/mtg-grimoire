@@ -19,6 +19,7 @@ import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
+import { nextGridIndex } from "./gridNav";
 import { needsNextPage } from "./useCardSearch";
 
 /**
@@ -90,6 +91,70 @@ const CAPTION_GAP = 4;
  * where it is scaled.
  */
 const CAPTION_HEIGHT = Math.ceil(CAPTION_CONTROL * CONTROL_SHRINK) + CAPTION_GAP;
+
+/**
+ * A tile's **absolute** position in `rows`, published on its own root element.
+ *
+ * The DOM is the caret's data structure here, exactly as it is for the context menu's rows
+ * (`components/menu/panel.ts` argues the same point at greater length): a keypress arrives with
+ * a `target`, and walking up from it to the tile it landed in is one `closest` — where mapping
+ * that element back to a *card* through the `rows` array would mean keeping a second index of
+ * something the browser is already holding.
+ *
+ * It goes on the tile's root rather than on the art button inside it because a press can land on
+ * any of a tile's four parts — the art, either corner mark, the quick-add in the caption — and
+ * only the root contains all of them. The element that eventually takes the caret is a different
+ * one; see {@link CARET_SELECTOR}.
+ *
+ * **Absolute, not (row, column).** Selecting a card opens the 384px detail pane, `columnsFor`
+ * divides what is left, and the wall re-flows *as a result of the very press being handled* — so
+ * a tile's row and column are answers with a shelf life of one render and its absolute index is
+ * not. Every step of the move is keyed off this number for that reason: the arithmetic in
+ * `gridNav.ts`, the tile the effect below hunts for, and the scroll that has to reach it.
+ *
+ * Written unconditionally rather than only under {@link CardGrid}'s `arrowNav`, because it
+ * states a fact about the tile rather than about a feature — a conditional attribute would be a
+ * second thing to keep in step with the prop, for nothing: nothing reads it unless the handler
+ * is armed.
+ */
+const GRID_INDEX_ATTR = "data-grid-index";
+
+/** The same spelling as a selector, written out so it reads as one string rather than as two. */
+const TILE_SELECTOR = "[data-grid-index]";
+
+/**
+ * What inside a tile takes the caret when an arrow key moves the selection: the art button.
+ *
+ * The tile's root is focusable (`tabIndex={-1}`, so a menu can hand the caret back to it) and is
+ * deliberately **not** what is focused here. It is a place the caret can be *put* and never one
+ * Tab travels through, and it wears no focus ring — the ring is `FOCUS` on the button. A reader
+ * arrowing across the wall with nothing visibly focused would be worse than no arrow keys at
+ * all.
+ *
+ * The art button is a tile's first `<button>` in document order: the two corner marks between it
+ * and the caption are `<span>`s, and the caller's own control (the search's quick-add) comes
+ * after it in the caption. `?? tile` is the fallback for a wall drawn without art at all, which
+ * no caller builds today.
+ */
+const CARET_SELECTOR = "button";
+
+/**
+ * A press that belongs to a caret in a field rather than to the wall.
+ *
+ * **Deliberately wider than `isTextEntry` in `components/menu/panel.ts`**, and the two must stay
+ * apart for the reason that file already gives about its own pair: that predicate governs which
+ * keys an open *menu* yields, and denies `checkbox`, `radio` and `range` because the arrows mean
+ * nothing on them there. Here every `<input>` counts, plus `<select>`, because a radio group or
+ * a range slider uses the arrow keys *itself* — a wall that jumped the selection while somebody
+ * was nudging a slider would be taking a key the control was using.
+ *
+ * It is the general statement of a rule the handler then makes tighter: a press is only a walk
+ * when the caret is on the tile itself, which excludes every field on the page whether or not it
+ * is named here. Both are kept because they fail in opposite directions — this one is a
+ * deny-list that survives any later loosening of *where* a walk may start from, and that one
+ * covers the controls a deny-list of input types cannot see (the quick-add popup's buttons).
+ */
+const FIELD_SELECTOR = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
 
 /**
  * How many tiles of `tileWidth` fit across `width`, counting the gap between them.
@@ -176,6 +241,7 @@ export function CardGrid<T extends GridCard>({
   cardMenuKey,
   tileRef,
   dragPayload,
+  arrowNav = false,
   baseTileWidth = TILE_BASE_WIDTH,
 }: {
   rows: T[];
@@ -336,6 +402,30 @@ export function CardGrid<T extends GridCard>({
    */
   dragPayload?: (card: T) => DragPayload;
   /**
+   * Whether the arrow keys walk the wall — left and right one tile, up and down one row — and
+   * **move the selection with them**, so the card the detail pane is showing follows the caret.
+   *
+   * That last part is what makes this a prop rather than a behaviour. Every press calls
+   * {@link onSelect}, which on the two walls that pass this *is* the store's `selectedCardId` and
+   * therefore what the docked 384px `CardDetailPane` reads — the reader asked for the next card
+   * to be *selected*, not merely outlined, and a focus ring that moved while the pane held still
+   * would be a wall with two carets on it. So a caller who passes this is signing up for the
+   * arrow keys to open cards.
+   *
+   * **The printings modal must never take it, and the reason is not caution.** `AllPrintingsDialog`
+   * draws this same wall over one card's printings, and left/right *there* mean something else
+   * entirely — stepping through the printings inside the surface the reader has already opened.
+   * Two meanings for one key on one screen is not a conflict a component can arbitrate, so the
+   * modal keeps its own and this wall is told nothing. The deck editor's docked search column
+   * (`DeckSearchPanel`) passes nothing either, for a plainer reason: its tiles are drag sources
+   * into the deck beside them, and the arrows are how a reader moves *within the deck*.
+   *
+   * Off by default, so the two walls that want it say so and nobody inherits it by omission —
+   * the same argument {@link zoomSection} makes from the other end, where the risk was a default
+   * rather than an absence.
+   */
+  arrowNav?: boolean;
+  /**
    * How wide a tile is here at 100%, overriding {@link TILE_BASE_WIDTH}.
    *
    * For the one wall that is not a page-width wall: the deck editor's docked panel opens at
@@ -356,6 +446,22 @@ export function CardGrid<T extends GridCard>({
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+
+  /**
+   * The tile an arrow key has sent the caret to, held until the wall has actually drawn it.
+   *
+   * **This is state rather than a `focus()` on the next line because the wall is virtualised.**
+   * `overscan` is 2, so the tile a press moves to is very often not in the DOM yet — a
+   * `querySelector` immediately after the keydown finds nothing, and the caret drops to `<body>`
+   * with the selection already moved, which is the worst of both. So the handler asks the
+   * virtualiser to scroll and writes the wanted index here; the effect below picks it up once
+   * the tile exists and clears it.
+   *
+   * `null` is "nobody is waiting", and it has to be cleared on arrival rather than left behind:
+   * the effect re-runs whenever the virtual rows change, and a stale index would steal the caret
+   * back from wherever the reader had since put it.
+   */
+  const [pendingIndex, setPendingIndex] = useState<number | null>(null);
 
   // The column count is a function of the container, and a window resize changes it
   // without any scroll or render this component would otherwise hear about.
@@ -460,13 +566,127 @@ export function CardGrid<T extends GridCard>({
 
   // A new list reuses this scroll container, and a browser clamps the old offset into
   // the new content rather than resetting it.
+  //
+  // A caret waiting on a tile goes with the old list. The index is a position in `rows`, and a
+  // new search's row 40 is a different card — chasing it would scroll a reader who has just
+  // retyped their query down to whatever landed there.
   useEffect(() => {
     virtualizer.scrollToOffset(0);
+    setPendingIndex(null);
   }, [listKey, virtualizer]);
 
   useEffect(() => {
     if (needsNextPage(lastRendered, rows.length)) onNeedNextPage();
   }, [lastRendered, rows.length, onNeedNextPage]);
+
+  /**
+   * The second half of an arrow press: put the caret on the tile the handler asked for, once
+   * that tile is on screen.
+   *
+   * **`virtualRows` is a dependency and is the point of the whole arrangement.** A long jump —
+   * Down through a wall the reader is only two rows into — lands on an index the virtualiser has
+   * not drawn, so there is nothing to focus on the render the keypress caused. Re-running as the
+   * window of drawn rows changes is what lets the caret arrive one render later instead of being
+   * lost; `getVirtualItems()` is memoised on the range, so this does not fire on every render.
+   *
+   * **The scroll is retried here rather than trusted from the handler**, and that is the reflow
+   * defence. `onSelect` opens the 384px detail pane, `columnsFor` divides what is left, and the
+   * wall comes back with fewer columns — so the *row* the handler scrolled to is no longer the
+   * row the wanted tile is in. The tile's absolute index is unchanged, so the lookup is still
+   * right and the row is simply recomputed from whatever `columns` is now.
+   *
+   * `preventScroll`, then `scrollIntoView({ block: "nearest" })`: the virtualiser owns the
+   * vertical offset and has already moved it, so a browser's own focus scroll is a second party
+   * with an opinion about the same number. Doing it explicitly afterwards is idempotent — a tile
+   * that is already fully visible is not moved — and covers the one thing `scrollToIndex` cannot,
+   * which is a tile clipped by the wall's own 12px padding. `scrollIntoView` is one of the layout
+   * APIs jsdom leaves undefined, hence the optional call.
+   */
+  useEffect(() => {
+    if (pendingIndex === null) return;
+    if (pendingIndex >= rows.length) {
+      setPendingIndex(null);
+      return;
+    }
+    // A wall that has drawn no rows at all — measured at zero height, or between lists — has
+    // nothing to focus and nothing to scroll onto. Read here rather than only named in the
+    // dependency array, because a dependency that the body never looks at is one a later reader
+    // deletes as noise, and this effect's whole timing rests on it.
+    if (virtualRows.length === 0) return;
+    const tile = scrollRef.current?.querySelector<HTMLElement>(
+      `[${GRID_INDEX_ATTR}="${pendingIndex}"]`,
+    );
+    if (!tile) {
+      virtualizer.scrollToIndex(Math.floor(pendingIndex / columns));
+      return;
+    }
+    const caret = tile.querySelector<HTMLElement>(CARET_SELECTOR) ?? tile;
+    caret.focus({ preventScroll: true });
+    caret.scrollIntoView?.({ block: "nearest" });
+    setPendingIndex(null);
+  }, [pendingIndex, virtualRows, columns, rows.length, virtualizer]);
+
+  /**
+   * One arrow press: move the selection, and take the caret with it.
+   *
+   * **One handler on the scroller rather than one per tile**, which is the same economy every
+   * other callback on this component is written for — an unfiltered browse is ~117 k rows, and a
+   * fresh closure per tile is what `dragPayload` and `gameChanger` each carry a paragraph asking
+   * callers not to do. Keydown bubbles, so a press on the art button, on a corner mark or on the
+   * caption all arrive here with a `target` inside the tile it happened in.
+   *
+   * The bail-outs, in the order they are cheapest:
+   *
+   * - **Not armed.** Three of this component's four callers pass nothing; see `arrowNav`.
+   * - **Already handled.** A tile's own `cardMenuKey` and any layer above this one run first, and
+   *   `defaultPrevented` is this app's handshake for "that press was mine" — the same protocol
+   *   `useDismissOnEscape` runs on.
+   * - **A modifier is down.** Ctrl+arrow, Alt+arrow and their friends belong to the browser, to
+   *   the window manager, or to a gesture this wall already has (ctrl+wheel zooms it). Shift is
+   *   in the list because Shift+arrow is a *selection* gesture everywhere else it exists, and
+   *   this wall has no range selection to extend — swallowing it would promise one.
+   * - **The caret is in a field.** See {@link FIELD_SELECTOR}.
+   * - **The caret is on the wall but not on a tile.** Nothing to move from.
+   * - **The caret is inside a tile but not on it** — the quick-add's popup, drawn in the tile's
+   *   own caption. See the check itself for the two positions that do count.
+   *
+   * `columns` is read at press time and is therefore the count the reader was *looking at*, which
+   * is the only honest answer: the pane the press is about to open re-flows the wall underneath
+   * it, so a move computed against the post-reflow count would be a move down a grid nobody had
+   * seen yet. The effect above is where that reflow is dealt with.
+   */
+  const onArrowKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!arrowNav || e.defaultPrevented) return;
+    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target || target.closest(FIELD_SELECTOR)) return;
+    const from = target.closest<HTMLElement>(TILE_SELECTOR);
+    if (!from) return;
+    // **Inside a tile is not enough: the caret has to be on the tile.** The quick-add's popup is
+    // `role="dialog"` drawn *in the tile's caption* — `SearchPage` passes it `static` so a 256px
+    // panel on a 170px tile opens from the tile's own left edge — so a reader stepping through
+    // its finish chips and condition rows is holding a caret that `closest` reports as being on
+    // a card. Walking the wall out from under them would be taking a key the control they opened
+    // is using, and the field test above cannot see it because those chips are buttons.
+    //
+    // Two positions count, and they are the two places this wall ever puts a caret: the art
+    // button, which is where a walk starts and where each step lands; and the tile's root, which
+    // is what `ContextMenu` focuses back when a tile's menu closes, so the walk survives a
+    // right-click.
+    const caret = from.querySelector<HTMLElement>(CARET_SELECTOR);
+    if (target !== from && !caret?.contains(target)) return;
+
+    const next = nextGridIndex(Number(from.dataset.gridIndex), e.key, columns, rows.length);
+    if (next === null) return;
+
+    e.preventDefault();
+    onSelect(rows[next].id);
+    // Scroll first, focus later. The tile may not be drawn yet — see `pendingIndex` — and the
+    // virtualiser is the only thing that can put it on screen, since it owns this scroller's
+    // offset outright.
+    virtualizer.scrollToIndex(Math.floor(next / columns));
+    setPendingIndex(next);
+  };
 
   return (
     <div
@@ -476,6 +696,11 @@ export function CardGrid<T extends GridCard>({
       // No `tabIndex`: every tile is a button, so the scroller is reachable and
       // scrollable from the keyboard through its own contents. A tab stop on the box
       // around them would be one more press between the reader and the cards.
+      //
+      // Which is also why the arrow keys are listened for **here** rather than on the tiles: this
+      // box holds no caret of its own, it holds every tile, and one listener is one closure
+      // instead of 117 k. The handler bails on a wall that was not given `arrowNav`.
+      onKeyDown={onArrowKey}
       className="min-h-0 flex-1 overflow-auto rounded-md border border-border p-3"
     >
       {/* Holds the scrollbar open to the full height of the wall while the rows inside it
@@ -513,6 +738,10 @@ export function CardGrid<T extends GridCard>({
               <Tile
                 key={`${v.index}-${i}`}
                 card={card}
+                // Where this tile sits in `rows` — not in the row it is drawn in. See
+                // `GRID_INDEX_ATTR` for why the absolute number is the one that survives the
+                // reflow an arrow press causes.
+                gridIndex={v.index * columns + i}
                 width={tileWidth}
                 zoom={cardZoom}
                 onSelect={onSelect}
@@ -544,6 +773,7 @@ export function CardGrid<T extends GridCard>({
  */
 function Tile<T extends GridCard>({
   card,
+  gridIndex,
   width,
   zoom,
   onSelect,
@@ -559,6 +789,13 @@ function Tile<T extends GridCard>({
   dragPayload,
 }: {
   card: T;
+  /**
+   * Where this tile sits in the whole list, published as `data-grid-index` on its root.
+   *
+   * Unconditional, and never a function of whether the wall takes the arrow keys — see
+   * {@link GRID_INDEX_ATTR}, which is where the reasoning for the attribute lives.
+   */
+  gridIndex: number;
   width: number;
   /**
    * How large the reader is drawing cards on this wall — **not** used to size anything here, only
@@ -621,6 +858,13 @@ function Tile<T extends GridCard>({
     // render as they please. The art is the button; the quick-add is its neighbour.
     <div
       ref={attach}
+      // The tile's place in the list, for the arrow-key walk — on the root because a press can
+      // land on any of a tile's four parts (the art, either corner, the caption's control) and
+      // only this box contains all of them. Written out rather than built from
+      // `GRID_INDEX_ATTR`, which is the spelling the reading end uses; the two are one file
+      // apart on purpose, since a JSX attribute assembled from a constant is a name neither the
+      // browser's devtools nor a reader can grep for.
+      data-grid-index={gridIndex}
       // The whole tile, rather than the art button inside it: a right-click on the caption, on
       // the printing count or on the owned badge is a right-click on the card. The handler is
       // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that

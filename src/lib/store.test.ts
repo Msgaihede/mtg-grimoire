@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { DeckWalkStop } from "@/features/decks/deckWalk";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
@@ -264,6 +265,84 @@ describe("the card a reader asked to see every printing of", () => {
     useAppStore.getState().closeAllPrintings();
 
     expect(useAppStore.getState().printingsRequest).toBeNull();
+  });
+});
+
+/**
+ * The order the printings modal's arrow keys walk, published by the deck editor.
+ *
+ * The channel above carries **which** card is open; this carries **what is either side of it**,
+ * and it is a second field for the same reason the first one is a field at all — the modal is a
+ * sibling of the editor with nothing between them but this store. It is the whole list rather
+ * than a cursor because where the reader is in it is *found*, by matching the request's own slot
+ * against these, so the two cannot come to disagree about which card is showing.
+ */
+describe("the deck's cards in the order the desk draws them", () => {
+  const stop = (name: string, categoryId: number, categoryName: string): DeckWalkStop => ({
+    oracleId: `o-${name}`,
+    name,
+    deck: {
+      deckId: 4,
+      categoryId,
+      categoryName,
+      cardId: `c-${name}`,
+      variant: "live",
+      finish: null,
+    },
+  });
+
+  const WALK = [stop("Sol Ring", 9, "Ramp"), stop("Pyroblast", 2, "Sideboard")];
+
+  /** No deck editor has been open, so there is nothing to walk — and `[]` rather than `null`,
+   *  because "no stops" is a walk of no length and every reader of this is a `.length` or a
+   *  `.findIndex`. */
+  it("has nothing to walk until an editor publishes one", () => {
+    expect(useAppStore.getState().deckWalk).toEqual([]);
+  });
+
+  it("takes the order it is handed", () => {
+    useAppStore.getState().setDeckWalk(WALK);
+
+    expect(useAppStore.getState().deckWalk).toEqual(WALK);
+  });
+
+  /** The editor clears it on unmount: a walk left behind would step a modal opened from the
+   *  Collection into the piles of a deck nobody has open. */
+  it("clears when the editor that published it goes", () => {
+    useAppStore.getState().setDeckWalk(WALK);
+
+    useAppStore.getState().setDeckWalk([]);
+
+    expect(useAppStore.getState().deckWalk).toEqual([]);
+  });
+
+  /**
+   * **An empty walk is always the same empty array**, which is not pedantry about identity: this
+   * store notifies every subscriber on every write and each one compares its slice with
+   * `Object.is`, so a fresh `[]` per teardown re-renders whatever is reading the walk — the shut
+   * printings modal included — to tell it that nothing is still nothing.
+   */
+  it("clears to the same empty array every time", () => {
+    const first = useAppStore.getState().deckWalk;
+
+    useAppStore.getState().setDeckWalk(WALK);
+    useAppStore.getState().setDeckWalk([]);
+
+    expect(useAppStore.getState().deckWalk).toBe(first);
+  });
+
+  /** One field, like `openAllPrintings` beside it. Publishing the walk says nothing about which
+   *  card is open, which deck is open or which view the reader is on. */
+  it("moves nothing else", () => {
+    useAppStore.setState({ activeView: "decks", openDeckId: 4, selectedCardId: "card-1" });
+
+    useAppStore.getState().setDeckWalk(WALK);
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("decks");
+    expect(s.openDeckId).toBe(4);
+    expect(s.selectedCardId).toBe("card-1");
+    expect(s.printingsRequest).toBeNull();
   });
 });
 

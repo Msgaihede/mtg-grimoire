@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -2460,5 +2460,291 @@ describe("StackView reordering", () => {
       from: RAMP.id,
       to: DRAW.id,
     });
+  });
+});
+
+/**
+ * **The arrows walk the deck**: left and right across the piles, up and down through the pile the
+ * caret is in. `nextStackPosition` is the movement itself and `stackNav.test.ts` drives
+ * every corner of it against nothing but pile sizes; this block is about the half that needs a
+ * document — which press reaches the handler, which card it decides it is on, where the caret
+ * ends up, and what the pane is told.
+ *
+ * **Every press here is `user.keyboard`, never `user.type`.** `user.type` focuses whatever
+ * element it is handed, so a focus assertion after one passes for the wrong reason and an
+ * implementation that moved no caret at all still goes green — the trap this repo has already
+ * paid for once. The caret is *placed* with `focus()` (in `act`, because a stacked card's own
+ * `onFocus` opens it, which is a state update), and what is asserted is always where it went
+ * next, which no placement can fake.
+ *
+ * **jsdom lays nothing out, so nothing here is a claim about geometry.** Which line a pile
+ * wrapped onto, whether the card the caret landed on is on screen, what `scrollIntoView` did —
+ * none of that exists in this environment, and all of it is the live pass's. What is real here
+ * is the walk order, `onSelect`'s argument and which element holds the caret.
+ */
+describe("StackView arrow keys", () => {
+  /**
+   * The reordering block's deck, and the shape is the whole of what this block turns on: the flow
+   * comes out `Commander(1 card) · Ramp(2) · Draw(0)` and the rail `Sideboard(1) · Maybeboard(1)`,
+   * so the walk is five piles holding `[1, 2, 0, 1, 1]` cards.
+   *
+   * Three of those are here on purpose. **Ramp holds two cards**, which is the only way up and
+   * down have anywhere to go and the only way the two clamps can be told from each other.
+   * **Draw is empty and still drawn** — a pile the reader made is a *place*, so it keeps its
+   * heading — which makes it the pile a sideways press has to step over rather than land on.
+   * And **the rail is on the end of the walk**, which is what says the piles played beside the
+   * deck are reachable at all: where a pile is drawn is a layout, and the caret does not read
+   * layouts.
+   */
+  const piles = buildGroups(
+    [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
+    [COMMANDER, RAMP, SIDE, DRAW, MAYBE],
+    "category",
+    "alphabetical",
+  );
+
+  /** A pile by its heading, so an index into `piles` never has to be written down. */
+  const pile = (name: string) => piles.find((group) => group.name === name)!;
+
+  /**
+   * One card's own control, addressed the way the view stamps it — `DECK_CARD_ATTR` carrying
+   * `deckCardSlot`, which is the same spelling the handler reads back off the press. The fixture
+   * `cardId` is `c-<name>` (`validation/fixtures.ts`) and every row here is the regular copy.
+   */
+  const control = (categoryId: number, name: string) =>
+    document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(categoryId, `c-${name}`, null)}"]`,
+    );
+
+  const draw = (over: Partial<ViewProps> = {}) => {
+    const onSelect = vi.fn();
+    render(<StackView groups={piles} marketplace={TCG} onSelect={onSelect} {...over} />);
+    return onSelect;
+  };
+
+  /**
+   * Down the pile and back up it — the axis a reader can point at, because a pile is a column of
+   * cards whatever the window is doing.
+   *
+   * The order inside the pile is the one the pile already holds, which under `alphabetical` puts
+   * Arcane Signet over Sol Ring; asserted once here so the cases below can name a position.
+   */
+  it("walks down the pile the caret is in, and back up it", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    const top = control(RAMP.id, "Arcane Signet")!;
+    const under = control(RAMP.id, "Sol Ring")!;
+
+    expect(pile("Ramp").cards.map((c) => c.name)).toEqual(["Arcane Signet", "Sol Ring"]);
+
+    act(() => top.focus());
+    await user.keyboard("{ArrowDown}");
+    expect(under).toHaveFocus();
+    // The pane follows the caret: in this view the picked card is also the pile's resting state,
+    // so a selection lagging behind would leave the gold ring on a card the reader has left.
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[1]);
+
+    await user.keyboard("{ArrowUp}");
+    expect(top).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[0]);
+  });
+
+  /**
+   * **Both ends of a pile are a clamp, and that is a decision rather than a limitation.** The
+   * flow is a masonry — a pile that will not fit on a line starts at the foot of the pile above
+   * it — so "the pile above this one" is a fact about how wide the window happened to be, and a
+   * reader pressing ArrowUp on a top card cannot point at what they would get.
+   */
+  it("clamps at the top and the foot of a pile rather than leaving it", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    const top = control(RAMP.id, "Arcane Signet")!;
+    const foot = control(RAMP.id, "Sol Ring")!;
+
+    act(() => top.focus());
+    await user.keyboard("{ArrowUp}");
+    expect(top).toHaveFocus();
+
+    act(() => foot.focus());
+    await user.keyboard("{ArrowDown}");
+    expect(foot).toHaveFocus();
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Sideways is a pile at a time, it lands on the top card, and it steps over a pile holding
+   * none.**
+   *
+   * The reader was offered "the same depth, clamped" and chose the top card, which is what the
+   * return leg asserts: the press leaves Ramp from its *second* card and comes back to its
+   * first. The top of a pile is a place that always exists, so one press means one thing whatever
+   * the neighbour is holding.
+   *
+   * `Draw` is between Ramp and the rail, drawn (it is a pile of the reader's own) and empty, so
+   * `CardStack` renders no card in it at all — landing there would put the caret nowhere. The
+   * "Nothing here yet." assertion is what keeps this case honest: drop that pile from the fixture
+   * and the skip stops being tested while every other line still passes.
+   */
+  it("steps to the next pile's top card, over a pile that holds none", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
+
+    act(() => control(RAMP.id, "Sol Ring")!.focus());
+    await user.keyboard("{ArrowRight}");
+    expect(control(SIDE.id, "Rest in Peace")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Sideboard").cards[0]);
+
+    await user.keyboard("{ArrowLeft}");
+    expect(control(RAMP.id, "Arcane Signet")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[0]);
+  });
+
+  /**
+   * **The rail is part of the walk**, which is the half of this that no layout rule decides: the
+   * Sideboard and the Maybeboard are drawn beside the deck rather than in it, and a caret that
+   * stopped at the last flowing pile would make them mouse-only.
+   */
+  it("reaches the piles played beside the deck", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+
+    act(() => control(SIDE.id, "Rest in Peace")!.focus());
+    await user.keyboard("{ArrowRight}");
+    expect(control(MAYBE.id, "Avacyn")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Maybeboard").cards[0]);
+  });
+
+  /** No wrapping at either end. A walk that came round again would take a reader pressing
+   *  steadily in one direction back to the card they started on, with nothing on screen saying
+   *  they had been all the way round. */
+  it("clamps at both ends of the walk rather than wrapping", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    const first = control(COMMANDER.id, "Serah Farron")!;
+    const last = control(MAYBE.id, "Avacyn")!;
+
+    act(() => first.focus());
+    await user.keyboard("{ArrowLeft}");
+    expect(first).toHaveFocus();
+
+    act(() => last.focus());
+    await user.keyboard("{ArrowRight}");
+    expect(last).toHaveFocus();
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /** A press from somewhere on the desk that is not a card has nowhere to move *from*. The
+   *  pile's own section is the case that exists in the app: `deckGroupProps` gives it a
+   *  `tabIndex` of −1 so the caret can be put there when a card leaves the pile under it. */
+  it("leaves a press that did not come from a card alone", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    const section = document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}]`)!;
+
+    act(() => section.focus());
+    await user.keyboard("{ArrowRight}");
+
+    expect(section).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A modified arrow is somebody else's gesture — the browser's own caret browsing, the window
+   * manager's, a shortcut this app has not written yet — and answering one takes a key away with
+   * nothing on screen saying why.
+   */
+  it("does not answer a modified arrow", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    const top = control(RAMP.id, "Arcane Signet")!;
+
+    act(() => top.focus());
+    await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
+    await user.keyboard("{Control>}{ArrowDown}{/Control}");
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+
+    expect(top).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **An arrow inside a field belongs to the field**, and the card's own quantity stepper is the
+   * one that is really there: an `<input type="number">` drawn *on* a card, where ArrowUp and
+   * ArrowDown step the number. A pile heading in rename mode is the other, drawn through
+   * `renameCategory`.
+   *
+   * Two guards deliver this and the test does not care which: the stepper is a **sibling** of the
+   * button carrying `DECK_CARD_ATTR` rather than inside it, so the caret is not "on a card" by
+   * that test either. Which is exactly why the field test is worth keeping — move the attribute
+   * out to the card's body one day and this is the only thing still saying the stepper's arrows
+   * are the stepper's.
+   */
+  it("leaves the arrows to a field drawn on a card", async () => {
+    const onSelect = draw({ actions: { setQuantity: vi.fn() } });
+    const user = userEvent.setup();
+    const field = screen.getByLabelText("Copies of Sol Ring in Main deck");
+
+    act(() => field.focus());
+    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{ArrowRight}");
+
+    expect(field).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The regression this change can most easily cause**: `CategoryGrip` binds the same four keys
+   * to *reordering the pile* and marks each press with `preventDefault()`, and the view's own
+   * handler returns early on `defaultPrevented`. So one key means two things, told apart by where
+   * the caret is — and if the yield were dropped, this is where it would show.
+   */
+  it("still lets the grip's own arrows reorder the piles", async () => {
+    const moveCategory = vi.fn();
+    const onSelect = draw({ actions: { moveCategory } });
+    const user = userEvent.setup();
+    const grip = screen.getByRole("button", { name: "Move Ramp, 2 of 3" });
+
+    act(() => grip.focus());
+    await user.keyboard("{ArrowRight}");
+
+    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
+    expect(grip).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * …and the half of that yield which is easy to lose: a grip at the end of the flow moves
+   * **nothing**, and still owns the press. `CategoryGrip` calls `preventDefault()` before it
+   * works out whether there is a neighbour, which is what keeps a grip at either end from
+   * quietly starting to move the *selection* instead.
+   */
+  it("keeps a grip's dead-end arrow away from the selection", async () => {
+    const moveCategory = vi.fn();
+    const onSelect = draw({ actions: { moveCategory } });
+    const user = userEvent.setup();
+    const grip = screen.getByRole("button", { name: "Move Draw, 3 of 3" });
+
+    act(() => grip.focus());
+    await user.keyboard("{ArrowRight}");
+
+    expect(moveCategory).not.toHaveBeenCalled();
+    expect(grip).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /** A view mounted read-only still walks: moving the caret is the reader's, and `onSelect` is
+   *  what a host does with the card once it has moved. A story and a test both mount this view
+   *  without one. */
+  it("moves the caret in a view that was given no onSelect", async () => {
+    render(<StackView groups={piles} marketplace={TCG} />);
+    const user = userEvent.setup();
+
+    act(() => control(RAMP.id, "Arcane Signet")!.focus());
+    await user.keyboard("{ArrowDown}");
+
+    expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
   });
 });

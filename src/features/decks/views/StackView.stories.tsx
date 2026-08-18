@@ -9,6 +9,7 @@ import {
   deckViolations,
   printing,
 } from "../../../../.storybook/fake/fixtures";
+import { DECK_CARD_ATTR } from "../dnd";
 import { buildGroups } from "../grouping";
 import { RAIL_ATTR } from "./columns";
 import { StackView, STACK_ATTR } from "./StackView";
@@ -688,5 +689,66 @@ export const Reorderable: Story = {
     ramp.focus();
     await userEvent.keyboard("{ArrowRight}");
     expect(args.actions?.moveCategory).toHaveBeenCalledWith(10, 11);
+  },
+};
+
+/**
+ * **The caret walking the deck**: left and right across the piles, up and down through the pile
+ * it is in.
+ *
+ * The two axes mean different things and the asymmetry is the point. **Up and down** run through
+ * one pile and stop at its ends — the flow is a masonry, so a pile that wraps starts at the foot
+ * of the pile *above* it, and "the pile above this one" is a fact about how wide the window
+ * happens to be rather than about the deck. **Left and right** change pile, and land on the
+ * **top card**: the reader was offered "the same depth" and chose this, because the top of a pile
+ * is a place that always exists where the same depth is a card a shorter neighbour may not have.
+ *
+ * Two more decisions are visible here rather than merely written down. A pile holding no cards is
+ * **stepped over**, because there is no card in it for the caret to be on. And the rail's piles —
+ * the Sideboard and the Maybeboard, drawn beside the deck rather than in it — are the **end of the
+ * walk** rather than outside it: where a pile is drawn is a layout, and a caret that stopped at
+ * the deck's last flowing pile would make the two piles a reader consults most mouse-only.
+ *
+ * **What to look at**: the card the caret is on stands out of its pile, exactly as a hovered one
+ * does — `StackedCard`'s own `onFocus` opens it — so a walk across the desk reads as a card being
+ * lifted out of each pile in turn. The gold ring follows with it, because in this view the picked
+ * card is also the pile's resting state.
+ *
+ * The play addresses the cards **by position** rather than by name: the flow is drawn first and
+ * the rail after it, and each pile draws its cards in the order it holds them, so the document
+ * order of the marked controls *is* the order the arrows walk. That is a property worth leaning
+ * on — a layout that reordered the piles in the DOM to draw them somewhere else would break the
+ * reading order and the tab order along with this.
+ */
+export const KeyboardWalk: Story = {
+  args: { groups: wideGroups(), onSelect: fn() },
+  decorators: [
+    (Story) => (
+      <div className="flex w-[52rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement, args }) => {
+    // Commander(1) · Ramp(3) · Removal(3) · … in the flow, then the rail — so index 1 is the top
+    // of Ramp and index 4 the top of Removal.
+    const cards = [...canvasElement.querySelectorAll<HTMLElement>(`[${DECK_CARD_ATTR}]`)];
+
+    cards[1].focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(cards[2]).toHaveFocus();
+    expect(args.onSelect).toHaveBeenCalledTimes(1);
+
+    // Out of the *second* card of Ramp and onto the **first** of Removal, which is the whole of
+    // the "top card, not the same depth" call.
+    await userEvent.keyboard("{ArrowRight}");
+    expect(cards[4]).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(cards[1]).toHaveFocus();
+
+    // And the clamp: there is no card above the top of a pile, so the press moves nothing.
+    await userEvent.keyboard("{ArrowUp}");
+    expect(cards[1]).toHaveFocus();
+    expect(args.onSelect).toHaveBeenCalledTimes(3);
   },
 };

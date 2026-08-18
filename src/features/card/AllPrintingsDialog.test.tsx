@@ -8,6 +8,9 @@ import type { MarketplaceId } from "@/lib/marketplace";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock, with the component's, where the hoisting order needs it.
 import type { PaneDeckContext } from "@/lib/store";
+// Same reason, one module over: the walk's stop shape is a type and nothing else here needs the
+// module's runtime half.
+import type { DeckWalkStop } from "@/features/decks/deckWalk";
 
 /**
  * One printing, with every field the wall and the filters read.
@@ -49,6 +52,31 @@ const slot: PaneDeckContext = {
   variant: "live",
   finish: null,
 };
+
+/** Another row of the same deck, differing in the parts of the grain a walk has to tell apart. */
+const rowOf = (categoryId: number, categoryName: string, cardId: string): PaneDeckContext => ({
+  deckId: 4,
+  categoryId,
+  categoryName,
+  cardId,
+  variant: "live",
+  finish: null,
+});
+
+/**
+ * The open deck as the desk is drawing it: three cards, in deck order, {@link slot} in the middle.
+ *
+ * `DeckEditor` publishes this — the order depends on the editor's grouping, its sorting and its
+ * filter, none of which this component can see — and it is `[]` whenever no editor is open, which
+ * is why the walk is a *fixture* here rather than something a request implies. The middle stop is
+ * the one every step test opens on, so both chevrons have somewhere to go and neither end state is
+ * being tested by accident.
+ */
+const WALK: DeckWalkStop[] = [
+  { oracleId: "o-bolt", name: "Lightning Bolt", deck: rowOf(9, "Ramp", "bolt-1") },
+  { oracleId: "o1", name: "Sol Ring", deck: slot },
+  { oracleId: "o-forest", name: "Forest", deck: rowOf(11, "Land", "forest-1") },
+];
 
 const cardPrintings = vi.fn();
 const getMarketplace = vi.fn();
@@ -163,6 +191,19 @@ function renderDialog(): ReactElement {
 /** What a card surface's menu row does: one store write, and nothing else moves. */
 function open(request: { oracleId: string; name: string; deck: PaneDeckContext | null }): void {
   act(() => useAppStore.getState().openAllPrintings(request));
+}
+
+/**
+ * An open deck editor, publishing {@link WALK}.
+ *
+ * Through the store's own action rather than a raw `setState`, for the reason {@link open} goes
+ * through `openAllPrintings`: the action is the door the editor uses, and a test that wrote the
+ * field directly would go on passing after that door grew a rule. What the *order* of the walk is
+ * belongs to `deckWalk.ts` and `DeckEditor`; what this file is about is what the modal does with
+ * one it was handed.
+ */
+function withDeckWalk(): void {
+  act(() => useAppStore.getState().setDeckWalk(WALK));
 }
 
 /**
@@ -334,5 +375,210 @@ describe("AllPrintingsDialog", () => {
     // `CardArt` rings the selected card's frame, which is the `<img>`'s parent.
     expect(held.parentElement).toHaveClass("ring-accent");
     expect(other.parentElement).not.toHaveClass("ring-accent");
+  });
+
+  /**
+   * **A step is two writes, and the second is what makes the first survivable.**
+   *
+   * `openAllPrintings` moves the modal; `openCardFromDeck` moves the desk behind it — the gold
+   * ring on the deck card and the card pane docked beside it. Without the second, a reader who
+   * walked six cards and closed the modal would land back on the row they started from, with the
+   * pane still about a card they had left; and this modal's own press would go on writing that
+   * first row, because a press is addressed by `request.deck`.
+   *
+   * All three fields are asserted rather than just the request. The pane's context is the one that
+   * has silently gone wrong before in this repo — see `PaneDeckContext` — and a test that only
+   * watched the modal would pass on exactly that failure.
+   */
+  it("steps to the next card in the deck on ArrowRight, and takes the desk with it", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    open(WALK[1]);
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    // The caret is on the panel — `DeckDialog` puts it there on open — so the press bubbles to
+    // the panel's own handler, which is the only thing entitled to it. Waited for rather than
+    // assumed: a press made while the caret is still on `<body>` reaches no handler at all, and
+    // would read as the step being broken.
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+
+    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(WALK[2]));
+    expect(useAppStore.getState().paneDeckContext).toEqual(WALK[2].deck);
+    expect(useAppStore.getState().selectedCardId).toBe(WALK[2].deck.cardId);
+    // The modal is a window onto the deck, so it stays open and re-captions itself.
+    expect(await screen.findByRole("dialog", { name: /Forest/ })).toBeInTheDocument();
+  });
+
+  /** The same step the other way, and the chevron makes it — one gesture, the same two writes. */
+  it("steps to the previous card when the left chevron is pressed", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    open(WALK[1]);
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    // Named by what it does **and what it lands on** — a chevron says neither on its own.
+    await user.click(
+      await screen.findByRole("button", { name: "Previous card in the deck, Lightning Bolt" }),
+    );
+
+    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(WALK[0]));
+    expect(useAppStore.getState().paneDeckContext).toEqual(WALK[0].deck);
+    expect(useAppStore.getState().selectedCardId).toBe(WALK[0].deck.cardId);
+  });
+
+  /**
+   * **No walk, no chevrons and no arrow keys** — the state every surface but a deck row opens in.
+   *
+   * A search tile, the collection, a wishlist row: `request.deck` is null, so the index is `-1`
+   * and there is nothing to step along. The arrow press is the half worth driving, because a
+   * chevron that is not drawn is obvious and a key that quietly did something would not be.
+   */
+  it("draws no chevrons and answers no arrow keys when the card is not on a walk", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    open({ oracleId: "o-elsewhere", name: "Counterspell", deck: null });
+    const dialog = await screen.findByRole("dialog", { name: /Counterspell/ });
+
+    expect(screen.queryByRole("button", { name: /card in the deck/ })).toBeNull();
+
+    // The press really does reach the panel — otherwise this would pass on a caret that was never
+    // in the dialog rather than on a handler that declined.
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowLeft}");
+    expect(useAppStore.getState().printingsRequest?.name).toBe("Counterspell");
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * The same absence for a deck row that is **not on this walk** — a card opened from one deck
+   * while the editor is showing another.
+   *
+   * It needs no test of its own in the component: the index answers it, which is the whole reason
+   * there is no second "is this the same deck" comparison to keep true. This asserts that the one
+   * test really does cover the case.
+   */
+  it("draws no chevrons for a deck row the open editor is not showing", async () => {
+    renderDialog();
+    withDeckWalk();
+    open({ oracleId: "o1", name: "Sol Ring", deck: { ...slot, deckId: 77 } });
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    expect(screen.queryByRole("button", { name: /card in the deck/ })).toBeNull();
+  });
+
+  /**
+   * The two ends: the chevron is **drawn and disabled**, never dropped.
+   *
+   * Both are still there so that the first step of a walk is not the moment a second control
+   * appears under the reader's pointer. `disabled` rather than `aria-disabled` is
+   * `QuantityStepper`'s exception — a control with nothing left to do buys the caret a stop and no
+   * action to take there — and it is also what `trapTab` reads when it decides what is in the
+   * cycle.
+   */
+  it("greys the chevron at each end of the walk and keeps the other one live", async () => {
+    renderDialog();
+    withDeckWalk();
+    open(WALK[0]);
+    await screen.findByRole("dialog", { name: /Lightning Bolt/ });
+
+    expect(screen.getByRole("button", { name: "Previous card in the deck" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Next card in the deck, Sol Ring" }),
+    ).not.toBeDisabled();
+
+    // And the far end, where the pair is the other way round.
+    open(WALK[2]);
+    await screen.findByRole("dialog", { name: /Forest/ });
+    expect(screen.getByRole("button", { name: "Next card in the deck" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Previous card in the deck, Sol Ring" }),
+    ).not.toBeDisabled();
+  });
+
+  /**
+   * **ArrowUp and ArrowDown are not this dialog's**, and the assertion is that nothing moved.
+   *
+   * The thing under them is a virtualised wall of card art whose native scrolling is exactly what
+   * those two keys are for. They are not handled at all — no branch and no `preventDefault` — so
+   * this is a test of an absence, which is the only kind of test it can be: a swallowed press and
+   * a press that walked the deck look identical to a reader who was trying to scroll.
+   */
+  it("leaves ArrowUp and ArrowDown alone", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    open(WALK[1]);
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    await user.keyboard("{ArrowUp}");
+    await user.keyboard("{ArrowDown}");
+
+    expect(useAppStore.getState().printingsRequest).toEqual(WALK[1]);
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * **A focused `<select>` owns the arrow keys**, and this is the guard that would otherwise have
+   * shipped.
+   *
+   * ArrowLeft on a focused `<select>` changes its value in Chromium and in WebView2 with it, so a
+   * reader re-sorting the wall would step to another card as well — or instead, depending on which
+   * handler answered. The sort control is the one on this row that is a native select.
+   *
+   * `focus()` and then `user.keyboard`, never `user.type`: `type` focuses whatever element it is
+   * handed, so a test written that way passes for the wrong reason on a component that never
+   * looked at the target at all.
+   */
+  it("yields the arrow keys to a focused select in the filter row", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    open(WALK[1]);
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    const sort = screen.getByRole("combobox", { name: "Sort printings by" });
+    act(() => sort.focus());
+    expect(sort).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowLeft}");
+
+    expect(useAppStore.getState().printingsRequest).toEqual(WALK[1]);
+  });
+
+  /**
+   * **A step starts a clean session, filter included** — which is `Body`'s `key` and not an effect.
+   *
+   * The filter belongs to the card the reader left. Carried across, a set or a text filter that
+   * the next card cannot match draws an empty wall, and an empty wall reads as an answer about the
+   * card rather than as a filter that is still running. This is the assertion that says the
+   * remount really happens: the box is empty and the count line is back to the unfiltered wording.
+   */
+  it("clears the filter when it steps, because the next card is a new session", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea", "Alpha"), p("b", "leb", "Beta")]));
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    open(WALK[1]);
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    const box = await screen.findByRole("searchbox", { name: "Filter printings" });
+    act(() => box.focus());
+    await user.keyboard("beta");
+    expect(await screen.findByText("showing 1 of 2 printings")).toBeVisible();
+
+    // The caret is in the box, which is a control that owns the arrow keys — so the step is made
+    // with the pointer, exactly as a reader who had just filtered would have to.
+    await user.click(screen.getByRole("button", { name: "Next card in the deck, Forest" }));
+
+    expect(await screen.findByRole("dialog", { name: /Forest/ })).toBeInTheDocument();
+    expect(await screen.findByRole("searchbox", { name: "Filter printings" })).toHaveValue("");
+    expect(await screen.findByText("2 printings")).toBeVisible();
   });
 });

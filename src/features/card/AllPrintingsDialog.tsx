@@ -24,8 +24,12 @@
  * Two components, and the split is the shell's rule rather than tidiness. {@link DeckDialog}
  * renders `children` **only while open**, so everything that costs something — the query, the
  * filter, the sort observer, the scroll position — lives in {@link Body} and therefore exists
- * only while the modal does. A closed modal costs one store read, and every open starts clean
- * with no effect anywhere resetting anything.
+ * only while the modal does. A closed modal costs a handful of store reads and nothing else, and
+ * every open starts clean with no effect anywhere resetting anything.
+ *
+ * **A *step* starts just as clean, and `key` is the whole of how**: the body is keyed on the card
+ * the request names, so walking to the next card mounts a new one exactly as an open does. That is
+ * the same guarantee spent twice rather than a second mechanism — see the `key` at its own site.
  *
  * ## What a press means
  *
@@ -41,16 +45,35 @@
  * * **From anywhere else** — the press opens the card detail pane on that printing and closes
  *   the modal, which is the "go and look at this one" the reader who is not building a deck
  *   asked for.
+ *
+ * ## Stepping along the deck
+ *
+ * Opened from a deck row, the modal is a **window onto the deck rather than onto one card**: the
+ * chevrons and the arrow keys move it to the previous and next card in deck order, which is
+ * `store.deckWalk` — the open editor's own cards, in the order the desk is drawing them, published
+ * by `DeckEditor` because that order depends on its grouping, its sorting and its filter and this
+ * component is mounted at `App` level with no way to ask. A reader checking which printing of each
+ * card they have sleeved up walks the whole list without closing anything.
+ *
+ * **Everything hangs off one index**: where `request.deck` sits on that walk. It is `-1` from a
+ * search tile, from the collection, from a wishlist row and from a deck that is not the one the
+ * walk belongs to — and in every one of those there is no walk to step along, so there are no
+ * chevrons and the arrow keys are not ours. That single test is deliberately the whole fence:
+ * a separate "is this the same deck" check would be a second thing to keep true.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { DeckDialog } from "@/features/decks/DeckDialog";
+import { sameDeckSlot, type DeckWalkStop } from "@/features/decks/deckWalk";
+import { DeckDialog, type DeckDialogFlanks } from "@/features/decks/DeckDialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
 import { plural } from "@/lib/counts";
 import { soleFinish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
+import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -162,9 +185,183 @@ const tileLanguage = (row: PrintingRow) =>
     </span>
   );
 
+/**
+ * What a keypress inside this dialog belongs to before it belongs to the walk.
+ *
+ * `PrintingsFilterBar` is a row of `<select>`s and a search box, and **ArrowLeft on a focused
+ * `<select>` changes its value** in Chromium and in WebView2 with it — so a reader narrowing the
+ * wall by set would step to the next card instead, or step *and* re-sort, depending on the engine.
+ * `<input>`, `<textarea>` and a `contenteditable` are here for the same reason one rung along: the
+ * arrows move a caret, and a caret's owner has the better claim.
+ *
+ * **A third predicate rather than a widening of one of the two that exist**, which is
+ * `src/CLAUDE.md`'s standing rule about `isTextField` and `isTextEntry`: those answer *does the
+ * browser's own context menu survive here* and *does an open menu panel yield its keys to a
+ * caret*, and this answers *does this control own the arrow keys*. `<select>` is the one element
+ * where the three genuinely disagree, and it is the one this exists for.
+ *
+ * `closest` rather than a tag test, because the press lands on whatever is under the caret and a
+ * `contenteditable` region is a tree.
+ */
+const ARROW_OWNERS = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
+
+function ownsArrowKeys(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ARROW_OWNERS) !== null;
+}
+
+/**
+ * One step control, drawn in the room {@link DeckDialog}'s `flanks` reserved beside the panel.
+ *
+ * **`disabled` and not `aria-disabled`, which is the reverse of this app's usual rule** and is
+ * `QuantityStepper`'s exception rather than a new one: that rule is for a control that greys as
+ * the reader types, where leaving the tab order under their hands is what makes it wrong. A
+ * chevron at the end of the walk has nothing left to do at all — there is no next card, and no
+ * keystroke made in this dialog can produce one — so holding a tab stop buys the caret a place to
+ * stop and no action to take there. It is also the state `trapTab` already reads: it filters
+ * `disabled` out of the cycle, so the end of a walk costs Tab one stop rather than swallowing a
+ * wrap.
+ *
+ * **Both chevrons are drawn whenever either is**, one of them greyed, rather than the ends of the
+ * walk dropping their control. The pair is positioned against the panel's edges, so a chevron that
+ * came and went would move nothing on screen — but the *first* step of a walk would then be the
+ * moment a second control appeared under the reader's pointer, which is exactly where they are
+ * pointing.
+ *
+ * The name says what the press does **and what it will land on**, because a chevron says neither:
+ * `Next card in the deck, Lightning Bolt`. It is the `title` as well — a glyph is silent to a
+ * pointer too — and the app's own `Move <name>, <n> of <total>` shape, where the comma is what
+ * keeps a card's name out of the verb.
+ */
+function StepChevron({
+  direction,
+  stop,
+  onStep,
+}: {
+  direction: "previous" | "next";
+  /** The card that press lands on, or `null` at that end of the walk. */
+  stop: DeckWalkStop | null;
+  onStep: (stop: DeckWalkStop) => void;
+}) {
+  const Glyph = direction === "previous" ? ChevronLeft : ChevronRight;
+  const label = direction === "previous" ? "Previous card in the deck" : "Next card in the deck";
+  const name = stop === null ? label : `${label}, ${stop.name}`;
+
+  return (
+    <button
+      type="button"
+      disabled={stop === null}
+      aria-label={name}
+      title={name}
+      onClick={() => {
+        // The `disabled` attribute above already refuses this press from both hands; the test is
+        // what narrows `stop` for the type checker, and it costs nothing to have both.
+        if (stop !== null) onStep(stop);
+      }}
+      // A filled disc rather than a bare glyph: it is drawn on the scrim, which is the app at 75%
+      // — a 1px outline with a card wall showing through it is `QuantityStepper`'s own
+      // "disappears over art of any brightness", one layer up. `bg-bg` is the app's own ground, so
+      // the disc reads as part of the dialog rather than as part of the view behind it.
+      className={cn(
+        "grid size-9 place-items-center rounded-full border border-border bg-bg text-dim",
+        "hover:text-text disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100",
+        PRESS,
+        FOCUS,
+      )}
+    >
+      <Glyph className="size-4" aria-hidden="true" />
+    </button>
+  );
+}
+
 export function AllPrintingsDialog() {
   const request = useAppStore((s) => s.printingsRequest);
   const close = useAppStore((s) => s.closeAllPrintings);
+  const walk = useAppStore((s) => s.deckWalk);
+  const openAllPrintings = useAppStore((s) => s.openAllPrintings);
+  const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+
+  /**
+   * Where the open modal sits on the deck's walk, or `-1` — see this file's doc for everything
+   * that hangs off it.
+   *
+   * `sameDeckSlot` rather than a `cardId` comparison, because a deck can hold one printing in two
+   * piles and in two finishes: all five parts of `DECK_CARD_GRAIN` are what tell those rows apart,
+   * and matching on fewer would land the walk on whichever one came first in the list.
+   */
+  const slot = request?.deck ?? null;
+  const at = useMemo(
+    () => (slot === null ? -1 : walk.findIndex((stop) => sameDeckSlot(stop.deck, slot))),
+    [walk, slot],
+  );
+  const previous = at > 0 ? walk[at - 1] : null;
+  const next = at >= 0 && at + 1 < walk.length ? walk[at + 1] : null;
+
+  /**
+   * A step: **two writes, and the second one is the point of the feature rather than a courtesy.**
+   *
+   * `openAllPrintings` alone would leave the desk behind the scrim marking the card the reader
+   * started from — so closing the modal after walking six cards would drop them back at the first,
+   * with the gold ring and the card pane both about a row they had left. `openCardFromDeck` is the
+   * store's one way to say "this card, out of *this* row", so the ring, the pane and this modal's
+   * own `request.deck` stay one answer; it is also what keeps a press on a tile writing the row
+   * the desk is pointing at.
+   *
+   * They are two `set` calls and therefore two renders. Folding them into one store action was the
+   * alternative and is refused: `openAllPrintings` and `openCardFromDeck` are each one field's
+   * single writer, and a third action writing both would be a second definition of what opening a
+   * card from a deck row means.
+   */
+  const step = useCallback(
+    (stop: DeckWalkStop) => {
+      openAllPrintings(stop);
+      openCardFromDeck(stop.deck);
+    },
+    [openAllPrintings, openCardFromDeck],
+  );
+
+  /**
+   * ArrowLeft and ArrowRight, on the **panel** — `DeckDialog` composes this with `trapTab`.
+   *
+   * On the panel rather than on `window`, which is the whole shape of the thing: an open modal
+   * must not arrow-drive the deck editor behind its scrim, and the editor must not reach into the
+   * modal. Whoever has the caret answers, and `aria-modal` says that is this dialog.
+   *
+   * **ArrowUp and ArrowDown are not handled at all** — no branch, no `preventDefault`, nothing —
+   * because the thing under them is a virtualised wall of card art and its native scrolling is
+   * what a reader wants from those two keys. "Up does nothing" would be a claim; leaving the keys
+   * alone is the absence of one.
+   *
+   * Three guards, and each closes a real press. `defaultPrevented` yields to anything inside the
+   * dialog that has already answered. A modifier held means the press was aimed at the browser or
+   * at a shortcut, never at a chevron. And {@link ownsArrowKeys} keeps the filter row's `<select>`s
+   * usable, which is the one that would have shipped.
+   *
+   * At either end of the walk the matching side is `null` and the press falls through **without**
+   * a `preventDefault`, so the key does whatever it would have done — which is nothing, and is
+   * still the honest answer rather than a swallowed press.
+   */
+  const onPanelKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.defaultPrevented) return;
+      if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      if (ownsArrowKeys(e.target)) return;
+      const stop = e.key === "ArrowLeft" ? previous : e.key === "ArrowRight" ? next : null;
+      if (stop === null) return;
+      e.preventDefault();
+      step(stop);
+    },
+    [previous, next, step],
+  );
+
+  // No walk, no flanks — and `undefined` rather than a pair of nulls, because that is what tells
+  // the shell to leave its scrim exactly as every other dialog draws it.
+  const flanks: DeckDialogFlanks | undefined =
+    at === -1
+      ? undefined
+      : {
+          left: <StepChevron direction="previous" stop={previous} onStep={step} />,
+          right: <StepChevron direction="next" stop={next} onStep={step} />,
+        };
 
   return (
     <DeckDialog
@@ -180,13 +377,34 @@ export function AllPrintingsDialog() {
       // Written out whole, never interpolated: Tailwind scans source text for class names.
       // 72rem is a wall rather than a list — six 170px tiles across at the default zoom.
       width="w-[72rem]"
+      flanks={flanks}
+      onPanelKeyDown={onPanelKeyDown}
       onDismiss={close}
       onClose={close}
     >
       {/* The `request &&` is not redundant with `open` above: `DeckDialog` keeps the panel mounted
           for the length of its fade, and the flag is already false on the render that starts it —
-          so without this the body would re-render for a frame against a `null` request. */}
-      {request && <Body request={request} onDone={close} />}
+          so without this the body would re-render for a frame against a `null` request.
+
+          **The `key` is how a step clears the filter, and it is one word rather than an effect.**
+          `DeckDialog` renders `children` only while open, which is what makes every piece of
+          {@link Body}'s state a *session* with nothing anywhere resetting it — so a step to the
+          next card asks for the same thing an open asks for, a new session, and `key` is what says
+          that to React. An effect watching the oracle id would be a second description of the same
+          rule, running a render later, with a window in which the old card's filter is applied to
+          the new card's wall. It matters because the filter belongs to the card the reader left:
+          narrowing to a set that the next card was never printed in draws an empty wall, and an
+          empty wall reads as an answer about the card rather than as a filter.
+
+          **Keyed on the oracle id and not on the slot**, so stepping between two piles holding the
+          same card keeps the filter — it is the same wall, and the same question about it.
+
+          What this does *not* reset is the sort, and that is right rather than an omission: it is
+          not `Body`'s state at all but `usePrintingGroupBy`'s `app_meta` row, shared with the card
+          pane, so it survives a step exactly as it survives a close and a restart. Remounting
+          re-reads a resolved query, which is a read of the cache and not a round trip — the card
+          pane's body is keyed on its card id for the same reason and gets the same answer. */}
+      {request && <Body key={request.oracleId} request={request} onDone={close} />}
     </DeckDialog>
   );
 }
@@ -473,6 +691,13 @@ function Body({
             // Its own zoom section, not the search's: the modal opens *over* a wall the reader
             // has already sized, and a ctrl+wheel in here must not resize the page underneath.
             zoomSection="printings"
+            // **`CardGrid`'s `arrowNav` is opt-in and this wall deliberately does not opt in**,
+            // which is what makes the chevrons' keys reachable at all: the two would otherwise be
+            // one press with two meanings — move the selection along the wall, and step to the
+            // next card in the deck — decided by whichever handler saw the event first. The search
+            // and collection walls take it because there the arrows have nothing else to mean.
+            // Nothing is passed here on purpose; the absence *is* the decision, and `arrowNav`'s
+            // own doc says so from the other end.
             // The "you are here" mark: the printing the deck slot currently plays. Null where
             // there is no deck, because then no printing on this wall is special.
             selectedId={request.deck?.cardId ?? null}

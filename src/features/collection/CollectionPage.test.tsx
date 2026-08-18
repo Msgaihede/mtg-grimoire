@@ -1206,3 +1206,36 @@ describe("the card menu", () => {
     );
   });
 });
+
+/**
+ * The arrow keys on this wall, and the one thing this page contributes to them.
+ *
+ * The mechanism is `CardGrid`'s and is pinned by its own suite and by `gridNav.test.ts`. But
+ * `arrowNav` is a prop, and three of that component's four callers are deliberately built
+ * without it, so a wall can be given the whole feature and say nothing about it. What is claimed
+ * here is that this page passes it — and that the press therefore moves `selectedCardId`, the
+ * field the docked card pane reads, rather than only an outline on the wall.
+ *
+ * ArrowDown, and at one column that is the same step as ArrowRight: jsdom measures this wall at
+ * 0px, so every tile is its own row. Telling the two keys apart needs a column count, which is
+ * `gridNav.test.ts`'s subject. `userEvent.keyboard` on a caret placed by hand, never `type`,
+ * which focuses what it is handed and would make the focus assertion pass for the wrong reason.
+ */
+describe("the arrow-key walk", () => {
+  it("selects the next card on the wall, which is the card the pane is showing", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    // Two printings, so there are two tiles: this wall sums the entries behind one printing into
+    // a single piece of art, and a second entry for `c1` would be one tile with nowhere to walk.
+    collectionList.mockResolvedValue(
+      page([BOLT, { ...BOLT, id: 8, cardId: "c2", name: "Ancestral Recall" }]),
+    );
+    wrap(<CollectionPage />);
+
+    const first = await screen.findByRole("button", { name: "Lightning Bolt" });
+    first.focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(useAppStore.getState().selectedCardId).toBe("c2");
+    expect(screen.getByRole("button", { name: "Ancestral Recall" })).toHaveFocus();
+  });
+});

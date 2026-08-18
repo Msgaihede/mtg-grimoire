@@ -41,6 +41,7 @@ import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
+import { deckWalkStops } from "./deckWalk";
 import { DeckDialog } from "./DeckDialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { DeckNameField } from "./DeckNameField";
@@ -663,6 +664,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const paneDeckContext = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  /** The write, and deliberately not a read: this component publishes the walk and never reads
+   *  one back, so selecting `deckWalk` here would re-render the editor on its own writes. */
+  const setDeckWalk = useAppStore((s) => s.setDeckWalk);
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
@@ -2228,6 +2232,46 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => buildGroups(shown, categories, groupBy, sortBy, separateX, emptyGroupRules),
     [shown, categories, groupBy, sortBy, separateX, emptyGroupRules],
   );
+
+  /**
+   * The same deck as a **walk** — every drawn row, in the order the desk draws it — published to
+   * the store so the printings modal's left/right keys can step through the deck behind it.
+   *
+   * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, a sibling
+   * of the shell, so there is no context between here and there; and it is published from here
+   * rather than derived there because {@link groups} is the only place this order exists.
+   * `groupBy` and `sortBy` are this component's `useState`, and the rows are `shown` — the deck
+   * narrowed by the toolbar's text box and tag chips. Nothing outside this file can reconstruct
+   * any of that.
+   *
+   * **What it costs, since the input recomputes on every keystroke in that box.** `groups` is a
+   * new array per letter typed, so this is a new array of ~100 lean objects per letter and a
+   * `set` on the store. That is noise beside `buildGroups` itself, which runs on the same
+   * keystroke over the same rows and does strictly more — a sort per pile and a price sum per
+   * heading. The part worth being careful about is not the arithmetic but the **write**: a
+   * zustand `set` re-runs every subscriber's selector, and the modal is the only thing in the
+   * app that selects `deckWalk`. It is shut nearly always, and shut it draws nothing, so an
+   * ordinary keystroke here costs one selector call and one `Object.is`. That stays true only
+   * for as long as this field has one reader — a component that selected the walk to decide
+   * something *else* would turn typing in a deck's filter into a re-render of a surface that has
+   * nothing to do with the deck.
+   *
+   * Memoised so that a render which changed none of the inputs does not rewrite the store at
+   * all: without it every unrelated re-render of this component — a hover on a stack, a mutation
+   * settling — would publish an identical walk under a new identity and re-render the modal.
+   */
+  const deckWalk = useMemo(() => deckWalkStops(groups, deckId), [groups, deckId]);
+
+  useEffect(() => {
+    setDeckWalk(deckWalk);
+  }, [deckWalk, setDeckWalk]);
+
+  // The clear is a **separate, mount-only** effect and not the one above's cleanup. A cleanup
+  // there would run on every change of `deckWalk`, so each keystroke would write an empty walk
+  // and then the real one — two writes, and a frame in which a modal that is open over this deck
+  // has nowhere to step to. Here the walk is cleared exactly once, when the editor goes: a walk
+  // left behind would step a modal opened from the Collection into a deck nobody has open.
+  useEffect(() => () => setDeckWalk([]), [setDeckWalk]);
 
   /**
    * Every finding, filed under each card it names, so a view can mark a card.

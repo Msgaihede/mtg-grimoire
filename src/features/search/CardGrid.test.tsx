@@ -1168,3 +1168,248 @@ describe("CardGrid", () => {
     expect(onNeedNextPage).toHaveBeenCalled();
   });
 });
+
+/**
+ * The arrow keys, on the two walls that ask for them.
+ *
+ * **What can honestly be asserted here is the wiring and nothing about direction.** jsdom has no
+ * layout engine: `src/test-setup.ts` stubs `ResizeObserver` to a no-op, so this wall measures
+ * itself at 0px, `columnsFor` floors at one column, and every tile is its own row. Up and down
+ * are therefore ±1 here exactly as left and right are, and a test written against a two-column
+ * wall would be a test of a grid that does not exist in this process. The grid cases — the row
+ * boundary, the part-full last row, the clamp — live in `gridNav.test.ts`, where the column count
+ * is an argument rather than a measurement.
+ *
+ * Every press below goes through `userEvent.keyboard` on a caret placed by hand, never
+ * `userEvent.type`: `type` focuses whatever element it is handed, so a focus assertion after it
+ * passes whether or not anything moved the caret.
+ */
+describe("the arrow-key walk", () => {
+  const THREE = [
+    card("aaa", "Lightning Bolt"),
+    card("bbb", "Lightning Helix"),
+    card("ccc", "Ancestral Recall"),
+  ];
+
+  /**
+   * Everything about these walls that is not the subject of a test.
+   *
+   * `as const` on the section for the reason the three `props` objects above it give: a spread
+   * object's `"search"` widens to `string`, and the wall's prop is the union — which is the whole
+   * point of it being one. `arrowNav` is in here rather than passed per test because all but one
+   * of the walls below have it; the ones that do not say so after the spread, where an explicit
+   * `arrowNav={false}` reads as the subject rather than as an omission.
+   */
+  const base = {
+    onNeedNextPage: vi.fn(),
+    listKey: "k",
+    zoomSection: "search" as const,
+    arrowNav: true,
+  };
+
+  /** A tile's art button — the element the caret sits on, and the one it is moved to. */
+  const art = (name: string) => screen.getByRole("button", { name });
+
+  /**
+   * The two halves of a press, in one test because they are one behaviour: the reader asked for
+   * the next card to be **selected**, so `onSelect` firing is the feature and the caret following
+   * it is what makes a second press possible.
+   *
+   * `onSelect` is what the two calling pages write `selectedCardId` with, so on a real page this
+   * is the docked card pane moving to the new card.
+   */
+  it("selects the next card along and takes the caret with it", async () => {
+    const onSelect = vi.fn();
+    render(<CardGrid rows={THREE} onSelect={onSelect} {...base} />);
+
+    art("Lightning Bolt").focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(onSelect).toHaveBeenLastCalledWith("bbb");
+    // The art button, not the tile's wrapper: the wrapper is `tabIndex={-1}` so a menu can hand
+    // the caret back to it, and it wears no focus ring — a reader arrowing across a wall with
+    // nothing visibly focused would be worse served than by no arrow keys at all.
+    expect(document.activeElement).toBe(art("Lightning Helix"));
+
+    await userEvent.keyboard("{ArrowLeft}");
+
+    expect(onSelect).toHaveBeenLastCalledWith("aaa");
+    expect(document.activeElement).toBe(art("Lightning Bolt"));
+  });
+
+  /**
+   * Down and up reach the same two tiles here, and that is the single column speaking rather than
+   * the implementation: at one column the row below a tile *is* the tile after it. This pins that
+   * the two keys are wired at all — `gridNav.test.ts` is where they are told apart.
+   */
+  it("answers up and down too, which are the same step in a single column", async () => {
+    const onSelect = vi.fn();
+    render(<CardGrid rows={THREE} onSelect={onSelect} {...base} />);
+
+    art("Lightning Bolt").focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(onSelect).toHaveBeenLastCalledWith("bbb");
+
+    await userEvent.keyboard("{ArrowUp}");
+    expect(onSelect).toHaveBeenLastCalledWith("aaa");
+    expect(document.activeElement).toBe(art("Lightning Bolt"));
+  });
+
+  /**
+   * A press the wall used is a press nothing else may have — without `preventDefault` the
+   * scroller underneath would also do its own arrow-key scrolling, so the caret would land on a
+   * tile and the wall would slide out from under it.
+   *
+   * `fireEvent` returns `false` for an event whose default was prevented, which is the only way
+   * to ask this question; `userEvent.keyboard` throws the answer away.
+   */
+  it("claims a press it acted on, and leaves an unused one for whatever is under it", () => {
+    render(<CardGrid rows={THREE} onSelect={vi.fn()} {...base} />);
+
+    expect(fireEvent.keyDown(art("Lightning Bolt"), { key: "ArrowRight" })).toBe(false);
+    // The end of the list. Nothing moves and nothing is claimed — no wrapping round to the top,
+    // which on a 117 k-row browse would be a reader losing their place to one keystroke.
+    expect(fireEvent.keyDown(art("Ancestral Recall"), { key: "ArrowRight" })).toBe(true);
+    // And a key this wall has no answer for stays with the tile, which is how Enter still opens
+    // a card and Shift+F10 still opens its menu.
+    expect(fireEvent.keyDown(art("Lightning Bolt"), { key: "Enter" })).toBe(true);
+  });
+
+  it("stops at the end of the list rather than wrapping round it", async () => {
+    const onSelect = vi.fn();
+    render(<CardGrid rows={THREE} onSelect={onSelect} {...base} />);
+
+    art("Ancestral Recall").focus();
+    await userEvent.keyboard("{ArrowRight}{ArrowDown}");
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(art("Ancestral Recall"));
+  });
+
+  /**
+   * Ctrl+arrow, Alt+arrow and their friends belong to the browser or the window manager, and this
+   * wall already reads Ctrl for a gesture of its own (ctrl+wheel zooms it). Shift is in the guard
+   * for a different reason: Shift+arrow extends a *selection* everywhere else it exists, and this
+   * wall has no range to extend — swallowing it would promise one.
+   */
+  it("keeps its hands off a modified arrow", async () => {
+    const onSelect = vi.fn();
+    render(<CardGrid rows={THREE} onSelect={onSelect} {...base} />);
+
+    art("Lightning Bolt").focus();
+    await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+    await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(art("Lightning Bolt"));
+  });
+
+  /**
+   * A caret in a field is a caret the field is using: the arrows move it through the text, and a
+   * wall that jumped at the same time would be taking a key that was already spoken for.
+   *
+   * The general rule, stated as a deny-list of what a caret may be sitting in. The test after
+   * this one is the tighter half of it — the one that covers the controls a list of input types
+   * cannot see.
+   */
+  it("yields to a caret in a field the caller drew on the tile", async () => {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={THREE}
+        onSelect={onSelect}
+        {...base}
+        action={() => <input aria-label="Copies" defaultValue="1" />}
+      />,
+    );
+    const field = screen.getAllByLabelText("Copies")[0];
+
+    field.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field);
+  });
+
+  /**
+   * **Inside a tile is not the same as on it**, and this is the case the field guard above cannot
+   * see. The search's quick-add opens a `role="dialog"` *in the tile's own caption* — `static`
+   * anchoring, so a 256px panel on a 170px tile opens from the tile's left edge rather than off
+   * the scroller's — and its finish chips and condition rows are **buttons**. A reader stepping
+   * through them is holding a caret that `closest` reports as being on a card; walking the wall
+   * out from under them would be taking a key the control they opened is using.
+   *
+   * The two positions that do count are the art button, which is where a walk starts and lands,
+   * and the tile's own root, which is what a closing context menu focuses back to.
+   */
+  it("leaves a control the caller drew inside a tile holding its own keys", async () => {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={THREE}
+        onSelect={onSelect}
+        {...base}
+        action={() => <button type="button">Foil</button>}
+      />,
+    );
+    const chip = screen.getAllByRole("button", { name: "Foil" })[0];
+
+    chip.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(chip).toHaveFocus();
+
+    // And the tile's root does count — it is where `ContextMenu` puts the caret when a tile's
+    // menu closes, so the walk survives a right-click.
+    const tile = art("Lightning Bolt").closest<HTMLElement>("[data-grid-index]");
+    tile?.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(onSelect).toHaveBeenLastCalledWith("bbb");
+  });
+
+  /**
+   * The prop is the whole of the opt-in, and this is the state three of the four callers are in.
+   * `AllPrintingsDialog` is the one that must never take it: left and right *there* step through
+   * a card's printings, and one key cannot mean two things on one screen.
+   */
+  it("does nothing at all on a wall that was not given the prop", async () => {
+    const onSelect = vi.fn();
+    render(<CardGrid rows={THREE} onSelect={onSelect} {...base} arrowNav={false} />);
+
+    art("Lightning Bolt").focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(art("Lightning Bolt"));
+  });
+
+  /**
+   * The number every step of the move is keyed off, published on the tile's root.
+   *
+   * **Absolute, and unconditional.** Absolute because selecting a card opens the 384px detail
+   * pane, which re-flows the wall to fewer columns *as a result of the very press being handled*
+   * — a tile's row and column have a shelf life of one render and its place in the list does not.
+   * Unconditional because it states a fact about the tile rather than about a feature: the wall
+   * below takes no arrow keys and still carries it.
+   */
+  it("publishes each tile's place in the whole list, whether or not it is being walked", () => {
+    const { container, rerender } = render(<CardGrid rows={THREE} onSelect={vi.fn()} {...base} />);
+    const indices = () =>
+      [...container.querySelectorAll("[data-grid-index]")].map((t) =>
+        t.getAttribute("data-grid-index"),
+      );
+
+    expect(indices()).toEqual(["0", "1", "2"]);
+    // On the tile's root, which is what contains all four of a tile's parts — the art, both
+    // corners and the caption — so a press on any of them walks up to the same element.
+    expect(art("Lightning Helix").closest("[data-grid-index]")).toHaveAttribute(
+      "data-grid-index",
+      "1",
+    );
+
+    rerender(<CardGrid rows={THREE} onSelect={vi.fn()} {...base} arrowNav={false} />);
+    expect(indices()).toEqual(["0", "1", "2"]);
+  });
+});

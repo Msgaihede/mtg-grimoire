@@ -2,7 +2,14 @@
  * The deck as stacks of cards in columns — the default view, and the one the redesign is
  * built around.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { GripVertical } from "lucide-react";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
@@ -20,11 +27,13 @@ import {
   type DeckCardActions,
 } from "../cardControl";
 import { useCategoryDragSource, useCategoryReorderDrop } from "../categoryDrag";
+import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
 import { RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { nextStackPosition, type StackPosition } from "./stackNav";
 
 /**
  * The group section's own `p-1.5`, one side — 6px, read off the class below.
@@ -170,6 +179,69 @@ function useFlowRowSpan(enabled: boolean) {
 }
 
 /**
+ * Everything an arrow key may not be answered from — a text field the press belongs to, and the
+ * desk, which is not a card.
+ *
+ * A pile heading goes into rename mode with a live `<input>` inside this view (see
+ * `deckGroupRename`), and an arrow in a field is the caret moving through text. `closest` rather
+ * than a tag test on the target, because the press lands on whichever leaf the caret is in — and
+ * `[contenteditable]` is here for completeness rather than for a call site: nothing in this view
+ * draws one, and a rule that only listed what exists today is a rule that goes wrong quietly.
+ */
+const NOT_THE_CARET = "input, textarea, select, [contenteditable]";
+
+/**
+ * Where in the walk the card carrying `slot` is, or `null` for a slot this view is not drawing.
+ *
+ * **The slot is the address, never a DOM index.** `deckCardProps` stamps `DECK_CARD_ATTR` on
+ * every card's button and `dnd.ts` owns both ends of the spelling, so the question "where is the
+ * caret" is answered against the same array the movement is computed over — rather than by
+ * counting buttons, which would answer about the *drawn* order of a grid whose placement is
+ * CSS's and whose piles are two boxes.
+ *
+ * `null` is a real answer and the caller acts on it: a card can leave the deck between the render
+ * that drew it and the press that reached here (a stepper reaching zero removes the row), and a
+ * press with nowhere to move from is a press this view leaves alone.
+ */
+function stackPositionOf(walk: readonly CardGroup[], slot: string): StackPosition | null {
+  for (let pile = 0; pile < walk.length; pile += 1) {
+    const card = walk[pile].cards.findIndex(
+      (c) => deckCardSlot(c.categoryId, c.cardId, c.finish) === slot,
+    );
+    if (card !== -1) return { pile, card };
+  }
+  return null;
+}
+
+/**
+ * Put the caret on a card's own button and bring it into view.
+ *
+ * Found by the slot rather than held as a ref, for `deckCardProps`' reason: the cards are not
+ * virtualised, so the button is already in the DOM, but which element stands for a row is a
+ * question only the document can answer after a write has replaced it. The search is scoped to
+ * this view's root, which is stronger than the pane's document-wide one — two deck views are
+ * never mounted together today, and this is not the place to depend on that.
+ *
+ * **`block: "nearest"` against the *page*, and the distinction is load-bearing since
+ * 2026-08-14**: this view is deliberately no longer its own scroll container — it is given no
+ * height, the piles wrap, and `DeckEditor`'s page scroller is the one thing that scrolls (the
+ * root element's own comment carries the whole of why). So there is no local scrollport to
+ * scroll a card inside, `nearest` asks for the least page movement that puts the card on screen,
+ * and a card already visible moves nothing at all. `preventScroll` on the focus is what stops
+ * the browser doing its own scroll first, by a different rule, on the way.
+ *
+ * The optional call is jsdom's: it lays nothing out and leaves `scrollIntoView` undefined, which
+ * is `SetCombobox`' spelling for the same reason rather than a doubt about the browser.
+ */
+function focusStackCard(root: HTMLElement, card: DeckCard): void {
+  const slot = deckCardSlot(card.categoryId, card.cardId, card.finish);
+  const button = root.querySelector<HTMLElement>(`[${DECK_CARD_ATTR}="${slot}"]`);
+  if (!button) return;
+  button.focus({ preventScroll: true });
+  button.scrollIntoView?.({ block: "nearest" });
+}
+
+/**
  * How a test finds one pile's box in the flow. An attribute rather than a role, because where a
  * pile was drawn is a *layout* and carries no meaning for a reader. `DropIndicator`'s
  * `DROP_LINE_ATTR` and `cardControl`'s `DECK_GROUP_ATTR` are the same idea for the same reason.
@@ -273,11 +345,82 @@ export function StackView({
   // is out by construction rather than by a second test, and a derived heading ("Mana value 3")
   // is out because it has no id to move.
   //
-  // It is what the grip's `n of N` counts and what the arrow keys step through, and it is
-  // deliberately the *drawn* order rather than the deck's: a reader pressing ArrowRight is asking
-  // for the pile they can see to the right, and the piles the deck holds that this desk is not
-  // drawing are the editor's to thread back in ({@link DeckCardActions.moveCategory}).
+  // It is what the grip's `n of N` counts and what the arrows **on a grip** step through — not
+  // the ones that move the caret, which walk `walk` below and reach the rail — and it is
+  // deliberately the *drawn* order rather than the deck's: a reader pressing ArrowRight on a grip
+  // is asking for the pile they can see to the right, and the piles the deck holds that this desk
+  // is not drawing are the editor's to thread back in ({@link DeckCardActions.moveCategory}).
   const flowIds = flow.flatMap((group) => (group.categoryId === null ? [] : [group.categoryId]));
+  // **Every pile the arrows walk, in the order they are drawn** — the flow, then the rail, each
+  // pile's cards in the order it already holds them. It is the same `splitRail` answer the view
+  // is drawn from and deliberately not a second derivation of it: a walk that disagreed with the
+  // layout by one pile would send the caret somewhere the reader is not looking, and nothing on
+  // screen would say so. `deckWalk.ts` builds this order for the printings modal off the same
+  // function, and the two are meant to agree.
+  //
+  // The rail is **in** it: those piles are drawn on the desk like any other and a reader arrowing
+  // right past the last flowing pile is asking for the Sideboard. Where a pile sits is a layout;
+  // what the caret can reach is not.
+  const walk = [...flow, ...rail];
+
+  /**
+   * The arrows, for the whole view — left and right to the neighbouring pile's top card, up and
+   * down through the pile the caret is in. {@link nextStackPosition} is the movement; this is
+   * everything about it that needs a document.
+   *
+   * **One handler on the root rather than one per card**, which is this file's standing rule for
+   * a view that draws hundreds of them: a keydown bubbles from whichever button the caret is on,
+   * and the slot stamped on that button says which card it was — so the alternative buys a
+   * closure per card to learn something the DOM already knows.
+   */
+  const onArrowKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    // **The grip's arrows are these arrows, and the grip goes first.** `CategoryGrip` binds all
+    // four to *reordering the pile* and calls `preventDefault()` on every one of them, including
+    // the presses that step past the end and send nothing — and it is the same synthetic event
+    // bubbling up to here, so the flag is readable. With the caret on a grip an arrow moves the
+    // pile; anywhere else it moves the selection. Yielding to whatever claimed the press is also
+    // what keeps this from swallowing a key some later control binds inside the view.
+    if (e.defaultPrevented) return;
+    // A modified arrow is somebody else's gesture — the browser's own caret browsing, the window
+    // manager's, a shortcut this app has not written yet. Answering one would take a key away
+    // with nothing on screen saying why.
+    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    // Whatever leaf the caret was in when the key was pressed — a `span` inside a button as
+    // often as the button itself, which is why every test below it is a `closest`.
+    const from = e.target;
+    if (!(from instanceof Element)) return;
+    if (from.closest(NOT_THE_CARET)) return;
+    // Not on a card at all: a heading, a grip that did not claim the press, the blank desk
+    // between two piles. There is nowhere to move *from*, so the press is left alone.
+    const slot = from.closest(`[${DECK_CARD_ATTR}]`)?.getAttribute(DECK_CARD_ATTR);
+    if (slot === null || slot === undefined) return;
+    const at = stackPositionOf(walk, slot);
+    if (at === null) return;
+    const to = nextStackPosition(
+      walk.map((group) => group.cards.length),
+      at,
+      e.key,
+    );
+    if (to === null) return;
+    const target = walk[to.pile].cards[to.card];
+
+    e.preventDefault();
+    // The pane and the gold ring follow the caret, because in this view the picked card is also
+    // the pile's resting state — a reader running along a row of piles is reading them, and a
+    // selection that lagged the caret would leave the ring on a card they have left.
+    //
+    // Called **before** the caret is moved, and the order costs nothing either way: both are
+    // inside one React event, so the re-render this schedules is flushed after this handler
+    // returns. Nothing remounts — a card's element is keyed by its `deck_cards.id` — so the
+    // button focused here is the same node afterwards and keeps the caret. `StackedCard`'s own
+    // `onFocus` opens the card it is on, which is the intended half of that: the card the caret
+    // lands on stands out of its pile.
+    onSelect?.(target);
+    // `e.currentTarget` is the view's own root — the element this handler is attached to — which
+    // is both the right scope for the lookup and one fewer read of `scrollRef`. It is only valid
+    // for the length of the handler, which is exactly how long it is used for.
+    focusStackCard(e.currentTarget, target);
+  };
 
   return (
     // Scrolls **down**, and that is the whole of this layout. A pile that will not fit opens
@@ -331,6 +474,9 @@ export function StackView({
     // 8px is what the layout was drawn with.
     <div
       ref={scrollRef}
+      // The arrow keys, for every card in the view — see {@link onArrowKey}, which is also where
+      // the four things it refuses to answer are written down.
+      onKeyDown={onArrowKey}
       className={cn(
         "flex h-full min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto",
         DROP_MARK_ROOM,
@@ -732,6 +878,15 @@ export const GRIP_ATTR = "data-category-grip";
  * — so "the pile below" is a fact about how much room the window had, not about the order. Left
  * and Up are the same press, Right and Down are the same press, and both are the move
  * `movedTo` makes.
+ *
+ * **These four presses win over the view's own arrows, and `preventDefault` is the whole of the
+ * handshake.** The root binds the same four keys to moving the *caret* between cards
+ * ({@link nextStackPosition}), and it returns early on `defaultPrevented` — so this handler
+ * marking every one of the four, including the two that step past an end and send nothing, is
+ * what keeps an arrow on a grip meaning "move this pile" while an arrow anywhere else means
+ * "move the selection". One key with two meanings, told apart by where the caret is; drop the
+ * `preventDefault()` on the no-op arms and a grip at either end of the flow would silently start
+ * moving the selection instead.
  *
  * **The neighbour is named rather than counted**, because {@link DeckCardActions.moveCategory}
  * takes two ids: the flow is a subset of the deck's categories, so a position here is not a

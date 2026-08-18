@@ -1,3 +1,4 @@
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { DeckDialog } from "./DeckDialog";
@@ -42,6 +43,26 @@ function Body({ paragraphs }: { paragraphs: number }) {
         </p>
       ))}
     </div>
+  );
+}
+
+/**
+ * A flank, drawn the way the one real caller draws it — a 36px disc with a chevron in it.
+ *
+ * The shell owns where a flank goes and reserves the room for it; what it *is* is the host's, so
+ * this is a stand-in for `AllPrintingsDialog`'s step chevron rather than a component either file
+ * shares. It is deliberately a plain `<button>`: the claim this story makes is about the tab
+ * cycle and the reserved column, and a control with less on it is a clearer claim.
+ */
+function Flank({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      className="grid size-9 place-items-center rounded-full border border-border bg-bg text-dim"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -193,5 +214,75 @@ export const Closed: Story = {
   args: { open: false },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).queryByRole("dialog")).toBeNull();
+  },
+};
+
+/**
+ * A dialog with a control hung off each side — **the shell's one non-chrome, non-body shape.**
+ *
+ * `AllPrintingsDialog` is the caller: opened from a deck row, its chevrons step the modal to the
+ * previous and next card in the deck. Everything about the arrangement follows from two facts that
+ * pull in opposite directions.
+ *
+ * **The room is the scrim's.** The panel is `max-w-full` inside a scrim whose padding is the whole
+ * inset, so at the app's 1024px floor a wide panel already *is* the window — a button positioned
+ * off its edge would be off the glass, unreachable by pointer and scrollable to by nothing, since
+ * a horizontal scrollbar is the one thing that floor forbids. So the scrim becomes three columns
+ * and the panel narrows. **The control is the panel's.** `trapTab` cycles within the panel, so a
+ * flank rendered beside it in the scrim would be pointer-only, and would sit outside the
+ * `aria-modal` subtree while being the only way to move the dialog on.
+ *
+ * The two are satisfied together: room reserved outside, control rendered inside and absolutely
+ * positioned out over the room. It works because the panel does not clip its content — an
+ * `overflow-hidden` added here to square a rounded corner would delete these buttons.
+ *
+ * **Every other host passes nothing and gets exactly the dialog above**, which is worth seeing
+ * beside {@link Default}: a third column on the scrim would narrow every dialog in the builder to
+ * reserve room nobody uses.
+ */
+export const Flanked: Story = {
+  args: {
+    title: "Sol Ring",
+    closeLabel: "Close printings",
+    width: "w-[72rem]",
+    flanks: {
+      left: (
+        <Flank label="Previous card in the deck, Lightning Bolt">
+          <ChevronLeft className="size-4" aria-hidden="true" />
+        </Flank>
+      ),
+      right: (
+        <Flank label="Next card in the deck, Forest">
+          <ChevronRight className="size-4" aria-hidden="true" />
+        </Flank>
+      ),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: "Sol Ring" });
+    await expect(dialog).toHaveFocus();
+
+    // Reserved on the scrim, and the rows untouched beside it — that class is what makes the
+    // panel's `max-h-full` mean anything, so a flanked dialog is clamped like any other.
+    const scrim = dialog.parentElement as HTMLElement;
+    await expect(scrim).toHaveClass("grid-cols-[3.5rem_minmax(0,1fr)_3.5rem]");
+    await expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]");
+
+    // Inside the panel's DOM, which is the half `trapTab` forces.
+    const previous = canvas.getByRole("button", {
+      name: "Previous card in the deck, Lightning Bolt",
+    });
+    await expect(dialog.contains(previous)).toBe(true);
+
+    // And ordinary tab stops of the dialog: the ✕ first — the way out is the stop a reader
+    // expects to meet first — then the two flanks.
+    await userEvent.tab();
+    await expect(canvas.getByRole("button", { name: "Close printings" })).toHaveFocus();
+    await userEvent.tab();
+    await expect(previous).toHaveFocus();
+    await userEvent.tab();
+    const next = canvas.getByRole("button", { name: "Next card in the deck, Forest" });
+    await expect(next).toHaveFocus();
   },
 };
