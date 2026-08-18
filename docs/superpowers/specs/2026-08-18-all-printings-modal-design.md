@@ -111,9 +111,15 @@ So `card_printings` gains an optional limit:
 
 ```rust
 const MAX_PRINTINGS: usize = 400;       // unchanged — the default, and the pane's
-const MAX_PRINTINGS_HARD: usize = 1500; // the ceiling an explicit limit is clamped to
+const MAX_PRINTINGS_HARD: usize = 1000; // the ceiling an explicit limit is clamped to
 pub async fn card_printings(.., limit: Option<i64>) -> Result<PrintingsResponse, String>
 ```
+
+**1000 is chosen against a measurement this repo already holds.** `MAX_PRINTINGS`' own doc records
+it: counting paper only, *exactly five* oracle cards exceed 400, and they are the five basic lands
+— Forest 862, Mountain 840, Swamp 832, Island 827, Plains 818. Seven cards in the whole library
+have more than 100. So 1000 clears the largest list in the corpus with headroom and is not a number
+picked for the feel of it.
 
 Absent means 400, so the card pane's query and its cache key are byte-identical to today's. The
 modal asks for `MAX_PRINTINGS_HARD`. The query is one `WHERE oracle_id = ?` on `idx_cards_oracle`;
@@ -216,8 +222,8 @@ what each of them does.
 `DeckDialog`'s header carries the card name; its subtitle carries the count line, in the data face:
 
 - unfiltered and uncapped — `862 printings`
-- unfiltered and capped — `1500 of 1712 printings`, a state no card in the corpus is known to
-  reach; the caption exists so that a future one cannot make the wall lie
+- unfiltered and capped — `1000 of 1204 printings`, a state no card in the corpus reaches today
+  (§4); the caption is kept so a future reprint cannot make the wall lie
 - filtered — `showing 37 of 862 printings`
 
 Under the header, a filter row; under that, the wall as `min-h-0 flex-1`, since `CardGrid` owns its
@@ -246,10 +252,9 @@ who is not building a deck asked for.
 
 ## 8. What this does not do
 
-- **No new backend filtering.** Every filter is client-side over one fetched page. The page is now
-  large enough (§4) for that to be honest: the largest list anyone has named is Forest's 862, and
-  1500 is headroom rather than a measured ceiling — the implementation is to query the corpus for
-  the true maximum and record it, and the caption goes on telling the truth either way.
+- **No new backend filtering.** Every filter is client-side over one fetched page, which §4's
+  1000-row ceiling makes honest: the largest paper printings list in the corpus is Forest's 862,
+  and no card reaches the cap. The caption goes on telling the truth if one ever does.
 - **No quick-add control on the tile.** The tile's context menu already carries Add to collection,
   wishlist and deck. A fourth control on a caption strip that scales with zoom is a separate
   question.
