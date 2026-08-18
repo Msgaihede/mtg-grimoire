@@ -324,6 +324,20 @@ reader to configure the deck they had just made; it now asks all of them.
   moves. The card pane's foil button is the second entrance: inside the editor, on a card the
   deck holds, it **writes** and says `Set as foil`; anywhere else it stays the view toggle it has
   always been and says `View as foil`.
+- **Setting a finish moves the row's _address_, so the write re-anchors the card pane's context on
+  it** — `useDeck`'s `reanchorPane`, on the mutation rather than at either call site because both
+  entrances above press it. A row is `(deck, category, card, variant, finish)` and this write
+  changes the fifth part, so a context left where it was names a row that no longer exists: the
+  reported defect (2026-08-18) was `Set as foil` **unpicking the card it was pressed on** — the
+  gold ring is `selectedSlot`, derived from that context — while the pane stayed open beside it
+  saying nothing about any row. Two more went with it and neither had been reported: the pane's
+  close had no control to hand the caret back to (`deckControlFor` searches by the same slot), and
+  the pane's own toggle sent `null → null` on its next press, refused as `SAME_FINISH`, so it
+  could be pressed once and never pressed back. `swapPrinting` met this one axis over and answered
+  it the same way — `openCardFromDeck` is both "which card is open" and "which row it came from".
+  **The fold needs no arm**: two rows becoming one leaves the survivor at the target finish, which
+  is where the context lands either way. **`move` and `refile` change the third part and have the
+  same hole**; they are not fixed and the mark goes out there too.
 - **What a deck card is drawn as is `playedFinish(card.finish, card.finishes)`** — the reader's
   own statement first, `soleFinish`'s second. The order carries the argument: `soleFinish` says
   what the *object* is and deliberately says nothing about a printing sold in both (a sheen on
