@@ -307,12 +307,12 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
     tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
     `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper` are each
-    drawn on a card face *and* in one of the three tables or the card pane, so a prop would have to
+    drawn on a card face _and_ in one of the three tables or the card pane, so a prop would have to
     be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
     answered fifteen times by whoever adds the newest call site. Every mark reads
     `var(--mark-scale, 1)` instead, and the fallback is what a table gets for knowing nothing.
   - **Real geometry, never `transform: scale()`** — the standing rule, and here the caption strip is
-    what enforces it: it is *in flow*, and a transform changes no layout, so scaled text would grow
+    what enforces it: it is _in flow_, and a transform changes no layout, so scaled text would grow
     straight out of the strip the virtualiser sized its rows from.
   - **What does not scale, and why**: hairline borders (1px is a hairline at every size),
     `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
@@ -332,7 +332,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     **20.4 / 40.8 / 81.6**. **The tag fits inside the reveal at 0.5× (11 ≤ 17)**, which is the one
     property `stackAdvance`'s floor existed to protect and is now held by the tag scaling instead.
     Deck grid: tile **75 / 300**, copy count **4.5 / 18px**, foot **10 / 40**, stepper **8.5 / 34**.
-    **The control case**: with the desk at 2× the deck's *table* row still read a **6px** gem and a
+    **The control case**: with the desk at 2× the deck's _table_ row still read a **6px** gem and a
     **20px** stepper with `--mark-scale` **unset**, and with the search wall at 2× beside an open
     card pane the pane's finish glyph still read **12px**. The `85 → 340` tile at
     `mark-scale 0.5 → 2` and `control-scale 0.425 → 1.7` was read off the tile's own computed style
@@ -465,7 +465,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   laid over it; `GridView`'s caption was 4.5px type at half size. Every one of those arguments was
   about chrome the zoom could not reach. **The marks read the card's own scale now** (below), so
   each budget and its contents are one proportion and `atLeast` has one consumer left —
-  `GridView`'s **gutter**, which measures the space *between* two cards rather than anything drawn
+  `GridView`'s **gutter**, which measures the space _between_ two cards rather than anything drawn
   on one, contains nothing, and would otherwise halve into a wall that reads as a single sheet of
   card backs. `CardGrid`'s caption is also **derived** rather than written down now
   (`ceil(24 × CONTROL_SHRINK) + 4` = 25), because the button it is a budget for is no longer 24px
@@ -801,7 +801,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   does not own the body's scroller — the history body has a sticky roll-up inside its own — so
   each body renders its own `min-h-0 flex-1 overflow-y-auto`.
   **A body's scroller only works if the panel above it is clamped, and for two days it was not**
-  (2026-08-18). The panel's `max-h-full` is a percentage against its *grid area*, and the scrim's
+  (2026-08-18). The panel's `max-h-full` is a percentage against its _grid area_, and the scrim's
   `grid place-items-center` gave it an **implicit** row — which is `auto`, and an `auto` row sizes
   to its own content, so the clamp was circular and clamped nothing. Measured in a headless
   browser at a 708px viewport with a 140-line export: the panel drew **2963px**, the body's
@@ -845,6 +845,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   focus and Escape figures above were taken on the drawers this replaced, and the collapsed
   default's effect on the desk is arithmetic from `DECK_FLOOR`'s measurement rather than a new
   reading.
+
 - **A popup is pinned to, and grows from, the corner nearest its trigger's own edge.**
   Nothing clips these popups — that is the point of not portalling them — so one that
   overflows the window scrolls the whole app sideways instead of being cut off. The set
@@ -928,7 +929,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   were filled — and an `overflow` on that axis stays, since one column zoomed past the desk's own
   width genuinely is wider than its box and clipping a card is worse than a scrollbar the reader
   asked for. Wrapping is what makes that the rare case. (It was `overflow-auto` at the time and
-  is `overflow-x-auto` since the deck-builder entry two bullets down, which took the *vertical*
+  is `overflow-x-auto` since the deck-builder entry two bullets down, which took the _vertical_
   scrollbar out of these views entirely; the horizontal reasoning here is what survived.)
 - **Wrapping fixed the direction and not the filling, and `StackView` gave up packing the same
   day.** The bullet above is about a run that went sideways; what it left standing is that
@@ -1003,7 +1004,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   - **The win is distribution, not height, and this fixture says so honestly.** Six piles over
     three columns is two per column either way, so both layouts came to the same **1026px** of
     flow. The height is only won where a column holds more than two; what is won at every size is
-    that the space is under the *last* pile instead of in a band across the middle of the desk.
+    that the space is under the _last_ pile instead of in a band across the middle of the desk.
+
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
   — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.
   `packColumns` is greedy and in the reader's own order (never reordering, never splitting a
@@ -1077,7 +1079,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     has been re-driven. The widths and both thresholds are untouched either way: they are
     arithmetic about one column, and a column is the same width whoever made the pile in it.
 - **Wrapping down is only half an answer while the box it wraps inside has a height: the deck
-  builder scrolled *inside itself*, and the fix was to stop giving the views one** (found and
+  builder scrolled _inside itself_, and the fix was to stop giving the views one** (found and
   fixed 2026-08-14, driven at `npm run tauri dev`, a **debug** build, at 1280×800 and 1024×600).
   The two entries above take a run that went sideways and turn it into a run that goes down —
   which is right, and leaves the reader looking at a wall of cards in a letterbox: the view was
@@ -1095,14 +1097,14 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     scroll. `page.scrollWidth - clientWidth`, `main`'s and the document's were **0** at every
     reading — the sideways rule the entries above establish is untouched.
   - **The table is the exception and it is a difference in kind.** `VirtualTable` mounts the rows
-    in view and holds a spacer open for the rest, so a scrollport is what it *is*; given no height
-    it was measured at **2 781px** with its own scroller *and* the page's — the two-scrollbar
+    in view and holds a spacer open for the rest, so a scrollport is what it _is_; given no height
+    it was measured at **2 781px** with its own scroller _and_ the page's — the two-scrollbar
     screen this change exists to remove, arriving by the opposite route. It keeps the bounded desk
     row: **384** with **2 397** of scroll inside it and **194** of page, which is exactly what it
     read before.
   - **`min-h-96` on the desk row was silently capping the whole thing, and only the live pass
     could show it.** A flex item's automatic minimum size is what stops it being squeezed below
-    its content, and a `min-height` *number* replaces that `auto`. With the class still on the
+    its content, and a `min-height` _number_ replaces that `auto`. With the class still on the
     row, the deck drew **2 783px** of piles in a desk box of **384** — the piles paint and the
     page counted them, so it looked correct, while the price strip and the stats band were laid
     out from the foot of the 384 (over the deck, not under it) and `position: sticky` clamped the
@@ -1114,8 +1116,8 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     cannot answer it.** A sibling of a 7 000px row would be drawn 7 000px tall, scrolling its own
     search field away and mounting tiles nobody can see; `100%` is the deck's height and a
     viewport unit is wrong by the app chrome above the scroller. So `sticky top-0 self-start`
-    plus a height of *the scroller's visible height less however much of the desk still sits
-    below its top*, recomputed on scroll behind a rAF. Read at six scroll positions on the
+    plus a height of _the scroller's visible height less however much of the desk still sits
+    below its top_, recomputed on scroll behind a rAF. Read at six scroll positions on the
     7 635px page: **489px** tall at rest (the window under the header), **589** at scrollTop 100,
     **702** — the whole window — from 213 on, with the panel's bottom edge flush to the
     scrollport's (`0px`) at every one of them, and its own wall never scrolling the page.
@@ -1307,7 +1309,7 @@ and what driving it found.
   light along the top edge — which is the 34px of itself a card in the middle of a pile shows.
   `inset 0 0 26px 4px`, blur far wider than the spread so the band falls off into the art instead
   of drawing a second border inside the first, in `color-mix(in oklab, var(--color-accent) 60%,
-  transparent)` because full-strength gold at that radius is a lamp.
+transparent)` because full-strength gold at that radius is a lamp.
 - **It is drawn _inside_ the card's face, and that is the requirement rather than a detail.** The
   brief was "visible from the middle of a stack". A collapsed card shows only the 34px of its own
   printed title bar that its successor has not painted over, so a ring on the card's outer box has
@@ -1410,30 +1412,30 @@ Edge was already running; the honest signal is that the call raised no refusal.
 24-card Standard deck.** Reported as "two scrollbars on the deck builder, and dead space at the
 bottom of the app".
 
-**What was on screen.** The deck editor drew its own page scrollbar, and the *window* drew a
+**What was on screen.** The deck editor drew its own page scrollbar, and the _window_ drew a
 second one beside it. Scrolling that second one slid the whole application up and left the page
 background under it — the "dead space", which is what an `h-screen` shell looks like in a document
 that is taller than the window.
 
 **What the numbers said, in the order they were taken.**
 
-| read | before | after |
-| --- | --- | --- |
-| `documentElement.scrollHeight` | **1704** | 800 |
-| `documentElement.clientHeight` | 800 | 800 |
-| `window.innerWidth - documentElement.clientWidth` | **15** | **0** |
-| `window.scrollTo(0, 5000)` → `scrollY` | **904** | **0** |
-| `body.scrollHeight` | 800 | 800 |
-| `#root > div` (`h-screen overflow-hidden`) `scrollHeight` | 800 | 800 |
+| read                                                      | before   | after |
+| --------------------------------------------------------- | -------- | ----- |
+| `documentElement.scrollHeight`                            | **1704** | 800   |
+| `documentElement.clientHeight`                            | 800      | 800   |
+| `window.innerWidth - documentElement.clientWidth`         | **15**   | **0** |
+| `window.scrollTo(0, 5000)` → `scrollY`                    | **904**  | **0** |
+| `body.scrollHeight`                                       | 800      | 800   |
+| `#root > div` (`h-screen overflow-hidden`) `scrollHeight` | 800      | 800   |
 
-**The third and fourth rows are the whole difficulty**: the document scrolled 904px while *every
-box in the tree measured 800*, the shell's own `overflow-hidden` included. Hiding the shell took
+**The third and fourth rows are the whole difficulty**: the document scrolled 904px while _every
+box in the tree measured 800_, the shell's own `overflow-hidden` included. Hiding the shell took
 `scrollHeight` to 800, so it was inside; forcing `overflow: hidden` onto the editor changed
 **nothing**, so it was not the editor's content escaping the editor's clip.
 
 **It was `.sr-only`, which is `position: absolute`.** An `overflow` clips a descendant only when
 the scroller lies between that descendant and its **containing block** — and a label with no
-positioned ancestor takes the *initial* containing block, so it is laid out at its static position
+positioned ancestor takes the _initial_ containing block, so it is laid out at its static position
 (deep inside the scrolled column) and clipped by nothing at all. It then contributes that position
 to the **document's** scrollable overflow. The deepest one was `DeckStats`' curve label
 `"0 cards at mana value 8 or more"` at y **1703** — the 1704 above, exactly.
@@ -1473,11 +1475,11 @@ narrow desk really is wider than its box. None of the three carried padding. **A
 at the box's padding box**, so a pile laid out flush against the scroller's content edge has
 everything drawn outside its own border box painted in the clipped region:
 
-| mark | drawn at | with no padding |
-| --- | --- | --- |
-| `DROP_RING` (`ring-2`) | a box shadow, 2px outside the border box | the whole side, gone |
+| mark                                   | drawn at                                 | with no padding      |
+| -------------------------------------- | ---------------------------------------- | -------------------- |
+| `DROP_RING` (`ring-2`)                 | a box shadow, 2px outside the border box | the whole side, gone |
 | `FOCUS` (`outline-2 outline-offset-2`) | 2px of outline standing 2px off the edge | the whole side, gone |
-| `DROP_OVER` (`bg-accent/10`) | inside | untouched |
+| `DROP_OVER` (`bg-accent/10`)           | inside                                   | untouched            |
 
 Three surfaces, one defect, and the shape of it differs by view: Stacks loses the left edge of the
 first pile in every line and the right edge of the rail, Text the same plus the top of its first
@@ -1493,7 +1495,7 @@ before the `padding-bottom` longhand — `.p-1\.5` at byte **29 557** against `.
 written in, and the foot of a column is the one edge that was never clipped.
 
 **It belongs on the box that carries the `overflow`, and one level in is not the same fix** —
-padding on a child moves the target off the edge, but the ring is then drawn outside *that* child
+padding on a child moves the target off the edge, but the ring is then drawn outside _that_ child
 and lands back on the same clip. Same rule, and the same trap, as the `relative` in the section
 above. The other way out is `ring-inset`, which is what `TableView` has always drawn, its rows
 being absolutely positioned inside a virtualiser where an outset ring would paint over its
@@ -1522,13 +1524,13 @@ it.
 `flex flex-wrap items-center justify-end gap-2` at 1000px, drawn with the same six action buttons
 after them:
 
-| the check reads | width |
-| --- | --- |
+| the check reads              | width        |
+| ---------------------------- | ------------ |
 | `No issues · Modern` (clean) | **144.81px** |
-| `3 issues` (broken) | **74px** |
-| the glyph, 0 findings | **36px** |
-| the glyph, 3 findings | **36px** |
-| the glyph, 147 findings | **36px** |
+| `3 issues` (broken)          | **74px**     |
+| the glyph, 0 findings        | **36px**     |
+| the glyph, 3 findings        | **36px**     |
+| the glyph, 147 findings      | **36px**     |
 
 **70.81px** is what the switch was worth, on a block that already wraps at the app's own 1280 — so
 the cost was never only that `Built` and the six buttons slid sideways, it was that a fold could
@@ -1546,12 +1548,12 @@ folded line ends flush against the header's right edge — which is the deck edi
 the editor is the page scroller, where `overflow-y: auto` computes `overflow-x` to `auto` as
 well. Driven at the two widths where the fold lands right after the check:
 
-| badge anchored | horizontal scroll in the scroller |
-| --- | --- |
-| `-top-1 right-0` (shipped), block 240px | **0** |
-| `-top-1 right-0` (shipped), block 260px | **0** |
-| `-top-1` + `right: -4px`, block 240px | **3px**, and a scrollbar drawn |
-| `-top-1` + `right: -4px`, block 260px | **3px**, and a scrollbar drawn |
+| badge anchored                          | horizontal scroll in the scroller |
+| --------------------------------------- | --------------------------------- |
+| `-top-1 right-0` (shipped), block 240px | **0**                             |
+| `-top-1 right-0` (shipped), block 260px | **0**                             |
+| `-top-1` + `right: -4px`, block 240px   | **3px**, and a scrollbar drawn    |
+| `-top-1` + `right: -4px`, block 260px   | **3px**, and a scrollbar drawn    |
 
 Shipped, the bubble's right edge sits **1px inside** the button's own (an `absolute` inset resolves
 against the padding box, so `right-0` is inside the border) and **3px above** its top, which the
@@ -1578,3 +1580,59 @@ instead, which is the same claim written where it can fail, plus the bubble bein
   `text-muted-foreground` and `text-accent-foreground` already resolve correctly.
 - **Dim text is `text-dim`, never `text-muted`** — the latter still compiles and now paints
   text in the surface colour, i.e. very nearly invisible. `src/lib/tokens.test.ts` guards it.
+
+## All printings, as a modal — driven in the shipped window
+
+**2026-08-18, `npm run tauri dev` (a debug build), 1280×800, against the real corpus (a copy of
+the 580 MB dev database).** Every figure below is a reading from that window.
+
+`View all printings` used to answer by _moving_ the reader: `requestAllPrintings` wrote
+`activeView`, `selectedCardId`, `paneDeckContext`, `openDeckId` and `returnToDeckId` in one `set`,
+so a reader on the Collection lost their place and a reader in the deck editor lost the deck.
+Inside the editor the row went to the 384px card pane instead, which is the right content at the
+wrong width. Both are one `AllPrintingsDialog` now, on the `DeckDialog` shell.
+
+- **It opens over the view and moves nothing.** From a Search tile: `activeView` stayed `search`,
+  `openDeckId` and `selectedCardId` stayed `null`, and the search box still read `lightning bolt`
+  with its wall behind the scrim. From a deck row: `openDeckId` stayed **2** and `activeView`
+  stayed `decks`, so the editor is still on screen behind it.
+- **The request carries the whole slot.** Right-clicking a Maybeboard row produced
+  `{ deckId: 2, categoryId: 10, categoryName: "Maybeboard", cardId: …, variant: "live", finish: null }`
+  — all five parts of `DECK_CARD_GRAIN`, which is what makes a press a swap rather than a guess.
+- **The press is the swap.** Vampiric Tutor, 16 printings, pressed on `VIS 72`: the deck row went
+  from `PLST · EMA-112` to `VIS · 72` (and Mythic to Rare, which is a different printing's rarity),
+  the modal closed, the editor stayed open.
+- **One Escape closes one layer.** Pressed with the modal up over the deck editor,
+  `printingsRequest` went `null` and `openDeckId` stayed **2**. Pressed over Search, the wall kept
+  its query and its results.
+- **The zoom does not leak.** Three ctrl+wheel steps inside the modal took `cardZoom.printings`
+  from 1 to 1.5 and a tile from **170px to 255px**, with `search`, `collection`, `deckSearch` and
+  `deck` all still at 1. That is the whole reason `printings` is its own `ZOOM_SECTIONS` member:
+  the modal opens _over_ a wall the reader has already sized.
+- **The layout at 1280×800**, Lightning Bolt (62 printings): the dialog is 752px tall inside an
+  800px viewport; the Sets and Languages pickers sit side by side and cap themselves at **181px**
+  and **131px** (both are the checkbox-list branch past eight options, each with its own scroller),
+  the treatment chips take **57px**, and the wall gets **372px** with 3587px of content under it.
+  Five tile columns at 100%.
+- **The filter narrows what it says it narrows.** Typing `secret lair` took the caption to
+  `showing 17 of 62 printings` with 17 tiles rendered, and exactly **one** control matching
+  `/Clear/` on screen — the filter bar's `Clear all`. The empty state deliberately draws no second
+  one, because two controls with one job are two things to keep in step and an ambiguous match for
+  anything addressing them by name.
+- **A zero-count treatment is greyed, not dropped.** Lightning Bolt has no extended-art printing,
+  and the chip is there, dimmed, named `Extended art — 0 printings`. The modal's own tiles read
+  `View all printings, you are already looking at them` and are `aria-disabled`.
+
+### The page size, measured
+
+`MAX_PRINTINGS` is 400 and the modal filters client-side, so it asks for a wider page: a filter
+over a truncated list draws an empty wall that reads as an answer rather than as a truncation.
+**Measured against the corpus on 2026-08-18** with `node:sqlite` (best of five, warm): the
+printings query for Forest costs **6.3 ms at `LIMIT 400`** (400 rows) and **7.1 ms at `LIMIT 1000`**
+(865 rows) — 0.8 ms for the whole list.
+
+The corpus's five largest paper printing lists that day: **Forest 865, Mountain 842, Swamp 834,
+Island 829, Plains 821**; the largest non-land is Sol Ring at 132. `card.rs`'s own note records
+862 / 840 / 832 / 827 / 818 from 2026-08-05, so these lists grow by a handful of rows a fortnight —
+which is the argument for `MAX_PRINTINGS_HARD = 1000` being headroom rather than a fitted number,
+and for the caption keeping its `N of M` wording for a cap nothing currently reaches.

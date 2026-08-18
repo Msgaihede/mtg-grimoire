@@ -1,7 +1,12 @@
 # All printings, as a modal
 
 **Date:** 2026-08-18
-**Status:** approved, not yet implemented
+**Status:** implemented. Plan: `docs/superpowers/plans/2026-08-18-all-printings-modal.md`. Every
+measurement taken while building it — including the live CDP pass and the page-size timing this
+document defers — is in
+[frontend-design.md](../../reference/frontend-design.md#all-printings-as-a-modal--driven-in-the-shipped-window),
+which supersedes the figures quoted below where they disagree: the printings counts here are
+`card.rs`'s from 2026-08-05, and Forest had grown from 862 to **865** by the time this shipped.
 
 `View all printings` is on the card menu of every card surface in the app. It answers a
 question — _which printing do I want?_ — and today it answers it by **taking the reader
@@ -116,7 +121,7 @@ pub async fn card_printings(.., limit: Option<i64>) -> Result<PrintingsResponse,
 ```
 
 **1000 is chosen against a measurement this repo already holds.** `MAX_PRINTINGS`' own doc records
-it: counting paper only, *exactly five* oracle cards exceed 400, and they are the five basic lands
+it: counting paper only, _exactly five_ oracle cards exceed 400, and they are the five basic lands
 — Forest 862, Mountain 840, Swamp 832, Island 827, Plains 818. Seven cards in the whole library
 have more than 100. So 1000 clears the largest list in the corpus with headroom and is not a number
 picked for the feel of it.

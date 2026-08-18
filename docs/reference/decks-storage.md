@@ -46,7 +46,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **`finish` is the fifth part, and it is v18's** (2026-08-17). `deck_cards.finish` is
   `NULL | 'foil' | 'etched'`, so a pile holds `1 × Sol Ring (foil)` beside `3 × Sol Ring` as two
   rows — which is what a reader means by picking the foil printing, since Scryfall models foil as
-  a *finish of a printing* rather than as a printing and 53 224 of 107 337 paper printings carry
+  a _finish of a printing_ rather than as a printing and 53 224 of 107 337 paper printings carry
   one under the same id. Four things about it:
   - **NULL is the regular copy and `'nonfoil'` is never stored.** `deck::normalise_finish` is the
     one place the word becomes NULL and the column's CHECK makes any other path a hard error:
@@ -55,7 +55,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `soleFinish` already answers in on the TypeScript side, and `wishlist_entries.
 preferred_finish`'s nullability one table over.
   - **The `coalesce` is load-bearing**, `COLLECTION_GRAIN`'s device for its reason: SQLite treats
-    NULLs in a UNIQUE index as *distinct*, so the bare column would enforce nothing and every
+    NULLs in a UNIQUE index as _distinct_, so the bare column would enforce nothing and every
     regular add would insert a new row instead of folding into the one already there. That makes
     `DECK_CARD_GRAIN` the third grain that cannot be checked through `PRAGMA index_info` — it
     left `every_plain_grain_constant_names_the_index_the_head_schema_carries` and is held to its
@@ -422,7 +422,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `DeckBefore` and `DECK_SELECT` exactly as `default_category_id` does, takes the **last** index in
   `deck_row` and the **next** `?` hole at the end of `update_deck`'s `SET` list (`?14`) — and that
   positional discipline is sharper here than it was for the column before it, because `game_key`
-  is `TEXT` and so are four of the columns above it: inserted beside the format, where it *reads*
+  is `TEXT` and so are four of the columns above it: inserted beside the format, where it _reads_
   like it belongs, it would have swapped a deck's variant for its platform with both fields still
   holding a plausible-looking string.
   **`'any'` is a sentinel for `default_category_id`'s reason**, spelled out one bullet up: a
@@ -436,7 +436,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   none can reach for `includes()` on the raw string and conclude that `arena` is playable in
   `standardbrawl`.
   **Nothing in the crate compares the two columns**, and that is the design rather than an
-  omission: a Modern deck may say Arena. The game narrows a *picker*, `pickerFormats`' `keep`
+  omission: a Modern deck may say Arena. The game narrows a _picker_, `pickerFormats`' `keep`
   folds the deck's own format back into it, and a create or a patch that refused the combination
   would be refusing a deck over a filter.
   **The audit word is `"game"`** — a single word, unlike `"xGroup"` and `"defaultCategory"`, but
@@ -606,15 +606,15 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   count, and `//` in the flat list — were re-counted from the same text by the same rules on
   2026-08-16.
 
-  | Fixture | rows | headings | card lines | copies | `()` | `^tag^` | `//` names | `{noDeck}` first |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | `ARCHIDEKT_SECTIONED` | 132 | 14 | 105 | 117 | 0 | 44 | 7 | 17 |
-  | `ARCHIDEKT_FLAT` | 88 | 0 | 88 | 100 | 0 | 43 | 5 | 0 |
-  | `EMPTY_HINT_LIST` | 88 | 0 | 88 | 100 | 33 | 0 | 0 | 0 |
+  | Fixture               | rows | headings | card lines | copies | `()` | `^tag^` | `//` names | `{noDeck}` first |
+  | --------------------- | ---- | -------- | ---------- | ------ | ---- | ------- | ---------- | ---------------- |
+  | `ARCHIDEKT_SECTIONED` | 132  | 14       | 105        | 117    | 0    | 44      | 7          | 17               |
+  | `ARCHIDEKT_FLAT`      | 88   | 0        | 88         | 100    | 0    | 43      | 5          | 0                |
+  | `EMPTY_HINT_LIST`     | 88   | 0        | 88         | 100    | 33   | 0       | 0          | 0                |
 
   Three cross-checks fall out of that table and are worth more than any assertion invented for the
   purpose. **105 − 17 = 88 and 117 − 17 = 100**: the two flat lists are the sectioned one minus its
-  maybeboard, so mis-handling `{noDeck}` breaks the arithmetic *between two fixtures* rather than
+  maybeboard, so mis-handling `{noDeck}` breaks the arithmetic _between two fixtures_ rather than
   one number in one test. **The sectioned list is `REFERENCE_LIST`'s deck** with printings,
   categories and tags added, so the two fixtures check each other — its 105 names and 117 copies
   are the list the import feature was designed against in the first place. And **14 headings
@@ -622,6 +622,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   stronger form: in **all 105** lines the first bracket entry is the heading that line is printed
   under, 0 disagreements. The heading and the bracket never disagree in a real export, which is
   what makes preferring the bracket safe.
+
 - **What the TypeScript side learnt for those exports**, each rule with the failure behind it in
   [the deck folder's own CLAUDE.md](../../src/features/decks/CLAUDE.md): four per-line decorations
   (an **empty** `()` hint, an Archidekt `^Tag,#colour^`, the `[Category]` bracket, the existing
@@ -648,7 +649,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   specific shape is `2 Lightning Bolt [2X2] 117`, and `parse.ts`'s `BRACKET` is anchored to the
   end of the line — so a bracket with a collector number after it is not a bracket to that parser
   and the whole tail lands in the card's name. `format.test.ts` measures that (`Lightning Bolt
-  [LEA] 161` comes back as one card *name*) rather than leaving the exclusion as a claim. It is
+[LEA] 161` comes back as one card _name_) rather than leaving the exclusion as a claim. It is
   also the one flat format that keeps a switched-off pile: Arena and MTGO cut theirs because a
   maybeboard is an illegal import at the other end, while a Mass Entry list is a cart and the pile
   a reader switched off is usually what they still have to buy. Rust's only part in any of it is
@@ -802,9 +803,19 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   (naming the category), a raced sync (the to-printing has left `cards`), and a **different
   oracle card** — the guard is inside the transaction, because "swap this printing" must never
   become "swap this card". Since v18 it also carries the row's **finish** across, and
-  deliberately does *not* check it against the target printing's `finishes`: a swap onto a
+  deliberately does _not_ check it against the target printing's `finishes`: a swap onto a
   printing sold in no foil would then be refused outright, where what a reader wants is the
   printing they picked.
+- **Two surfaces press it now, through one hook.** The card pane's printings rows were the only
+  presser until 2026-08-18; `AllPrintingsDialog` is the second, and it reaches the same
+  `useSwapFromPane(context, variant)` rather than mounting its own mutation — which is the point
+  of that hook rather than a convenience. `useDeck` is a live `deck_get`, so a second mount would
+  be a second read of one deck, and TanStack shares a query's cache between observers but a
+  mutation's state with **nobody**: two `useMutation` calls on this definition are two error
+  states, which is why the refusal path invalidates `["decks"]` where no other write here does.
+  Both surfaces address the row by the same five-part `PaneDeckContext`, and the modal's comes
+  from the deck editor's own `deckSlotOf` — one definition shared with `openCard`, because a
+  context naming four of five parts has twice rewritten the wrong row in this codebase.
 - **`deck_set_card_finish` is `deck_swap_printing` one axis over**, and shares its shape for the
   reason it shares its `SwapResult`: the deck plays a different physical object of the same
   card. It **folds** the same way — setting a row to a finish the pile already holds adds the
@@ -815,12 +826,12 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   spelling. Three refusals, each its own sentence: `SAME_FINISH` (and `nonfoil` compares equal to
   absent, because they are normalised first), `FINISH_NOT_SOLD` read off `cards.finishes`, and
   `GONE` for a row that is not in that pile. **Only the target finish is checked** — the finish
-  being *left* may well be one the corpus no longer lists, and refusing to move off it would
+  being _left_ may well be one the corpus no longer lists, and refusing to move off it would
   strand the copies on exactly the value the reader is correcting.
 - **Undo's `Cell` is deliberately finish-blind, and `CardRow` is what grew the column.**
   `Op::Cards` is "delete exactly `scope` and insert exactly `rows`", and a cell naming a
   `card_id` and no finish covers **both** rows of that printing — which is the correct scope
-  rather than an oversight, because a finish change moves quantity *between* those two rows and
+  rather than an oversight, because a finish change moves quantity _between_ those two rows and
   a scope naming one would delete half of what the write touched and restore half of what it
   read. Without `CardRow.finish`, though, a restored foil row comes back regular: the row is
   there, the count is right, and the only things wrong are what the deck says it plays and what
