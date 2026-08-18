@@ -355,7 +355,7 @@ export const CommanderDeck: Story = {
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeInTheDocument();
 
     // One issue, and the chip counts rather than names: the sentence is behind it.
-    await userEvent.click(canvas.getByRole("button", { name: "1 issue" }));
+    await userEvent.click(canvas.getByRole("button", { name: "1 issue · Commander" }));
     await expect(canvas.getByRole("dialog", { name: "Commander check" })).toHaveTextContent(
       "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 " +
         "or less; Kenrith, the Returned King does not.",
@@ -727,7 +727,7 @@ export const NeverTwoLayers: Story = {
   args: { deckId: 2 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const chip = await canvas.findByRole("button", { name: "1 issue" });
+    const chip = await canvas.findByRole("button", { name: "1 issue · Commander" });
     const only = async (name: string) => {
       await waitFor(async () => {
         await expect(canvas.getAllByRole("dialog")).toHaveLength(1);
@@ -797,7 +797,7 @@ export const EmptyDeck: Story = {
     await expect(canvas.queryByRole("region", { name: "Main deck" })).toBeNull();
     await expect(canvas.getAllByText("Nothing here yet.").length).toBeGreaterThan(0);
 
-    await userEvent.click(canvas.getByRole("button", { name: "1 issue" }));
+    await userEvent.click(canvas.getByRole("button", { name: "1 issue · Modern" }));
     await expect(canvas.getByRole("dialog", { name: "Modern check" })).toHaveTextContent(
       "Modern decks need at least 60 cards; you have 0.",
     );
@@ -838,8 +838,9 @@ export const EmptyCommandZone: Story = {
     await expect(canvas.queryByRole("region", { name: "Companion" })).toBeNull();
 
     // The heading and the sentence are the same fact drawn twice: the zone is empty, and this
-    // format needs it not to be. The count is left to the regex — the size rule is talking too.
-    await userEvent.click(canvas.getByRole("button", { name: /^\d+ issues$/ }));
+    // format needs it not to be. The count is left to the regex — the size rule is talking too —
+    // and the format is not, because it is the deck's own and the whole point of the story.
+    await userEvent.click(canvas.getByRole("button", { name: /^\d+ issues · Commander$/ }));
     await expect(canvas.getByRole("dialog", { name: "Commander check" })).toHaveTextContent(
       "Commander decks need a commander; the commander zone is empty.",
     );
