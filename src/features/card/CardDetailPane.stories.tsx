@@ -224,6 +224,17 @@ const meta = {
           "{@link ChoosingHowToGroup} drives the control itself. The choice is remembered in " +
           "`app_meta` and survives every row the reader clicks, which is why it is a query " +
           "rather than component state.\n\n" +
+          "**This list is no longer where `View all printings` lands, and the cap on it is why " +
+          "that matters.** The card menu's row used to have two destinations and both moved the " +
+          "reader — the Search view from a plain surface, this 384px pane from inside the deck " +
+          "editor — and it opens `AllPrintingsDialog` over whatever is on screen now, including " +
+          "over this pane, so the row is a live offer on the pane's own card rather than the " +
+          "greyed one it used to be here. What is left on this surface is the card's own list, " +
+          "and it keeps the backend's **default page of 400** deliberately: it draws no filters, " +
+          "so a truncation it names in its count line costs a reader nothing, where the modal " +
+          "filters and therefore asks for the ceiling — a filter over a truncated list draws an " +
+          "empty wall that reads as an answer. See `Card/All printings` for the other " +
+          "surface.\n\n" +
           "**Two store facts are the pane's real subject, and both are invisible in a " +
           "screenshot.** `openCardFromDeck` is the *only* writer of `paneDeckContext` " +
           "(`store.ts:165-166`) and `setSelectedCardId` clears it (`store.ts:163`), so “opened " +

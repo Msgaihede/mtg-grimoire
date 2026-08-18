@@ -143,6 +143,44 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The page size, which only the printings modal names.
+   *
+   * `limit` is what `card_printings` declares. A wrapper that spelled it `pageSize` — or dropped
+   * it — deserializes to `None` with no error anywhere, and the modal would then filter the
+   * newest 400 of Forest's 862 printings: narrowing to a set outside that page draws an empty
+   * wall that reads as an answer rather than as a truncation.
+   */
+  it("sends a page size under `limit` when one is asked for", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0 });
+
+    await ipc.cardPrintings("o1", "manapool", 1000);
+
+    expect(invoke).toHaveBeenCalledWith("card_printings", {
+      oracleId: "o1",
+      marketplace: "manapool",
+      limit: 1000,
+    });
+  });
+
+  it("sends no page size when none is asked for, so the card pane's page is unchanged", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0 });
+
+    await ipc.cardPrintings("o1", "manapool");
+
+    expect(invoke).toHaveBeenCalledWith("card_printings", {
+      oracleId: "o1",
+      marketplace: "manapool",
+      limit: undefined,
+    });
+    // Read off the call as well, because `toHaveBeenCalledWith` compares like `toEqual`: an
+    // absent key and an `undefined` one are the same object to it, so the assertion above would
+    // still pass if this wrapper invented a page size of its own. Absent has to reach Rust as
+    // `None` for `MAX_PRINTINGS` — the pane's 400, and its cache key — to stay what it was.
+    const sent = invoke.mock.calls[0][1] as { limit?: number };
+    expect(sent.limit).toBeUndefined();
+  });
+
+  /**
    * The ten writes and reads Plan 3 added, in one table.
    *
    * Every one of them is a name `invoke` matches positionally-by-key against the Rust

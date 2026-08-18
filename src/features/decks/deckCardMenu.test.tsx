@@ -20,8 +20,7 @@ const CARD_DEPS: CardMenuDeps = {
   marketplace: MARKETPLACES.tcgplayer,
   addToCollection: vi.fn(),
   addToWishlist: vi.fn(),
-  viewPrintingsInPane: null,
-  requestAllPrintings: vi.fn(),
+  openAllPrintings: vi.fn(),
   DeckTargetSubmenu: () => null,
 };
 

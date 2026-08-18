@@ -194,56 +194,76 @@ describe("the deck row a card was opened from", () => {
 });
 
 /**
- * The channel between a card's menu and the Search view.
+ * The channel between a card's menu and the printings modal.
  *
- * `useCardSearch` keeps every filter in component-local `useState` inside `SearchPage`, so
- * nothing outside that component can set one — and "View all printings" is pressed from every
- * card surface, nearly all of which are not Search. Same shape as `returnToDeckId` above:
- * written by one view, read and cleared once by another.
+ * **One field, written by one action that touches nothing else** — which is the whole of what
+ * replaced `pendingCardSearch`. That channel's destination was a *view*, so it wrote
+ * `activeView`, `selectedCardId`, `paneDeckContext`, `openDeckId` and `returnToDeckId` in one
+ * `set`: asking which printings a card had moved the reader to Search and closed the deck the
+ * card was being asked about. The modal is drawn over whatever is already on screen, so there
+ * is nowhere to navigate to and nothing to clear.
  */
 describe("the card a reader asked to see every printing of", () => {
-  const BOLT = { oracleId: "o-bolt", name: "Lightning Bolt" };
-
   /**
-   * **One write, and that is the whole design.** `setActiveView` clears the open deck and the
-   * open card, so calling it beside this would either clear the intent or race it — while the
-   * clears themselves are wanted, exactly as they are for every other way of leaving a view.
+   * The slot a press inside the modal writes to, as a deck editor row builds it: every one of
+   * the five parts of `DECK_CARD_GRAIN`, for the reason `PaneDeckContext`'s own doc gives.
    */
-  it("requesting all printings sets the intent and goes to search in one write", () => {
-    useAppStore.setState({ activeView: "decks", openDeckId: 7 });
-    useAppStore.getState().openCardFromDeck({
-      deckId: 7,
-      categoryId: 1,
-      categoryName: "Main deck",
-      cardId: "p1",
-      variant: "live",
-      finish: null,
-    });
-
-    useAppStore.getState().requestAllPrintings(BOLT);
-
-    const s = useAppStore.getState();
-    expect(s.activeView).toBe("search");
-    expect(s.pendingCardSearch).toEqual(BOLT);
-    // `setActiveView`'s own rule: leaving the view closes the deck and the card.
-    expect(s.openDeckId).toBeNull();
-    expect(s.selectedCardId).toBeNull();
-    expect(s.paneDeckContext).toBeNull();
-    expect(s.returnToDeckId).toBeNull();
-  });
+  const SLOT: PaneDeckContext = {
+    deckId: 4,
+    categoryId: 9,
+    categoryName: "Ramp",
+    cardId: "card-1",
+    variant: "live",
+    finish: null,
+  };
 
   it("has nothing waiting until something asks", () => {
-    expect(useAppStore.getState().pendingCardSearch).toBeNull();
-    expect(useAppStore.getState().consumePendingCardSearch()).toBeNull();
+    expect(useAppStore.getState().printingsRequest).toBeNull();
   });
 
-  it("consuming the intent clears it", () => {
-    useAppStore.getState().requestAllPrintings(BOLT);
+  it("records the request and the deck slot it was asked from", () => {
+    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: SLOT });
 
-    expect(useAppStore.getState().consumePendingCardSearch()).toEqual(BOLT);
-    // Read once. A second visit to Search must not re-apply a filter the reader has cleared.
-    expect(useAppStore.getState().consumePendingCardSearch()).toBeNull();
-    expect(useAppStore.getState().pendingCardSearch).toBeNull();
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: SLOT,
+    });
+  });
+
+  /**
+   * Every surface that is not a row of an open deck says so by handing over `null`, and the
+   * field keeps that rather than filling it in — a press then opens the card pane instead of
+   * rewriting a deck row nobody named.
+   */
+  it("keeps a null slot from a surface that is not a deck row", () => {
+    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: null });
+
+    expect(useAppStore.getState().printingsRequest?.deck).toBeNull();
+  });
+
+  /**
+   * The whole of the change. `requestAllPrintings` used to write `activeView`,
+   * `selectedCardId`, `paneDeckContext`, `openDeckId` and `returnToDeckId` in the same `set` —
+   * so asking which printings a card had closed the deck you were building it into.
+   */
+  it("moves nothing else", () => {
+    useAppStore.setState({ activeView: "decks", openDeckId: 4, selectedCardId: "card-1" });
+
+    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: null });
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("decks");
+    expect(s.openDeckId).toBe(4);
+    expect(s.selectedCardId).toBe("card-1");
+  });
+
+  it("closes to null", () => {
+    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: null });
+
+    useAppStore.getState().closeAllPrintings();
+
+    expect(useAppStore.getState().printingsRequest).toBeNull();
   });
 });
 

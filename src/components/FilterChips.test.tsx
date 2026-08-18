@@ -25,6 +25,49 @@ describe("ToggleChip", () => {
     expect(chip).toHaveAttribute("aria-pressed", "true");
     expect(chip).toHaveClass("border-accent");
   });
+
+  /**
+   * An option that would leave nothing is greyed and **kept**, per `features/search/facets.ts`:
+   * an option that vanishes reads as a control that broke, where a greyed one reads as a fact
+   * about the card in front of you.
+   *
+   * Both halves are asserted because either alone is a control that lies. `aria-disabled` says
+   * so — and unlike `disabled` it does not stop the browser firing the click, so a chip that
+   * only wore the attribute would still be pressable by every pointer in the app.
+   */
+  it("says it is out of reach and refuses the press", async () => {
+    const onClick = vi.fn();
+    render(<ToggleChip label="Showcase" pressed={false} disabled onClick={onClick} />);
+
+    const chip = screen.getByRole("button", { name: "Showcase" });
+    expect(chip).toHaveAttribute("aria-disabled", "true");
+    expect(chip).toHaveClass("opacity-45");
+
+    await userEvent.click(chip);
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **It keeps its tab stop.** `aria-disabled` rather than `disabled` is the whole reason —
+   * a reader sweeping the filter row still reaches the option and still hears its count, which
+   * is where the "0 printings" the greying stands for is actually said.
+   */
+  it("stays reachable by the caret", () => {
+    render(<ToggleChip label="Showcase" pressed={false} disabled onClick={vi.fn()} />);
+
+    const chip = screen.getByRole("button", { name: "Showcase" });
+    expect(chip).not.toHaveAttribute("disabled");
+    chip.focus();
+    expect(chip).toHaveFocus();
+  });
+
+  /** Nothing is said when there is nothing to say — the common case, on every other chip. */
+  it("says nothing about reach when it is reachable", () => {
+    render(<ToggleChip label="Foil" pressed={false} onClick={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Foil" })).not.toHaveAttribute("aria-disabled");
+  });
 });
 
 /**

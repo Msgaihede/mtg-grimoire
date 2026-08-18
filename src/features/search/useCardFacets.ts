@@ -11,12 +11,16 @@ import { facetsOrUndefined } from "./facets";
  * every header press and every scroll. `limit`/`offset` are filled in below because
  * `SearchRequest` requires them and the backend ignores them here.
  *
- * **The fence reaches the page fields and stops there: it does not reach `oracleId`.** That is
- * a filter, so the `Omit` above keeps it, and the type would happily carry it into a facet key.
- * What keeps it out is the one place a `FacetRequest` is built — `useCardSearch.ts`'s `facetReq`
- * lists its fields by hand and leaves that one off — so it is discipline at the call site rather
- * than something checked here. Read that object's doc before adding a second builder; the reason
- * is a property of the in-memory index, not of this type.
+ * **The fence reaches the page fields and stops there.** Every *filter* is kept, and the one
+ * place a `FacetRequest` is built — `useCardSearch.ts`'s `facetReq` — lists its fields by hand,
+ * so what any one of them costs a facet key is discipline at that call site rather than something
+ * checked here. Read that object before adding a second builder.
+ *
+ * This paragraph used to name `oracleId` as the filter deliberately left off, and that fence went
+ * with the filter: `View all printings` opens a modal now, so nothing in this view can set an
+ * oracle id and there is nothing left for the builder to omit. The `SearchRequest` field and its
+ * Rust implementation are untouched — the search contract still carries it — but no frontend
+ * caller reaches it.
  */
 export type FacetRequest = Omit<SearchRequest, "sort" | "collapse" | "limit" | "offset">;
 

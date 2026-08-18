@@ -26,7 +26,7 @@ import {
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
@@ -647,9 +647,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * **One `CardMenuDeps` for this whole screen**, from the hook every other card surface uses:
    * the collection add's four invalidation keys and the wishlist add's two are written down once
    * there, and this page spelling them out again would be one more place for one rule to
-   * drift. What this editor answers differently is `viewPrintingsInPane`, which is a *per
-   * surface* answer — the deck's cards open as deck rows, the docked panel's tiles do not — so
-   * it is spread over at each of the two builders below rather than fixed here.
+   * drift. What this editor answers differently is `printingsDeck` — the **deck slot** a press
+   * inside the printings modal writes to — and that is a *per surface* answer rather than a
+   * per-screen one: the deck's own cards are rows of this deck and hand their slot over, the
+   * docked panel's tiles are not and hand over nothing. So it is spread over at the first of the
+   * two builders below and deliberately absent from the second, rather than fixed here.
    *
    * `menu(build)` takes a **thunk**: a deck of a hundred cards builds no menu at all until a
    * reader right-clicks one of them.
@@ -1729,33 +1731,48 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * Open a card **as a deck row** — the only write of `paneDeckContext` in the app, and the
-   * reason every view hands its whole `DeckCard` back rather than an id.
+   * One deck row as the slot every write to it is addressed by, and the reason every view hands
+   * its whole `DeckCard` back rather than an id.
    *
-   * What it buys is on the other side of the app: the pane's printings list gains "Use this
-   * printing", which rewrites *this* slot. Everything else that opens a card — the docked
-   * panel's tiles, the validation panel's names — goes through `setSelectedCardId`, which
-   * clears the context in the same write (see the store), so a card that is not a row of this
-   * deck can never be shown as one.
+   * **Written once because two things need it now**: {@link openCard}, which anchors the card
+   * pane on the row it was opened from, and the card menu's `printingsDeck`, which is what makes
+   * a press inside the printings modal a *swap* of this row rather than a look at a printing. Two
+   * hand-written copies of a five-part address is how one of them comes to name four parts —
+   * which is not a hypothetical: `PaneDeckContext`'s own doc records it happening twice, once
+   * over `variant` and once over `finish`, each time rewriting the wrong deck row while showing
+   * the reader the right-looking answer.
    *
-   * The context carries the category's **name** as well as its id, because the pane is a
-   * sibling of this editor and has no category list to translate one with; the **variant**,
+   * The slot carries the category's **name** as well as its id, because both readers are
+   * *siblings* of this editor and have no category list to translate one with; the **variant**,
    * because a deck is two lists and a swap addressed to the wrong one either misses or rewrites
    * a row the reader is not looking at; and the **finish**, for that same reason one column
-   * over — a pile can hold this printing twice, and the pane's swap and its foil button both
-   * write to one of the two.
+   * over — a pile can hold this printing twice, and a swap, the pane's foil button and the
+   * modal's tiles all write to one of the two.
+   */
+  const deckSlotOf = useCallback(
+    (card: DeckCard): PaneDeckContext => ({
+      deckId,
+      categoryId: card.categoryId,
+      categoryName: card.categoryName,
+      cardId: card.cardId,
+      variant,
+      finish: card.finish,
+    }),
+    [deckId, variant],
+  );
+
+  /**
+   * Open a card **as a deck row** — the only write of `paneDeckContext` in the app.
+   *
+   * What it buys is on the other side of the app: the pane's printings list gains "Use this
+   * printing", which rewrites *this* slot, and the gold ring on the desk is drawn from the same
+   * context. Everything else that opens a card — the docked panel's tiles, the validation
+   * panel's names — goes through `setSelectedCardId`, which clears the context in the same write
+   * (see the store), so a card that is not a row of this deck can never be shown as one.
    */
   const openCard = useCallback(
-    (card: DeckCard) =>
-      openCardFromDeck({
-        deckId,
-        categoryId: card.categoryId,
-        categoryName: card.categoryName,
-        cardId: card.cardId,
-        variant,
-        finish: card.finish,
-      }),
-    [deckId, openCardFromDeck, variant],
+    (card: DeckCard) => openCardFromDeck(deckSlotOf(card)),
+    [deckSlotOf, openCardFromDeck],
   );
 
   /**
@@ -1793,10 +1810,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * and deliberately not the drawn groups), the deck's format spec, and the deck's tags.
    *
    * The item list is a thunk inside `menu`, so a hundred-card deck pays for nothing until a
-   * reader right-clicks a card. The `viewPrintingsInPane` override is per **card** rather than
-   * per surface, and that is free for the same reason — this whole object is built on the press:
-   * inside the editor "View all printings" opens the pane, and it opens it *as a deck row*, so
-   * the pane's printings list can offer "Use this printing" on the slot that was right-clicked.
+   * reader right-clicks a card. The `printingsDeck` override is per **card** rather than per
+   * surface, and that is free for the same reason — this whole object is built on the press, so
+   * the slot handed over is the slot of the row that was actually right-clicked, and "View all
+   * printings" opens the modal already knowing which of this deck's rows a press in it rewrites.
    *
    * **Both doors, from one thunk.** `menuKey` is Shift+F10 and the ContextMenu key, and it is
    * not an extra here: the per-card `Move…` select was removed on 2026-08-14 and took the only
@@ -1807,13 +1824,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (card: DeckCard) => {
       const build = () =>
         buildDeckCardMenu(card, {
-          // **No `paneCardId`, deliberately.** That field greys "View all printings" on the
-          // card the pane is already showing, because there the row would do nothing. Here it
-          // would not: this hand-off is `openCardFromDeck` — the app's only write of
-          // `paneDeckContext` — so pressing it on the card already open **re-anchors the pane
-          // onto this deck row**, which is what puts "Use this printing" on its printings list.
-          // Greying it would take a working affordance away. It is optional for this reason.
-          card: { ...cardMenuDeps, viewPrintingsInPane: () => openCard(card) },
+          // **The slot, not a destination.** The row used to re-anchor the card pane onto this
+          // deck row so that the pane's printings list could offer "Use this printing"; the modal
+          // takes the slot directly, so the pane is out of the path entirely and the deck stays
+          // on screen behind it. `deckSlotOf` rather than a second object literal, because a slot
+          // written out twice is how one of the two copies comes to name four of the five parts.
+          //
+          // No `printingsOracleId` either. That field is `paneCardId`'s replacement one level up,
+          // and it greys the row on a surface that is *already* listing this oracle card's
+          // printings — which the modal is and a deck card is not, so the row stays live here on
+          // every card including the one the pane happens to be open on.
+          card: { ...cardMenuDeps, printingsDeck: deckSlotOf(card) },
           categories,
           cards: deck.cards,
           spec,
@@ -1830,7 +1851,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       menu,
       menuKey,
       cardMenuDeps,
-      openCard,
+      deckSlotOf,
       categories,
       deck.cards,
       deck.tags,
@@ -1977,21 +1998,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * Built here rather than in the panel so that one `useCardMenuDeps` serves both surfaces of
    * this screen — two would be two collection-add observers and two sentences to draw for one
-   * refusal. `viewPrintingsInPane` is `setSelectedCardId` here and not `openCard`: the tile is
-   * not a row of this deck, and the store clears `paneDeckContext` in that same write precisely
-   * so it cannot be shown as one.
+   * refusal. It is `cardMenuDeps` **unaltered**, which is the whole of what a tile has to say: no
+   * `printingsDeck`, because a search result is not a row of this deck, so there is no slot for a
+   * press in the printings modal to rewrite. Absent is not a gap the surface forgot to fill —
+   * `printingsItem` reads it as `deck: null` and a press then opens the card pane on the printing,
+   * which is what a reader who is not editing this row asked for.
    */
   const panelCardBuild = useCallback(
-    (card: CardSummary) => () =>
-      buildCardMenu(searchCardTarget(card), {
-        ...cardMenuDeps,
-        // No `paneCardId` here either, and for the other half of the same reason: a tile is
-        // not a row of this deck, so `setSelectedCardId` clears `paneDeckContext` in the same
-        // write. Pressing it on the card the pane is showing therefore *un*-anchors a pane that
-        // was opened from a deck row, which is a state change rather than a no-op.
-        viewPrintingsInPane: setSelectedCardId,
-      }),
-    [cardMenuDeps, setSelectedCardId],
+    (card: CardSummary) => () => buildCardMenu(searchCardTarget(card), cardMenuDeps),
+    [cardMenuDeps],
   );
   const panelCardMenu = useCallback(
     (card: CardSummary) => menu(panelCardBuild(card)),

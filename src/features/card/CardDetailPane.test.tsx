@@ -1660,13 +1660,13 @@ describe("the card menu", () => {
   });
 
   /* ---------------------------------------------------------------------------------------- *
-   * "View all printings", and the one dep this pane overrides
+   * "View all printings" — one destination, and this pane no longer names it
    * ---------------------------------------------------------------------------------------- */
 
   /**
    * A deck is open behind the pane. `openDeckId` is the test, deliberately **not**
    * `paneDeckContext`: a card opened from the docked search panel carries no deck context and is
-   * still inside the editor, where navigating away would close the deck.
+   * still inside the editor, where the old route would have closed the deck.
    *
    * `activeView` is moved off its default, and that is not scenery: the store starts on
    * `"search"`, so an assertion that the pane *did not navigate* is satisfied by the initial
@@ -1678,16 +1678,20 @@ describe("the card menu", () => {
 
   /** Down "View all printings", from whatever menu is open. */
   async function viewAllPrintings(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("menuitem", { name: "View all printings" }));
+    await user.click(screen.getByRole("menuitem", { name: /View all printings/ }));
   }
 
   /**
-   * **The whole point of the override**: `requestAllPrintings` sets `activeView`, and that write
-   * clears `openDeckId` *and* `selectedCardId` — so the app's default would close the deck the
-   * reader is building **and** the pane they were reading it from, to show them a list that is
-   * already on screen under their pointer.
+   * **The whole of the change, asserted from the surface that used to need an exception.**
+   *
+   * The row had two destinations and both moved the reader: outside the deck editor
+   * `requestAllPrintings` wrote `activeView` and cleared `openDeckId` *and* `selectedCardId` in
+   * one `set`, so asking which printings a card had closed the deck it was being asked about;
+   * inside the editor this pane overrode the dep to keep the answer in its own 384px column.
+   * There is one destination now — a modal over whatever is on screen — so the pane hands over
+   * the plain deps and the store write is the whole of the behaviour.
    */
-  it("keeps the deck and the pane open when a printings row asks for all printings", async () => {
+  it("asks for the printings modal and moves nothing, from a printings row", async () => {
     const user = userEvent.setup();
     insideTheEditor();
     wrapWithMenu("p1");
@@ -1697,28 +1701,30 @@ describe("the card menu", () => {
     await screen.findByRole("menu");
     await viewAllPrintings(user);
 
-    // The deck is untouched and the pane never went to Search.
+    // The card's oracle id and the card's name, which is what "every printing of this card" is
+    // asked by — and neither of which a `Printing` row carries.
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      oracleId: "o1",
+      name: "Delver of Secrets // Insectile Aberration",
+      deck: null,
+    });
+    // Nothing else moved: the deck is still open, the view has not changed, and the pane is
+    // still on the card it was on rather than on the row that was right-clicked.
     expect(useAppStore.getState().openDeckId).toBe(4);
     expect(useAppStore.getState().activeView).toBe("decks");
-    expect(useAppStore.getState().pendingCardSearch).toBeNull();
-    // **Accepted and stated rather than hidden**: on a printings row inside the editor the item
-    // moves the pane onto that printing, which is more than the label promises and less than
-    // navigating would cost. The pane it lands on *is* the all-printings view for the same card.
-    expect(useAppStore.getState().selectedCardId).toBe("p2");
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
   });
 
   /**
-   * **Greyed, with a sentence of its own.** For the card the pane is already showing, this item
-   * has nowhere to go: `viewPrinting` would set `selectedCardId` to the value it already holds
-   * and nothing at all would happen — the answer is the list directly below it.
+   * **The greyed row is gone, and that is the point rather than a loosened assertion.**
    *
-   * This shipped as a live, silently inert row. Greying it was not available from this surface
-   * at the time, because the reason a row is disabled is `buildCardMenu`'s to give and its only
-   * arm said *this printing has left the card database*, which is flatly false of a card the
-   * pane is drawing. The builder has a second arm now and the pane hands it the one fact it
-   * cannot know — which card is open — so the rule stays in one place and the row says why.
+   * *"This pane is already showing them"* existed only because one of the two destinations could
+   * be the surface you were standing on: `viewPrinting` would have set `selectedCardId` to the
+   * value it already held and nothing at all would have happened. The modal is somewhere else,
+   * with filters and a wall of art, so the row is a real offer on the pane's own card — and the
+   * fence that remains is `printingsOracleId`, which only the modal sets.
    */
-  it("greys View all printings for the card the pane is already showing, inside the editor", async () => {
+  it("offers the modal on the pane's own card, where the row used to be greyed", async () => {
     const user = userEvent.setup();
     insideTheEditor();
     wrapWithMenu("p1");
@@ -1727,29 +1733,32 @@ describe("the card menu", () => {
     rightClick(art);
     await screen.findByRole("menu");
 
-    // `aria-disabled` and never the `disabled` attribute: the greyed row exists to be read.
+    // A greyed row's accessible name includes its reason, so the regex is what tells "live" from
+    // "missing" — an exact-name query would fail either way and read as the row being absent.
     const row = screen.getByRole("menuitem", { name: /View all printings/ });
-    expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(within(row).getByText("this pane is already showing them")).toBeInTheDocument();
+    expect(row).not.toHaveAttribute("aria-disabled", "true");
 
     await user.click(row);
 
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      oracleId: "o1",
+      name: "Delver of Secrets // Insectile Aberration",
+      deck: null,
+    });
+    // Still open, still on the same card, still on the deck the reader was building.
     expect(useAppStore.getState().selectedCardId).toBe("p1");
     expect(useAppStore.getState().openDeckId).toBe(4);
-    expect(useAppStore.getState().pendingCardSearch).toBeNull();
     expect(useAppStore.getState().activeView).toBe("decks");
   });
 
   /**
-   * The other arm, and the app's own default: with no deck open there is nothing to close, and
-   * the search wall is a genuinely bigger answer than a 384px column — every printing as art,
-   * uncapped, with the filters cleared.
+   * The other half of "moves nothing", with no deck open: the pane used to navigate here, and
+   * that write closed the pane itself. Standing on `"decks"` so that a navigation would be a
+   * change rather than the store's own default.
    */
-  it("goes to the search wall for the whole card when no deck is open", async () => {
+  it("navigates nowhere and keeps the pane open when no deck is open", async () => {
     const user = userEvent.setup();
-    // Standing somewhere that is not Search, so "it navigated" is a change rather than the
-    // store's own default — which `activeView` starts on.
-    useAppStore.setState({ activeView: "decks" });
+    useAppStore.setState({ activeView: "decks", selectedCardId: "p1" });
     wrapWithMenu("p1");
     const art = await screen.findByAltText("Delver of Secrets");
     expect(useAppStore.getState().openDeckId).toBeNull();
@@ -1758,15 +1767,14 @@ describe("the card menu", () => {
     await screen.findByRole("menu");
     await viewAllPrintings(user);
 
-    expect(useAppStore.getState().activeView).toBe("search");
-    // The card's oracle id, which is what "every printing of this card" is asked by — and which
-    // a `Printing` does not carry.
-    expect(useAppStore.getState().pendingCardSearch).toEqual({
+    expect(useAppStore.getState().printingsRequest).toEqual({
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
+      deck: null,
     });
-    // …and that write closes the pane, which is right when the wall is where the reader is going.
-    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(useAppStore.getState().activeView).toBe("decks");
+    // The write that used to send the reader to the Search wall closed the pane on the way.
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
   });
 
   /**

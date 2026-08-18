@@ -47,6 +47,7 @@ import {
   faceCount,
   isPrintingGroupBy,
   legalityChips,
+  printingTarget,
   PRINTING_GROUP_BY_OPTIONS,
   type PrintingGroupBy,
 } from "./printings";
@@ -228,32 +229,6 @@ function paneTarget(card: CardDetail): CardMenuTarget {
   };
 }
 
-/**
- * A printings row, as a menu target — **the one adapter in the app that reads two objects**.
- *
- * A `Printing` carries `setCode`, `collectorNumber` and `finishes` and **no name, no oracle id
- * and no type line**: it is a printing *of the card the pane is open on*, so those three come
- * from that `CardDetail`. Getting it wrong is invisible — the menu still draws, "Copy card name"
- * copies `undefined`, and a `null` oracle id greys "View all printings" out with the fence's own
- * sentence (*this printing has left the card database*) over a card that is perfectly healthy.
- *
- * The three fields that *are* the row's are the three that identify the piece of cardboard: the
- * Scryfall permalink is this printing's, and so is the finish list an "Add to → Collection"
- * records against. That split is the whole of what this function is for, and it is the same one
- * the row's own {@link AddToCollectionButton} target already makes.
- */
-function printingTarget(printing: Printing, card: CardDetail): CardMenuTarget {
-  return {
-    cardId: printing.id,
-    name: card.name,
-    setCode: printing.setCode,
-    collectorNumber: printing.collectorNumber,
-    oracleId: card.oracleId,
-    finishes: printing.finishes,
-    typeLine: card.typeLine,
-  };
-}
-
 /** A surface's two doors into one menu — a right-click, and Shift+F10 or the ContextMenu key. */
 interface MenuHandlers {
   onContextMenu: MouseEventHandler;
@@ -275,38 +250,6 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
    */
   const { deps, error: menuFailure } = useCardMenuDeps();
   const client = useQueryClient();
-  const openDeckId = useAppStore((s) => s.openDeckId);
-  const viewPrinting = useAppStore((s) => s.viewPrinting);
-
-  /**
-   * Where "View all printings" lands, which is the one dep this pane overrides.
-   *
-   * **Inside the deck editor it must stay in the pane.** `requestAllPrintings` sets
-   * `activeView`, and that write clears `openDeckId` *and* `selectedCardId` — so the default
-   * would close the deck the reader is building and the pane they were reading it from, to show
-   * them a list the pane is already showing under their pointer. `viewPrinting` is what a click
-   * on a printings row already does: it moves the pane and deliberately leaves
-   * `paneDeckContext` alone, so the swap offers survive.
-   *
-   * Outside the editor there is no deck to close, and the search wall is a genuinely bigger
-   * answer than this 384px column — every printing as art, uncapped, with the filters cleared —
-   * so the item keeps the app's default and navigates.
-   *
-   * **`paneCardId` is the second half of that override and travels with it.** Handing over a way
-   * to move the pane is a claim that the row does something, and on this surface it is not always
-   * true: the card the pane is *already* on is exactly the card `viewPrinting` cannot move it to.
-   * The builder greys the row and says so; this is only the fact it needs, which no other surface
-   * can answer for the pane. It is passed unconditionally rather than only inside the editor,
-   * because a fact does not stop being true when the row happens to route elsewhere.
-   */
-  const menuDeps = useMemo<CardMenuDeps>(
-    () => ({
-      ...deps,
-      viewPrintingsInPane: openDeckId === null ? null : viewPrinting,
-      paneCardId: cardId,
-    }),
-    [deps, openDeckId, viewPrinting, cardId],
-  );
 
   /**
    * The open card's own rows — **read from the cache on the press, never observed.**
@@ -319,10 +262,8 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
    * as "no menu" — the reader gets the plain suppression instead of an empty box.
    */
   const paneMenu = () => {
-    const card = client.getQueryData<CardDetail | null>(
-      cardDetailKey(cardId, menuDeps.marketplace.id),
-    );
-    return card ? buildCardMenu(paneTarget(card), menuDeps) : [];
+    const card = client.getQueryData<CardDetail | null>(cardDetailKey(cardId, deps.marketplace.id));
+    return card ? buildCardMenu(paneTarget(card), deps) : [];
   };
 
   return (
@@ -376,7 +317,7 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
           the reader was on. The deck add is not here and needs nothing: it reaches the app's
           single mount through `CardToDeckProvider`, which draws its own sentence. */}
       <CardMenuRefusal error={menuFailure} />
-      <Body key={cardId} cardId={cardId} onClose={onClose} paneRef={paneRef} menuDeps={menuDeps} />
+      <Body key={cardId} cardId={cardId} onClose={onClose} paneRef={paneRef} menuDeps={deps} />
     </motion.aside>
   );
 }
@@ -829,9 +770,9 @@ function foilViewFinish(finishesJson: string | null): DeckFinish {
  * plays, and pressing it writes. Anywhere else there is no row to write, so it stays what it has
  * always been: a way to see what the shiny one looks like.
  *
- * **The surface supplies a fact and never a decision**, which is `cardMenu.tsx`'s `paneCardId`
- * rule one component over: this is the row, and the label, the write and the seeded state are
- * all worked out at the control.
+ * **The surface supplies a fact and never a decision**, which is `cardMenu.tsx`'s
+ * `printingsOracleId` rule one component over: this is the row, and the label, the write and the
+ * seeded state are all worked out at the control.
  */
 interface DeckFinishTarget {
   /** What the deck row plays now — what the toggle opens on. */

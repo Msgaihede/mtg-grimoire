@@ -200,21 +200,35 @@ interface AppState {
   returnToDeckId: number | null;
   clearReturnToDeck: () => void;
   /**
-   * A card the reader asked to see every printing of, waiting for Search to pick it up.
+   * The card a reader asked to see every printing of, and the deck slot they asked from.
    *
-   * `useCardSearch` keeps every filter in component-local `useState` inside `SearchPage`, so
-   * nothing outside that component can set one — and "View all printings" is pressed from every
-   * card surface, nearly all of which are not Search. This is the channel, and it is the same
-   * shape as {@link returnToDeckId}: written by one view, read and cleared once by another.
+   * **One field, written by one action that touches nothing else.** What this replaced —
+   * `pendingCardSearch` plus `requestAllPrintings` — moved the reader to the Search view and
+   * cleared the open card and the open deck in the same `set`, because its destination was a
+   * *view*: asking a question about a card closed the deck it was being asked about, and a
+   * reader on the Collection lost their place in a filtered list to get an answer. The modal is
+   * drawn over whatever is already on screen, so there is nowhere to navigate to and nothing to
+   * clear — and the three fields the old channel needed (an intent, a setter that navigated, a
+   * consume-once reader) collapse to a value plus an open and a close.
    *
-   * The name travels with the id because the chip that draws the filter says the card's name,
-   * and Search would otherwise have to fetch a card to caption a filter it was handed.
+   * The name travels with the id because the modal captions itself with the card's name, and it
+   * is handed the name by the menu that opened it rather than fetching a card to say one word.
+   *
+   * `deck` is the slot a press writes to: non-null only where the surface that opened the menu
+   * is a row of an open deck, and it is the same {@link PaneDeckContext} the card pane's swap is
+   * addressed by — every one of the five parts of `DECK_CARD_GRAIN`, for the reason that type's
+   * own doc gives. Null is "there is no deck row to write to", and a press then opens the card
+   * pane on that printing instead.
    */
-  pendingCardSearch: { oracleId: string; name: string } | null;
-  /** Go to Search and show every printing of one card. Sets `activeView` too. */
-  requestAllPrintings: (target: { oracleId: string; name: string }) => void;
-  /** Read it once and clear it. Returns null when there is nothing waiting. */
-  consumePendingCardSearch: () => { oracleId: string; name: string } | null;
+  printingsRequest: { oracleId: string; name: string; deck: PaneDeckContext | null } | null;
+  /** Open the printings modal. Writes one field — see {@link printingsRequest} for why. */
+  openAllPrintings: (request: {
+    oracleId: string;
+    name: string;
+    deck: PaneDeckContext | null;
+  }) => void;
+  /** Close it. */
+  closeAllPrintings: () => void;
 }
 
 /**
@@ -225,7 +239,7 @@ interface AppState {
  * Server-ish state (cards, sync status) does not belong here — that is TanStack Query's
  * job and `useSync`'s.
  */
-export const useAppStore = create<AppState>((set, get) => ({
+export const useAppStore = create<AppState>((set) => ({
   activeView: "search",
   // Leaving the view closes the card: the detail pane belongs to the list that opened it,
   // and a card sitting beside the Decks placeholder is a pane with nothing to be next to.
@@ -299,24 +313,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   returnToDeckId: null,
   clearReturnToDeck: () => set({ returnToDeckId: null }),
-  pendingCardSearch: null,
-  // The intent and the navigation in **one** `set`, because `setActiveView` clears the open
-  // deck and the open card — calling it separately would either clear the intent or race it.
-  // The clears themselves are wanted: leaving the view closes the deck, as it always has.
-  requestAllPrintings: (pendingCardSearch) =>
-    set({
-      pendingCardSearch,
-      activeView: "search",
-      selectedCardId: null,
-      paneDeckContext: null,
-      openDeckId: null,
-      returnToDeckId: null,
-    }),
-  // Read once. A reader who clears the filter and comes back to Search must not find it
-  // re-applied — the same reason `clearReturnToDeck` exists.
-  consumePendingCardSearch: () => {
-    const pending = get().pendingCardSearch;
-    if (pending !== null) set({ pendingCardSearch: null });
-    return pending;
-  },
+  printingsRequest: null,
+  // One field, and that is the whole point — see the interface. Its predecessor wrote six in
+  // this `set` because it was a navigation; a modal drawn over the app is not one, so nothing
+  // here has an opinion about the view, the open card or the open deck behind it.
+  openAllPrintings: (printingsRequest) => set({ printingsRequest }),
+  closeAllPrintings: () => set({ printingsRequest: null }),
 }));

@@ -125,33 +125,6 @@ export function FilterBar({
         )}
       />
 
-      {/* The card the wall is narrowed to, drawn only while it is — and drawn **first**,
-          beside the search box, because it is the one filter on this row the reader did not
-          set here. It arrives from a card's own right-click menu on any card surface, so
-          without it the reader gets a wall holding one card's printings and nothing on screen
-          saying why; the name is the whole account, and pressing it is the way out.
-
-          A `ToggleChip` like its neighbours rather than a shape of its own: it is on, it says
-          so with the same gold border every other on-chip here uses, and it turns off on a
-          press exactly as they do. The title leads with the visible name (WCAG 2.5.3) and
-          spends the rest saying what the chip is, which "Lightning Bolt" alone cannot.
-
-          **`max-w-48 truncate`, and it is the one chip on this row that needs a width bound.**
-          Every other label here is a word this app chose; this one is a card name, which is
-          data — up to 141 characters ("Our Market Research Shows That Players Like Really Long
-          Card Names…"), and a name that long wraps to three lines inside a `h-9` box, taking
-          the row's whole line with it. Written out whole rather than interpolated: Tailwind
-          scans source text. The `title` carries the full name, so the ellipsis costs nothing. */}
-      {search.oracleId !== "" && (
-        <ToggleChip
-          label={search.oracleName}
-          pressed
-          title={`${search.oracleName} — showing every printing of this card. Press to clear.`}
-          className="max-w-48 truncate"
-          onClick={() => search.setOracleId("")}
-        />
-      )}
-
       {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
           edge, and at 4px apart two pressed chips look like one welded object. */}
       <div role="group" aria-label="Color identity" className="flex gap-1.5">

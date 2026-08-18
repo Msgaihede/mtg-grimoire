@@ -181,7 +181,7 @@ function ActionRow({ item, run }: { item: MenuAction; run: RowsContext["run"] })
       {/* `text-dim`, which is this app's only dim-text class — the retired spelling still
           compiles and paints the surface colour on the surface, and `tokens.test.ts` sweeps
           prose as eagerly as code for it, so it is not named here either. Part of the row's own
-          accessible name, deliberately: "View all printings, this pane is already showing them"
+          accessible name, deliberately: "View all printings, you are already looking at them"
           is one sentence and reads as one.
 
           **Optional, and a caller that leaves it out is not being lazy.** A row is as wide as

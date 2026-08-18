@@ -2472,12 +2472,24 @@ export const ipc = {
   cardDetail: (id: string, marketplace: MarketplaceId) =>
     invoke<CardDetail | null>("card_detail", { id, marketplace }),
   /**
-   * Every paper printing of the oracle card, newest first, capped at 400 with a full count.
+   * Every paper printing of the oracle card, newest first, with a full count.
    *
    * `marketplace` prices every row per finish — the figures a reader is choosing a printing by.
+   *
+   * `limit` is the page size, and **absent is the card pane's 400** — `MAX_PRINTINGS`, exactly
+   * what this command answered before the argument existed, so the pane's query and its cache
+   * key are unchanged by it. The printings modal names the backend's ceiling instead, because it
+   * **filters client-side**: a filter over a truncated list lies, and narrowing to a set that
+   * fell outside the newest 400 would draw an empty wall that reads as an answer rather than as
+   * a truncation. Rust clamps whatever it is sent into `1..=MAX_PRINTINGS_HARD` (1000, chosen
+   * against the corpus — Forest, the most-printed card, has 862), so the number here is a
+   * request rather than a promise, and a zero or a negative falls back to the default instead of
+   * answering "this card has no printings".
+   *
+   * `total` stays uncapped either way, so a caption can always tell a truncation from a filter.
    */
-  cardPrintings: (oracleId: string, marketplace: MarketplaceId) =>
-    invoke<PrintingsResponse>("card_printings", { oracleId, marketplace }),
+  cardPrintings: (oracleId: string, marketplace: MarketplaceId, limit?: number) =>
+    invoke<PrintingsResponse>("card_printings", { oracleId, marketplace, limit }),
   /**
    * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
    * the work is queued, and an image that fails to prefetch simply fetches when it is

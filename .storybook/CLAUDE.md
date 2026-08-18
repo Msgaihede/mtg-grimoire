@@ -83,10 +83,11 @@ deliberately**: no screenshots are stored.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.
-- **`useAppStore` is the one global that cannot be made per-story**, so the four story files that
-  write it during render carry `docs: { story: { inline: false, height } }`. A new story file that
-  writes the store needs the same parameter or its docs page shows one story's view under every
-  heading.
+- **`useAppStore` is the one global that cannot be made per-story**, so every story file that
+  writes it during render carries `docs: { story: { inline: false, height } }`. A new story file
+  that writes the store needs the same parameter or its docs page shows one story's view under
+  every heading. (This used to name a count of such files, and the count went stale the first time
+  one was added — the imports answer it, so it is not written down here.)
 - **A fixture more than one story file needs lives in `.storybook/fake/fixtures.ts`.** A CSF file
   cannot own one — every non-default export is indexed as a story. Not in `cards.ts`: that file is
   generated wholesale.
