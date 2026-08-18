@@ -451,6 +451,14 @@ reader to configure the deck they had just made; it now asks all of them.
   handshake `useDismissOnEscape` runs on; that is the one thing here most easily broken by a tidy.
   `onSelect` is `openCardFromDeck`, so the gold ring and the card pane follow the caret — one
   `[data-deck-card-selected]` in the DOM, on the focused card, confirmed live.
+  **Every selection this view makes goes through `selectCard`, which keeps the caret on the card**
+  (2026-08-19). A press is how a reader *starts* a walk and a press is a deliberate open, so
+  without the note the pane took the caret and the first arrow moved nothing — the arrows worked
+  only from a caret a test had placed by hand. And **the caret can sit on the card's `<li>` rather
+  than on its button**: `ContextMenu` hands it back there, and a click on the card's data line
+  lands there as the nearest focusable ancestor. So `caretCardSlot` reads the button by `closest`
+  **or** the body by an exact `===` match — exact, because the stepper's buttons are inside that
+  same box and the field guard cannot see a `<button>`.
 - **The printings modal steps along the deck, and the order reaches it through the store because
   it cannot be recomputed anywhere else.** `AllPrintingsDialog` is drawn at `App` level, outside
   this editor, and the order depends on three things that are the editor's own — `groupBy` and

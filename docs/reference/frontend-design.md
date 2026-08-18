@@ -1735,3 +1735,67 @@ dialog on the shell rather than anything this work introduced — the shell focu
 mount and restores nothing on close — so it is recorded here and left alone. It is more visible now
 than it was: a reader who walks the deck from inside the modal and then closes it has to Tab back
 from the top of the app to carry on walking the desk.
+
+
+## The arrow keys, part two: the gesture a keyboard test cannot make
+
+Driven in the shipped window **2026-08-19** (`npm run tauri dev`, a **debug** build, 1280×800,
+against a real synced corpus), after a reader reported the deck's piles still not walking.
+
+**The first pass proved the arrows and missed the way in.** Every live check and every test drove
+the walk from a card focused *programmatically* — `act(() => top.focus())` in the suite,
+`el.focus()` over CDP — which is a caret that was never anywhere else. A reader's caret gets there
+by **clicking**, and a click is a deliberate open: `onSelect` writes the store, the card pane's
+body mounts and focuses itself, and the reader's first arrow then moves nothing at all. The note
+was written by the arrow handlers only, so the walk worked from a caret nobody could get.
+
+Measured before the fix: a real pointer click on a deck card left `document.activeElement` as
+`<aside aria-label="Card details">`, and ArrowRight and ArrowDown both moved nothing. Same on the
+search wall.
+
+The fix is to write the note where **every** selection a walkable surface makes goes through it,
+press and arrow alike — `selectCard` in `StackView`, `select` in `CardGrid` — rather than at the
+arrow handler. A third way to select a card would otherwise have to remember, and the failure is
+silent: the selection is right, the gold ring is right, and only the *next* keypress is wrong.
+
+`CardGrid` gates it on `arrowNav`, which is the same question asked once: a wall the arrows move
+is one the reader is navigating and keeps its caret; a wall they are passing through hands it over
+as before. **The printings modal needs that half** — a press there is a swap or a look and the
+modal closes on it, so a caret held on a tile of a wall that no longer exists is a caret on
+`<body>`.
+
+### The card's `<li>`, which is the other thing that holds a caret
+
+`DECK_CARD_ATTR` is stamped on a card's **button** (the art). Its outermost element is an `<li>`
+carrying `CARD_BODY_ATTR`, and that takes the caret by two routes a reader really uses:
+`ContextMenu` hands it back there when a row runs or Escape closes, and a click on the card's
+**data line** — a sibling of the button, not a child — lands on it as the nearest focusable
+ancestor. From there the button is a *descendant*, so `closest` found nothing and the arrows were
+dead. Reported as the window eating the focus.
+
+`caretCardSlot` now reads the button by `closest` **or** the body by an exact `===` match. Exact,
+because the stepper's `+` and `−` sit inside that same `<li>`: reading "anything inside a card"
+instead of "the card's body itself" is how the arrows would come to walk the deck out from under
+a reader adjusting a quantity, and the field guard cannot catch it because those are `<button>`s.
+
+### Two traps this pass paid for, both in the suite rather than the app
+
+- **`focus()` on a node with no `tabindex` is a no-op**, and a card's `<li>` gets `tabIndex={-1}`
+  from `deckCardMenuProps` **only when the card has a menu**. A fixture built without `actions`
+  therefore has an unfocusable card body, and the test read as a broken handler until the fixture
+  was given a `menu`. The app always passes one, which is why the same route worked live.
+- **The caret note is module state and is deliberately not cleared on read** (StrictMode's
+  double-invoked mount effect is why). So a test that leaves one behind hands it to the next, and
+  the case asserting a note is *absent* is the one that goes red. Both suites clear it in a
+  `beforeEach` with an id nothing uses.
+
+Confirmed after the fix, in the window: a real click on a deck card leaves the caret on that
+card's button with the pane open beside it; ArrowDown, ArrowRight, ArrowRight, ArrowUp then walk
+piles and cards with exactly one `[data-deck-card-selected]` in the DOM, on the focused card. From
+a caret placed on a card's `<li>`, ArrowDown moves to the next card's button. On the search wall a
+clicked tile keeps the caret and ArrowRight then ArrowDown step 2 → 3 → 6 at three columns.
+
+**Two apparent failures during the pass were the clamps working**: ArrowDown on the Commander
+pile's only card, and ArrowDown on the last card of a pile. Both are `null` from
+`nextStackPosition` and therefore a press left alone — worth writing down, because "nothing
+happened" looks identical to a dead handler and cost this pass two wrong diagnoses.

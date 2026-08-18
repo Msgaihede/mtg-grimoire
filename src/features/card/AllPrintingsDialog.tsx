@@ -69,7 +69,7 @@ import { sameDeckSlot, type DeckWalkStop } from "@/features/decks/deckWalk";
 import { DeckDialog, type DeckDialogFlanks } from "@/features/decks/DeckDialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
-import { walkingToCard } from "@/lib/caretWalk";
+import { keepCaretForCard } from "@/lib/caretWalk";
 import { plural } from "@/lib/counts";
 import { soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -325,7 +325,7 @@ export function AllPrintingsDialog() {
        * never fired again. Reported by the reader and measured in the shipped window the same
        * day. See `caretWalk.ts`.
        */
-      walkingToCard(stop.deck.cardId);
+      keepCaretForCard(stop.deck.cardId);
       openAllPrintings(stop);
       openCardFromDeck(stop.deck);
     },

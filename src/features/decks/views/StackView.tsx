@@ -11,7 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { GripVertical } from "lucide-react";
-import { walkingToCard } from "@/lib/caretWalk";
+import { keepCaretForCard } from "@/lib/caretWalk";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
@@ -21,6 +21,7 @@ import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { CardStack, STACK_CARD_BORDER, stackCardWidth } from "../CardStack";
 import {
+  CARD_BODY_ATTR,
   deckGroupMenuProps,
   deckGroupProps,
   deckGroupRename,
@@ -204,6 +205,31 @@ const NOT_THE_CARET = "input, textarea, select, [contenteditable]";
  * that drew it and the press that reached here (a stepper reaching zero removes the row), and a
  * press with nowhere to move from is a press this view leaves alone.
  */
+/**
+ * The slot the caret is standing on, or `null` for a press that started nowhere in particular.
+ *
+ * **Two elements of a card can hold the caret and only one of them carries the address.**
+ * `DECK_CARD_ATTR` is stamped on the card's *button* — the art — and that is what a `closest`
+ * from the caret finds in the ordinary case. But a card's outermost element is a `<li>` carrying
+ * `CARD_BODY_ATTR` and `tabIndex={-1}`, and it takes the caret by two routes a reader really
+ * uses: `ContextMenu` hands it back there after a row runs or Escape closes, and a click on the
+ * card's **data line** — a sibling of the button, not a child — lands on it as the nearest
+ * focusable ancestor. From there the button is a *descendant*, so `closest` finds nothing and the
+ * arrows did nothing at all. Reported as the window eating the caret; measured 2026-08-19.
+ *
+ * **`from === body` and not `from.closest(body)`**, which is the difference between reading the
+ * caret's own element and reading anything inside a card. The stepper's `+` and `−` and the
+ * quick-add all sit inside that same `<li>`, and a press on one of those is about that control —
+ * the field guard cannot see a `<button>`, so widening this is how the arrows would come to move
+ * the deck's selection out from under a reader adjusting a quantity.
+ */
+function caretCardSlot(from: Element): string | null {
+  const onButton = from.closest(`[${DECK_CARD_ATTR}]`);
+  const body = from.hasAttribute(CARD_BODY_ATTR) ? from : null;
+  const card = onButton ?? body?.querySelector(`[${DECK_CARD_ATTR}]`) ?? null;
+  return card?.getAttribute(DECK_CARD_ATTR) ?? null;
+}
+
 function stackPositionOf(walk: readonly CardGroup[], slot: string): StackPosition | null {
   for (let pile = 0; pile < walk.length; pile += 1) {
     const card = walk[pile].cards.findIndex(
@@ -365,6 +391,30 @@ export function StackView({
   const walk = [...flow, ...rail];
 
   /**
+   * **Every selection this view makes, press and arrow alike — and the caret stays on the card.**
+   *
+   * The note is here rather than on the arrow handler alone, and that placement *is* the fix for
+   * the second half of a reported bug. `onSelect` is `openCardFromDeck`, so it mounts the card
+   * pane's body, and that body focuses itself as it opens — the right contract for a card opened
+   * from somewhere the reader is passing through, and the wrong one for a deck they are working
+   * out of. Announced only for the arrows, the walk worked and *a click did not*: pressing a card
+   * put the caret on the pane, so the reader's next arrow moved nothing at all. Measured in the
+   * shipped window 2026-08-19 — a real click on a deck card left `document.activeElement` as
+   * `<aside aria-label="Card details">`, and ArrowRight and ArrowDown then did nothing.
+   *
+   * **That is why it wraps the prop rather than sitting at the two call sites**: a third way to
+   * select a card in this view would otherwise have to remember, and the failure it causes is
+   * silent — the selection is right, the ring is right, and only the *next* keypress is wrong.
+   *
+   * It costs the pane nothing it needs. Escape still closes it, and the caret it would have
+   * handed back is where the reader already is.
+   */
+  const selectCard = (card: DeckCard) => {
+    keepCaretForCard(card.cardId);
+    onSelect?.(card);
+  };
+
+  /**
    * The arrows, for the whole view — left and right to the neighbouring pile's top card, up and
    * down through the pile the caret is in. {@link nextStackPosition} is the movement; this is
    * everything about it that needs a document.
@@ -393,8 +443,8 @@ export function StackView({
     if (from.closest(NOT_THE_CARET)) return;
     // Not on a card at all: a heading, a grip that did not claim the press, the blank desk
     // between two piles. There is nowhere to move *from*, so the press is left alone.
-    const slot = from.closest(`[${DECK_CARD_ATTR}]`)?.getAttribute(DECK_CARD_ATTR);
-    if (slot === null || slot === undefined) return;
+    const slot = caretCardSlot(from);
+    if (slot === null) return;
     const at = stackPositionOf(walk, slot);
     if (at === null) return;
     const to = nextStackPosition(
@@ -416,11 +466,10 @@ export function StackView({
     // button focused here is the same node afterwards and keeps the caret. `StackedCard`'s own
     // `onFocus` opens the card it is on, which is the intended half of that: the card the caret
     // lands on stands out of its pile.
-    // And said before *that*, for the same reason one file over in `CardGrid`: `onSelect` here is
-    // `openCardFromDeck`, so it mounts the card pane's body, and that body focuses itself as it
-    // opens. Unannounced, the caret is the pane's after one press and the walk cannot continue.
-    walkingToCard(target.cardId);
-    onSelect?.(target);
+    //
+    // `selectCard` rather than `onSelect` — the caret note is in there, and it is in there rather
+    // than here precisely so that a *press* on a card gets it too.
+    selectCard(target);
     // `e.currentTarget` is the view's own root — the element this handler is attached to — which
     // is both the right scope for the lookup and one fewer read of `scrollRef`. It is only valid
     // for the length of the handler, which is exactly how long it is used for.
@@ -556,7 +605,7 @@ export function StackView({
             group={group}
             marketplace={marketplace}
             violations={violations}
-            onSelect={onSelect}
+            onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
             landed={landed}
@@ -619,7 +668,7 @@ export function StackView({
               group={group}
               marketplace={marketplace}
               violations={violations}
-              onSelect={onSelect}
+              onSelect={selectCard}
               actions={actions}
               selectedSlot={selectedSlot}
               landed={landed}

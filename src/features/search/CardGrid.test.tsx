@@ -29,6 +29,7 @@ import {
   scaled,
   type ZoomSection,
 } from "@/lib/cardZoom";
+import { consumeCaretNote } from "@/lib/caretWalk";
 import { parseFinishes } from "@/lib/finish";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -1185,6 +1186,17 @@ describe("CardGrid", () => {
  * passes whether or not anything moved the caret.
  */
 describe("the arrow-key walk", () => {
+  /**
+   * The caret note is module state and is deliberately *not* cleared on read — see
+   * `caretWalk.ts`, where StrictMode's double-invoked mount effect is why. So a test that leaves
+   * one behind hands it to the next, and the case asserting a note is **absent** is the one that
+   * would read as a failure. Discarded here with a card id nothing uses, which is the only way
+   * to clear it from outside.
+   */
+  beforeEach(() => {
+    consumeCaretNote("no-test-walks-to-this-id");
+  });
+
   const THREE = [
     card("aaa", "Lightning Bolt"),
     card("bbb", "Lightning Helix"),
@@ -1235,6 +1247,41 @@ describe("the arrow-key walk", () => {
 
     expect(onSelect).toHaveBeenLastCalledWith("aaa");
     expect(document.activeElement).toBe(art("Lightning Bolt"));
+  });
+
+  /**
+   * **A press on a tile keeps the caret too, and it is the gesture a keyboard test cannot make.**
+   *
+   * Every case in this block starts by focusing a tile by hand, which is a caret that was never
+   * anywhere else. A reader's is: they *click* a tile, `onSelect` writes `selectedCardId`, the
+   * card pane's body mounts and focuses itself — and their first arrow then moves nothing at all.
+   * Measured in the shipped window 2026-08-19, on this wall and on the deck's piles.
+   *
+   * The pane is not mounted here, so what is asserted is the **note** rather than the caret: no
+   * jsdom test can watch a pane steal something no pane is drawing. `consumeCaretNote` is
+   * idempotent, so reading it is a question rather than a write.
+   */
+  it("keeps the caret for a tile that was pressed, not only for one arrowed to", async () => {
+    render(<CardGrid rows={THREE} onSelect={vi.fn()} {...base} />);
+
+    await userEvent.click(art("Lightning Bolt"));
+
+    expect(consumeCaretNote("aaa")).toBe(true);
+  });
+
+  /**
+   * **And a wall the arrows do not move goes on handing the caret over**, which is the printings
+   * modal's case and not a detail: a press there is a swap or a look, the modal closes on it, and
+   * a caret held on a tile of a wall that no longer exists is a caret on `<body>`. `arrowNav` is
+   * the test for both behaviours because it is the same question — is this a wall the reader
+   * navigates, or one they are passing through.
+   */
+  it("hands the caret over on a wall the arrows do not move", async () => {
+    render(<CardGrid rows={THREE} onSelect={vi.fn()} {...base} arrowNav={false} />);
+
+    await userEvent.click(art("Lightning Bolt"));
+
+    expect(consumeCaretNote("aaa")).toBe(false);
   });
 
   /**
