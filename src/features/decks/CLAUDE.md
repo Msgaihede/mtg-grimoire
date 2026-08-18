@@ -324,6 +324,20 @@ reader to configure the deck they had just made; it now asks all of them.
   moves. The card pane's foil button is the second entrance: inside the editor, on a card the
   deck holds, it **writes** and says `Set as foil`; anywhere else it stays the view toggle it has
   always been and says `View as foil`.
+- **Setting a finish moves the row's _address_, so the write re-anchors the card pane's context on
+  it** — `useDeck`'s `reanchorPane`, on the mutation rather than at either call site because both
+  entrances above press it. A row is `(deck, category, card, variant, finish)` and this write
+  changes the fifth part, so a context left where it was names a row that no longer exists: the
+  reported defect (2026-08-18) was `Set as foil` **unpicking the card it was pressed on** — the
+  gold ring is `selectedSlot`, derived from that context — while the pane stayed open beside it
+  saying nothing about any row. Two more went with it and neither had been reported: the pane's
+  close had no control to hand the caret back to (`deckControlFor` searches by the same slot), and
+  the pane's own toggle sent `null → null` on its next press, refused as `SAME_FINISH`, so it
+  could be pressed once and never pressed back. `swapPrinting` met this one axis over and answered
+  it the same way — `openCardFromDeck` is both "which card is open" and "which row it came from".
+  **The fold needs no arm**: two rows becoming one leaves the survivor at the target finish, which
+  is where the context lands either way. **`move` and `refile` change the third part and have the
+  same hole**; they are not fixed and the mark goes out there too.
 - **What a deck card is drawn as is `playedFinish(card.finish, card.finishes)`** — the reader's
   own statement first, `soleFinish`'s second. The order carries the argument: `soleFinish` says
   what the *object* is and deliberately says nothing about a printing sold in both (a sheen on
@@ -356,7 +370,7 @@ reader to configure the deck they had just made; it now asks all of them.
   `QuickZones.tsx` draws four boxes across the top of the editor for the length of a drag —
   `Auto`, `New category`, and the deck's own Maybeboard and Sideboard — against the remove tray's
   `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
-  means the pile it landed on. Five things about it are decisions rather than details:
+  means the pile it landed on. Everything below is a decision rather than a detail:
   - **It owns its own `monitorForElements`, and that is the point of it being a component.**
     `PriceStrip`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
     answered for the docked panel's tiles would re-render the strip — and, while that monitor
@@ -414,6 +428,16 @@ reader to configure the deck they had just made; it now asks all of them.
     moment the reader was aiming at it. `sticky` rather than `fixed` so the bar is the editor's
     width with nothing measured; the editor **is** the page scroller, so `top-0` is the top of what
     the reader can see.
+  - **Its height is the deck's name/settings ribbon's, because that is the row it lands on**
+    (2026-08-18). `h-[5.75rem]` — 92px, which is that row wrapped to two lines at the app's own
+    1280×800, measured. **So a change to the ribbon's height is a change to this number**: at 74px
+    the bar left the last 18px of the ribbon showing under it and stopped reading as a replacement
+    for it. The height sits on the bar and the boxes stretch into it (`flex-1`, no `h-*` of their
+    own, capped at `max-w-[300px]` with the bar `justify-center` so four targets do not span a
+    2560px window). It deliberately does **not** follow the ribbon back down to 48px where that
+    row stops wrapping (≥1600px): the boxes would be 30px, under the 40px that was reported as
+    easy to miss. Every clearance is in
+    [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   - **`aria-hidden`, like the tray**, and for the same argument: all four have a click path a caret
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
@@ -745,10 +769,10 @@ controls open that dialog** — the editor header's `Export deck` and a category
   that is what the whole `## Import` section above is about — and each writer here emits **one**
   spelling. It is the same rule that makes the output LF with a trailing newline whatever the
   parser would tolerate: a file this app wrote should have one answer.
-- **Six formats, and three of the decisions inside them are worth carrying.** `EXPORT_FORMATS` is
-  `plain · mtgo · arena · moxfield · archidekt · csv`, and the dialog's radio row **maps that
-  array** rather than listing them, so the count is the array's and never a number written down
-  twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
+- **Four of the decisions inside the formats are worth carrying.** `EXPORT_FORMATS` is
+  `plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`, and the dialog's radio row
+  **maps that array** rather than listing them, so the count is the array's and never a number
+  written down twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
   was no whole-deck export and therefore no sideboard to prefix; it writes `SB: ` on a side or
   companion card now, which is a one-line override rather than a heading — exactly how `parse.ts`
   reads it back. **(2) `arena` and `mtgo` write only switched-on piles**, because neither format
@@ -759,7 +783,15 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `{noDeck}` and a lowercase set code.** The flag is the only thing any of these formats can say
   about a pile that counts toward nothing, which makes Archidekt the one format that writes an
   inactive pile _and_ leaves nothing out; it is the round trip that makes the flag worth writing,
-  not fidelity to the site for its own sake. The lowercase set code is what Archidekt itself emits
+  not fidelity to the site for its own sake. **(4) `tcgplayer` is a _cart_ rather than a decklist**
+  (added 2026-08-18), and that decides all three of the ways it differs. Its line is
+  `2 Lightning Bolt [2X2] 117` — the most specific of the three shapes TCGplayer Mass Entry
+  documents, so the cart lands on the printing the deck names. It is **flat**, because Mass Entry
+  reads every line as one item and a heading would be read as a card nobody sells. It writes **no
+  finish marker**, because a printing's foil is chosen in the cart. And it is the one flat format
+  that **keeps a switched-off pile**, where Arena and MTGO cut theirs: the pile a reader switched
+  off is usually exactly what they still have to buy, so `omittedCount` is 0 here and the dialog's
+  omission line never fires for it. The lowercase set code is what Archidekt itself emits
   and what its own importer round-trips, and our parser uppercases on read, so it costs the round
   trip nothing.
 - **`KIND_SECTION` maps `maybe` to `Deck` and `sectionOf` asks `categoryActive`. That is "nothing
@@ -770,13 +802,19 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `Maybeboard` "because that is what it is called" files a switched-on Maybeboard out of the deck
   it counts toward **and** leaves a reader's own switched-off `Ramp` under `Deck` beside it — one
   edit, both errors, and nothing about it reads as wrong.
-- **CSV is write-only and stays so**, and `decklists.test.ts` excludes it **by name** rather than by
+- **Two formats are write-only**, and `decklists.test.ts` excludes each **by name** rather than by
   omission (`expect(READABLE).toEqual([…])`), so a format dropped out of that table by accident is a
-  failure rather than a quietly smaller matrix. Nothing in `parse.ts` reads a comma-separated
-  decklist, and teaching it one would be a second grammar rather than a rule inside the one there
-  is.
+  failure rather than a quietly smaller matrix. **CSV**, because nothing in `parse.ts` reads a
+  comma-separated decklist and teaching it one would be a second grammar rather than a rule inside
+  the one there is. **TCGplayer**, because its line is addressed to a shopping cart rather than to
+  us: `parse.ts`'s `BRACKET` is anchored to the **end of the line**, so a bracket with a collector
+  number after it is not a bracket to that parser at all and the whole tail lands in the card's
+  name — `2 Lightning Bolt [2X2] 117` comes back as a card *called* `Lightning Bolt [2X2] 117`, the
+  copies surviving and the name not. That is **measured in `format.test.ts` rather than asserted
+  here**, so the day `parse.ts` learns to read an unanchored bracket the exclusion fails rather
+  than quietly outliving its reason.
 - **`decklists.test.ts` is where a writer drifting from the parser shows up.** Three real decklists
-  crossed with all six formats, driven text → planner → writer → parser, and **every readable
+  crossed with every format, driven text → planner → writer → parser, and **every readable
   format is a fixed point**: export → import → export is byte-identical. One cycle cannot see a
   writer that is not idempotent, because there is nothing to compare the first answer against.
   Every count this branch turns on is re-derived there or in `parse.test.ts` rather than restated
@@ -802,6 +840,17 @@ controls open that dialog** — the editor header's `Export deck` and a category
   app grants nowhere, so `export_write_file` takes the path and the text — the same shape
   `deck_set_cover_image` has, for the same reason.
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both.
+- **The preview opens shut** (2026-08-18), which is `DeckSearchPanel`'s collapsed default one rung
+  down: a decklist is the tallest thing this dialog draws and the least of what a reader came for,
+  and the two presses that do the work are Copy and Save as…. Shut, the dialog is the format row,
+  whatever that format leaves out, the toggle and the buttons — and the **toggle's own label
+  carries the line count**, so "nothing is showing" is never mistaken for "nothing is there". The
+  `<pre>` is **unmounted** rather than hidden, which is the half worth enforcing: a hidden block
+  still holding the text is exactly the shape that lets a test assert a line no reader can see, so
+  every play and test that reads a rendered line presses the toggle first, as a reader would.
+  **It is not the fix for the reported bug it arrived with**, and the two are worth keeping apart —
+  the panel itself grew past the window and took the buttons off screen with it, which is
+  `DeckDialog`'s scrim and is fixed there for every dialog on the shell.
 - **`save()` resolves `null` on Cancel**, and writing that string to disk is the trap the guard in
   `handleSaveAs` exists to prevent. A refused write is **reported and does not close the dialog**:
   the reader's text is still on screen and still copyable, so the failure costs them nothing they
@@ -847,6 +896,35 @@ controls open that dialog** — the editor header's `Export deck` and a category
   **Every width on this page was measured with _five_ buttons in that block**; `Export deck` made
   it six and none of them has been re-taken, so the standing claim is "it already wrapped", not a
   number for what it costs now.
+- **The format check on that block is a glyph in a 36px box, and it is a glyph because the deck
+  has two lists** (2026-08-18). Live and Theory hold different cards and so fail different rules,
+  so the readout's two states are one press of the variant switch apart — and while it was
+  `No issues · Modern` against `3 issues` that press changed its width and slid `Built` and all
+  six action buttons along with it, on a block that already wraps at the app's own window. It is
+  `CircleCheck` in `--color-ok` for a clean deck and `TriangleAlert` in `--destructive` for a
+  broken one, with the count in a bubble that is `absolute` — **out of the box's flow, which is
+  the whole mechanism**: nothing inside a 36px square may change its width, so 0, 3 and 47
+  findings draw the same control. Three rules hold it:
+  - **`--color-ok` is the app's first success colour and had to be a new token.** The palette's
+    two greens are `--color-mana-g` ("Mana UI only — chips, pips, the line. Never a panel, never
+    a border, never text") and `--color-pie-g`, a colour-identity deep that reads as grey at
+    16px on this background; a check mark in either says "green cards" to the one reader who has
+    learned what those colours mean here. It is a peer of `--destructive` — same lightness, less
+    chroma — and like it, it colours a glyph and never a panel.
+  - **The bubble hangs off the _top_ and never off the right**, and that asymmetry is a
+    scrollbar. The block is `flex-wrap justify-end`, so every folded line ends flush against the
+    editor's own right edge, and the editor is the page scroller — where `overflow-y: auto`
+    computes `overflow-x` to `auto` as well. A bubble 4px past that edge, at whatever width the
+    wrap happens to fall right there, is 4px of horizontal scroll on the page this folder has
+    twice gone looking for phantom scrollbars on. Up costs nothing: the header's `py-1.5` leaves
+    6px and the bubble asks for 3.
+  - **The accessible name names the format in both states** — `No issues · Modern`,
+    `3 issues · Modern` — and is the `title` as well, because a glyph says nothing to a screen
+    reader or to a pointer. It used to carry the format only when there was nothing to count,
+    where there was nothing else to print; now that the name is the only place either fact
+    exists, withholding the ruleset for a broken deck would answer "checked against what?"
+    exactly when the question stops being worth asking. **It is what every test and story
+    addresses this control by**, so a reworded label is a red suite.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long

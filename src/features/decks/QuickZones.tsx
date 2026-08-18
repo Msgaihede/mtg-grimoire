@@ -75,14 +75,21 @@ export const QUICK_ZONE_ATTR = "data-quick-zone";
  * started (78 and 341.5), and with the editor scrolled to 500 the header row had gone to **−422**
  * while the bar stayed at 78.
  *
- * **The bar is 74px since 2026-08-17**, when the box below grew `h-10` → `h-14` to stop being
- * missed, so those two clearances are **139px** and **49px** now. The wrapper is `h-0` and the
- * desk row therefore does not move, so the whole of the growth comes off the gap under the bar
- * and that arithmetic is exact rather than a second estimate. The 74 itself is measured, though
- * not in the app — a `file://` harness against the **built** stylesheet, the app lock being held
- * that day — and the same harness reproduced the old bar at **58px** to the pixel, which is what
- * makes the new number worth writing down at all. **49px is the figure to watch**: it is still a
- * whole bar clear of every pile, and it is what a fifth zone or a taller box would be spending.
+ * **The bar is 92px since 2026-08-18, and the number is the ribbon's rather than its own.** It
+ * grew 58 → 74 on 2026-08-17 (the box went `h-10` → `h-14`, to stop being missed) and 74 → 92
+ * now, which is the height of the deck's name/settings row it lands on — the thing it is drawn
+ * *instead of*. At 74 it covered all but the last **18px** of that row, so a strip of the
+ * ribbon's second line sat under a bar that was plainly meant to replace it. Both figures are
+ * from the shipped window on 2026-08-18 (`npm run tauri dev`, a debug build, 1280×800): row and
+ * bar start at the same y=78, the row measured **92** and the bar **74**.
+ *
+ * The wrapper is `h-0` and the desk row therefore does not move, so the growth comes off the gap
+ * under the bar and that arithmetic is exact rather than a second estimate: the two clearances
+ * are **121px** at 1280×800 and **29px** at 1920×1080. **29px is the figure to watch**, and it
+ * is smaller than it sounds — the row the bar overhangs at 1920 is the *toolbar*, not a pile,
+ * because the ribbon is one line at that width and 92px is two. It has overhung it since the
+ * bar was 74 (by 14px, now 32), and a toolbar is not a thing a hand mid-drag can use anyway.
+ * Every pile is still clear at both sizes, which is the claim that matters.
  *
  * `aria-hidden`, exactly as the tray is: this is chrome for a gesture only a pointer can make,
  * and every one of the four has a click path a caret can reach — the toolbar's `Add to` select
@@ -261,7 +268,46 @@ export function QuickZoneBar({
   ];
 
   return (
-    <div className="flex gap-2 rounded-lg border border-border bg-surface p-2 shadow-lg">
+    <div
+      className={cn(
+        // **92px, because that is the ribbon it is drawn over.** The bar is `sticky top-0` in
+        // the editor's own scroller, so at rest it lands exactly on the deck's name/settings
+        // row — and that row is 92px at the app's own 1280×800: `py-1.5` either side of two
+        // wrapped lines of 36px controls with `gap-y-2` between them (6 + 36 + 8 + 36 + 6).
+        // At 74px the bar covered all but the last 18px of it, so a strip of the ribbon's
+        // second line stayed showing under a box that was plainly meant to replace it.
+        // Measured in the shipped window 2026-08-18 (`npm run tauri dev`, a debug build): row
+        // and bar both start at y=78, the row is 92 and the bar was 74.
+        //
+        // **It does not follow the ribbon back down, and that is a decision rather than an
+        // oversight.** The row wraps below **~1600px** — 92 at 1280, 1400 and 1500, 48 at 1600
+        // and every width above, all measured on the same pass — so a bar that matched it
+        // everywhere would be 48px on a wide window, which leaves the boxes **30px**: shorter
+        // than the 40px the reader reported as easy to miss, on the one surface that exists for
+        // two seconds. So the height is fixed, and on a wide window the bar covers the one-line
+        // ribbon and most of the toolbar row under it — a row no hand mid-drag can use anyway.
+        // What it must never cover is a pile, and it does not: the desk row clears it by 29px
+        // at 1920×1080 and by 121px at 1280×800.
+        //
+        // The height is on the bar and not on the boxes: they are `flex-1` in a row with no
+        // `items-*`, so they stretch to whatever is left once the padding is taken off, and
+        // the one number that has to agree with the ribbon is written once.
+        "flex h-[5.75rem] rounded-lg border border-border bg-surface shadow-lg",
+        // Horizontal only. `gap-3` between the boxes and `px-4` outside the outermost two —
+        // four targets that touch each other and the bar's edge read as one banded block
+        // rather than as four things to aim at. `py-2` is the old `p-2` left alone: the
+        // vertical space belongs to the boxes, which is what "fills the ribbon" means.
+        "gap-3 px-4 py-2",
+        // **Centred, because the boxes stop growing before the bar does.** Each is capped at
+        // 300px (see {@link QuickZone}), so on a wide window the four no longer fill the
+        // editor's width and the leftover has to go somewhere: split evenly is the only place
+        // that keeps the group under the reader's pointer, which arrives from the middle of the
+        // deck rather than from either edge. Costs nothing where they still stretch — measured
+        // 2026-08-18 at 1280×800, each box is 236.8px, well inside the cap, and `justify-center`
+        // on a row with no slack left is a no-op.
+        "justify-center",
+      )}
+    >
       {zones.map((zone) => (
         <QuickZone key={zone.label} {...zone} />
       ))}
@@ -295,7 +341,9 @@ interface Zone {
  * pointer rather than at the chrome, and the only moment this surface exists at all. A control
  * that appears for two seconds cannot also be quiet.
  *
- * So the box is **`h-14`**, the label is `text-sm font-medium` in **`text-text`** — the app's own
+ * So the box is **as tall as the bar leaves it** — 56px when that was fixed at `h-14`, **74px**
+ * since the bar took the ribbon's own 92 and these became the stretch inside it (2026-08-18) —
+ * the label is `text-sm font-medium` in **`text-text`** — the app's own
  * parchment, the same value as the deck's headings — and the outline is **2px of dashed
  * `border-dim`**, which is exactly the colour the *label* used to be. That inverts the hierarchy
  * on purpose: the reader now finds the box first and reads it second, which is the order a drop
@@ -343,7 +391,15 @@ function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElem
       ref={attach}
       {...{ [QUICK_ZONE_ATTR]: label }}
       className={cn(
-        "flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border-2 border-dashed",
+        // No height of its own: the bar carries one, and these stretch into it. See the bar.
+        // **`max-w-[300px]` against the `flex-1`**: the four share the editor's width evenly
+        // until one of them would pass 300px, and then they stop and the bar centres what is
+        // left (see the bar's `justify-center`). A drop target twice the width of the label in
+        // it is not twice as easy to hit — the pointer is already inside it — and four boxes
+        // spanning a 2560px window read as a banner rather than as four things to choose
+        // between. Binds above ~1300px of bar; at 1280×800 the boxes are 236.8px and it does
+        // nothing.
+        "flex min-w-0 max-w-[300px] flex-1 items-center justify-center gap-2 rounded-md border-2 border-dashed",
         "border-dim bg-bg px-3 text-sm font-medium text-text",
         // No transition on either state, exactly as the remove tray has none: an affordance that
         // fades in during a drag is an affordance that is still arriving when the reader has let

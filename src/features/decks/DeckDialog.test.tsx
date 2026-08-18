@@ -202,6 +202,35 @@ describe("DeckDialog", () => {
   });
 
   /**
+   * **The panel is clamped to the window, and it takes two classes to say so** (2026-08-18).
+   *
+   * `max-h-full` on the panel is a percentage against its *grid area*, and the area was an
+   * implicit row — which is `auto`, and an `auto` row sizes to its own content. The clamp was
+   * therefore circular and clamped nothing: measured in a headless browser at a 708px viewport
+   * with a 140-line export, the panel drew **2963px**, its body's `overflow-y-auto` never
+   * scrolled because it had every pixel it asked for, and the dialog's buttons sat at y≈2930 —
+   * off the window, and reachable by neither pointer nor wheel. One explicit
+   * `minmax(0,1fr)` row bounds the area to the scrim's content box; the same panel then draws
+   * 660px and the body scrolls.
+   *
+   * **This can only be a class assertion, and that is a property of the tool rather than a
+   * choice**: jsdom has no layout engine, so every box it reports is 0px and the entire class of
+   * defect is invisible to this suite. The numbers above were measured in a browser. What this
+   * pins is that neither half of the pair is dropped by an edit that never runs one.
+   */
+  it("bounds the panel to the window, which takes the scrim's row and the panel's max height", async () => {
+    open();
+    const dialog = await panel();
+
+    expect(dialog).toHaveClass("max-h-full");
+    const scrim = dialog.parentElement as HTMLElement;
+    // A bare `1fr` is `minmax(auto, 1fr)`, and that `auto` floor is the panel's content again —
+    // which is the same bug spelled a second way. The `minmax(0,` half is load-bearing.
+    expect(scrim).toHaveClass("grid");
+    expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]");
+  });
+
+  /**
    * **The shell does not own the body's scroller.** The three bodies differ — one keeps a sticky
    * roll-up inside its scroller — so the host's element is a direct child of the panel and
    * nothing is wrapped around it. A shell that grew a scroll container here would give every one

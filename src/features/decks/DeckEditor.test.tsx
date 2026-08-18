@@ -35,6 +35,9 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+// The other write that changes a row's *address* rather than its quantity — the card menu's
+// `Set as foil` / `Set as regular`.
+const deckSetCardFinish = vi.hoisted(() => vi.fn());
 // Not a card write: the tab, the `Group by` and the `Sort` the reader leaves the deck on.
 const deckSetViewState = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
@@ -103,6 +106,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckAddCard,
     deckMissingToWishlist,
     deckSwapPrinting,
+    deckSetCardFinish,
     deckSetViewState,
     formatSpecs,
     searchCards,
@@ -527,6 +531,7 @@ beforeEach(() => {
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetViewState.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   // Nothing found by default: a result named after a card already in the deck would be a
@@ -2283,7 +2288,7 @@ describe("DeckEditor", () => {
   it("counts the format's findings on a chip in the header", async () => {
     await open();
 
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
 
     expect(
       screen.getByText("Modern decks need at least 60 cards; you have 6."),
@@ -2454,7 +2459,7 @@ describe("DeckEditor", () => {
   it("never has two of its own layers open at once", async () => {
     await open();
 
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
     expect(screen.getByRole("dialog", { name: "Modern check" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Categories" }));
@@ -2592,6 +2597,9 @@ describe("DeckEditor", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Export deck" }));
 
     const dialog = await screen.findByRole("dialog", { name: 'Export "Burn"' });
+    // The preview opens shut and is **unmounted** while it is — the press is what a reader makes
+    // to read the text, and this suite has to make it too. See `ExportDialog.tsx`.
+    await userEvent.click(within(dialog).getByRole("button", { name: /Show decklist/ }));
     expect(within(dialog).getByText(/Lightning Bolt/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Sol Ring/)).toBeInTheDocument();
   });
@@ -2686,14 +2694,14 @@ describe("DeckEditor", () => {
     const filterOpen = () => screen.queryByRole("combobox", { name: "Search sets" });
 
     // The format check, then the set filter: taking the caret out of the check closes it.
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
     await userEvent.click(setFilter());
 
     expect(filterOpen()).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     // ...and back the other way: opening the check takes the set filter down.
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
 
     expect(screen.getByRole("dialog", { name: "Modern check" })).toBeInTheDocument();
     expect(filterOpen()).not.toBeInTheDocument();
@@ -3962,6 +3970,64 @@ describe("DeckEditor — a card's menu", () => {
 
     fireEvent.contextMenu(tile);
     expect(await screen.findByRole("menu")).toBeInTheDocument();
+  });
+
+  /**
+   * **`Set as foil` moves the row's address, so it has to move the mark with it** — the reported
+   * defect (2026-08-18), and the seam it comes from is the one `swap_printing` already met.
+   *
+   * A deck row is addressed by `(deck, category, card, variant, finish)` — the pane's context is
+   * that address, and `selectedSlot` is drawn from it. The finish write changes the fifth part,
+   * so a context left alone names a row that no longer exists: the gold ring goes out, the pane
+   * stays open on a card it can no longer say anything about, and its own foil button and swap
+   * write to a dead slot. The swap's answer was to re-anchor through `openCardFromDeck`; this is
+   * the same answer one axis over, and it is on the mutation rather than here because two
+   * surfaces press this write.
+   *
+   * The refetched deck is the foil row, which is what the write actually leaves behind — without
+   * it the mark could only be lost, and a passing assertion would mean nothing.
+   */
+  it("keeps the picked card picked when its finish is set", async () => {
+    const FOILABLE = { finishes: '["nonfoil","foil"]' };
+    deckGet.mockResolvedValue(detail({}, [bolt(FOILABLE)]));
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(1);
+
+    // What the deck reads as once the write has landed: one row, now foil.
+    deckGet.mockResolvedValue(detail({}, [bolt({ ...FOILABLE, finish: "foil" })]));
+    await rightClickCard("Lightning Bolt");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Set as foil" }));
+
+    expect(deckSetCardFinish).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      "live",
+      null,
+      "foil",
+    );
+    // The context follows the row, which is what keeps the pane attached to it.
+    await waitFor(() =>
+      expect(useAppStore.getState().paneDeckContext).toMatchObject({
+        cardId: "c-Lightning Bolt",
+        categoryId: MAIN,
+        finish: "foil",
+      }),
+    );
+
+    // Named by the slot as well as counted: a count of 1 would also pass if the ring had landed
+    // on some other card.
+    const marked = await waitFor(() => {
+      const found = [...document.querySelectorAll(`[${SELECTED_ATTR}]`)];
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(marked[0].querySelector(`[${DECK_CARD_ATTR}]`) ?? marked[0]).toHaveAttribute(
+      DECK_CARD_ATTR,
+      deckCardSlot(MAIN, "c-Lightning Bolt", "foil"),
+    );
   });
 });
 

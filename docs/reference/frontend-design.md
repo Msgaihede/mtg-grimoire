@@ -800,6 +800,28 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   which is what lets each body start its queries and its state clean on every open. The shell
   does not own the body's scroller — the history body has a sticky roll-up inside its own — so
   each body renders its own `min-h-0 flex-1 overflow-y-auto`.
+  **A body's scroller only works if the panel above it is clamped, and for two days it was not**
+  (2026-08-18). The panel's `max-h-full` is a percentage against its *grid area*, and the scrim's
+  `grid place-items-center` gave it an **implicit** row — which is `auto`, and an `auto` row sizes
+  to its own content, so the clamp was circular and clamped nothing. Measured in a headless
+  browser at a 708px viewport with a 140-line export: the panel drew **2963px**, the body's
+  `overflow-y-auto` never scrolled because it had every pixel it asked for, and the dialog's
+  buttons sat at y≈2930 — off the window, reachable by neither pointer nor wheel. The scrim now
+  names one explicit `grid-rows-[minmax(0,1fr)]` row; the same panel draws **660px**, the preview
+  scrolls its own 2754px, and the buttons are on screen. `minmax(0,` is load-bearing: a bare `1fr`
+  is `minmax(auto, 1fr)`, whose `auto` floor is the content again. It reached every dialog on the
+  shell and was reported against one of them, and **jsdom can see none of it** — no layout engine,
+  every box 0px — so the suite pins the two classes and the numbers come from a browser.
+
+  **A dialog's tallest block opens shut when it is not what the reader came for** (2026-08-18),
+  which is `DeckSearchPanel`'s collapsed default one rung down. `ExportDialog`'s decklist preview
+  is a disclosure starting closed: the presses that do the work are Copy and Save as…, and a
+  whole-deck export put both of them a screenful of text away from the format that chose them.
+  Shut, the dialog is the format row, whatever that format leaves out, the toggle and the
+  buttons. The toggle's own label carries the line count, so "nothing is showing" is never
+  mistaken for "nothing is there" — and the block is **unmounted** rather than hidden, because a
+  hidden `<pre>` still holding the text is the shape that lets a test assert a line no reader can
+  see.
   **The argument is width, and it is the desk row's own number.** At the app's own 1280×800 with
   the card pane docked that row measures **602px** (`DeckEditor`'s `DECK_FLOOR`), so the 384px
   search panel plus its 16px gap leave the deck **202px** — one stack column. A drawer that is
@@ -1488,6 +1510,63 @@ rect is zero, and a rendering assertion passes just as happily against a view th
 padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-auto` **and**
 `DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
 of the `overflow`.
+
+## The format check that changed width with the deck
+
+**2026-08-18.** Reported from the shipped window: a deck that keeps a plan has two lists, Live and
+Theory hold different cards, and the two therefore fail different rules — so pressing the variant
+switch took the format check from `No issues · Modern` to `3 issues` and moved everything beside
+it.
+
+**Measured, in the old spelling and the new, in one frame.** Both blocks are the deck header's own
+`flex flex-wrap items-center justify-end gap-2` at 1000px, drawn with the same six action buttons
+after them:
+
+| the check reads | width |
+| --- | --- |
+| `No issues · Modern` (clean) | **144.81px** |
+| `3 issues` (broken) | **74px** |
+| the glyph, 0 findings | **36px** |
+| the glyph, 3 findings | **36px** |
+| the glyph, 147 findings | **36px** |
+
+**70.81px** is what the switch was worth, on a block that already wraps at the app's own 1280 — so
+the cost was never only that `Built` and the six buttons slid sideways, it was that a fold could
+fall on the other side of them.
+
+**The glyph is `CircleCheck` in `--color-ok` or `TriangleAlert` in `--destructive`**, computed
+`oklch(0.72 0.14 152)` and `oklch(0.704 0.191 22.216)` — a new token beside the red rather than
+one of the palette's two greens, both of which belong to mana (`src/index.css` says why at the
+token). Nothing but the glyph is coloured: the control's surface stays what every other chip on
+that row is, because this panel refuses nothing.
+
+**The count is a 16×16 bubble, `absolute`, and it hangs off the top and never off the right.**
+That asymmetry is a scrollbar rather than a preference. The block is `justify-end`, so every
+folded line ends flush against the header's right edge — which is the deck editor's own edge, and
+the editor is the page scroller, where `overflow-y: auto` computes `overflow-x` to `auto` as
+well. Driven at the two widths where the fold lands right after the check:
+
+| badge anchored | horizontal scroll in the scroller |
+| --- | --- |
+| `-top-1 right-0` (shipped), block 240px | **0** |
+| `-top-1 right-0` (shipped), block 260px | **0** |
+| `-top-1` + `right: -4px`, block 240px | **3px**, and a scrollbar drawn |
+| `-top-1` + `right: -4px`, block 260px | **3px**, and a scrollbar drawn |
+
+Shipped, the bubble's right edge sits **1px inside** the button's own (an `absolute` inset resolves
+against the padding box, so `right-0` is inside the border) and **3px above** its top, which the
+header's `py-1.5` has six of to spare.
+
+**Photographed rather than reasoned about, and without either lock**: a `file://` page against the
+built `dist/assets/index-*.css`, every state in one frame, shot by headless Edge, with the retired
+anchor spelled as an inline `style` because a class that has left the source is not in the built
+sheet. **That is a real layout engine and it is not the shipped window** — WebView2 at the app's own
+width, with the deck's real controls in the row, has not been driven for this change.
+
+**Why the suite cannot hold any of it.** jsdom has no layout engine, so every rect is zero and
+nothing clips. `ValidationPanel.test.tsx` asserts the two states' **class lists are identical**
+instead, which is the same claim written where it can fail, plus the bubble being `absolute` and
+`aria-hidden`.
 
 ## Vendored components and tokens
 

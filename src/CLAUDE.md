@@ -129,7 +129,16 @@ Every one of these has its measurement and its story in
   resemblance is N independent decisions that happen to agree today. Each of those is settled
   once in `DeckDialog.tsx` with the reason at its own site, and the shell's three optional
   header props (`title: ReactNode`, `ariaLabel`, `subtitle`) exist because folding the last
-  three in needed exactly that much and no more. `DeckEditor.test.tsx`'s Tab sweep is still
+  three in needed exactly that much and no more. **Clamping the panel to the window takes two
+  classes and they only work together** (2026-08-18): the panel's `max-h-full` is a percentage
+  against its *grid area*, so the scrim needs `grid-rows-[minmax(0,1fr)]` to bound that area — an
+  implicit grid row is `auto`, an `auto` row sizes to its own content, and the clamp was therefore
+  circular and clamped **nothing**. Measured headless at a 708px viewport with a 140-line export,
+  the panel drew **2963px**, every body's `overflow-y-auto` was inert because it had every pixel it
+  asked for, and the dialog's buttons sat at y≈2930 — off the window, reachable by neither pointer
+  nor wheel. `minmax(0,` is load-bearing: a bare `1fr` is `minmax(auto, 1fr)`, whose `auto` floor
+  is the content again. **jsdom has no layout engine, so nothing in the suite can see any of it** —
+  `DeckDialog.test.tsx` pins the two classes and the numbers come from a browser. `DeckEditor.test.tsx`'s Tab sweep is still
   driven per surface rather than pointed at the shell, and it is what would go red if a modality
   fix reached one dialog and stopped there. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
