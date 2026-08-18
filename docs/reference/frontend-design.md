@@ -1477,6 +1477,63 @@ padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-au
 `DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
 of the `overflow`.
 
+## The format check that changed width with the deck
+
+**2026-08-18.** Reported from the shipped window: a deck that keeps a plan has two lists, Live and
+Theory hold different cards, and the two therefore fail different rules — so pressing the variant
+switch took the format check from `No issues · Modern` to `3 issues` and moved everything beside
+it.
+
+**Measured, in the old spelling and the new, in one frame.** Both blocks are the deck header's own
+`flex flex-wrap items-center justify-end gap-2` at 1000px, drawn with the same six action buttons
+after them:
+
+| the check reads | width |
+| --- | --- |
+| `No issues · Modern` (clean) | **144.81px** |
+| `3 issues` (broken) | **74px** |
+| the glyph, 0 findings | **36px** |
+| the glyph, 3 findings | **36px** |
+| the glyph, 147 findings | **36px** |
+
+**70.81px** is what the switch was worth, on a block that already wraps at the app's own 1280 — so
+the cost was never only that `Built` and the six buttons slid sideways, it was that a fold could
+fall on the other side of them.
+
+**The glyph is `CircleCheck` in `--color-ok` or `TriangleAlert` in `--destructive`**, computed
+`oklch(0.72 0.14 152)` and `oklch(0.704 0.191 22.216)` — a new token beside the red rather than
+one of the palette's two greens, both of which belong to mana (`src/index.css` says why at the
+token). Nothing but the glyph is coloured: the control's surface stays what every other chip on
+that row is, because this panel refuses nothing.
+
+**The count is a 16×16 bubble, `absolute`, and it hangs off the top and never off the right.**
+That asymmetry is a scrollbar rather than a preference. The block is `justify-end`, so every
+folded line ends flush against the header's right edge — which is the deck editor's own edge, and
+the editor is the page scroller, where `overflow-y: auto` computes `overflow-x` to `auto` as
+well. Driven at the two widths where the fold lands right after the check:
+
+| badge anchored | horizontal scroll in the scroller |
+| --- | --- |
+| `-top-1 right-0` (shipped), block 240px | **0** |
+| `-top-1 right-0` (shipped), block 260px | **0** |
+| `-top-1` + `right: -4px`, block 240px | **3px**, and a scrollbar drawn |
+| `-top-1` + `right: -4px`, block 260px | **3px**, and a scrollbar drawn |
+
+Shipped, the bubble's right edge sits **1px inside** the button's own (an `absolute` inset resolves
+against the padding box, so `right-0` is inside the border) and **3px above** its top, which the
+header's `py-1.5` has six of to spare.
+
+**Photographed rather than reasoned about, and without either lock**: a `file://` page against the
+built `dist/assets/index-*.css`, every state in one frame, shot by headless Edge, with the retired
+anchor spelled as an inline `style` because a class that has left the source is not in the built
+sheet. **That is a real layout engine and it is not the shipped window** — WebView2 at the app's own
+width, with the deck's real controls in the row, has not been driven for this change.
+
+**Why the suite cannot hold any of it.** jsdom has no layout engine, so every rect is zero and
+nothing clips. `ValidationPanel.test.tsx` asserts the two states' **class lists are identical**
+instead, which is the same claim written where it can fail, plus the bubble being `absolute` and
+`aria-hidden`.
+
 ## Vendored components and tokens
 
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).

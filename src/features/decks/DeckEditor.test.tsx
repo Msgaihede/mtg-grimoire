@@ -2288,7 +2288,7 @@ describe("DeckEditor", () => {
   it("counts the format's findings on a chip in the header", async () => {
     await open();
 
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
 
     expect(
       screen.getByText("Modern decks need at least 60 cards; you have 6."),
@@ -2459,7 +2459,7 @@ describe("DeckEditor", () => {
   it("never has two of its own layers open at once", async () => {
     await open();
 
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
     expect(screen.getByRole("dialog", { name: "Modern check" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Categories" }));
@@ -2694,14 +2694,14 @@ describe("DeckEditor", () => {
     const filterOpen = () => screen.queryByRole("combobox", { name: "Search sets" });
 
     // The format check, then the set filter: taking the caret out of the check closes it.
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
     await userEvent.click(setFilter());
 
     expect(filterOpen()).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     // ...and back the other way: opening the check takes the set filter down.
-    await userEvent.click(await screen.findByRole("button", { name: "1 issue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
 
     expect(screen.getByRole("dialog", { name: "Modern check" })).toBeInTheDocument();
     expect(filterOpen()).not.toBeInTheDocument();

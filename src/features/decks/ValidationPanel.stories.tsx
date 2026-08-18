@@ -181,9 +181,10 @@ type Story = StoryObj<typeof meta>;
 /**
  * A deck with nothing wrong with it: 60 Modern-legal cards and a 15-card sideboard.
  *
- * The chip carries the format's name when there is nothing to count — "No issues · Modern" — and
- * the panel behind it says so in a whole sentence rather than showing an empty list. An empty
- * list is indistinguishable from a list that failed to render.
+ * Shut, the control is a green check in a 36px box and the format's name is in its accessible
+ * name — "No issues · Modern", which is what a pointer gets as a tooltip and a screen reader as
+ * the button. The panel behind it says the same thing in a whole sentence rather than showing an
+ * empty list: an empty list is indistinguishable from a list that failed to render.
  *
  * Modern rather than a commander format, because the commander formats also draw the bracket
  * advisory below the findings and this story is about the absence of findings. {@link
@@ -206,6 +207,49 @@ export const Legal: Story = {
     await expect(panel).toHaveTextContent(
       "Nothing to fix. This deck matches every Modern rule this app can check.",
     );
+  },
+};
+
+/**
+ * The two states of the shut control, side by side — which is the whole reason it stopped being
+ * words.
+ *
+ * Live and Theory hold different cards, so they fail different rules, and this readout sits two
+ * controls along from the switch between them. While it read "No issues · Modern" against
+ * "3 issues" the two states were tens of pixels apart, so flipping that switch slid `Built` and
+ * the header's action buttons along the row — and at the widths that row already wraps at, it
+ * could move them onto a different line. Both states are one 36px box now, and the count hangs
+ * off the corner where it is out of that box's flow.
+ *
+ * **Shut, unlike every other story in this file**, because shut is the state this is about. The
+ * play asserts the two class lists rather than two rects: a story runs in jsdom, which has no
+ * layout engine, so the width itself is a claim only a live pass or the workbench can settle.
+ */
+export const ShutBothWays: Story = {
+  args: { cards: [], spec: SPECS.modern, buttonRef: chipRef(), open: false },
+  render: (args) => (
+    <div className="flex items-center gap-2">
+      <ValidationPanel
+        {...args}
+        cards={[...MODERN_MAIN, ...modernSide(15)]}
+        buttonRef={chipRef()}
+      />
+      <ValidationPanel
+        {...args}
+        cards={padWithIslands(40, MODERN_SPELLS)}
+        buttonRef={chipRef()}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const clean = canvas.getByRole("button", { name: "No issues · Modern" });
+    const broken = canvas.getByRole("button", { name: "1 issue · Modern" });
+
+    await expect(clean.className).toBe(broken.className);
+    // The bubble is the count's whole appearance on screen and says nothing to a screen reader:
+    // the button's own name has already said how many.
+    await expect(within(broken).getByText("1")).toHaveAttribute("aria-hidden", "true");
   },
 };
 

@@ -896,6 +896,35 @@ controls open that dialog** — the editor header's `Export deck` and a category
   **Every width on this page was measured with _five_ buttons in that block**; `Export deck` made
   it six and none of them has been re-taken, so the standing claim is "it already wrapped", not a
   number for what it costs now.
+- **The format check on that block is a glyph in a 36px box, and it is a glyph because the deck
+  has two lists** (2026-08-18). Live and Theory hold different cards and so fail different rules,
+  so the readout's two states are one press of the variant switch apart — and while it was
+  `No issues · Modern` against `3 issues` that press changed its width and slid `Built` and all
+  six action buttons along with it, on a block that already wraps at the app's own window. It is
+  `CircleCheck` in `--color-ok` for a clean deck and `TriangleAlert` in `--destructive` for a
+  broken one, with the count in a bubble that is `absolute` — **out of the box's flow, which is
+  the whole mechanism**: nothing inside a 36px square may change its width, so 0, 3 and 47
+  findings draw the same control. Three rules hold it:
+  - **`--color-ok` is the app's first success colour and had to be a new token.** The palette's
+    two greens are `--color-mana-g` ("Mana UI only — chips, pips, the line. Never a panel, never
+    a border, never text") and `--color-pie-g`, a colour-identity deep that reads as grey at
+    16px on this background; a check mark in either says "green cards" to the one reader who has
+    learned what those colours mean here. It is a peer of `--destructive` — same lightness, less
+    chroma — and like it, it colours a glyph and never a panel.
+  - **The bubble hangs off the _top_ and never off the right**, and that asymmetry is a
+    scrollbar. The block is `flex-wrap justify-end`, so every folded line ends flush against the
+    editor's own right edge, and the editor is the page scroller — where `overflow-y: auto`
+    computes `overflow-x` to `auto` as well. A bubble 4px past that edge, at whatever width the
+    wrap happens to fall right there, is 4px of horizontal scroll on the page this folder has
+    twice gone looking for phantom scrollbars on. Up costs nothing: the header's `py-1.5` leaves
+    6px and the bubble asks for 3.
+  - **The accessible name names the format in both states** — `No issues · Modern`,
+    `3 issues · Modern` — and is the `title` as well, because a glyph says nothing to a screen
+    reader or to a pointer. It used to carry the format only when there was nothing to count,
+    where there was nothing else to print; now that the name is the only place either fact
+    exists, withholding the ruleset for a broken deck would answer "checked against what?"
+    exactly when the question stops being worth asking. **It is what every test and story
+    addresses this control by**, so a reworded label is a red suite.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long
