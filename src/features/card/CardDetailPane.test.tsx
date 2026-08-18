@@ -194,7 +194,7 @@ vi.mock("@/lib/externalLinks", async (original) => ({
 import { CardDetailPane } from "./CardDetailPane";
 import { CardToDeckProvider } from "./cardMenu";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
-import { walkingToCard } from "@/lib/caretWalk";
+import { keepCaretForCard } from "@/lib/caretWalk";
 import { copyText } from "@/lib/clipboard";
 import { openExternal } from "@/lib/externalLinks";
 import { useAppStore } from "@/lib/store";
@@ -620,7 +620,7 @@ describe("CardDetailPane", () => {
    * `selectedCardId` exactly as a press does — that is what makes the pane follow a walk — but
    * the reader is standing on a tile, a deck card or a modal that has to keep the **next** press.
    * Taking the caret here ends every walk after one card, which is what all three surfaces did
-   * until 2026-08-18. `walkingToCard` is the note that says so; `src/lib/caretWalk.ts` carries
+   * until 2026-08-18. `keepCaretForCard` is the note that says so; `src/lib/caretWalk.ts` carries
    * the three live readings and why it is idempotent.
    *
    * **Driven under StrictMode deliberately**, because that is the arrangement that broke the
@@ -631,7 +631,7 @@ describe("CardDetailPane", () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(printings));
 
-    walkingToCard("p1");
+    keepCaretForCard("p1");
     const opener = await openFromAButton({ strict: true });
 
     expect(screen.getByRole("complementary", { name: /card details/i })).not.toHaveFocus();
@@ -643,7 +643,7 @@ describe("CardDetailPane", () => {
     cardDetail.mockResolvedValue(detail);
     cardPrintings.mockResolvedValue(page(printings));
 
-    walkingToCard("some-other-card");
+    keepCaretForCard("some-other-card");
     await openFromAButton({ strict: true });
 
     expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus();

@@ -21,7 +21,7 @@ import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dn
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
-import { consumeWalkNote } from "@/lib/caretWalk";
+import { consumeCaretNote } from "@/lib/caretWalk";
 import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
@@ -478,7 +478,7 @@ function Body({
      * suppresses the focus and nothing else. What the pane must not do is take a caret it was
      * not given.
      */
-    if (!consumeWalkNote(cardId)) paneRef.current?.focus();
+    if (!consumeCaretNote(cardId)) paneRef.current?.focus();
     // `cardId` is this body's identity — the pane keys on it — so this list is constant for the
     // life of the component and the effect still runs exactly once. `paneRef` is the box's own
     // ref, stable for as long as any card is open, and changes nothing about that.

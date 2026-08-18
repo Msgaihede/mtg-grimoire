@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   DEFAULT_SECTION_ZOOMS,
@@ -10,6 +10,7 @@ import {
   ZOOM_SECTIONS,
   ZOOM_STEPS,
 } from "@/lib/cardZoom";
+import { consumeCaretNote } from "@/lib/caretWalk";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -2484,6 +2485,17 @@ describe("StackView reordering", () => {
  */
 describe("StackView arrow keys", () => {
   /**
+   * The caret note is module state and is deliberately *not* cleared on read — see
+   * `caretWalk.ts`, where StrictMode's double-invoked mount effect is why. So a test that leaves
+   * one behind hands it to the next, and the case asserting a note is **absent** is the one that
+   * would read as a failure. Discarded here with a card id nothing uses, which is the only way
+   * to clear it from outside.
+   */
+  beforeEach(() => {
+    consumeCaretNote("no-test-walks-to-this-id");
+  });
+
+  /**
    * The reordering block's deck, and the shape is the whole of what this block turns on: the flow
    * comes out `Commander(1 card) · Ramp(2) · Draw(0)` and the rail `Sideboard(1) · Maybeboard(1)`,
    * so the walk is five piles holding `[1, 2, 0, 1, 1]` cards.
@@ -2639,6 +2651,78 @@ describe("StackView arrow keys", () => {
   /** A press from somewhere on the desk that is not a card has nowhere to move *from*. The
    *  pile's own section is the case that exists in the app: `deckGroupProps` gives it a
    *  `tabIndex` of −1 so the caret can be put there when a card leaves the pile under it. */
+  /**
+   * **A press on a card keeps the caret too, and this is the half a keyboard-only test cannot
+   * reach.**
+   *
+   * The suite drives the walk from a card focused by hand (`act(() => top.focus())`), which is a
+   * caret that was never anywhere else. A reader's is: they *click* a card, `onSelect` is
+   * `openCardFromDeck`, and the card pane's body mounts and focuses itself — so the first arrow
+   * they press moves nothing at all. Reported and measured in the shipped window 2026-08-19.
+   *
+   * The pane is not mounted here, so the assertion is the **note** rather than the caret: no
+   * amount of jsdom can show a pane stealing something no pane is drawing. `consumeCaretNote` is
+   * idempotent, so reading it here is a question rather than a write.
+   */
+  it("keeps the caret for a card that was pressed, not only for one arrowed to", async () => {
+    draw();
+    const user = userEvent.setup();
+    const top = control(RAMP.id, "Arcane Signet")!;
+
+    await user.click(top);
+
+    expect(consumeCaretNote("c-Arcane Signet")).toBe(true);
+  });
+
+  /**
+   * **The caret can sit on a card's `<li>` rather than on its button, and the arrows have to work
+   * from there.**
+   *
+   * Two routes a reader really takes put it there: `ContextMenu` hands the caret back to the
+   * element its handler is attached to, which for a deck card is the `<li>`; and a click on the
+   * card's **data line** — a sibling of the button, not a child — lands on that `<li>` as the
+   * nearest focusable ancestor. `DECK_CARD_ATTR` is stamped on the *button*, so a `closest` from
+   * there finds nothing and every arrow was silently dead. The reader described it as the window
+   * eating the focus.
+   */
+  it("walks from a caret handed back to the card's body rather than its button", async () => {
+    // **`menu` is what makes the card's `<li>` focusable at all**, and that is not a fixture
+    // detail: `deckCardMenuProps` gives it `tabIndex={-1}` only where a card has a menu to open,
+    // because taking the caret is what a menu opener does. Without it `focus()` on that element
+    // is a no-op — this repo's own rule, and the reason this test read as a broken handler for
+    // one run before the fixture was corrected.
+    const onSelect = draw({ actions: { setQuantity: vi.fn(), menu: () => ({ onContextMenu: vi.fn(), onKeyDown: vi.fn() }) } });
+    const user = userEvent.setup();
+    const body = control(RAMP.id, "Arcane Signet")!.closest<HTMLElement>(`[${CARD_BODY_ATTR}]`)!;
+
+    act(() => body.focus());
+    await user.keyboard("{ArrowDown}");
+
+    expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[1]);
+  });
+
+  /**
+   * And the widening stops at the card's own box. The stepper's `+` and `−` sit inside that same
+   * `<li>`, so reading "anything inside a card" instead of "the card's body itself" is how the
+   * arrows would come to walk the deck out from under a reader adjusting a quantity — and the
+   * field guard cannot catch it, because those two are `<button>`s.
+   */
+  it("leaves the arrows to a control drawn inside the card", async () => {
+    // The stepper is what puts a second button inside the card's box, so the guard has something
+    // to be about; `menu` is what makes the box focusable, as one test up.
+    const onSelect = draw({ actions: { setQuantity: vi.fn(), menu: () => ({ onContextMenu: vi.fn(), onKeyDown: vi.fn() }) } });
+    const user = userEvent.setup();
+    const body = control(RAMP.id, "Arcane Signet")!.closest<HTMLElement>(`[${CARD_BODY_ATTR}]`)!;
+    const inside = body.querySelector<HTMLElement>(`button:not([${DECK_CARD_ATTR}])`)!;
+
+    act(() => inside.focus());
+    await user.keyboard("{ArrowDown}");
+
+    expect(inside).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("leaves a press that did not come from a card alone", async () => {
     const onSelect = draw();
     const user = userEvent.setup();

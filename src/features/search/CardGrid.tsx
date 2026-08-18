@@ -13,7 +13,7 @@ import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
-import { walkingToCard } from "@/lib/caretWalk";
+import { keepCaretForCard } from "@/lib/caretWalk";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -560,6 +560,28 @@ export function CardGrid<T extends GridCard>({
     virtualizer.measure();
   }, [tileHeight, virtualizer]);
 
+  /**
+   * **Every selection this wall makes — and on a wall the arrows move, the caret stays on the
+   * tile.**
+   *
+   * `onSelect` writes `selectedCardId`, which mounts the card pane's body, and that body focuses
+   * itself as it opens. That is right for a wall the reader is passing *through* and wrong for one
+   * they are walking: announced for the arrows alone, the walk worked and **a click did not** —
+   * pressing a tile put the caret in the pane, so the reader's first arrow moved nothing.
+   *
+   * **`arrowNav` is the test, and it is the honest one.** It is exactly "is this a wall the reader
+   * navigates", so the two surfaces that pass nothing keep the pane's ordinary contract — and the
+   * printings modal *needs* to: a press there is a swap or a look, the modal closes on it, and a
+   * caret left on a tile of a wall that no longer exists is a caret on `<body>`.
+   */
+  const select = useCallback(
+    (cardId: string) => {
+      if (arrowNav) keepCaretForCard(cardId);
+      onSelect(cardId);
+    },
+    [arrowNav, onSelect],
+  );
+
   const virtualRows = virtualizer.getVirtualItems();
   const lastRendered = virtualRows.length
     ? Math.min(rows.length - 1, (virtualRows[virtualRows.length - 1].index + 1) * columns - 1)
@@ -688,12 +710,9 @@ export function CardGrid<T extends GridCard>({
     if (next === null) return;
 
     e.preventDefault();
-    // Said **before** the write, because the write is what mounts the card pane's body and that
-    // body focuses itself as it opens. Unannounced, the pane takes the caret on the first press
-    // and every later one lands on the pane rather than on a tile — measured in the shipped
-    // window, and the whole reason this note exists.
-    walkingToCard(rows[next].id);
-    onSelect(rows[next].id);
+    // `select` rather than `onSelect`: the caret note lives in there, so a *press* on a tile gets
+    // it too and the reader's first arrow after clicking has somewhere to move from.
+    select(rows[next].id);
     // Scroll first, focus later. The tile may not be drawn yet — see `pendingIndex` — and the
     // virtualiser is the only thing that can put it on screen, since it owns this scroller's
     // offset outright.
@@ -757,7 +776,7 @@ export function CardGrid<T extends GridCard>({
                 gridIndex={v.index * columns + i}
                 width={tileWidth}
                 zoom={cardZoom}
-                onSelect={onSelect}
+                onSelect={select}
                 selected={card.id === selectedId}
                 badge={badge}
                 topLeft={topLeft}

@@ -217,10 +217,18 @@ Every one of these has its measurement and its story in
   body focuses the pane as it mounts — the right contract for a card a reader *pressed*, and the
   wrong one for one they arrowed onto, because the caret has to stay on the thing being walked for
   the second press to have anywhere to come from. `src/lib/caretWalk.ts` is the note that tells the
-  two apart: `walkingToCard(id)` immediately **before** the store write, since the write is what
+  two apart: `keepCaretForCard(id)` immediately **before** the store write, since the write is what
   re-keys the pane. Three surfaces call it — the search and collection walls, the deck's piles, the
   printings modal — and it shipped broken on all three at once, the modal's press putting the caret
   *outside an `aria-modal` dialog* where `trapTab` could not get it back.
+  **The note goes where every selection the surface makes passes through it — a press as well as
+  an arrow — and never on the arrow handler alone.** Written on the arrows only (2026-08-18) the
+  walk worked and *a click did not*: a reader clicks a card to start, a click is a deliberate
+  open, so the pane took the caret and their first arrow moved nothing. Every test and every live
+  check had driven the walk from a **programmatically** focused card, which is the one caret a
+  reader cannot produce — so nothing caught it and it was reported the next day. A third way to
+  select a card must go through the same wrapper, because the failure is silent: the selection is
+  right, the mark is right, and only the *next* keypress is wrong.
   **The note is idempotent and must stay idempotent**: `main.tsx` wraps the app in
   `React.StrictMode`, which runs a mount effect **twice** in development, so a note that cleared
   itself on read was consumed by the first invocation and the second took the caret anyway — a
