@@ -79,52 +79,6 @@ export function packColumns<T>(
 export const RAIL_ATTR = "data-deck-rail";
 
 /**
- * How wide the flowing half may grow while a rail is drawn beside it — the whole columns it can
- * actually use, and never the ragged remainder past the last of them.
- *
- * **What it removes is the gap a reader sees between the deck and the Sideboard.** The flowing box
- * is `flex-1`, so it takes every pixel the rail leaves; it then lays *whole* columns from its left
- * edge and keeps what is left over — anything from nothing to very nearly a whole column — as dead
- * space **inside itself**, past its last column and in front of the rail. Measured on the reader's
- * own screenshot: a 1606px flowing box at 224px columns uses 1424 and holds 182px of nothing, so
- * the Sideboard stood **198px** from the deck where every other pair of piles is 16 apart. It moves
- * with the column width, so every zoom step changed it — which is why it read as a zoom bug.
- *
- * Two terms, and the smaller of them wins:
- *
- * - **`round(down, 100% - <column>, <column> + <gap>)`** is CSS's own floor, and it is what lets
- *   this stay a rule about **whole columns while nothing here measures the desk**. `100%` is the
- *   box the flowing half is a flex item of, the column subtracted from it is the rail's own width
- *   (the rail is exactly one column wide in both views, by construction), and rounding the rest
- *   down to a whole number of column pitches arrives at the same count `auto-fill` is about to.
- *   Less the one trailing gutter a pitch carries, that is the width of those columns.
- * - **`<columns> × (<column> + <gap>) - <gap>`** is the deck's own answer, and it is the half that
- *   matters on a desk with room for more columns than the deck has to put in them. A freshly
- *   created deck flows two piles; without this term the first term would hand it seven columns of
- *   box and hang the rail a screen away from the two that are drawn.
- *
- * The lengths are **strings rather than numbers** because the two views state a column in different
- * units — `StackView` in pixels derived from the zoom, `TextView` in the `rem` its own constant is
- * written in — and every operation here is arithmetic CSS does for itself, in whatever unit it is
- * handed. That is also why this returns an expression rather than a length: the desk's width is
- * only known to the browser, and the whole point is that it stays that way.
- *
- * `Math.max(1, …)` because a `max-width` that resolves negative is clamped to zero while the
- * flowing box keeps a `min-width` of one column, and a ceiling that disagrees with the floor beside
- * it is a rule that reads two ways. **An empty flow is reachable now and was not before**
- * (2026-08-17): `splitRail`'s switch test rails every pile that counts toward nothing, so a reader
- * who switches off every pile in the deck empties the flowing half — one empty column beside a rail
- * holding the lot, which is the honest picture of that deck rather than a state to guard against.
- */
-export function flowMaxWidth(column: string, gap: string, columns: number): string {
-  const pitch = `${column} + ${gap}`;
-  return [
-    `min(calc(${Math.max(1, columns)} * (${pitch}) - ${gap}),`,
-    `calc(round(down, 100% - ${column}, ${pitch}) - ${gap}))`,
-  ].join(" ");
-}
-
-/**
  * The groups that flow, and the ones that are pinned to the right.
  *
  * **Two tests, in this order: the pile's `kind`, then its switch.** The kinds played beside the

@@ -526,10 +526,16 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   and the rail is a plain
   flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
   before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
-  it, at the same inline width and `flex` basis. **Nothing positions that box** — since 2026-08-17
-  it is document order and a gutter, the `ml-auto` that used to hold it against the desk's right
-  edge having been the cause of the gap between the deck and the rail rather than the end of the
-  fix; what keeps the spacing even is `flowMaxWidth`'s cap on the flowing half. The failure it
+  it, at the same inline width and `flex` basis. **The box is pinned to the desk's right edge and nothing else
+  positions it** — `ml-auto`, which went on 2026-08-17 and came back on **2026-08-18** with the cap
+  on the flowing half removed (`flowMaxWidth` is deleted). The day between is the whole argument:
+  capping the flow at whole columns did put the rail one gutter from the deck's last pile, and it
+  did so by letting the rail drift left with the deck's own width — which is the thing the reader
+  wanted fixed in place. The leftover is the price, up to very nearly a whole column and a
+  different number at every zoom stop, and it is dead desk between the deck and the rail. **What
+  the margin actually does is the wrapped line**: beside the flow it resolves to zero, because
+  `flex-1` has already taken every free pixel of the line and the rail is at the right edge for
+  want of anything to its right. The failure it
   prevents is a drag with no destination on screen: both piles sort last, so packed they were the
   far end of the run, and a card dragged out of the main deck had nowhere to be let go of. The
   Maybeboard earns the rail on the same three counts as the Sideboard — played beside the deck
@@ -570,7 +576,10 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   the rail is one column wide however many piles are in it, and each one costs height.
 - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build, 1280×800,
   against a real synced corpus — a 14-card Commander deck of nine categories). Every figure is a
-  `getBoundingClientRect` off the running window.
+  `getBoundingClientRect` off the running window. **Two of the numbers below are the capped
+  build's and are no longer what this app draws** (the cap was deleted 2026-08-18): the rail's
+  16px gutter and the 1184px flowing box. Everything about _which pile is where_ — the split, the
+  order, the masonry closing up — is unaffected, which is what this pass was for.
   - **Before**: flow `Commander, Instant, Artifact, Creature, Test` at x **234 / 474 / 714**, the
     last two wrapping to a second line at y **699** and **767**; rail at x **954**, 224 wide, 480
     tall. The last flow column ends at 938, so the gutter is exactly **16** — `flowMaxWidth` holding.
@@ -589,9 +598,34 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     on one line, the flowing box capped at **1184px** (= 5 × 240 − 16, `flowMaxWidth`'s deck term
     rather than the desk's), rail at 1434, and `documentElement.scrollWidth` **2560** against a
     `clientWidth` of **2560** — no horizontal page scrollbar, which is what the 1024px floor forbids.
-  - **Not driven**: an entirely switched-off deck (the empty flow `flowMaxWidth` now documents), and
+  - **Not driven**: an entirely switched-off deck (an empty flow beside a rail holding the lot), and
     a switched-off pile under a derived grouping — that one is `views.test.tsx`'s and the
     Maybeboard's ordinary path.
+- **Driven in the shipped window 2026-08-18** (`npm run tauri dev`, a **debug** build, against a
+  real synced corpus — a 14-card Commander deck of five flowing piles and the two railed ones),
+  for the reversal above: the cap deleted, `ml-auto` back on both rails. Every figure is a
+  `getBoundingClientRect` off the running window, with `innerWidth` read in the same expression
+  as the rect (the window can be resized under a pass, and a wide desk reads exactly like an
+  overflow).
+  - **Beside the deck, at 1280×800 and 1× zoom.** The view root spans 228 → **1193** and carries
+    `DROP_MARK_ROOM`'s 6px, so its content edge is 1187 — and the rail's right edge is **1187**,
+    flush. Flow 234 → 947 (**713** wide = 965 − 12 padding − 224 rail − 16 gap) with **no**
+    `max-width` in the style attribute. Three columns at x **234 / 474 / 714**, 224 wide, so every
+    gutter between two piles is **16** and the deck's own rhythm is untouched. The leftover shows
+    up where the change puts it: the last column ends at 938 and the rail starts at 963, a
+    **25px** gap where two piles are 16 apart.
+  - **It moves with the zoom, which is the accepted price.** Three ctrl+wheel steps up (column
+    **329**) left the rail's right edge at **1187** and the flow at 608 — one column, since
+    329 + 16 + 329 = 674 does not fit — so the gap between the deck and the rail was **295**. The
+    rail did not move; the deck did.
+  - **The wrapped line is where `ml-auto` actually acts**, and it was reached at five steps up
+    (column **434**) in a 1024px window: the rail took its own line at y **4519** under a flow at
+    y 339, and its right edge was **931** — the flow's own right edge — rather than x 234 under
+    the first column, which is where the day without the margin left it. `scrollWidth` **1024**
+    against a `clientWidth` of 1024: no horizontal page scrollbar, which the 1024px floor forbids.
+  - **`TextView` agrees**, measured on a 2560px desk: rail right edge **2467** against a root
+    content edge of 2467, `ml-auto flex flex-col gap-4` on the box, and the flowing half **1909**
+    wide with no `max-width` — one 300px column in it and the rest blank desk before the rail.
 - **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
   shipped window.** Against `.storybook/fake`, reading each group's accessible name off
   `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no
@@ -980,8 +1014,9 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   is room for that rail is decided by
   the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
   the desk holds two columns and the gap between them the rail sits beside the flow, and below
-  that width it wraps onto its own line — at the **left**, under the first column, since
-  2026-08-17. **`content-start`
+  that width it wraps onto its own line — at the **right** of that line, which is where `ml-auto`
+  put it until 2026-08-17, where the day without that margin left it (the left, under the first
+  column), and where it is again since 2026-08-18. **`content-start`
   belongs on the view's root and nowhere else**, and it is what keeps a wrapped rail immediately
   under the flow: that root is a `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as
   the scroller rather than as tall as its content, and `align-content`'s initial `normal` behaves
@@ -1011,10 +1046,9 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     884, and the rail wrapped there too, still with no sideways scroll.
   - **`ml-auto` is what puts a wrapped rail back on the right**, and it does: at 1024 the rail
     took its own line with its right edge on the flow's, 15px of scrollbar in from the
-    scroller's own edge. **Superseded 2026-08-17** — `ml-auto` is gone from both rails and a
-    wrapped rail lands at the left now. The reading stands as what that build did; it is not what
-    the current one does, and it is kept because the *rest* of this pass's figures were taken on
-    the same run.
+    scroller's own edge. **Superseded 2026-08-17 and restored 2026-08-18** — the margin was gone
+    for a day, and a wrapped rail landed at the left under the first column in that build only.
+    The reading describes what the current build does again; it has not been re-driven since.
   - **The sticky machinery really is gone** — the rail computes `position: static`,
     `box-shadow: none`, `z-index: auto` and a transparent background — and **`content-start`
     is on the box that has a height**: the view root computes `align-content: flex-start`.
