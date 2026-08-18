@@ -194,6 +194,7 @@ vi.mock("@/lib/externalLinks", async (original) => ({
 import { CardDetailPane } from "./CardDetailPane";
 import { CardToDeckProvider } from "./cardMenu";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { walkingToCard } from "@/lib/caretWalk";
 import { copyText } from "@/lib/clipboard";
 import { openExternal } from "@/lib/externalLinks";
 import { useAppStore } from "@/lib/store";
@@ -609,6 +610,43 @@ describe("CardDetailPane", () => {
 
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
+  });
+
+  /**
+   * **A card the reader _walked_ to leaves the caret where it is**, which is the other half of
+   * the rule the two tests above pin.
+   *
+   * The arrow keys on the search wall, on the deck's piles and in the printings modal write
+   * `selectedCardId` exactly as a press does — that is what makes the pane follow a walk — but
+   * the reader is standing on a tile, a deck card or a modal that has to keep the **next** press.
+   * Taking the caret here ends every walk after one card, which is what all three surfaces did
+   * until 2026-08-18. `walkingToCard` is the note that says so; `src/lib/caretWalk.ts` carries
+   * the three live readings and why it is idempotent.
+   *
+   * **Driven under StrictMode deliberately**, because that is the arrangement that broke the
+   * first attempt: the note was consumed on the first of the two mount invocations and the
+   * second took the caret anyway. A test of this that mounted once would have passed over it.
+   */
+  it("leaves the caret alone for a card that was walked to, twice-mounted", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(printings));
+
+    walkingToCard("p1");
+    const opener = await openFromAButton({ strict: true });
+
+    expect(screen.getByRole("complementary", { name: /card details/i })).not.toHaveFocus();
+    expect(opener).toHaveFocus();
+  });
+
+  /** And a card opened any other way still takes it — the note is about one press, not a mode. */
+  it("still takes the caret for a card the note is not about", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(printings));
+
+    walkingToCard("some-other-card");
+    await openFromAButton({ strict: true });
+
+    expect(screen.getByRole("complementary", { name: /card details/i })).toHaveFocus();
   });
 
   it("closes from the button and hands focus back the same way", async () => {

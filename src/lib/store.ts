@@ -229,7 +229,65 @@ interface AppState {
   }) => void;
   /** Close it. */
   closeAllPrintings: () => void;
+  /**
+   * The open deck's cards in the order the desk draws them, or `[]` when no deck editor is open.
+   *
+   * The printings modal's left/right keys walk this. It is here for the same reason
+   * {@link paneDeckContext} is, one size up: `AllPrintingsDialog` renders at `App` level, a
+   * sibling of the shell and therefore *outside* `DeckEditor`, so no React context reaches it —
+   * and unlike a slot, this cannot be handed over at the moment the menu row is pressed either,
+   * because it changes underneath the open modal every time the reader types in the deck's
+   * filter box.
+   *
+   * **The whole list rather than a cursor and a pair of neighbours.** Where the reader is in it
+   * is derived by *finding* {@link printingsRequest}'s own slot, through `sameDeckSlot` — so the
+   * two fields cannot disagree about which card the modal is on, which a stored index and a
+   * stored request could and would the first time a write reordered the deck under them.
+   *
+   * **Only the editor writes it, and it is the editor's order rather than the deck's.** It is
+   * `deckWalkStops(groups, deckId)` — the piles as `splitRail` lays them out, each pile's cards
+   * as `sortBy` ordered them, narrowed by whatever the toolbar's text box and tag chips are
+   * narrowing. That is what the reader is looking at, and it is knowable nowhere else: `groupBy`
+   * and `sortBy` are `useState` inside that component.
+   *
+   * `[]` is "there is no walk", written on the editor's unmount. A stale walk through a deck
+   * that is no longer open would step a modal opened from the Collection into somebody's
+   * Sideboard.
+   */
+  deckWalk: DeckWalkStop[];
+  /** Publish the walk. One field, like {@link openAllPrintings} — nothing about the open card,
+   *  the open deck or the view is this write's business. */
+  setDeckWalk: (stops: DeckWalkStop[]) => void;
 }
+
+/**
+ * One stop on {@link AppState.deckWalk}: **exactly the shape {@link AppState.openAllPrintings}
+ * takes**, so a step is one call and nothing between the deck editor and the modal has to
+ * reassemble a request.
+ *
+ * `deck` is non-nullable where {@link AppState.printingsRequest}'s own `deck` is not, and that
+ * difference is the whole of what this type is: that field is `null` for every surface which is
+ * not a deck row, and a walk is made of nothing but deck rows.
+ *
+ * **Here rather than in `features/decks/deckWalk.ts`, where the stops are built**, for
+ * {@link PaneDeckContext}'s reason: it is an address this store carries between two surfaces that
+ * cannot see each other, and `lib` sits underneath `features`. `deckWalk.ts` re-exports it, so
+ * the callers who reach for it beside `deckWalkStops` still find it there.
+ */
+export interface DeckWalkStop {
+  /** Non-null, unlike `DeckCard.oracleId` — a row with no oracle id is not a stop at all, since
+   *  an orphan whose printing has left the corpus has no printings to walk to. */
+  oracleId: string;
+  /** `deck_cards.name`, denormalized at write time, so an orphaned row still has one. The modal
+   *  captions itself with this rather than fetching a card to say one word. */
+  name: string;
+  /** The row this stop *is*, as every write to it is addressed — all five parts of the grain
+   *  plus the category's name. See {@link PaneDeckContext}. */
+  deck: PaneDeckContext;
+}
+
+/** The one empty walk — see {@link AppState.setDeckWalk} for why there is only one of it. */
+const NO_WALK: DeckWalkStop[] = [];
 
 /**
  * UI state that outlives a single component tree.
@@ -319,4 +377,17 @@ export const useAppStore = create<AppState>((set) => ({
   // here has an opinion about the view, the open card or the open deck behind it.
   openAllPrintings: (printingsRequest) => set({ printingsRequest }),
   closeAllPrintings: () => set({ printingsRequest: null }),
+  // No walk until a deck editor publishes one, and back to this the moment it unmounts.
+  deckWalk: NO_WALK,
+  // **An empty walk is always the same empty array**, which is what makes clearing one that is
+  // already clear free: zustand compares a subscriber's selected slice with `Object.is`, so a
+  // fresh `[]` on every teardown is a new identity and re-renders whoever is reading the walk —
+  // including the closed modal, which selects this field to decide nothing at all. Collapsed
+  // here rather than at the call site so that it holds for every caller rather than for the one
+  // that remembered.
+  //
+  // Deliberately not cleared in `setOpenDeckId` or `setActiveView` beside `paneDeckContext`:
+  // those two are *navigations*, and this is a fact about what is drawn, which only the editor
+  // drawing it knows. A second writer would be a second place for the two to disagree.
+  setDeckWalk: (stops) => set({ deckWalk: stops.length === 0 ? NO_WALK : stops }),
 }));

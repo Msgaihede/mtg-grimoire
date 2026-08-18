@@ -8,6 +8,20 @@ import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
+/**
+ * A control drawn **outside** the panel, one on each side, vertically centred.
+ *
+ * The one shape on this shell that is neither chrome nor body: `AllPrintingsDialog`'s step
+ * chevrons, which walk the modal along the open deck. They are the shell's problem rather than
+ * the host's because of where the room has to come from — see {@link DeckDialogProps.flanks}.
+ */
+export interface DeckDialogFlanks {
+  /** Drawn off the panel's left edge. */
+  left: ReactNode;
+  /** Drawn off its right edge. */
+  right: ReactNode;
+}
+
 export interface DeckDialogProps {
   open: boolean;
   /**
@@ -62,6 +76,50 @@ export interface DeckDialogProps {
    * the string. `max-w-full` below is the shell's, so a width wider than the window still fits.
    */
   width: string;
+  /**
+   * Two controls hung off the panel's sides, or absent — which is what every host but one is.
+   *
+   * **Absent has to be byte-for-byte today's scrim, and that is the reason this is a prop rather
+   * than something a host renders for itself.** Every other dialog in the builder sits on this
+   * shell and none of them may move a pixel because one of them grew a chevron.
+   *
+   * ## Why the shell reserves the room rather than the host hanging a button off the panel
+   *
+   * The panel is `max-w-full` inside a scrim whose padding is the whole inset (`p-4 sm:p-6`), so
+   * at the app's **1024px floor** a wide panel already *is* the window — `AllPrintingsDialog` asks
+   * for `w-[72rem]`, which is 1152. A button positioned off that panel's edge is therefore off the
+   * window: unreachable by pointer, and scrollable to by nothing, since a horizontal scrollbar is
+   * the one thing the 1024px floor forbids. So the scrim becomes a three-column grid —
+   * {@link FLANK_COLUMNS} either side, the panel in `minmax(0,1fr)` between them — and the panel
+   * **narrows** on a small window instead of the flanks leaving it. The rows are untouched:
+   * `grid-rows-[minmax(0,1fr)]` is what makes the panel's `max-h-full` mean anything at all, and
+   * that argument is written out on the scrim below.
+   *
+   * ## Why they are rendered *inside* the panel
+   *
+   * `trapTab` cycles within `e.currentTarget`, which is the panel — so a flank rendered as a
+   * sibling of the panel in the scrim would be reachable by pointer and by nothing else, and would
+   * sit outside the `aria-modal` subtree while being the only way to move the modal on. Inside it,
+   * each flank is an ordinary tab stop of the dialog it belongs to. They are absolutely positioned
+   * out over the reserved columns, which is legal because **this panel does not clip its content**
+   * — the guarantee stated at the panel's own site, and this is the first caller to depend on it.
+   */
+  flanks?: DeckDialogFlanks;
+  /**
+   * A second keydown handler on the **panel**, composed with `trapTab` rather than replacing it.
+   *
+   * For a host whose dialog answers keys of its own — today, `AllPrintingsDialog`'s
+   * ArrowLeft/ArrowRight walk along the open deck. **On the panel and never on `window`**, which
+   * is the whole reason it is a prop here: a window listener would let an open modal arrow-drive
+   * the view behind it, and let that view's own arrow handling reach into the modal. The panel
+   * holding the caret is the only thing entitled to the press.
+   *
+   * `trapTab` runs first and unconditionally, so the modality guarantee cannot be spent by a host
+   * handler that throws or that stops the event. The two never contend for a key — one reads Tab,
+   * the other must not — and a host that wants to yield to something inside the dialog reads
+   * `e.defaultPrevented` for itself.
+   */
+  onPanelKeyDown?: (e: React.KeyboardEvent<HTMLElement>) => void;
   /**
    * Escape, and the close control: hand focus back to whatever opened the dialog, then close.
    *
@@ -121,6 +179,13 @@ export interface DeckDialogProps {
  *   hosts used to stand here and had already drifted once; it is a number the imports answer.)
  *   A body is expected to be, or to contain, `min-h-0 flex-1 overflow-y-auto` with its own
  *   padding; the panel is the `flex flex-col` that makes that work.
+ * * **A host that asks for nothing gets exactly the dialog it got before the last prop landed.**
+ *   {@link DeckDialogProps.flanks} and {@link DeckDialogProps.onPanelKeyDown} are both absent for
+ *   every host but one, and both are written so that absent leaves the scrim's and the panel's
+ *   class strings character for character what they were. That is the price of one shell under
+ *   every dialog in the builder: a prop added for one surface may not move the rest of them (how
+ *   many that is, is a number the imports answer), and `DeckDialog.test.tsx` pins the untouched
+ *   shape rather than trusting the reading.
  * * **The presence subtree reaches the body.** `children` render inside the same
  *   `AnimatePresence` child the panel does, so a `useIsPresent()` in a host's body is false from
  *   the render that starts the exit — which is what `useDeckField`'s commit-on-close is driven
@@ -136,6 +201,8 @@ export function DeckDialog({
   subtitle,
   closeLabel,
   width,
+  flanks,
+  onPanelKeyDown,
   onDismiss,
   onClose,
   children,
@@ -168,6 +235,8 @@ export function DeckDialog({
           subtitle={subtitle}
           closeLabel={closeLabel}
           width={width}
+          flanks={flanks}
+          onPanelKeyDown={onPanelKeyDown}
           onDismiss={onDismiss}
           onClose={onClose}
         >
@@ -178,6 +247,22 @@ export function DeckDialog({
   );
 }
 
+/**
+ * The room a flank is given on each side of the panel, as the scrim's two outer columns.
+ *
+ * **3.5rem is one 36px control plus the 8px it stands off the panel, plus 12px of slack** — the
+ * app's own control height, which is what `AllPrintingsDialog`'s chevrons are drawn at and what
+ * every other button in the deck builder measures. The slack is the window edge's: at the 1024px
+ * floor the scrim's `sm:p-6` is already 24px, so a chevron never sits against the glass.
+ *
+ * Written out whole rather than composed, because **Tailwind scans source text for whole class
+ * names** and a template built from a length matches nothing the scanner knows — it emits no rule
+ * at all, silently, and only in a build. The panel takes `col-start-2` to land between them:
+ * `place-items-center` centres a grid item in its area, it does not choose the area, and with the
+ * panel as the scrim's only child auto-placement would put it in the first column.
+ */
+const FLANK_COLUMNS = "grid-cols-[3.5rem_minmax(0,1fr)_3.5rem]";
+
 /** The chrome proper — mounted only while it is open, which is what makes a body's state a
  *  session rather than something an effect has to clear. */
 function Panel({
@@ -186,6 +271,8 @@ function Panel({
   subtitle,
   closeLabel,
   width,
+  flanks,
+  onPanelKeyDown,
   onDismiss,
   onClose,
   children,
@@ -243,6 +330,12 @@ function Panel({
       // above came from a browser.
       className={cn(
         "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75 p-4 sm:p-6",
+        // **Only when a host asked for flanks**, and the `undefined` test is doing real work: with
+        // no flanks this string has to be what it was before the prop existed, because every other
+        // dialog in the builder is drawn by this line and a third column would narrow all of them
+        // to buy room nobody uses. See {@link DeckDialogProps.flanks} for why the room is bought
+        // here rather than off the panel's edge.
+        flanks !== undefined && FLANK_COLUMNS,
         !present && "pointer-events-none",
         // Above every anchored popup and above the editor's drag tray: a dialog opened over the
         // editor must not be painted under a menu the reader left open behind it. Below `gate`,
@@ -280,7 +373,17 @@ function Panel({
         // cross, and `trapTab` below keeps the caret inside to match. The claim is true for
         // both input methods, which is the only condition under which it may be made — and if
         // either half is ever removed, this attribute goes with it.
-        onKeyDown={trapTab}
+        //
+        // **`trapTab` first and unconditionally**, then whatever the host answers keys with. The
+        // trap is half of the `aria-modal` claim directly above, so it may not be made
+        // conditional on a prop, on an order, or on a host handler behaving — and it costs
+        // nothing to compose, because it reads its panel off `e.currentTarget` rather than out of
+        // a ref. A fresh closure per render is fine here: React attaches one listener at the root
+        // and the panel re-renders about as often as the dialog opens.
+        onKeyDown={(e) => {
+          trapTab(e);
+          onPanelKeyDown?.(e);
+        }}
         // **`max-h-full` is the one height rule, settled 2026-08-16.** The three dialogs folded
         // into this shell arrived carrying `max-h-[85%]` and `max-h-[80%]` against this
         // `max-h-full`, which is three answers to one question — and the percentages are the
@@ -297,14 +400,25 @@ function Panel({
         // together; whichever of them is edited next, the panel's height is what the edit is
         // about.
         //
-        // **This panel does not clip its content, and nothing on the shell has needed it to**:
-        // two of the three dialogs folded in on 2026-08-16 arrived carrying a clip of their own
-        // and lost nothing by dropping it, because no body here paints a background out to the
-        // rounded corners — the first one that does will square them off on every dialog at
-        // once rather than on its own, which is the kind of thing worth knowing before the
-        // discovery instead of after it.
+        // **This panel does not clip its content, and something on the shell depends on it now**
+        // (2026-08-18). Two of the three dialogs folded in on 2026-08-16 arrived carrying a clip
+        // of their own and lost nothing by dropping it, because no body here paints a background
+        // out to the rounded corners — the first one that does will square them off on every
+        // dialog at once rather than on its own. What has changed is that the absence stopped
+        // being merely free: {@link DeckDialogProps.flanks} positions its controls *outside* this
+        // box, so an `overflow-hidden` added here would not square a corner, it would delete the
+        // printings modal's only pointer affordance for walking the deck. Anything that needs a
+        // clip needs it on a box inside the panel.
+        //
+        // `relative` and `col-start-2` are the flanked case's and are absent otherwise, for
+        // {@link DeckDialogProps.flanks}' reason — every other dialog's panel keeps exactly the
+        // class string it had. `relative` because the flanks are positioned against *this* box
+        // rather than against the scrim, so the pair travels with the panel at every width; the
+        // scale tween happens to establish a containing block too, and relying on that would tie
+        // a layout to whether an animation is at rest.
         className={cn(
           "flex max-h-full max-w-full flex-col rounded-xl border border-border bg-bg shadow-2xl",
+          flanks !== undefined && "relative col-start-2",
           width,
           FOCUS,
         )}
@@ -339,6 +453,22 @@ function Panel({
             <X className="size-4" aria-hidden="true" />
           </button>
         </header>
+
+        {/* The flanks, out over the columns the scrim reserved — **inside the panel's DOM and
+            outside its box**, which is the arrangement `trapTab` forces and which
+            {@link DeckDialogProps.flanks} spells out. `right-full`/`left-full` rather than a
+            negative offset, so the pair is placed by the panel's own edges and follows it as it
+            narrows; `top-1/2 -translate-y-1/2` centres each against the panel's height, whatever
+            the body inside it turned out to be.
+
+            After the header so a Tab lands on the ✕ first — the way out of a dialog is the stop a
+            reader expects to meet first, and these two are navigation within it. */}
+        {flanks !== undefined && (
+          <>
+            <div className="absolute right-full top-1/2 mr-2 -translate-y-1/2">{flanks.left}</div>
+            <div className="absolute left-full top-1/2 ml-2 -translate-y-1/2">{flanks.right}</div>
+          </>
+        )}
 
         {/* No scroll container here: see this file's doc. The body is the host's, and it brings
             its own `min-h-0 flex-1 overflow-y-auto` and its own padding. */}

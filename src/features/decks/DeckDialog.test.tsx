@@ -287,4 +287,129 @@ describe("DeckDialog", () => {
     // The render that starts the exit, seen from inside the body — the panel is still mounted.
     expect(seen).toContain(false);
   });
+
+  /**
+   * **A host that asks for nothing gets the dialog every other host already had.**
+   *
+   * `flanks` is one surface's — `AllPrintingsDialog`'s step chevrons — and every other dialog in
+   * the builder is drawn by the same two class strings. So the absent case is asserted as an
+   * absence rather than left to a reading of the source: a third grid column narrows the panel on
+   * every dialog at once to reserve room nobody is using, and `relative` on the panel moves the
+   * containing block out from under any absolutely positioned thing a body draws. Neither would
+   * fail anything else in this suite, and **jsdom lays nothing out**, so neither would fail
+   * anything anywhere.
+   */
+  it("leaves the scrim and the panel untouched when no flanks were asked for", async () => {
+    open();
+    const dialog = await panel();
+    const scrim = dialog.parentElement as HTMLElement;
+
+    expect(scrim.className).not.toMatch(/grid-cols-/);
+    expect(dialog).not.toHaveClass("relative");
+    expect(dialog).not.toHaveClass("col-start-2");
+    // Header and body, and nothing hung off the sides.
+    expect(dialog.children).toHaveLength(2);
+  });
+
+  /**
+   * The flanked case: **room reserved on the scrim, controls rendered inside the panel.**
+   *
+   * The split is the whole design and neither half works alone. The room has to be the *scrim's*,
+   * because the panel is `max-w-full` inside a padded scrim — at the app's 1024px floor a wide
+   * panel already is the window, so a control hung off its edge is off the glass. And the control
+   * has to be inside the **panel**, because `trapTab` cycles within `e.currentTarget`: a flank
+   * rendered as a sibling of the panel would be pointer-only and would sit outside the
+   * `aria-modal` subtree while being the only way to move the dialog on.
+   *
+   * **The classes are all this can check.** jsdom has no layout engine, so every box here is 0px
+   * and nothing about the three columns, the panel narrowing or where a chevron lands is visible
+   * to this suite. Those are the live pass's, at 1024 and at 1280.
+   */
+  it("reserves a column either side and renders the flanks inside the panel", async () => {
+    open({
+      flanks: {
+        left: <button type="button">Previous card</button>,
+        right: <button type="button">Next card</button>,
+      },
+    });
+    const dialog = await panel();
+    const scrim = dialog.parentElement as HTMLElement;
+
+    expect(scrim).toHaveClass("grid-cols-[3.5rem_minmax(0,1fr)_3.5rem]");
+    // …and the rows are untouched: that class is what makes the panel's `max-h-full` mean
+    // anything, and a flanked dialog is clamped to the window exactly like an unflanked one.
+    expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]");
+    expect(dialog).toHaveClass("relative");
+    expect(dialog).toHaveClass("col-start-2");
+
+    const previous = screen.getByRole("button", { name: "Previous card" });
+    const next = screen.getByRole("button", { name: "Next card" });
+    expect(dialog.contains(previous)).toBe(true);
+    expect(dialog.contains(next)).toBe(true);
+  });
+
+  /**
+   * A flank is an ordinary tab stop of the dialog, which is the point of rendering it in there.
+   *
+   * The cycle is the panel's own: ✕ first — the way out is the stop a reader expects to meet
+   * first — then the two flanks, then whatever the body drew, then back round to the ✕. That last
+   * step is the one worth driving: it is `trapTab` still holding the caret with two more controls
+   * in the panel than it had before.
+   */
+  it("puts the flanks in the panel's own tab cycle", async () => {
+    open({
+      flanks: {
+        left: <button type="button">Previous card</button>,
+        right: <button type="button">Next card</button>,
+      },
+    });
+    const dialog = await panel();
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Close deck settings" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Previous card" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Next card" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "A control inside the body" })).toHaveFocus();
+    // Off the end and round, rather than out into the view behind the scrim.
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Close deck settings" })).toHaveFocus();
+  });
+
+  /**
+   * **The host's keydown is composed with `trapTab`, never in place of it.**
+   *
+   * Both halves are asserted because either alone is a shell that lies: a host handler that never
+   * fires is a dialog with no keys of its own, and a `trapTab` displaced by one is an
+   * `aria-modal` claim that is false for the keyboard — which is the half no reader with a mouse
+   * would ever notice.
+   *
+   * On the **panel** and not on `window`, which is why this can be driven at all: the caret is in
+   * the dialog, so the press reaches the panel by bubbling from whatever holds it.
+   */
+  it("runs the host's keydown as well as the tab trap", async () => {
+    const onPanelKeyDown = vi.fn();
+    open({ onPanelKeyDown });
+    const dialog = await panel();
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(onPanelKeyDown).toHaveBeenCalledTimes(1);
+    expect(onPanelKeyDown.mock.calls[0][0]).toMatchObject({ key: "ArrowRight" });
+
+    // Tab reaches it too — the composition hands the host every press — and the trap still holds
+    // the caret, which is the assertion that says `trapTab` ran first and was not replaced.
+    //
+    // **The keys are counted rather than the calls**, and the difference is `userEvent`'s rather
+    // than this shell's: `tab({ shift: true })` presses Shift *and* Tab, so a composed handler
+    // that is working correctly is called twice by that one line. Asserting a call count here
+    // pins a fact about the test driver — it was `2`, and the handler saw 3 — where what this is
+    // about is that a `Tab` press reaches the host at all.
+    await userEvent.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "A control inside the body" })).toHaveFocus();
+    expect(onPanelKeyDown.mock.calls.map(([e]) => e.key)).toEqual(["ArrowRight", "Shift", "Tab"]);
+  });
 });

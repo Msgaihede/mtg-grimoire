@@ -212,6 +212,31 @@ Every one of these has its measurement and its story in
   at 1280×800 and 2322 vs 2297 at 2560×1400 — because the panel's width does not move with the
   window. Only a live pass finds this one; the figures and the fix are in
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **A surface that walks its selection with the arrow keys says so, or the card pane takes the
+  caret on the first press.** `CardDetailPane` renders its body keyed on the open card and that
+  body focuses the pane as it mounts — the right contract for a card a reader *pressed*, and the
+  wrong one for one they arrowed onto, because the caret has to stay on the thing being walked for
+  the second press to have anywhere to come from. `src/lib/caretWalk.ts` is the note that tells the
+  two apart: `walkingToCard(id)` immediately **before** the store write, since the write is what
+  re-keys the pane. Three surfaces call it — the search and collection walls, the deck's piles, the
+  printings modal — and it shipped broken on all three at once, the modal's press putting the caret
+  *outside an `aria-modal` dialog* where `trapTab` could not get it back.
+  **The note is idempotent and must stay idempotent**: `main.tsx` wraps the app in
+  `React.StrictMode`, which runs a mount effect **twice** in development, so a note that cleared
+  itself on read was consumed by the first invocation and the second took the caret anyway — a
+  fix that looked like a fix, and one a **release build would have passed** while `tauri dev`
+  failed. Every measurement:
+  [frontend-design.md](../docs/reference/frontend-design.md).
+- **`scrollIntoView({ block: "nearest" })` parks an element flush against the scrollport, and a
+  scrollport is the padding box — so a scroller's own padding buys a focus ring nothing.** The
+  ring `FOCUS` draws stands 4px proud of the border box and is clipped there, which is
+  `DROP_MARK_ROOM`'s rule (`src/lib/dropMarks.ts`) reached from the other end: that constant is
+  padding for a mark drawn *at rest*, and this is a **scroll margin** for the same mark at the
+  moment something scrolls to it. `CardGrid`'s tile carries `scroll-m-1.5` — 6px, the same number,
+  written once in each place so they cannot drift. Two more things the live pass settled: scroll
+  **the tile**, not the button inside it that takes the caret, or the caption under the button
+  hangs past the edge; and jsdom leaves `scrollIntoView` undefined, so none of this can go red in
+  the suite.
 - **`aria-disabled`, never the `disabled` attribute**, on anything that greys as the reader
   types — a `disabled` button leaves the tab order. The one exception is a native `<option>`.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser

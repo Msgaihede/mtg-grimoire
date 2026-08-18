@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import type { DeckWalkStop } from "@/features/decks/deckWalk";
 import { useDeck } from "@/features/decks/useDeck";
 import type { PrintingsResponse } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
@@ -88,6 +89,58 @@ function slotOf(deckId: number, cardId: string): PaneDeckContext {
 }
 
 /**
+ * One deck's live rows as a walk the modal can step along — **the shape `DeckEditor` publishes.**
+ *
+ * `store.deckWalk` is the open editor's cards in the order the desk is drawing them, which depends
+ * on that editor's grouping, its sorting and its filter; the modal is mounted at `App` level and
+ * has no way to ask, so the editor hands it over. A story has no editor, so it writes the field
+ * directly — the *order* is `DeckEditor`'s claim and belongs to that component's tests, and what
+ * is staged here is only the fact that there is a walk at all.
+ *
+ * The seed's own row order stands in for the desk's. It is built the way {@link slotOf} builds one
+ * slot and for the same reason: **the fake stores table rows and derives DTOs**, so a deck card row
+ * carries a category *id* and a denormalised name and neither the category's word nor the card's
+ * oracle id — those are looked up, exactly as the backend's own SELECT joins them.
+ *
+ * A row whose printing has left the corpus is dropped rather than carried: an orphan has no oracle
+ * id, and an oracle id is the whole of what this modal is opened by.
+ */
+function deckWalkOf(deckId: number): DeckWalkStop[] {
+  const db = seed("starter");
+  const stops: DeckWalkStop[] = [];
+  for (const row of db.deckCards) {
+    if (row.deckId !== deckId || row.variant !== "live") continue;
+    const card = db.cards.find((c) => c.id === row.cardId);
+    const category = db.deckCategories.find((c) => c.id === row.categoryId);
+    if (!card || !category) continue;
+    stops.push({
+      oracleId: card.oracleId,
+      name: row.name,
+      deck: {
+        deckId,
+        categoryId: category.id,
+        categoryName: category.name,
+        cardId: row.cardId,
+        variant: "live",
+        finish: row.finish,
+      },
+    });
+  }
+  return stops;
+}
+
+/**
+ * Deck 2's walk, and the stop {@link SteppingTheDeck} opens on.
+ *
+ * **The second card rather than a card named here**, which is what keeps the story honest against
+ * a seed that gains or loses rows: index 1 has a neighbour on both sides by construction, so both
+ * chevrons are live and neither end state is being shown by accident. Naming a card instead would
+ * be a claim about where that card sits in somebody else's deck.
+ */
+const DECK_2_WALK = deckWalkOf(2);
+const WALK_FROM = DECK_2_WALK[1];
+
+/**
  * A page the fake cannot answer with: **the real rows, under a count no fixture can reach.**
  *
  * The backend truncates a printings list and reports the untruncated count beside it, so the
@@ -134,6 +187,7 @@ function Printings({
   name,
   deckId,
   heldCardId,
+  walkDeckId,
   truncatedTo,
 }: {
   /** The oracle card whose printings are being asked for. */
@@ -146,6 +200,9 @@ function Printings({
   deckId: number | null;
   /** The printing that deck row plays: the swap's `from`, and the tile the wall rings. */
   heldCardId: string | null;
+  /** Stage an open deck editor publishing this deck's walk, or `null` for no editor at all —
+   *  which is what every surface outside the deck builder opens the modal from. */
+  walkDeckId: number | null;
   /** Stage a truncated page by claiming this many printings exist. `null` leaves the fake to
    *  answer — see {@link truncatedPage} for why the count cannot come from it. */
   truncatedTo: number | null;
@@ -162,6 +219,10 @@ function Printings({
         truncatedPage(oracleId, truncatedTo),
       );
     }
+    // **Written on every story, `[]` included**, rather than only where a walk is wanted: the
+    // store is the one global `.storybook/` cannot make per-story, so a story that said nothing
+    // here would inherit whichever deck the last one staged and grow chevrons nobody asked for.
+    useAppStore.getState().setDeckWalk(walkDeckId === null ? [] : deckWalkOf(walkDeckId));
     useAppStore.getState().openAllPrintings({ oracleId, name, deck: opened });
     return opened;
   });
@@ -203,13 +264,17 @@ const meta = {
     name: REPRINTED.name,
     deckId: null,
     heldCardId: null,
+    walkDeckId: null,
     truncatedTo: null,
   },
   // Keyed, so changing the card, the opener or the count in Controls mounts a fresh host and the
   // initializer runs again — rather than writing to a store and a cache the mounted modal is
   // already subscribed to.
   render: (args) => (
-    <Printings key={`${args.oracleId}:${args.deckId}:${args.truncatedTo}`} {...args} />
+    <Printings
+      key={`${args.oracleId}:${args.deckId}:${args.walkDeckId}:${args.truncatedTo}`}
+      {...args}
+    />
   ),
   parameters: {
     // The wall this file is about. `starter`'s most reprinted card has four printings; see
@@ -553,5 +618,69 @@ export const NoMatches: Story = {
 
     await expect(await modal.findByText("8 printings")).toBeInTheDocument();
     await expect(modal.queryByText("No printings match these filters.")).toBeNull();
+  },
+};
+
+/**
+ * Opened from a deck row with the editor open behind it — **the modal as a window onto the deck
+ * rather than onto one card.**
+ *
+ * A chevron on each side, and ArrowLeft/ArrowRight beside them, move it to the previous and next
+ * card in deck order. That order is `store.deckWalk`, published by `DeckEditor` because it depends
+ * on the editor's grouping, its sorting and its filter and this component is mounted at `App`
+ * level with no way to ask. A reader checking which printing of each card they have sleeved up
+ * walks the whole deck without closing anything.
+ *
+ * **Everything hangs off one index** — where `request.deck` sits on that walk. It is `-1` from a
+ * search tile, from the collection and from a deck the editor is not showing, and in every one of
+ * those there is no walk, so there are no chevrons and the arrow keys are not the modal's. Every
+ * other story on this page is that case: {@link FromADeckRow} is opened from a deck row with no
+ * editor behind it, and draws none.
+ *
+ * **A step is two writes.** The modal moves, and so does the desk behind the scrim — the gold ring
+ * on the deck card and the card pane docked beside it — so closing after six steps leaves the
+ * reader on the card they walked to rather than the one they started from, and a press on a tile
+ * goes on writing the row the desk is marking. The second write is the one nothing in this frame
+ * draws, so the play reads it out of the store.
+ *
+ * **The chevrons are named for what they land on**, because a chevron says nothing on its own; at
+ * the two ends of the walk the matching one is drawn and `disabled` rather than dropped, so the
+ * first step is never the moment a control appears under the reader's pointer.
+ *
+ * The box above the modal is the surface the reader was on, and it keeps naming the row the modal
+ * was *opened* from — it is scenery for the swap stories rather than a second readout of the walk.
+ */
+export const SteppingTheDeck: Story = {
+  args: {
+    oracleId: WALK_FROM.oracleId,
+    name: WALK_FROM.name,
+    deckId: WALK_FROM.deck.deckId,
+    heldCardId: WALK_FROM.deck.cardId,
+    walkDeckId: 2,
+  },
+  parameters: { fake: { seed: "starter" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("dialog", { name: WALK_FROM.name });
+
+    const back = canvas.getByRole("button", {
+      name: `Previous card in the deck, ${DECK_2_WALK[0].name}`,
+    });
+    const forward = canvas.getByRole("button", {
+      name: `Next card in the deck, ${DECK_2_WALK[2].name}`,
+    });
+    await expect(back).toBeEnabled();
+    await expect(forward).toBeEnabled();
+
+    await userEvent.click(forward);
+
+    // The modal re-captions itself: it is still the same dialog, about the next card.
+    await expect(await canvas.findByRole("dialog", { name: DECK_2_WALK[2].name })).toBeVisible();
+    // And the desk followed. Read out of the store because nothing in this frame draws the deck
+    // editor — the ring and the card pane are what these two fields are.
+    await waitFor(async () => {
+      await expect(useAppStore.getState().paneDeckContext).toEqual(DECK_2_WALK[2].deck);
+    });
+    await expect(useAppStore.getState().selectedCardId).toBe(DECK_2_WALK[2].deck.cardId);
   },
 };

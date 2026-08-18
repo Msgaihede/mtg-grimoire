@@ -464,6 +464,12 @@ export function CollectionPage() {
               zoomSection="collection"
               selectedId={selectedCardId}
               onSelect={selectCard}
+              // The same arrow-key walk the search wall takes, on the same terms: `selectedId`
+              // and `onSelect` here are both the store field the card pane reads, so a press
+              // moves the pane rather than only an outline. The two walls that are a *page* pass
+              // this and the two that are a panel do not — `CardGrid`'s `arrowNav` is where that
+              // split is argued.
+              arrowNav
               onNeedNextPage={onNeedNextPage}
               // The same mark search draws, and only the mark: the corner and the felt
               // behind it are the wall's, so the two views cannot drift into two shades.

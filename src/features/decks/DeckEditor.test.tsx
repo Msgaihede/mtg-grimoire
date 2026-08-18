@@ -525,6 +525,9 @@ beforeEach(() => {
     selectedCardId: null,
     paneDeckContext: null,
     printingsRequest: null,
+    // The order the printings modal steps through, published by this editor. Reset with the rest
+    // so a test reading it is reading its own editor's answer and not the previous one's.
+    deckWalk: [],
   });
   deckGet
     .mockReset()
@@ -4648,5 +4651,105 @@ describe("DeckEditor reordering the deck's piles", () => {
     await screen.findByRole("region", { name: "Mana value 1" });
 
     expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **The order the printings modal's arrow keys step through, and why this component is what
+ * publishes it.**
+ *
+ * `AllPrintingsDialog` renders at `App` level, a sibling of the shell, so no context reaches it
+ * from in here — and it could not recompute the order even if one did: `groupBy` and `sortBy` are
+ * this component's `useState` and the rows are `shown`, the deck narrowed by the toolbar's filter
+ * box and tag chips. So the editor writes `deckWalk` and the modal reads it, which is what the
+ * two assertions about the filter and the unmount below are really about.
+ */
+describe("DeckEditor — the walk it publishes", () => {
+  /**
+   * Three cards in three piles, chosen so the drawn order is **not** the order `buildGroups`
+   * hands the groups over in: the Sideboard's `sortOrder` is 1 and the Commander's is 2, so a
+   * walk that read `groups` straight through would put Pyroblast in the middle. `splitRail` pins
+   * the Sideboard to the rail, where the reader is looking at it.
+   */
+  const SPREAD = [
+    bolt(),
+    card({ name: "Kenrith, the Returned King", categoryKind: "commander" }),
+    card({ name: "Pyroblast", categoryKind: "side" }),
+  ];
+
+  const walk = () => useAppStore.getState().deckWalk;
+
+  it("publishes the deck in the order the desk draws it, the rail last", async () => {
+    deckGet.mockResolvedValue(detail({}, SPREAD));
+    await open();
+
+    await waitFor(() =>
+      expect(walk().map((stop) => stop.name)).toEqual([
+        "Lightning Bolt",
+        "Kenrith, the Returned King",
+        "Pyroblast",
+      ]),
+    );
+  });
+
+  /**
+   * Each stop is the whole five-part address plus the deck — the same slot `deckSlotOf` builds
+   * for the card pane and for the menu's own `View all printings`, so a step is one
+   * `openAllPrintings` call and a press inside the modal rewrites the row that was stepped to.
+   *
+   * `toEqual`, because the failure this guards is an address naming four parts, and
+   * `toMatchObject` is exactly the assertion that cannot see a missing one. `deckId` is the one
+   * part no `DeckCard` carries, so it is also the one this test — rather than `deckWalk.test.ts`
+   * — is the only place to check.
+   */
+  it("addresses every stop as a deck row", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt()]));
+    await open();
+
+    await waitFor(() =>
+      expect(walk()).toEqual([
+        {
+          oracleId: "o-Lightning Bolt",
+          name: "Lightning Bolt",
+          deck: {
+            deckId: 4,
+            categoryId: MAIN,
+            categoryName: "Main deck",
+            cardId: "c-Lightning Bolt",
+            variant: "live",
+            finish: null,
+          },
+        },
+      ]),
+    );
+  });
+
+  /**
+   * **The walk is what the reader is looking at, not what the deck holds** — which is the whole
+   * argument for it being published rather than derived on the modal's side. Nothing outside this
+   * component knows that three letters in the filter box have taken two of these cards off the
+   * desk, so a modal walking the deck would step onto a card that is not on screen.
+   */
+  it("narrows with the toolbar's filter", async () => {
+    deckGet.mockResolvedValue(detail({}, SPREAD));
+    await open();
+    await waitFor(() => expect(walk()).toHaveLength(3));
+
+    screen.getByLabelText("Filter this deck").focus();
+    await userEvent.keyboard("bolt");
+
+    await waitFor(() => expect(walk().map((stop) => stop.name)).toEqual(["Lightning Bolt"]));
+  });
+
+  /** And it goes when the editor does. A walk left behind would step a modal opened from the
+   *  Collection into the piles of a deck nobody has open. */
+  it("clears the walk when the editor closes", async () => {
+    deckGet.mockResolvedValue(detail({}, SPREAD));
+    const view = await open();
+    await waitFor(() => expect(walk()).toHaveLength(3));
+
+    view.unmount();
+
+    expect(walk()).toEqual([]);
   });
 });
