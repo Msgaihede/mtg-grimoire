@@ -637,11 +637,21 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   at all, so `EMPTY_HINT_LIST` previews **33 hint misses** where it previewed 33 unresolved cards.
   That is the honest trade and the alternative was 33 cards nothing found.
 - **The export side is the mirror, and `src/features/decks/decklists.test.ts` is what holds the two
-  writers and the parser to each other**: three real decklists crossed with six formats
-  (`plain · mtgo · arena · moxfield · archidekt · csv`), driven text → planner → writer → parser,
-  with **every readable format a fixed point** — export → import → export byte-identical. `csv` is
-  write-only and is excluded from that table **by name**, so a format dropped out of it by accident
-  fails rather than shrinking the matrix quietly. Rust's only part in any of it is
+  writers and the parser to each other**: three real decklists crossed with every format
+  (`plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`), driven text → planner →
+  writer → parser, with **every readable format a fixed point** — export → import → export
+  byte-identical. **Two of them are write-only and are excluded from that table by name**, so a
+  format dropped out of it by accident fails rather than shrinking the matrix quietly. `csv`,
+  because nothing in `parse.ts` reads a comma-separated decklist and teaching it one would be a
+  second grammar rather than a rule inside the one there is. `tcgplayer` (added 2026-08-18),
+  because its line is addressed to a shopping cart rather than to us: TCGplayer Mass Entry's most
+  specific shape is `2 Lightning Bolt [2X2] 117`, and `parse.ts`'s `BRACKET` is anchored to the
+  end of the line — so a bracket with a collector number after it is not a bracket to that parser
+  and the whole tail lands in the card's name. `format.test.ts` measures that (`Lightning Bolt
+  [LEA] 161` comes back as one card *name*) rather than leaving the exclusion as a claim. It is
+  also the one flat format that keeps a switched-off pile: Arena and MTGO cut theirs because a
+  maybeboard is an illegal import at the other end, while a Mass Entry list is a cart and the pile
+  a reader switched off is usually what they still have to buy. Rust's only part in any of it is
   `export_write_file` taking the path `save()` answered, for `deck_import_read_file`'s reason one
   shelf up: **no `fs:` permission is granted anywhere**.
 - **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a

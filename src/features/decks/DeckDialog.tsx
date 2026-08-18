@@ -223,8 +223,26 @@ function Panel({
       // A **scrim**: every anchored layer in this app leaves the view behind it live, and this
       // one covers the window, which is what makes `aria-modal` below honest rather than a
       // claim — see the panel.
+      //
+      // **`grid-rows-[minmax(0,1fr)]` is what makes the panel's `max-h-full` mean anything**
+      // (2026-08-18). A percentage `max-height` on a grid item resolves against its *grid area*,
+      // and the area here was an **implicit** row — which is `auto`, and an `auto` row sizes to
+      // its own content. So the clamp was circular: the row grew with the panel, `100%` of it
+      // grew too, and nothing was ever clamped. Measured in a headless browser at a 708px
+      // viewport with a 140-line export: the panel drew **2963px**, its body's
+      // `overflow-y-auto` never scrolled because it had all the room it asked for, and Copy and
+      // Save as… sat at y≈2930 — off the window, unreachable by pointer or wheel. Naming one
+      // explicit row bounds the area to the scrim's content box: the same panel draws 660px, the
+      // export's preview scrolls its own 2754px, and the buttons are on screen. The `minmax(0,`
+      // half is not decoration — a bare `1fr` is `minmax(auto, 1fr)`, whose `auto` floor is the
+      // content again, which is the bug spelled a second way.
+      //
+      // It reached every dialog on this shell rather than the one it was reported against, and
+      // **jsdom cannot see any of it**: it has no layout engine, so every box is 0 and this whole
+      // class of defect is invisible to the suite. The shell's test pins the class; the numbers
+      // above came from a browser.
       className={cn(
-        "fixed inset-0 grid place-items-center bg-bg/75 p-4 sm:p-6",
+        "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75 p-4 sm:p-6",
         !present && "pointer-events-none",
         // Above every anchored popup and above the editor's drag tray: a dialog opened over the
         // editor must not be painted under a menu the reader left open behind it. Below `gate`,
@@ -272,6 +290,12 @@ function Panel({
         // grows with the window: at 800px it is 16 + ~115, at 1400px it is 24 + ~206. One rule —
         // the scrim's padding is the inset, and the panel takes what is left — is a constant gap
         // at every size, which is what the four dialogs already on this shell draw.
+        //
+        // **And for its first two days it clamped nothing at all** — `100%` of an implicit,
+        // auto-sized grid row is `100%` of the panel's own content. The scrim's
+        // `grid-rows-[minmax(0,1fr)]` is the other half of this rule and the two only work
+        // together; whichever of them is edited next, the panel's height is what the edit is
+        // about.
         //
         // **This panel does not clip its content, and nothing on the shell has needed it to**:
         // two of the three dialogs folded in on 2026-08-16 arrived carrying a clip of their own

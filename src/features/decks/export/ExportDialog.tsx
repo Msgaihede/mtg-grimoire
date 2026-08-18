@@ -22,6 +22,16 @@
  * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way
  * `DeckCoverPicker`'s and `ImportDeckDialog`'s tests stub `open`.
  *
+ * **The preview is a disclosure and opens shut** (2026-08-18). A decklist is the tallest thing
+ * this dialog draws and the least of what a reader came for — the two presses that do the work
+ * are Copy and Save as…, and a whole-deck export put both of them below a screenful of text on
+ * the way to them. Shut, the dialog is the format row, the toggle and the buttons. It really is
+ * shut rather than hidden: the `<pre>` is unmounted, because a hidden block of text is the shape
+ * that lets a test assert a line no reader can see. The reported bug that arrived with it was
+ * *not* this file's, though, and the two are worth keeping apart — the panel itself grew past
+ * the window and took the buttons off screen with it, which is `DeckDialog`'s scrim and is fixed
+ * there for every dialog on the shell.
+ *
  * **A cancelled save answers `null`, and that is the one bug worth naming in prose.** `save()`
  * resolves `null` on Cancel, and writing *that* string to disk — `ipc.exportWriteFile(path,
  * text)` called with `path` still `null` — is exactly the trap `deck_set_cover_image`'s callers
@@ -47,8 +57,9 @@
  * reports a rejection through the same `role="alert"` line `handleSaveAs`'s refusal uses, rather
  * than swallowing it — the "reported, not fatal" rule above is not just the save button's.
  */
-import { useCallback, useMemo, useState, type JSX } from "react";
+import { useCallback, useId, useMemo, useState, type JSX } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { ChevronRight } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
@@ -122,6 +133,20 @@ function Body({
   suggestedFileName: string;
 }) {
   const [format, setFormat] = useState<ExportFormat>("plain");
+  /**
+   * The preview's disclosure, **shut on every open**.
+   *
+   * A decklist is the tallest thing this dialog can draw and the least of what a reader came for
+   * — the two presses that do the work are Copy and Save as…, and a 100-card deck put both of
+   * them a screenful below the text on the way to them. Shut, the whole dialog is the format row,
+   * the toggle and the two buttons; the count in the toggle's own label is what a shut preview
+   * still owes the reader, so "nothing is showing" is never mistaken for "nothing is there".
+   *
+   * State rather than a `<details>` element: the preview is **unmounted** while it is shut, and
+   * `<details>` keeps its contents in the DOM. A hidden `<pre>` full of text is exactly the shape
+   * that lets a test assert a line no reader can see.
+   */
+  const [showList, setShowList] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   /** One line for both failures a press here can produce — a refused clipboard write and a
@@ -133,6 +158,19 @@ function Body({
   /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
    *  it is a claim about the text on screen and goes stale the moment that changes. */
   const omitted = useMemo(() => omittedCount(cards, format), [cards, format]);
+  /**
+   * Lines of the **file**, which is what the toggle names while the preview is shut.
+   *
+   * Rows of the text rather than cards in the pile, and the two really do differ: a sectioned
+   * format writes headings and blank lines between them, and CSV opens on a header. The number
+   * is a fact about the text under the toggle, so it is measured on that text — and it moves with
+   * the format for the same reason the omission line does. `trimEnd` takes off the single
+   * trailing newline every non-empty export ends with, which would otherwise count as a line
+   * nobody wrote; an empty export is 0 rather than 1.
+   */
+  const lines = useMemo(() => (text === "" ? 0 : text.trimEnd().split("\n").length), [text]);
+  /** Names the preview for the toggle's `aria-controls` — see the button. */
+  const previewId = useId();
 
   const handleCopy = useCallback(() => {
     setError(null);
@@ -168,8 +206,8 @@ function Body({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-      {/* A radio group over every format `EXPORT_FORMATS` names — six of them, and the map is
-          what keeps this row from being a list to remember to grow. In that array's own order and
+      {/* A radio group over every format `EXPORT_FORMATS` names, and the map is what keeps this
+          row from being a list to remember to grow. In that array's own order and
           **not** through `sortOptions`: plain first is the one most readers want, the same kind
           of deliberate order `lib/options.ts` exempts a grade scale for. */}
       <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
@@ -211,14 +249,50 @@ function Body({
         </p>
       )}
 
-      <pre
+      {/* The disclosure. **`aria-controls` only while there is something to control**: the
+          preview is unmounted when this is shut, and an `aria-controls` pointing at an id no
+          element carries is a promise to assistive technology that nothing keeps. `aria-expanded`
+          is on the button in both states, which is what actually announces the pair. */}
+      <button
+        type="button"
+        aria-expanded={showList}
+        aria-controls={showList ? previewId : undefined}
+        onClick={() => setShowList((open) => !open)}
         className={cn(
-          "min-h-0 flex-1 overflow-auto rounded-md border border-border bg-surface p-3",
-          "whitespace-pre-wrap break-words font-mono text-xs leading-relaxed",
+          "flex h-8 w-fit shrink-0 items-center gap-2 rounded-md px-2 text-sm text-dim",
+          "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
+          "motion-reduce:transition-none",
+          FOCUS,
         )}
       >
-        {text}
-      </pre>
+        {/* Rotated rather than swapped for a second glyph, so the reduced-motion arm is the only
+            thing that has to know there are two states. */}
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "size-4 transition-transform duration-[var(--duration-fast)] ease-standard",
+            "motion-reduce:transition-none",
+            showList && "rotate-90",
+          )}
+        />
+        {showList ? "Hide" : "Show"} decklist ({lines === 1 ? "1 line" : `${lines} lines`})
+      </button>
+
+      {/* `flex-1` and its own scroller, which is the whole of what keeps a 100-card export inside
+          the panel: the shell clamps the panel to the window, this takes what is left over after
+          the row above and the buttons below, and the text scrolls *inside* it rather than
+          pushing them out of reach. */}
+      {showList && (
+        <pre
+          id={previewId}
+          className={cn(
+            "min-h-0 flex-1 overflow-auto rounded-md border border-border bg-surface p-3",
+            "whitespace-pre-wrap break-words font-mono text-xs leading-relaxed",
+          )}
+        >
+          {text}
+        </pre>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <button

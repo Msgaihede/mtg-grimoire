@@ -769,10 +769,10 @@ controls open that dialog** — the editor header's `Export deck` and a category
   that is what the whole `## Import` section above is about — and each writer here emits **one**
   spelling. It is the same rule that makes the output LF with a trailing newline whatever the
   parser would tolerate: a file this app wrote should have one answer.
-- **Six formats, and three of the decisions inside them are worth carrying.** `EXPORT_FORMATS` is
-  `plain · mtgo · arena · moxfield · archidekt · csv`, and the dialog's radio row **maps that
-  array** rather than listing them, so the count is the array's and never a number written down
-  twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
+- **Four of the decisions inside the formats are worth carrying.** `EXPORT_FORMATS` is
+  `plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`, and the dialog's radio row
+  **maps that array** rather than listing them, so the count is the array's and never a number
+  written down twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
   was no whole-deck export and therefore no sideboard to prefix; it writes `SB: ` on a side or
   companion card now, which is a one-line override rather than a heading — exactly how `parse.ts`
   reads it back. **(2) `arena` and `mtgo` write only switched-on piles**, because neither format
@@ -783,7 +783,15 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `{noDeck}` and a lowercase set code.** The flag is the only thing any of these formats can say
   about a pile that counts toward nothing, which makes Archidekt the one format that writes an
   inactive pile _and_ leaves nothing out; it is the round trip that makes the flag worth writing,
-  not fidelity to the site for its own sake. The lowercase set code is what Archidekt itself emits
+  not fidelity to the site for its own sake. **(4) `tcgplayer` is a _cart_ rather than a decklist**
+  (added 2026-08-18), and that decides all three of the ways it differs. Its line is
+  `2 Lightning Bolt [2X2] 117` — the most specific of the three shapes TCGplayer Mass Entry
+  documents, so the cart lands on the printing the deck names. It is **flat**, because Mass Entry
+  reads every line as one item and a heading would be read as a card nobody sells. It writes **no
+  finish marker**, because a printing's foil is chosen in the cart. And it is the one flat format
+  that **keeps a switched-off pile**, where Arena and MTGO cut theirs: the pile a reader switched
+  off is usually exactly what they still have to buy, so `omittedCount` is 0 here and the dialog's
+  omission line never fires for it. The lowercase set code is what Archidekt itself emits
   and what its own importer round-trips, and our parser uppercases on read, so it costs the round
   trip nothing.
 - **`KIND_SECTION` maps `maybe` to `Deck` and `sectionOf` asks `categoryActive`. That is "nothing
@@ -794,13 +802,19 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `Maybeboard` "because that is what it is called" files a switched-on Maybeboard out of the deck
   it counts toward **and** leaves a reader's own switched-off `Ramp` under `Deck` beside it — one
   edit, both errors, and nothing about it reads as wrong.
-- **CSV is write-only and stays so**, and `decklists.test.ts` excludes it **by name** rather than by
+- **Two formats are write-only**, and `decklists.test.ts` excludes each **by name** rather than by
   omission (`expect(READABLE).toEqual([…])`), so a format dropped out of that table by accident is a
-  failure rather than a quietly smaller matrix. Nothing in `parse.ts` reads a comma-separated
-  decklist, and teaching it one would be a second grammar rather than a rule inside the one there
-  is.
+  failure rather than a quietly smaller matrix. **CSV**, because nothing in `parse.ts` reads a
+  comma-separated decklist and teaching it one would be a second grammar rather than a rule inside
+  the one there is. **TCGplayer**, because its line is addressed to a shopping cart rather than to
+  us: `parse.ts`'s `BRACKET` is anchored to the **end of the line**, so a bracket with a collector
+  number after it is not a bracket to that parser at all and the whole tail lands in the card's
+  name — `2 Lightning Bolt [2X2] 117` comes back as a card *called* `Lightning Bolt [2X2] 117`, the
+  copies surviving and the name not. That is **measured in `format.test.ts` rather than asserted
+  here**, so the day `parse.ts` learns to read an unanchored bracket the exclusion fails rather
+  than quietly outliving its reason.
 - **`decklists.test.ts` is where a writer drifting from the parser shows up.** Three real decklists
-  crossed with all six formats, driven text → planner → writer → parser, and **every readable
+  crossed with every format, driven text → planner → writer → parser, and **every readable
   format is a fixed point**: export → import → export is byte-identical. One cycle cannot see a
   writer that is not idempotent, because there is nothing to compare the first answer against.
   Every count this branch turns on is re-derived there or in `parse.test.ts` rather than restated
@@ -826,6 +840,17 @@ controls open that dialog** — the editor header's `Export deck` and a category
   app grants nowhere, so `export_write_file` takes the path and the text — the same shape
   `deck_set_cover_image` has, for the same reason.
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both.
+- **The preview opens shut** (2026-08-18), which is `DeckSearchPanel`'s collapsed default one rung
+  down: a decklist is the tallest thing this dialog draws and the least of what a reader came for,
+  and the two presses that do the work are Copy and Save as…. Shut, the dialog is the format row,
+  whatever that format leaves out, the toggle and the buttons — and the **toggle's own label
+  carries the line count**, so "nothing is showing" is never mistaken for "nothing is there". The
+  `<pre>` is **unmounted** rather than hidden, which is the half worth enforcing: a hidden block
+  still holding the text is exactly the shape that lets a test assert a line no reader can see, so
+  every play and test that reads a rendered line presses the toggle first, as a reader would.
+  **It is not the fix for the reported bug it arrived with**, and the two are worth keeping apart —
+  the panel itself grew past the window and took the buttons off screen with it, which is
+  `DeckDialog`'s scrim and is fixed there for every dialog on the shell.
 - **`save()` resolves `null` on Cancel**, and writing that string to disk is the trap the guard in
   `handleSaveAs` exists to prevent. A refused write is **reported and does not close the dialog**:
   the reader's text is still on screen and still copyable, so the failure costs them nothing they

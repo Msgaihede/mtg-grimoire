@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ExportCard } from "./format";
+import { EXPORT_FORMATS, EXPORT_FORMAT_LABEL, type ExportCard } from "./format";
 
 const exportWriteFile = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -50,6 +50,17 @@ const BOLT = exportCard({
 
 const noop = () => {};
 
+/**
+ * Open the preview, which starts shut.
+ *
+ * Every assertion about the *text* of an export goes through this rather than through a `<pre>`
+ * that is merely hidden — the block is unmounted while the disclosure is shut, so a test that
+ * skipped the press would be asserting a line no reader can see.
+ */
+async function showList(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
+}
+
 beforeEach(() => {
   exportWriteFile.mockReset();
   exportWriteFile.mockResolvedValue(undefined);
@@ -61,6 +72,7 @@ beforeEach(() => {
 
 describe("ExportDialog", () => {
   it("previews the plain format by default", async () => {
+    const user = userEvent.setup();
     render(
       <ExportDialog
         open
@@ -71,7 +83,57 @@ describe("ExportDialog", () => {
         onClose={noop}
       />,
     );
+    await showList(user);
     expect(await screen.findByText("2 Lightning Bolt")).toBeInTheDocument();
+  });
+
+  it("opens with the decklist shut, and draws none of it until it is asked for", async () => {
+    const user = userEvent.setup();
+    render(
+      <ExportDialog
+        open
+        subject="Removal"
+        cards={[BOLT]}
+        suggestedFileName="Removal"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    // Shut is **unmounted**, not hidden: a `<pre>` still holding the text would let every
+    // assertion below pass over a preview no reader can see.
+    const toggle = await screen.findByRole("button", { name: /Show decklist/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector("pre")).toBeNull();
+    expect(screen.queryByText("2 Lightning Bolt")).not.toBeInTheDocument();
+    // The count is what a shut preview still owes the reader — one line here, said in the
+    // singular.
+    expect(toggle).toHaveTextContent("Show decklist (1 line)");
+
+    await user.click(toggle);
+    expect(await screen.findByText("2 Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hide decklist/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("counts the lines of the file rather than the cards in the pile", async () => {
+    render(
+      <ExportDialog
+        open
+        subject="Removal"
+        cards={[BOLT]}
+        suggestedFileName="Removal"
+        onDismiss={noop}
+        onClose={noop}
+      />,
+    );
+    // Moxfield writes a `Deck` heading over the one card, so the file is two lines and the pile
+    // is one — and the trailing newline every export ends with is not a third.
+    await userEvent.setup().click(await screen.findByRole("radio", { name: "Moxfield" }));
+    expect(screen.getByRole("button", { name: /decklist/ })).toHaveTextContent(
+      "Show decklist (2 lines)",
+    );
   });
 
   it("redraws the preview when the format changes", async () => {
@@ -86,6 +148,7 @@ describe("ExportDialog", () => {
         onClose={noop}
       />,
     );
+    await showList(user);
     await user.click(await screen.findByRole("radio", { name: "Moxfield" }));
     // Moxfield writes its section heading even for a single section — the vocabulary is fixed, so
     // `Deck` is a fact about where these cards are and not a separator a one-pile file can drop.
@@ -93,7 +156,7 @@ describe("ExportDialog", () => {
     expect(await screen.findByText("Deck 2 Lightning Bolt (LEA) 161")).toBeInTheDocument();
   });
 
-  it("offers all six formats", async () => {
+  it("offers every format format.ts writes, in that file's own order", async () => {
     render(
       <ExportDialog
         open
@@ -104,10 +167,12 @@ describe("ExportDialog", () => {
         onClose={noop}
       />,
     );
-    // The row maps `EXPORT_FORMATS`, so this counts the array rather than a list drawn by hand —
-    // a seventh writer reaches the reader without an edit here, and this is what says so.
-    expect(await screen.findAllByRole("radio")).toHaveLength(6);
-    expect(screen.getByRole("radio", { name: "Archidekt" })).toBeInTheDocument();
+    // The row maps `EXPORT_FORMATS`, so this reads the array rather than a list drawn by hand —
+    // an eighth writer reaches the reader without an edit here. Compared against the array
+    // itself rather than a count, which is a number that rots the moment a writer is added.
+    const labels = (await screen.findAllByRole("radio")).map((radio) => radio.textContent);
+    expect(labels).toEqual(EXPORT_FORMATS.map((format) => EXPORT_FORMAT_LABEL[format]));
+    expect(labels).toContain("TCGplayer");
   });
 
   it("says how many cards a format leaves out, and stops saying it when one does not", async () => {
