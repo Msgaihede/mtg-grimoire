@@ -103,10 +103,10 @@ function FakeWorld({
  * `set`, so a second instance of it cannot be built from `.storybook/` — it would take an edit
  * to component source, which this branch does not have. So the store is reset per story on the
  * canvas and left alone on a docs page, and the story files that **write** it during render —
- * `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage` — carry
+ * `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage`, `AllPrintingsDialog` — carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Most of the catalogue is isolated in-process instead, which is what
- * keeps it readable.
+ * keeps it readable. The list is named rather than counted, for the reason two paragraphs down.
  *
  * **There is no longer a count here, and its deletion is the fix rather than a gap.** This
  * paragraph used to carry "43 of the 51 story files still render inline" and it rotted three

@@ -70,9 +70,9 @@ function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
     marketplace: MARKETPLACES.tcgplayer,
     addToCollection: vi.fn(),
     addToWishlist: vi.fn(),
-    // Null is "not inside the deck editor", which is every card surface outside it.
-    viewPrintingsInPane: null,
-    requestAllPrintings: vi.fn(),
+    // No `printingsDeck` and no `printingsOracleId`: the shape a *plain* card surface hands
+    // over, which is every one of them except the deck editor and the modal itself.
+    openAllPrintings: vi.fn(),
     DeckTargetSubmenu: () => null,
     ...over,
   };
@@ -141,71 +141,86 @@ describe("buildCardMenu", () => {
     );
   });
 
-  it("routes View all printings to Search outside the editor", () => {
-    const requestAllPrintings = vi.fn();
-    const items = buildCardMenu(BOLT, deps({ requestAllPrintings, viewPrintingsInPane: null }));
+  /**
+   * The deck slot a surface names, as the deck editor's four views build it — every part of
+   * `DECK_CARD_GRAIN`, because a context naming fewer has rewritten the wrong row here before.
+   */
+  const SLOT = {
+    deckId: 4,
+    categoryId: 9,
+    categoryName: "Ramp",
+    cardId: "bolt-lea",
+    variant: "live" as const,
+    finish: null,
+  };
+
+  it("opens the printings modal with no deck slot from a plain surface", () => {
+    const openAllPrintings = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ openAllPrintings }));
     (find(items, "View all printings") as MenuAction).onSelect();
-    expect(requestAllPrintings).toHaveBeenCalledWith({
+    // The card's oracle id, never the printing's: "every printing of this card" is asked by the
+    // one field a `Printing` does not carry. `deck: null` is "there is no slot to write to".
+    expect(openAllPrintings).toHaveBeenCalledWith({
       oracleId: "o-bolt",
       name: "Lightning Bolt",
+      deck: null,
     });
   });
 
-  it("routes View all printings to the card pane inside the editor", () => {
-    const viewPrintingsInPane = vi.fn();
-    const requestAllPrintings = vi.fn();
-    const items = buildCardMenu(BOLT, deps({ viewPrintingsInPane, requestAllPrintings }));
+  it("carries the deck slot the surface named", () => {
+    const openAllPrintings = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ openAllPrintings, printingsDeck: SLOT }));
     (find(items, "View all printings") as MenuAction).onSelect();
-    // Navigating would close the deck -- setActiveView clears openDeckId by design.
-    expect(viewPrintingsInPane).toHaveBeenCalledWith("bolt-lea");
-    expect(requestAllPrintings).not.toHaveBeenCalled();
+    // Whole, and not a card id: it is what makes a press in the modal a swap rather than a look.
+    expect(openAllPrintings).toHaveBeenCalledWith({
+      oracleId: "o-bolt",
+      name: "Lightning Bolt",
+      deck: SLOT,
+    });
   });
 
   it("disables View all printings for an orphan with no oracle id", () => {
     const items = buildCardMenu({ ...BOLT, oracleId: null }, deps());
     const item = find(items, "View all printings") as MenuAction;
     expect(item.disabled).toBe(true);
-    expect(item.reason).toBeTruthy();
+    expect(item.reason).toBe("this printing has left the card database");
   });
 
-  it("greys View all printings on the card the pane is already showing", () => {
-    // It shipped live and inert: `viewPrinting` sets `selectedCardId` to the value it already
-    // holds, so the press moved nothing and said nothing.
-    const viewPrintingsInPane = vi.fn();
-    const items = buildCardMenu(BOLT, deps({ viewPrintingsInPane, paneCardId: "bolt-lea" }));
+  /** Inside the modal itself the row would re-ask a question already on screen. */
+  it("greys the row on the surface that is already listing that card", () => {
+    const openAllPrintings = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ openAllPrintings, printingsOracleId: "o-bolt" }));
     const item = find(items, "View all printings") as MenuAction;
 
     expect(item.disabled).toBe(true);
     // And **not** the orphan's sentence, which would be false of a perfectly healthy card.
-    expect(item.reason).toBe("this pane is already showing them");
+    expect(item.reason).toBe("you are already looking at them");
     item.onSelect();
-    expect(viewPrintingsInPane).not.toHaveBeenCalled();
+    expect(openAllPrintings).not.toHaveBeenCalled();
   });
 
-  it("leaves the row live for another printing of the card in the pane", () => {
-    // The printings list is the case: every row but the open one moves the pane somewhere.
-    const viewPrintingsInPane = vi.fn();
-    const items = buildCardMenu(BOLT, deps({ viewPrintingsInPane, paneCardId: "bolt-2ed" }));
+  /**
+   * A different oracle card in the same modal — a menu on some other card — still routes. The
+   * fence is an oracle comparison rather than the printing one it replaced, so *this* is the
+   * case that would silently grey every row if it were written on `cardId`.
+   */
+  it("stays live for a different card than the one being listed", () => {
+    const openAllPrintings = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ openAllPrintings, printingsOracleId: "o-shock" }));
     const item = find(items, "View all printings") as MenuAction;
 
     expect(item.disabled).toBeUndefined();
     item.onSelect();
-    expect(viewPrintingsInPane).toHaveBeenCalledWith("bolt-lea");
+    expect(openAllPrintings).toHaveBeenCalled();
   });
 
-  it("keeps the row live for the open card on a surface that navigates to Search", () => {
-    // A wall beside an open pane routes to Search, which always has somewhere to go — greying
-    // there would refuse a row that works.
-    const requestAllPrintings = vi.fn();
+  /** The same list, reached from another printing of it — one modal, not a second one. */
+  it("greys the row for a different printing of the card being listed", () => {
     const items = buildCardMenu(
-      BOLT,
-      deps({ requestAllPrintings, viewPrintingsInPane: null, paneCardId: "bolt-lea" }),
+      { ...BOLT, cardId: "bolt-2ed", setCode: "2ed" },
+      deps({ printingsOracleId: "o-bolt" }),
     );
-    const item = find(items, "View all printings") as MenuAction;
-
-    expect(item.disabled).toBeUndefined();
-    item.onSelect();
-    expect(requestAllPrintings).toHaveBeenCalled();
+    expect((find(items, "View all printings") as MenuAction).disabled).toBe(true);
   });
 
   it("adds one copy silently when the printing has one finish", () => {

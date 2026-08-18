@@ -47,6 +47,7 @@ import { marketplaceSearchUrl, openExternal, scryfallCardUrl } from "@/lib/exter
 import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
 import { ipc, ipcError, type DeckFolder, type DeckRow, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
+import type { PaneDeckContext } from "@/lib/store";
 import { sortOptions } from "@/lib/options";
 
 /**
@@ -93,21 +94,39 @@ export interface CardMenuDeps {
   marketplace: Marketplace;
   addToCollection: (target: CardMenuTarget, finish: Finish) => void;
   addToWishlist: (target: CardMenuTarget) => void;
-  /** Null outside the deck editor: inside it, the item opens the card pane instead. */
-  viewPrintingsInPane: ((cardId: string) => void) | null;
   /**
-   * The card the docked pane is **already** showing, for the surfaces that are the pane.
+   * Open the printings modal for a card.
    *
-   * Read only when {@link CardMenuDeps.viewPrintingsInPane} is set, and it is the second half of
-   * that field rather than an independent one: a surface that hands over a way to move the pane
-   * is claiming the row does something, and this is what makes the claim checkable. Left out, the
-   * row behaves exactly as it did before this field existed — it is a fact the builder can use,
-   * never one it can be wrong about, which is why it is optional rather than required.
-   *
-   * `null` is a pane that is closed, and never equal to a card id.
+   * **One field where there were three** — `viewPrintingsInPane`, `paneCardId` and
+   * `requestAllPrintings`. The row used to route two ways, to the Search *view* outside the deck
+   * editor and to the docked card *pane* inside it, and both were the same wish answered by
+   * moving the reader somewhere: the first wrote `activeView` and cleared the open card and the
+   * open deck in one `set`, so asking a question about a card closed the deck it was being asked
+   * about; the second spent 384px of a 602px desk on a list. The modal is drawn over wherever the
+   * reader already is, so there is one destination and no surface has to say which one it wants.
    */
-  paneCardId?: string | null;
-  requestAllPrintings: (t: { oracleId: string; name: string }) => void;
+  openAllPrintings: (t: { oracleId: string; name: string; deck: PaneDeckContext | null }) => void;
+  /**
+   * The deck slot this surface's rows belong to, or absent.
+   *
+   * Set only by a surface whose rows really are rows of an **open deck** — the deck editor's four
+   * views. It is what makes a press inside the modal a *swap* rather than a look, and it is the
+   * whole {@link PaneDeckContext} rather than a card id for that type's own reason: a context
+   * naming fewer parts than `DECK_CARD_GRAIN` has rewritten the wrong row twice in this
+   * codebase's history. A search tile in the editor's docked panel is not a deck row, and says so
+   * by leaving this out.
+   */
+  printingsDeck?: PaneDeckContext | null;
+  /**
+   * The oracle card this surface is **already** listing every printing of, if it is.
+   *
+   * `paneCardId`'s replacement, one level up: the old field named a *printing*, because the pane
+   * showed one card at a time and could only refuse the row on the card it was open on. The modal
+   * lists the whole oracle card, so a different printing of it is the same list and the fence has
+   * to be an oracle comparison. Only the modal sets it; absent means "this surface is not a
+   * printings list", which is true of every other one.
+   */
+  printingsOracleId?: string | null;
   DeckTargetSubmenu: ComponentType<{ target: CardMenuTarget; onDone: () => void }>;
 }
 
@@ -204,37 +223,31 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
 }
 
 /**
- * "View all printings" — the two places it can land, and the two it cannot.
- *
- * Inside the deck editor it opens the **card pane**, because `requestAllPrintings` moves
- * `activeView` in the same write and `setActiveView` clears `openDeckId` by design — routing
- * to Search there would close the deck the reader is building out from under them.
- *
- * **Both refusals are greyed with a reason rather than hidden, and that is a judgement about
- * this row in particular.** The category menu leaves Delete *absent* on the four predefined
- * zones on the grounds that "an item that exists only to be refused is worse than one that is
- * not there" — but that item is refused on one kind of category and offered on every other,
- * so its absence reads as a property of the row it is missing from. This row is on every card
- * surface and on every other card of the surface it greys on, so removing it from one would
- * read as a bug in the menu rather than as a fact about the card. Greyed, it teaches the rule;
- * that is the commander row's argument and it is this one's.
+ * "View all printings" — one destination, and the two facts that can refuse it.
  *
  * **The first refusal is a fact about the card.** `oracleId` is nullable on `CardSummary`, which
  * is a fence around the type rather than a card anyone can find (0 of 116 590 live rows are null,
- * reversible printings included, because `card_row` falls back to `card_faces[0]`).
+ * reversible printings included, because `card_row` falls back to `card_faces[0]`). With no oracle
+ * id there is no list to ask for.
  *
- * **The second is a fact about the situation, and it shipped as a silent no-op.** On the card
- * pane's own card, inside the deck editor, `viewPrintingsInPane` is the write that moves the
- * pane *to the card it is already on* — `viewPrinting` sets `selectedCardId` to the value it
- * already holds, Zustand notifies nobody, and nothing whatever happens. The row looked live and
- * pressing it did nothing. The one sentence this file had was no use for it: the card is present
- * and perfectly healthy, so *this printing has left the card database* would have been flatly
- * false, which is why the surface that found it correctly left the row alone rather than reuse
- * the wrong words.
+ * **The second is a fact about the surface.** Inside the printings modal the row would re-ask the
+ * question already on screen. This used to be `paneCardId` and used to be a *printing* comparison,
+ * because the pane it fenced showed one card at a time; the modal lists the whole oracle card, so
+ * a different printing of it is the same list and every tile in the modal would otherwise offer to
+ * open the modal it is drawn in.
  *
- * The check lives here, with the label, the routing and both sentences, so that the rule is one
- * thing in one place. What the surface supplies is a fact — {@link CardMenuDeps.paneCardId} —
- * and never a decision.
+ * **Both are greyed with a reason rather than hidden, and that is a judgement about this row in
+ * particular.** The category menu leaves Delete *absent* on the four predefined zones on the
+ * grounds that "an item that exists only to be refused is worse than one that is not there" — but
+ * that item is refused on one kind of category and offered on every other, so its absence reads as
+ * a property of the row it is missing from. This row is on every card surface and on every other
+ * card of the surface it greys on, so removing it from one would read as a bug in the menu rather
+ * than as a fact about the card. Greyed, it teaches the rule; that is the commander row's argument
+ * and it is this one's.
+ *
+ * What a surface supplies is a fact — {@link CardMenuDeps.printingsOracleId} and
+ * {@link CardMenuDeps.printingsDeck} — and never a decision. The label, the destination and both
+ * sentences stay here, so the rule is one thing in one place.
  */
 function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
   const { oracleId } = target;
@@ -253,22 +266,24 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
       onSelect: () => {},
     };
   }
-  // Only where the pane is the destination: a surface that navigates to Search always has
-  // somewhere to go, whatever card happens to be open beside it.
-  if (deps.viewPrintingsInPane !== null && deps.paneCardId === target.cardId) {
+  // `!= null` before the comparison, rather than the comparison alone: the field is absent on
+  // every surface that is not a printings list, and `undefined === undefined` would grey the row
+  // for a card with no oracle id — which the arm above has already answered, in its own words.
+  if (deps.printingsOracleId != null && deps.printingsOracleId === oracleId) {
     return {
       ...row,
       disabled: true,
-      reason: "this pane is already showing them",
+      reason: "you are already looking at them",
       onSelect: () => {},
     };
   }
   return {
     ...row,
-    onSelect: () => {
-      if (deps.viewPrintingsInPane !== null) deps.viewPrintingsInPane(target.cardId);
-      else deps.requestAllPrintings({ oracleId, name: target.name });
-    },
+    // `?? null` because the dep is optional and the store's field is not: a surface that says
+    // nothing about a deck is saying there is no slot to write to, and a press in the modal then
+    // opens the card pane on the printing instead of swapping anything.
+    onSelect: () =>
+      deps.openAllPrintings({ oracleId, name: target.name, deck: deps.printingsDeck ?? null }),
   };
 }
 

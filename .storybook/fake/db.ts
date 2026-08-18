@@ -2761,6 +2761,11 @@ const LIST_MAX_LIMIT = 500;
  *  they are the five basic lands. Unreachable from a 43-row fixture; here so the shape of
  *  the answer (`items.length < total`) is the real one. */
 const MAX_PRINTINGS = 400;
+/** `card::MAX_PRINTINGS_HARD`, the ceiling an explicit page size is clamped to — the printings
+ *  modal's page. Also unreachable from the fixture, and here for the same reason: the clamp is
+ *  part of the answer's shape, and a fake that let a caller past it would pass a story that the
+ *  window refuses. */
+const MAX_PRINTINGS_HARD = 1000;
 /** `deck_audit::MAX_LIMIT`. A cap rather than a page cursor, because this table grows by one
  *  row per edit and a built deck is hundreds of rows, not millions. */
 const AUDIT_MAX_LIMIT = 500;
@@ -3435,11 +3440,31 @@ export function readHandlers(db: FakeDb) {
       return card ? toCardDetail(db, card, marketplaceOf(args.marketplace)) : null;
     },
 
-    /** `card::list_printings`: every **paper** printing of one oracle card, newest first,
-     *  capped with an uncapped count so a truncated list can say what it truncates. Every row
-     *  is priced per finish at the marketplace asked for, like the card above. */
-    card_printings: (args: { oracleId: string; marketplace?: string }) => {
+    /**
+     * `card::list_printings`: every **paper** printing of one oracle card, newest first,
+     * capped with an uncapped count so a truncated list can say what it truncates. Every row
+     * is priced per finish at the marketplace asked for, like the card above.
+     *
+     * **`limit` is honoured here because the mirror sends it**, which is the whole argument for
+     * this fake sitting *under* `src/lib/ipc.ts` rather than beside it: a handler that quietly
+     * ignored an argument would let a story pass over a call the window answers differently. The
+     * card detail pane sends nothing and gets {@link MAX_PRINTINGS}; the printings modal names
+     * the ceiling, because it filters client-side and a filter over a truncated list draws an
+     * empty wall that reads as an answer.
+     *
+     * Clamped exactly as `card.rs`'s `page_size` clamps: absent, zero and negative all fall back
+     * to the default rather than answering with an empty page — a page of nothing here would be
+     * indistinguishable from "this card has no printings". The negative case is not defensive
+     * padding: SQLite reads a negative `LIMIT` as *no limit at all*, so on the real backend it is
+     * the whole table rather than nothing, and the two ends must agree about which answer a
+     * caller bug gets.
+     */
+    card_printings: (args: { oracleId: string; marketplace?: string; limit?: number }) => {
       const mp = marketplaceOf(args.marketplace);
+      const page =
+        args.limit !== undefined && args.limit > 0
+          ? Math.min(args.limit, MAX_PRINTINGS_HARD)
+          : MAX_PRINTINGS;
       if (args.oracleId.trim() === "") return { items: [], total: 0 };
       const all = db.cards
         .filter((c) => c.oracleId === args.oracleId && c.isPaper)
@@ -3451,7 +3476,7 @@ export function readHandlers(db: FakeDb) {
             cmp(a.id, b.id),
         );
       return {
-        items: all.slice(0, MAX_PRINTINGS).map((c) => toPrinting(db, c, mp)),
+        items: all.slice(0, page).map((c) => toPrinting(db, c, mp)),
         total: all.length,
       };
     },

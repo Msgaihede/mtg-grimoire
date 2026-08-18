@@ -164,18 +164,19 @@ const ORPHANED_TARGET: CardMenuTarget = { ...CARD_TARGET, oracleId: null };
 /**
  * Everything the card menu needs that is not the card.
  *
- * `viewPrintingsInPane: null` is "not inside the deck editor", where the item navigates to Search
- * instead of opening the pane. `DeckTargetSubmenu` is passed **as itself**, with no glue, which is
- * how every surface passes it: the picker reaches the app's one `useCardToDeck` through the
- * context {@link Stage} mounts rather than through a callback threaded from here.
+ * No `printingsDeck` and no `printingsOracleId`, which is what a plain card surface hands over:
+ * these rows are not rows of an open deck and this is not a list of one card's printings, so
+ * "View all printings" opens the modal over whatever is on screen with no slot to write to.
+ * `DeckTargetSubmenu` is passed **as itself**, with no glue, which is how every surface passes it:
+ * the picker reaches the app's one `useCardToDeck` through the context {@link Stage} mounts rather
+ * than through a callback threaded from here.
  */
 function cardDeps(act: Act): CardMenuDeps {
   return {
     marketplace: MARKETPLACES.cardmarket,
     addToCollection: (target, finish) => act(`collection:${target.cardId}:${finish}`),
     addToWishlist: (target) => act(`wishlist:${target.cardId}`),
-    viewPrintingsInPane: null,
-    requestAllPrintings: (t) => act(`printings:${t.oracleId}`),
+    openAllPrintings: (t) => act(`printings:${t.oracleId}`),
     DeckTargetSubmenu,
   };
 }

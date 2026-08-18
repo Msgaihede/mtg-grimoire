@@ -57,15 +57,24 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
 /**
  * The card sections that zoom independently of one another.
  *
- * Four surfaces draw walls of cards, and two of them are on screen at once: the deck editor puts
- * its docked card search column beside the deck itself. One shared number made a gesture over
- * the search column resize the deck too — "how big are the cards I am browsing" and "how big is
- * my deck laid out" answered together, when the reader only asked one of them.
+ * Five surfaces draw walls of cards, and they share the screen rather than taking turns on it:
+ * the deck editor puts its docked card search column beside the deck itself, and the printings
+ * modal opens over whichever wall is already up. One shared number made a gesture over the
+ * search column resize the deck too — "how big are the cards I am browsing" and "how big is my
+ * deck laid out" answered together, when the reader only asked one of them.
  *
  * `deck` is one key for **both** deck views. Stacks and Grid are two drawings of the same pile,
  * so switching between them must not resize the cards the reader just settled on.
+ *
+ * `printings` is the all-printings modal's wall, and it is the strongest case on the list rather
+ * than the weakest: the modal opens **over** a wall the reader has already sized, so a shared
+ * number would have a ctrl+wheel inside it resize the page underneath — a change made to
+ * something they cannot see, waiting for them when the modal closes. It is the one section that
+ * is not a place a reader navigates to, and it is still a section for that reason: the modal
+ * throws away its filter and its scroll on every close, and the size the cards are drawn at is
+ * the one thing about it a reader would resent re-setting.
  */
-export const ZOOM_SECTIONS = ["search", "collection", "deckSearch", "deck"] as const;
+export const ZOOM_SECTIONS = ["search", "collection", "deckSearch", "deck", "printings"] as const;
 
 export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
 
@@ -82,6 +91,10 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   collection: DEFAULT_ZOOM,
   deckSearch: DEFAULT_ZOOM,
   deck: DEFAULT_ZOOM,
+  // The modal's wall. Its own key rather than the search's, for {@link ZOOM_SECTIONS}' own
+  // reason: the modal opens *over* a wall the reader has already sized, and a ctrl+wheel inside
+  // it must not resize the page underneath.
+  printings: DEFAULT_ZOOM,
 };
 
 /**

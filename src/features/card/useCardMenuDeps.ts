@@ -12,7 +12,8 @@
  *
  * `buildCardMenu` stays a pure builder taking its dependencies as an argument; this is the one
  * argument all of those surfaces have in common. The deck editor spreads over it rather than
- * taking it plain, because it answers `viewPrintingsInPane` and carries the deck extras.
+ * taking it plain, because its rows are rows of an open deck — it names the slot in
+ * `printingsDeck` — and because it carries the deck extras.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -54,7 +55,7 @@ export interface CardMenuWiring {
 export function useCardMenuDeps(): CardMenuWiring {
   const queryClient = useQueryClient();
   const { marketplace } = useMarketplace();
-  const requestAllPrintings = useAppStore((s) => s.requestAllPrintings);
+  const openAllPrintings = useAppStore((s) => s.openAllPrintings);
 
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -129,10 +130,13 @@ export function useCardMenuDeps(): CardMenuWiring {
       marketplace,
       addToCollection,
       addToWishlist,
-      // `null` is "not inside the deck editor": here "View all printings" navigates to Search
-      // and filters to the oracle card, which is safe because there is no open deck to close.
-      viewPrintingsInPane: null,
-      requestAllPrintings,
+      // **No `printingsDeck` and no `printingsOracleId`, and both absences are the point.** This
+      // is the object every *plain* card surface takes — the search walls, the collection, the
+      // wishlist, the card pane — and not one of them is a row of an open deck or a list of one
+      // card's printings. The deck editor spreads its own slot over this per card; the modal
+      // spreads the oracle id it is open for. Nothing here has to answer "where should this land",
+      // because the modal opens over whatever is already on screen.
+      openAllPrintings,
       // **Passed as itself, with no glue at all.** The picker reaches the app's single
       // `useCardToDeck` through `CardToDeckProvider` rather than through a callback threaded
       // from here, so there is nothing for a surface to mis-wire and no second observer of the
@@ -141,7 +145,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       // exists to prevent.
       DeckTargetSubmenu,
     }),
-    [marketplace, addToCollection, addToWishlist, requestAllPrintings],
+    [marketplace, addToCollection, addToWishlist, openAllPrintings],
   );
 
   return { deps, error: refusal };

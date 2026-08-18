@@ -24,17 +24,6 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleManaValue: vi.fn(),
     manaX: false,
     toggleManaX: vi.fn(),
-    // **Spelled out even though the cast would let them be omitted**, and the card filter is
-    // why. `FilterBar` draws its chip on `oracleId !== ""` — the right test for a string, since
-    // a truthiness check reads a legitimate empty name as "no card" — and an *absent* key makes
-    // that comparison `undefined !== ""`, which is **true**. Every case in this file then drew a
-    // phantom chip with no text and an accessible name reading "undefined — showing every
-    // printing…", and the one test that checks the chip is not there passed against a
-    // `FilterBar` with the guard deleted. A cast is not a fixture: what TypeScript is told to
-    // stop checking, this object has to get right by hand.
-    oracleId: "",
-    oracleName: "",
-    setOracleId: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
     ...over,
@@ -167,50 +156,6 @@ describe("FilterBar", () => {
     const select = screen.getByLabelText("Format") as HTMLSelectElement;
     expect(select).toHaveValue(ANY_CARD);
     expect(select.selectedOptions[0]).toHaveTextContent("Any card");
-  });
-
-  /**
-   * A wall narrowed to one card, with the card's name on the row saying so.
-   *
-   * The filter arrives from somewhere else entirely — a right-click on a card anywhere in the
-   * app — so it is the one filter on this row the reader did not set here, and the only
-   * one they could not otherwise account for. It is drawn as the same `ToggleChip` its
-   * neighbours are, switched on, and clearing it is the press every other on-chip here answers.
-   */
-  it("names the card the wall is narrowed to, and clears it on a press", async () => {
-    const setOracleId = vi.fn();
-    render(
-      <FilterBar
-        search={search({ oracleId: "o-bolt", oracleName: "Lightning Bolt", setOracleId })}
-      />,
-    );
-
-    const chip = screen.getByRole("button", { name: /^Lightning Bolt/ });
-    expect(chip).toHaveTextContent("Lightning Bolt");
-    expect(chip).toHaveAttribute("aria-pressed", "true");
-    // The one label on this row that is **data**: a card name runs to 141 characters, and
-    // without a width bound it wraps to three lines inside a 36px-tall box and takes the row's
-    // line with it. jsdom has no layout engine, so the class is the assertion — the same way
-    // the mana chips' glyph is asserted by its font class above.
-    expect(chip).toHaveClass("max-w-48", "truncate");
-
-    await userEvent.click(chip);
-
-    expect(setOracleId).toHaveBeenCalledWith("");
-  });
-
-  /**
-   * No card, no chip: an empty chip captioned with nothing is a control about nothing.
-   *
-   * **Queried by the title rather than by the name, because the name cannot fail.** With no card
-   * the chip would draw with an empty label, so `queryByRole("button", { name: /^Lightning
-   * Bolt/ })` is null whether the guard exists or not — this test passed against a `FilterBar`
-   * with the guard deleted. The tooltip is the part that is there whatever the name is.
-   */
-  it("draws no card chip when the search is not narrowed to one", () => {
-    render(<FilterBar search={search()} />);
-
-    expect(screen.queryByTitle(/showing every printing/)).toBeNull();
   });
 
   it("counts what Reset all would clear, and clears it", async () => {

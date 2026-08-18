@@ -926,11 +926,15 @@ describe("the card menu", () => {
    * assertion is on both halves: the row is pressable, and pressing it asks about **this**
    * card's oracle id rather than some fallback.
    *
-   * `requestAllPrintings` writes the intent and the navigation in one `set`, so the store is
-   * where the press is observed — `App` owns the view this page is drawn in.
+   * `openAllPrintings` writes one field and moves nothing, so the store is where the press is
+   * observed — the modal itself is mounted once in `App`, over whatever view is on screen.
    */
   it("offers View all printings, and asks about the entry's own oracle card", async () => {
     const user = userEvent.setup();
+    // Standing where the page is actually drawn, so "it did not navigate" is a fact rather than
+    // the store's own default — `activeView` starts on `"search"`, which is where the old
+    // channel took the reader.
+    useAppStore.setState({ activeView: "collection" });
     wrap(<CollectionPage />);
     rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
     await screen.findByRole("menu");
@@ -942,11 +946,18 @@ describe("the card menu", () => {
 
     await user.click(printings);
 
-    expect(useAppStore.getState().pendingCardSearch).toEqual({
+    expect(useAppStore.getState().printingsRequest).toEqual({
       oracleId: "o1",
       name: "Lightning Bolt",
+      // A collection row is not a row of an open deck, so there is no slot for a press in the
+      // modal to swap — it opens the card pane on the printing instead.
+      deck: null,
     });
-    expect(useAppStore.getState().activeView).toBe("search");
+    // **And the reader is still on their collection.** This press used to write `activeView`,
+    // `selectedCardId`, `paneDeckContext` and `openDeckId` in the same `set`, so asking which
+    // printings a card had moved them to the Search page and lost their place in a filtered
+    // list. The modal is drawn over this page; nothing navigates.
+    expect(useAppStore.getState().activeView).toBe("collection");
   });
 
   /**

@@ -289,6 +289,7 @@ import {
   langOptions,
   setOptions,
   treatmentOptions,
+  type PrintingFilter,
 } from "./printingFilters";
 
 /** One printing, with every field the filters read and sane defaults for the rest. */
@@ -314,7 +315,7 @@ function printing(over: Partial<Printing> = {}): Printing {
   };
 }
 
-const all = (over: Partial<Printing> = {}) => ({ ...EMPTY_PRINTING_FILTER, ...over });
+const all = (over: Partial<PrintingFilter> = {}) => ({ ...EMPTY_PRINTING_FILTER, ...over });
 
 describe("filterPrintings", () => {
   it("passes everything through an empty filter", () => {
@@ -695,7 +696,7 @@ export function treatmentOptions(printings: readonly Printing[]): TreatmentOptio
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `npx vitest run src/features/card/printingFilters.test.ts`
-Expected: PASS, 16 tests.
+Expected: PASS. (Count the `it` blocks in the file above rather than trusting a number written beside them — a count is a fact about a tree, and this plan is not the tree.)
 
 - [ ] **Step 5: Commit**
 
@@ -1225,7 +1226,10 @@ it("says why an over-narrowed wall is empty, and offers the way out", async () =
   open({ oracleId: "o1", name: "Sol Ring", deck: null });
   await user.type(await screen.findByRole("searchbox", { name: "Filter printings" }), "zzz");
   expect(await screen.findByText(/No printings match/)).toBeVisible();
-  await user.click(screen.getByRole("button", { name: /Clear/ }));
+  // **`Clear all` is the filter bar's, and it is the only one.** The empty state says why the
+  // wall is empty and points at that control rather than drawing a second one — two buttons
+  // whose names both match /Clear/ would make this line throw on an ambiguous match.
+  await user.click(screen.getByRole("button", { name: "Clear all" }));
   expect(await screen.findByText("1 printing")).toBeVisible();
 });
 
@@ -1360,13 +1364,13 @@ The chrome:
   - `action` — the cheapest price across finishes at the current marketplace: `cheapestPrice(p.finishPrices)` from `./printings`, drawn with `formatPrice(value, marketplace.currency)` from `@/lib/prices`. A `null` price draws an **em dash**, never `$0.00` — `formatPrice` never invents a zero, and a marketplace that has not answered costs an em dash rather than a number. Wrapped in `font-mono tabular-nums`.
   - `cardMenu` / `cardMenuKey` — `useContextMenu()`'s `menu`/`menuKey` over a thunk `() => buildCardMenu(printingTarget(p, cardFacts), { ...deps, printingsOracleId: request.oracleId, printingsDeck: request.deck })`. `cardFacts` is `{ name: request.name, oracleId: request.oracleId, typeLine: null }` — the request carries no type line, and `null` is the honest value: `cardMenu.tsx`'s doc says `null` still runs `autoCategoryFor`, where **absent** would skip the filing rule entirely.
 - Loading: `query.isPending` draws `Loading printings…`. Error: `query.isError` draws `Could not read the printings — {ipcError(query.error)}`.
-- Empty: `shown.length === 0 && items.length > 0` draws `No printings match these filters.` plus a `Clear filters` button. `items.length === 0 && !query.isPending && !query.isError` draws `This card has no paper printings.` — a different sentence, because it is a different fact.
+- Empty: `shown.length === 0 && items.length > 0` draws `No printings match these filters.` and **no button of its own** — `PrintingsFilterBar` already renders `Clear all` whenever the filter is active, which is exactly when this sentence is on screen, and a second control with the same job is a second thing to keep in step (and an ambiguous match for any test addressing it by name). `items.length === 0 && !query.isPending && !query.isError` draws `This card has no paper printings.` — a different sentence, because it is a different fact.
 - A refused swap draws `ipcError(swap.error)` in `text-destructive` above the wall, and the modal stays open.
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `npx vitest run src/features/card/AllPrintingsDialog.test.tsx`
-Expected: PASS, 9 tests.
+Expected: PASS. (Count the `it` blocks above rather than trusting a number beside them.)
 
 - [ ] **Step 5: Commit**
 

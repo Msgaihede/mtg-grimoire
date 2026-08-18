@@ -331,6 +331,7 @@ export function ToggleChip({
   onClick,
   hint,
   title,
+  disabled,
   className,
 }: {
   label: string;
@@ -344,12 +345,38 @@ export function ToggleChip({
    * condition chips, this carries a facet count on the search's Owned chip — and if they
    * ever do, the sentence built for this chip wins over the one built for its label.
    *
-   * **No `disabled` here, deliberately.** The one faceted chip of this kind is Owned, which
-   * is never greyed: it is a single button cycling off → owned → missing → off, and greying
-   * it would strand whoever is mid-cycle. A prop no caller may ever set is one more state to
-   * reason about and no behaviour at all.
+   * `disabled` is one prop down, and it exists now — see it for why, and for what this note
+   * used to say instead.
    */
   title?: string;
+  /**
+   * Out of reach: a chip whose option would leave nothing.
+   *
+   * **This used to be documented as a prop deliberately absent**, and the argument was sound
+   * for as long as its premise held: the only faceted chip of this kind was Owned, which is a
+   * single button cycling off → owned → missing → off, so greying it would strand whoever was
+   * mid-cycle — and a prop no caller may ever set is one more state to reason about and no
+   * behaviour at all. The printings modal's treatment chips are the second caller and they are
+   * not a cycle: each is one independent option over one card's printings, and a card with no
+   * showcase printing has a Showcase chip that can only ever answer with an empty wall.
+   *
+   * **Greyed and present rather than dropped**, which is `features/search/facets.ts`' rule and
+   * its reason: an option that vanishes reads as a control that broke, where a greyed one reads
+   * as a fact about the card in front of you. It also keeps the row a fixed shape, so it does
+   * not reflow under the reader as they narrow.
+   *
+   * Three things together, because any one alone is a control that lies. `aria-disabled` rather
+   * than `disabled`, so the chip keeps its tab stop and a reader sweeping the row still hears
+   * the option and its count; the press refused here rather than only at the call site, so the
+   * attribute cannot drift from the behaviour; and {@link FILTER_UNAVAILABLE}'s dimming plus the
+   * dropped hover and press responses, because a control that brightens under the mouse and then
+   * ignores the click is worse than one that never moved.
+   *
+   * It never co-occurs with `pressed` — a selected option is never greyed, per `facets.ts` — and
+   * if the two ever did meet, `filterChipState` draws "on, and out of reach" rather than letting
+   * one silently win.
+   */
+  disabled?: boolean;
   /**
    * Extra classes, **for a label that is data rather than app vocabulary** — and that is the
    * whole of what it is for.
@@ -371,11 +398,28 @@ export function ToggleChip({
   return (
     <button
       type="button"
-      onClick={onClick}
+      // Refused here as well as said in the attribute. `aria-disabled` is a statement to the
+      // accessibility tree and nothing more — unlike `disabled` it does not stop the browser
+      // firing the click — so a chip that only wore the attribute would be one every pointer
+      // could still press. See the prop for why it is not `disabled`.
+      onClick={disabled ? undefined : onClick}
       aria-pressed={pressed}
+      aria-disabled={disabled || undefined}
       title={title ?? hint}
       aria-label={name}
-      className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(pressed), className)}
+      className={cn(
+        FILTER_CONTROL,
+        FILTER_FOCUS,
+        "px-3",
+        filterChipState(pressed, disabled),
+        // The two responses `filterChipState`'s classes cannot reach from here, because both are
+        // written by the recipe this chip is built out of rather than by the state: `PRESS`'s
+        // `active:scale` is keyed on an `aria-disabled` that `FILTER_CONTROL` sets on the
+        // *element*, and the hover brightening is a `hover:text-text` that survives a merge
+        // against an identical `text-dim`. Named here so the greyed chip really is inert to both.
+        disabled && "hover:text-dim active:scale-100",
+        className,
+      )}
     >
       {label}
     </button>

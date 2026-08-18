@@ -4,6 +4,7 @@ import { AnimatePresence, MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
 import { CardZoomIndicator } from "@/components/CardZoomIndicator";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { CollectionPage } from "@/features/collection/CollectionPage";
@@ -146,6 +147,26 @@ export default function App() {
             would be no easier to find. It is mounted *here* and drawn *there*, which is the
             whole trick — the corner comes from a measurement, not from where this line sits. */}
             <CardZoomIndicator />
+            {/* **Every printing of one card, over whatever the reader is already looking at.**
+            A sibling of the shell for the badge's reason one line up: the panel is `fixed` at
+            `LAYER.overlay`, a z-index competes only inside its own stacking context, and every
+            card surface in this app draws rows that are positioned and transformed — so mounted
+            where it was opened it would be capped by that row's layer. Nothing between here and
+            the root transforms.
+
+            **One instance, and that is what the whole change is for.** `View all printings` is on
+            the card menu of twelve surfaces, and it used to answer by *moving* the reader: to the
+            Search view from the collection and the wishlist, into the 384px card pane inside the
+            deck editor. Both destinations closed something to show a list. A dialog mounted here
+            is drawn over all twelve without any of them knowing it exists, so asking the question
+            costs the reader nothing — the deck stays open behind the scrim, and closing the modal
+            puts them back exactly where they were.
+
+            Inside `CardToDeckProvider` and `ContextMenuProvider` because its tiles carry the same
+            card menu every other wall in the app draws, lazy deck picker included; inside
+            `QueryClientProvider` because it reads `card_printings` and writes through
+            `deck_swap_printing`. */}
+            <AllPrintingsDialog />
           </ContextMenuProvider>
         </CardToDeckProvider>
       </QueryClientProvider>

@@ -519,7 +519,13 @@ function viewport(px: number) {
 
 beforeEach(() => {
   resetRowIds();
-  useAppStore.setState({ openDeckId: 4, selectedCardId: null, paneDeckContext: null });
+  useAppStore.setState({
+    activeView: "decks",
+    openDeckId: 4,
+    selectedCardId: null,
+    paneDeckContext: null,
+    printingsRequest: null,
+  });
   deckGet
     .mockReset()
     .mockResolvedValue(
@@ -3967,6 +3973,85 @@ describe("DeckEditor — a card's menu", () => {
 
     fireEvent.contextMenu(tile);
     expect(await screen.findByRole("menu")).toBeInTheDocument();
+  });
+
+  /**
+   * **`View all printings` hands the modal the slot, not a destination** — and the slot is all
+   * five parts of `DECK_CARD_GRAIN` plus the deck, which is what makes a press inside the modal
+   * a swap of *this* row.
+   *
+   * `toEqual` rather than `toMatchObject` on purpose: the failure this guards against is a slot
+   * that names four parts instead of five, and `toMatchObject` is exactly the assertion that
+   * cannot see a missing one. `PaneDeckContext`'s own doc records that mistake twice — over
+   * `variant` and over `finish` — each time rewriting a deck row the reader was not looking at.
+   */
+  it("hands the printings modal the slot the card was right-clicked in", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
+
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      oracleId: "o-Lightning Bolt",
+      name: "Lightning Bolt",
+      deck: {
+        deckId: 4,
+        categoryId: MAIN,
+        categoryName: "Main deck",
+        cardId: "c-Lightning Bolt",
+        variant: "live",
+        finish: null,
+      },
+    });
+  });
+
+  /**
+   * A docked search tile is **not** a row of this deck, so it supplies no slot and a press in the
+   * modal opens the card pane on that printing instead of rewriting something.
+   *
+   * The tile and the deck card sit on one screen and draw the same menu, so this is the pair that
+   * discriminates: a `printingsDeck` fixed once for the whole editor would pass the test above
+   * and quietly offer a swap of some deck row from a card the deck does not hold.
+   */
+  it("hands it no slot from the docked search panel's tiles", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    await open();
+    await openSearchPanel();
+
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Goblin Guide" }));
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
+
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      oracleId: "o-Goblin Guide",
+      name: "Goblin Guide",
+      deck: null,
+    });
+  });
+
+  /**
+   * **The deck stays open behind the modal, which is the whole point of the change.**
+   *
+   * The row used to be a *navigation*: it wrote `activeView`, `selectedCardId` and `openDeckId`
+   * in one `set`, so asking a question about a card closed the deck it was being asked about.
+   * `openAllPrintings` writes one field, and the first three assertions here are exactly the
+   * three fields that write used to move. The fourth is the one a reader would have reported:
+   * the editor itself, still on screen with the deck in it.
+   */
+  it("leaves the deck open when printings are asked for", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
+
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState().openDeckId).toBe(4);
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(screen.getByLabelText("Deck name")).toBeInTheDocument();
   });
 
   /**

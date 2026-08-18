@@ -47,6 +47,40 @@ use std::sync::Arc;
 /// a truncation of.
 const MAX_PRINTINGS: usize = 400;
 
+/// The ceiling an explicitly asked-for page is clamped to — the printings modal's page, and
+/// the fence around it.
+///
+/// **Chosen against the measurement [`MAX_PRINTINGS`] already carries** rather than for the
+/// feel of the number: counting paper only, exactly five oracle cards exceed 400, and they are
+/// the five basic lands — Forest at 862, then Mountain 840, Swamp 832, Island 827, Plains 818.
+/// So 1000 clears the largest list in the corpus with room to spare, and nothing in the library
+/// reaches it.
+///
+/// The modal needs the wider page for a reason the card pane does not have: it **filters**, and
+/// a filter over a truncated list lies. Narrowing to a set that fell outside the newest 400
+/// would draw an empty wall that reads as an answer rather than as a truncation — where the
+/// pane, which offers no filter, can say "400 of 862" in its caption and be honest.
+const MAX_PRINTINGS_HARD: usize = 1000;
+
+/// The page size for one request, from what the caller asked for.
+///
+/// Absent is [`MAX_PRINTINGS`] — the card pane's page, unchanged, so that command's query and
+/// its cache key are byte-identical to what they were before the modal existed. Anything else
+/// is clamped into `1..=MAX_PRINTINGS_HARD`.
+///
+/// **A zero or a negative is a caller bug rather than a request for an empty list, and is
+/// answered with the default.** An empty page here would be indistinguishable from "this card
+/// has no printings", which is the one thing this list must never say by accident. The negative
+/// is the sharper half of the same rule: SQLite reads a negative `LIMIT` as *no limit at all*
+/// — the trap [`crate::deck_audit`]'s `clamp(1, 500)` exists for — so passing one through
+/// would hand out the whole table instead of an empty page.
+fn page_size(limit: Option<i64>) -> i64 {
+    match limit {
+        Some(n) if n > 0 => n.min(MAX_PRINTINGS_HARD as i64),
+        _ => MAX_PRINTINGS as i64,
+    }
+}
+
 /// The rows a printings list is about, stated once because the page and the count must
 /// agree — a `total` taken over a wider `WHERE` than the page is exactly the lie the
 /// `total` was added to prevent.
@@ -173,7 +207,7 @@ pub struct Printing {
 
 /// A printings list and the size of the list it was taken from.
 ///
-/// `total` exists because [`MAX_PRINTINGS`] truncates silently otherwise: Forest has 862
+/// `total` exists because the page truncates silently otherwise: Forest has 862
 /// paper printings, and a pane that returns 400 of them with no way to say so tells the
 /// reader those 400 are all there are. With this it can caption "400 of 862". Mirrors
 /// [`crate::search::SearchResponse`], minus its cap flag — see [`list_printings`] for why
@@ -181,7 +215,8 @@ pub struct Printing {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintingsResponse {
-    /// Newest first, at most [`MAX_PRINTINGS`] of them.
+    /// Newest first, at most one page of them — [`MAX_PRINTINGS`] unless the caller named a
+    /// wider one, and never more than [`MAX_PRINTINGS_HARD`]. See [`page_size`].
     pub items: Vec<Printing>,
     /// Every paper printing of this oracle card, counted in full. `items.len() < total`
     /// means the list was truncated.
@@ -293,10 +328,16 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 /// [`crate::search::run_search`]'s is not — `idx_cards_oracle` narrows it to one card's
 /// printings (946 rows at the very worst) instead of scanning toward 116 k — so there is
 /// nothing here to cap and no `total_is_capped` to report.
+///
+/// **The `LIMIT` is the caller's, within the ceiling** — [`page_size`] turns `limit` into it,
+/// and `None` is [`MAX_PRINTINGS`], so a caller that says nothing gets exactly the page this
+/// function has always answered. `total` is taken over the same `WHERE` with no limit at all
+/// either way, which is what lets a caption tell a truncation from a filter.
 pub fn list_printings(
     conn: &Connection,
     oracle_id: &str,
     market: Marketplace,
+    limit: Option<i64>,
 ) -> Result<PrintingsResponse, String> {
     if oracle_id.trim().is_empty() {
         return Ok(PrintingsResponse::default());
@@ -312,7 +353,7 @@ pub fn list_printings(
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![oracle_id, MAX_PRINTINGS as i64], |r| {
+        .query_map(params![oracle_id, page_size(limit)], |r| {
             Ok(Printing {
                 id: r.get(0)?,
                 set_code: r.get(1)?,
@@ -367,16 +408,23 @@ pub async fn card_detail(
 
 /// Every paper printing of one oracle card, priced at `marketplace`. Read-only connection,
 /// blocking pool.
+///
+/// **`limit` is the page size, and absent is the card pane's [`MAX_PRINTINGS`].** The pane
+/// reads a list it cannot narrow and captions what it dropped, so 400 has always been enough
+/// for it; the printings modal asks for [`MAX_PRINTINGS_HARD`] because it filters client-side,
+/// and a filter over a truncated list draws an empty wall that reads as an answer. Whatever a
+/// caller sends is clamped by [`page_size`], so the number is a request rather than a promise.
 #[tauri::command]
 pub async fn card_printings(
     state: tauri::State<'_, Arc<AppState>>,
     oracle_id: String,
     marketplace: Option<String>,
+    limit: Option<i64>,
 ) -> Result<PrintingsResponse, String> {
     let state = state.inner().clone();
     let market = Marketplace::from_opt(marketplace.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
-        list_printings(&lock_db_read(&state), &oracle_id, market)
+        list_printings(&lock_db_read(&state), &oracle_id, market, limit)
     })
     .await
     .map_err(|e| format!("printings could not be read: {e}"))?
@@ -659,6 +707,24 @@ mod tests {
         .unwrap();
     }
 
+    /// `count` paper printings of one oracle card, ids `<oracle_id>-<n>`.
+    ///
+    /// Lifted out of the truncation test below, which was the only thing that needed it until
+    /// the page became the caller's to name. The columns are the fewest [`list_printings`]
+    /// reads without answering NULL where [`Printing`] says `String`; every row is dated the
+    /// same day, because these cases ask how many rows come back and never which.
+    fn seed_printings(conn: &Connection, oracle_id: &str, count: usize) {
+        for n in 0..count {
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
+                    layout, released_at, search_text, raw)
+                 VALUES (?1, ?2, 'Forest', 'set', ?3, 'en', 'normal', '2020-01-01', 'Forest', '{}')",
+                rusqlite::params![format!("{oracle_id}-{n}"), oracle_id, n.to_string()],
+            )
+            .unwrap();
+        }
+    }
+
     #[test]
     fn a_card_comes_back_with_the_blobs_the_ui_parses() {
         let conn = seeded();
@@ -834,7 +900,7 @@ mod tests {
     #[test]
     fn printings_come_back_newest_first_with_their_art_identity() {
         let conn = seeded();
-        let all = list_printings(&conn, "o1", TCG).unwrap().items;
+        let all = list_printings(&conn, "o1", TCG, None).unwrap().items;
 
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].set_code, "m10", "newest first");
@@ -868,7 +934,7 @@ mod tests {
         seed_feed(&conn, "manapool", "p3", "foil", 36.80);
 
         let newest = |m| {
-            list_printings(&conn, "o1", m)
+            list_printings(&conn, "o1", m, None)
                 .unwrap()
                 .items
                 .into_iter()
@@ -887,7 +953,7 @@ mod tests {
 
         // And the printings a feed has never listed are unpriced there rather than quoted from
         // the blob every one of them still carries.
-        let rest = list_printings(&conn, "o1", Marketplace::Cardkingdom)
+        let rest = list_printings(&conn, "o1", Marketplace::Cardkingdom, None)
             .unwrap()
             .items;
         assert!(
@@ -906,7 +972,7 @@ mod tests {
     fn an_unknown_oracle_id_returns_nothing() {
         let conn = seeded();
         for absent in ["", "o-none"] {
-            let r = list_printings(&conn, absent, TCG).unwrap();
+            let r = list_printings(&conn, absent, TCG, None).unwrap();
             assert!(r.items.is_empty(), "{absent}");
             assert_eq!(r.total, 0, "{absent}");
         }
@@ -919,7 +985,7 @@ mod tests {
     #[test]
     fn digital_printings_are_not_offered_as_copies_to_own() {
         let conn = seeded();
-        let r = list_printings(&conn, "o1", TCG).unwrap();
+        let r = list_printings(&conn, "o1", TCG, None).unwrap();
 
         assert_eq!(r.items.len(), 3, "the MTGO printing does not belong here");
         assert!(
@@ -950,19 +1016,69 @@ mod tests {
     #[test]
     fn the_total_counts_past_the_page_so_a_capped_list_can_say_so() {
         let conn = seeded();
-        for n in 0..MAX_PRINTINGS + 5 {
-            conn.execute(
-                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
-                    layout, released_at, search_text, raw)
-                 VALUES (?1, 'o3', 'Forest', 'set', ?2, 'en', 'normal', '2020-01-01', 'Forest', '{}')",
-                rusqlite::params![format!("f{n}"), n.to_string()],
-            )
-            .unwrap();
-        }
-        let r = list_printings(&conn, "o3", TCG).unwrap();
+        seed_printings(&conn, "o3", MAX_PRINTINGS + 5);
+        let r = list_printings(&conn, "o3", TCG, None).unwrap();
 
         assert_eq!(r.items.len(), MAX_PRINTINGS, "the page is capped");
         assert_eq!(r.total, MAX_PRINTINGS as i64 + 5, "the count is not");
+    }
+
+    /// A caller that asks for more than the default gets it — this is what the printings
+    /// modal's filters stand on. Filtering a truncated list draws an empty wall that looks
+    /// like an answer rather than like a truncation.
+    #[test]
+    fn an_explicit_limit_widens_the_page() {
+        let conn = seeded();
+        seed_printings(&conn, "o3", MAX_PRINTINGS + 20);
+        let r = list_printings(&conn, "o3", TCG, Some(1000)).unwrap();
+
+        assert_eq!(
+            r.items.len(),
+            MAX_PRINTINGS + 20,
+            "the wider page is honoured"
+        );
+        assert_eq!(r.total, MAX_PRINTINGS as i64 + 20, "the count is unchanged");
+    }
+
+    /// The ceiling is the fence, not the caller. A limit past it is clamped rather than
+    /// obeyed, so no caller can ask this query to walk the whole table.
+    #[test]
+    fn a_limit_past_the_ceiling_is_clamped() {
+        let conn = seeded();
+        seed_printings(&conn, "o3", MAX_PRINTINGS_HARD + 5);
+        let r = list_printings(&conn, "o3", TCG, Some(99_999)).unwrap();
+
+        assert_eq!(r.items.len(), MAX_PRINTINGS_HARD, "clamped to the ceiling");
+        assert_eq!(
+            r.total,
+            MAX_PRINTINGS_HARD as i64 + 5,
+            "the count is still uncapped"
+        );
+    }
+
+    /// Absent is the card pane's page, byte for byte. The pane must not change because the
+    /// modal arrived.
+    #[test]
+    fn no_limit_is_still_the_default_page() {
+        let conn = seeded();
+        seed_printings(&conn, "o3", MAX_PRINTINGS + 5);
+        let r = list_printings(&conn, "o3", TCG, None).unwrap();
+
+        assert_eq!(r.items.len(), MAX_PRINTINGS);
+    }
+
+    /// Zero and negatives are a caller bug, not a request for an empty list — an empty page
+    /// here would read as "this card has no printings", which is the one thing it must never
+    /// say. The negative is the sharper half: SQLite reads a negative `LIMIT` as *no limit at
+    /// all*, so passing one straight through would widen the page rather than empty it.
+    #[test]
+    fn a_nonsense_limit_falls_back_to_the_default() {
+        let conn = seeded();
+        seed_printings(&conn, "o3", MAX_PRINTINGS + 5);
+        for bad in [Some(0), Some(-1)] {
+            let r = list_printings(&conn, "o3", TCG, bad).unwrap();
+            assert_eq!(r.items.len(), MAX_PRINTINGS, "{bad:?} falls back");
+        }
     }
 
     /// A face with no name must not be dropped: the flip control addresses faces by index,

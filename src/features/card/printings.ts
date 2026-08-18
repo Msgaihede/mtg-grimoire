@@ -1,7 +1,7 @@
 /**
  * The card-detail domain logic: which printings share artwork, how a reader asked the
- * printings list to be grouped, which formats are worth a chip, and how many sides a card
- * really has.
+ * printings list to be grouped, which formats are worth a chip, how many sides a card really
+ * has, and how one printing row becomes a card menu's target.
  *
  * Here rather than in Rust because CLAUDE.md puts domain logic in TypeScript — and
  * because every rule below is a judgement call about meaning (is a null illustration a
@@ -16,6 +16,7 @@
  * `CardDetailPane`.
  */
 import type { FinishPrices, Printing } from "@/lib/ipc";
+import type { CardMenuTarget } from "./cardMenu";
 
 /**
  * The 23 legality keys in Scryfall's emission order.
@@ -486,6 +487,44 @@ export function legalityChips(legalitiesJson: string | null): { format: string; 
  */
 export function faceCount(layout: string, faces: number): number {
   return TWO_SIDED.has(layout) && faces >= 2 ? 2 : 1;
+}
+
+/**
+ * One printings row as a card menu's target — **the one adapter in the app that reads two
+ * objects.**
+ *
+ * **The card supplies what a printing cannot.** A {@link Printing} says what a piece of cardboard
+ * is — set, collector number, finishes — and carries no name, no oracle id and no type line,
+ * because all three are facts about the *card* rather than about the printing. Taking them off the
+ * card is the stronger answer rather than a workaround, and getting it wrong is invisible: the
+ * menu still draws, "Copy card name" copies `undefined`, and a missing oracle id greys "View all
+ * printings" with the fence's own sentence — *this printing has left the card database* — over a
+ * card that is perfectly healthy.
+ *
+ * The `typeLine` in particular is load-bearing and is passed as `null` rather than omitted where a
+ * caller has none. `useDeck.addCard` reads **absent** as "this caller has nothing to say" and files
+ * the card under the default category with no rule run at all, where `null` still goes through
+ * `autoCategoryFor` — so omitting the key would take the filing rule off a menu add that a drag of
+ * the same row still gets.
+ *
+ * **Here rather than in either surface, because two build it now** — the card pane's printings
+ * list and the printings modal — and a second copy is a second chance to drop a field silently.
+ * The second parameter is a shape rather than a `CardDetail` for the same reason: the modal is
+ * opened from a store request that carries a name and an oracle id and has never loaded a card.
+ */
+export function printingTarget(
+  printing: Printing,
+  card: { name: string; oracleId: string | null; typeLine: string | null },
+): CardMenuTarget {
+  return {
+    cardId: printing.id,
+    name: card.name,
+    setCode: printing.setCode,
+    collectorNumber: printing.collectorNumber,
+    oracleId: card.oracleId,
+    finishes: printing.finishes,
+    typeLine: card.typeLine,
+  };
 }
 
 function safeParse(json: string | null): unknown {

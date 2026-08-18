@@ -1,9 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createElement, StrictMode, type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FacetResponse, SearchRequest } from "@/lib/ipc";
-import { useAppStore } from "@/lib/store";
 
 const searchCards = vi.hoisted(() => vi.fn());
 const facetCards = vi.hoisted(() => vi.fn());
@@ -41,7 +40,6 @@ describe("activeFilterCount", () => {
     manaValues: [],
     manaX: false,
     owned: undefined,
-    oracleId: "",
   };
 
   it("is zero when nothing is filtered", () => {
@@ -83,16 +81,6 @@ describe("activeFilterCount", () => {
   /** Whitespace is not a search. */
   it("ignores a blank search box", () => {
     expect(activeFilterCount({ ...none, text: "   " })).toBe(0);
-  });
-
-  /**
-   * The narrowest filter this view has — one card — and it is counted like the rest, because
-   * Reset all really does clear it and a badge reading `0` over a wall narrowed to one printing
-   * would be the button lying about what it does.
-   */
-  it("counts the one-card filter", () => {
-    expect(activeFilterCount({ ...none, oracleId: "o-bolt" })).toBe(1);
-    expect(activeFilterCount({ ...none, oracleId: "o-bolt", text: "bolt" })).toBe(2);
   });
 
   /**
@@ -587,197 +575,39 @@ describe("the default format filter", () => {
 });
 
 /**
- * "View all printings" — a card picked on any card surface, answered by this hook.
+ * **The search page is no longer a printings viewer**, and this describe is what is left of the
+ * mode that made it one.
  *
- * The filters live in component-local `useState` inside `SearchPage`, so the menu cannot reach
- * one: it writes `pendingCardSearch` on the store instead and this hook consumes it. Every
- * surface but one is in another view, so `SearchPage` mounts fresh and the first render picks the
- * intent up; the exception is the search view itself, where nothing mounts and nothing re-renders
- * unless this hook is *subscribed* to the field. Both paths are below, and they fail differently.
+ * "View all printings" used to write `pendingCardSearch` on the store, which this hook consumed
+ * during render: it seeded an `oracleId` filter, widened the format select to `Any card`, cleared
+ * every other filter and switched `allPrintings` on — a whole second mode of this view, reachable
+ * only from a right-click made somewhere else. The row opens a modal over wherever the reader
+ * already is now, so nothing seeds a filter here and there is nothing left to consume.
+ *
+ * The `oracleId` field on `SearchRequest` and its Rust implementation stay, because they are part
+ * of the search contract and are tested there. What is gone is the frontend's only way to set it.
  */
-describe("the pending card search", () => {
-  const BOLT = { oracleId: "o-bolt", name: "Lightning Bolt" };
-
+describe("the retired one-card mode", () => {
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
     facetCards.mockReset().mockResolvedValue(READY);
-    useAppStore.setState(useAppStore.getInitialState());
   });
 
-  const searchRequestAt = (i: number) => searchCards.mock.calls[i][0] as SearchRequest;
-
-  /** How the app itself mounts this — `main.tsx` wraps the whole tree. */
-  function strict({ children }: { children: ReactNode }) {
-    return createElement(
-      StrictMode,
-      null,
-      createElement(QueryClientProvider, { client: qc }, children),
-    );
-  }
-
   /**
-   * **The first request, not the last** — the whole reason the intent is consumed during render
-   * rather than in an effect. An effect runs after the paint, so the panel would fire the
-   * *unfiltered* browse of a 116 k-row corpus first, answer it with a wall of the wrong cards,
-   * and replace it a round trip later. Only reading call zero can see that.
+   * **Call zero, not the last one** — which is where the seed lived. It was spent in a
+   * `useState` initialiser precisely so that the *first* request already carried the card, so a
+   * surviving seed is a thing only the mount request can still show.
    */
-  it("arrives filtered: the very first request already carries the card", async () => {
-    useAppStore.getState().requestAllPrintings(BOLT);
-
+  it("sends no oracle id", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    expect(searchRequestAt(0).oracleId).toBe("o-bolt");
-    expect(result.current.oracleId).toBe("o-bolt");
-    // The name travels with the id so the chip can caption itself without fetching a card.
-    expect(result.current.oracleName).toBe("Lightning Bolt");
-    // Read once: nothing is left on the store for the next visit to Search to re-apply.
-    expect(useAppStore.getState().pendingCardSearch).toBeNull();
-  });
-
-  /**
-   * The one exception — a card right-clicked in the search results themselves. No view change,
-   * no remount, so an intent read with a bare `getState()` during render would sit on the store
-   * forever and the wall would never narrow.
-   */
-  it("applies a pending intent by clearing every filter and widening the corpus", async () => {
-    const { result } = renderHook(() => useCardSearch(), { wrapper });
-    await waitFor(() => expect(searchCards).toHaveBeenCalled());
-
-    // The reader's old filters, which this card is very unlikely to satisfy.
-    act(() => {
-      result.current.setFormat("modern");
-      result.current.toggleColor("R");
-      result.current.toggleSet("lea");
-      result.current.toggleManaValue(1);
-      result.current.toggleManaX();
-      result.current.toggleOwned();
-    });
-    await waitFor(() => expect(lastSearchRequest().format).toBe("modern"));
-
-    act(() => useAppStore.getState().requestAllPrintings(BOLT));
-
-    await waitFor(() => expect(result.current.oracleId).toBe("o-bolt"));
-    // {@link ANY_CARD}, not `""` — a Modern filter would hide the Vintage-only printings and
-    // `Any format` would hide the art series, so the widest row of the select is what "show me
-    // everything that is this card" needs. It is what `unplayable=true` used to say on its own
-    // before that flag folded into this one select.
-    expect(result.current.format).toBe(ANY_CARD);
-    expect(result.current.colors).toEqual([]);
-    expect(result.current.sets).toEqual([]);
-    expect(result.current.manaValues).toEqual([]);
-    expect(result.current.manaX).toBe(false);
-    expect(result.current.owned).toBeUndefined();
-    // The other half of "show me everything that is this card": without it, a collapsed view
-    // answers with the single row the reader is opening up rather than every printing.
-    expect(result.current.allPrintings).toBe(true);
-  });
-
-  /**
-   * **The key, which is the load-bearing half**, and the sharpest form of it: every other thing
-   * the intent sets is switched on by hand first, so the card is the only segment that can have
-   * moved. This query is against local SQLite — a key that could not tell one card from the
-   * whole corpus would answer instantly out of the browse's cached pages, with no spinner and
-   * nothing on screen to notice.
-   */
-  it("sends the oracle id to the backend and keys the query on it", async () => {
-    const { result } = renderHook(() => useCardSearch(), { wrapper });
-    await waitFor(() => expect(searchCards).toHaveBeenCalled());
-
-    act(() => {
-      result.current.toggleAllPrintings();
-      result.current.setFormat(ANY_CARD);
-    });
-    await waitFor(() => expect(lastSearchRequest().playableOnly).toBeUndefined());
-    const asked = searchCards.mock.calls.length;
-    const key = result.current.searchKey;
-
-    act(() => useAppStore.getState().requestAllPrintings(BOLT));
-
-    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(asked));
-    expect(result.current.searchKey).not.toBe(key);
-    expect(lastSearchRequest().oracleId).toBe("o-bolt");
-    // Every printing, uncollapsed — which is what the reader asked for by name.
-    expect(lastSearchRequest().collapse).toBeUndefined();
-  });
-
-  /**
-   * The search box is cleared **through the debounce as well as through the state**. `text` is
-   * 300 ms away from the request it feeds, so clearing only the box would leave the reader's old
-   * word ANDed with the card for a third of a second — a wall of nothing, followed by the cards.
-   */
-  it("clears the search box on the same render, debounce and all", async () => {
-    const { result } = renderHook(() => useCardSearch(), { wrapper });
-    act(() => result.current.setText("bolt"));
-    await waitFor(() => expect(lastSearchRequest().text).toBe("bolt"));
-    const asked = searchCards.mock.calls.length;
-
-    act(() => useAppStore.getState().requestAllPrintings(BOLT));
-
-    await waitFor(() => expect(lastSearchRequest().oracleId).toBe("o-bolt"));
-    expect(result.current.text).toBe("");
-    // Not one request from here carries the word — including the one the debounce would have
-    // fired on its own a moment later.
-    for (const call of searchCards.mock.calls.slice(asked)) {
-      expect((call[0] as SearchRequest).text).toBeUndefined();
-    }
-  });
-
-  /** A filter, so Reset all reaches it — and the way out of a wall narrowed to one card. */
-  it("clearing the card filter is Reset all, and it does not come back", async () => {
-    useAppStore.getState().requestAllPrintings(BOLT);
-    const { result } = renderHook(() => useCardSearch(), { wrapper });
-    await waitFor(() => expect(result.current.oracleId).toBe("o-bolt"));
-
-    act(() => result.current.resetAll());
-
-    expect(result.current.oracleId).toBe("");
-    // The intent was consumed on arrival, so nothing re-applies it a render later.
-    await waitFor(() => expect(lastSearchRequest().oracleId).toBeUndefined());
-    expect(result.current.oracleId).toBe("");
-  });
-
-  /**
-   * **Under StrictMode, which is how the app really mounts this** (`main.tsx`), and the one
-   * place the render-phase *store write* could come apart: React invokes the render twice, so
-   * the first pass clears `pendingCardSearch` and the second sees nothing waiting. Local
-   * `setState` during render is replayed for that second pass; a write to an external store is
-   * not, so an implementation that read the card straight back out of the store on the second
-   * pass — rather than out of the state the first pass set — would drop the filter here and
-   * nowhere else.
-   */
-  it("takes the card once under StrictMode, where every render runs twice", async () => {
-    const { result } = renderHook(() => useCardSearch(), { wrapper: strict });
-    await waitFor(() => expect(searchCards).toHaveBeenCalled());
-    act(() => result.current.setFormat("modern"));
-    await waitFor(() => expect(lastSearchRequest().format).toBe("modern"));
-
-    act(() => useAppStore.getState().requestAllPrintings(BOLT));
-
-    await waitFor(() => expect(result.current.oracleId).toBe("o-bolt"));
-    expect(result.current.oracleName).toBe("Lightning Bolt");
-    expect(result.current.format).toBe(ANY_CARD);
-    expect(useAppStore.getState().pendingCardSearch).toBeNull();
-  });
-
-  it("counts the card filter among the active filters", async () => {
-    useAppStore.getState().requestAllPrintings(BOLT);
-    const { result } = renderHook(() => useCardSearch(), { wrapper });
-    await waitFor(() => expect(result.current.oracleId).toBe("o-bolt"));
-
-    // `activeCount` is what the Reset all badge prints, and it is the whole of what the reader
-    // has to press to get their search back.
-    //
-    // **Two, not one, since `main` merged the Unplayable chip into the format select.** The card
-    // is one; `Any card` is the other, because "View all printings" now makes its widest-row
-    // statement through `format` rather than through a chip that was deliberately uncounted. By
-    // this number's own rule — *how much would pressing Reset all change* — both are things it
-    // would clear, so two is the honest answer and one would be the badge lying about the button.
-    expect(result.current.activeCount).toBe(2);
-    // Something *was* asked of the database, so an empty answer is "this card is not in there"
-    // rather than "wait for the sync".
-    expect(result.current.unfiltered).toBe(false);
+    expect(searchCards.mock.calls[0][0]).not.toHaveProperty("oracleId");
+    // The two states that used to arrive with it, back to being this view's own defaults: one
+    // row per card, and the caller's format rather than the widest row of the select.
+    expect(result.current.allPrintings).toBe(false);
+    expect(result.current.format).toBe("");
   });
 });
 
