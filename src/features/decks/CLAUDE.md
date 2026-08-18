@@ -1368,36 +1368,40 @@ price | type`). An **inactive category stays its own group in all three grouping
   put it behind the Sideboard and the Maybeboard, which is the kind-before-switch order proved
   where it can fail. Switching both back on restored the original flow order exactly. Every figure:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
-- **The rail hugs the deck, and what holds it one gutter away is a cap on the flowing box**
-  (changed 2026-08-17, both column views). The flowing half is `flex-1`, so it takes every pixel the
-  rail leaves, and a column layout then spends only _whole_ columns of it: the remainder sat inside
-  that box as blank desk between the last pile and the Sideboard. **It is not a fixed cost** — it is
-  whatever the desk's width leaves over, up to very nearly a whole column, and it moves with
-  `stackColumnWidth`, so every zoom step changed it and the reader met it as a zoom bug. Measured on
-  the screenshot that reported it: a 1606px flowing box at 224px columns uses 1424, so the Sideboard
-  stood **198px** from the deck where two piles are 16 apart. `flowMaxWidth` (`views/columns.ts`,
-  shared by both views) caps the box at
-  `min(<columns the deck has>, round(down, 100% − <one column>, <column + gap>) − <gap>)` —
-  **`round(down, …)` is CSS's own floor**, so the count is still the browser's and this file's rule
-  that nothing here measures the desk survives whole. Verified in Chromium 151, the WebView2
-  runtime's version, before it was written: `round()` takes a percentage and resolves it against the
-  flex container at layout. The second term is the one that matters on a wide desk — a freshly
-  created deck flows two piles, and the first term alone would hand it seven columns of box.
-  **`ml-auto` is gone from both rails and its absence _is_ the fix**: a margin that eats free space
-  cannot be asked to eat all but 16px of it, so it was pinning the rail to the right edge of the
-  desk rather than to the right of the deck. What that costs is the wrapped line — see the bullet
-  below. **jsdom cannot check any of this**: `cssstyle` does not reject the value, it rewrites it
-  (`min(464px * , * calc(round(100% * , * down − …`), so `columns.test.ts` asserts the expression on
-  the pure function, the view suites assert only that a cap is present and that it goes with the
-  rail, and the gutter itself is a live claim.
+- **The rail is pinned to the right edge of the desk, and the leftover is what it costs**
+  (changed 2026-08-18, both column views — reversing 2026-08-17, which reversed the day before it).
+  The flowing half is `flex-1`, so it takes every pixel the rail leaves, and a column layout then
+  spends only _whole_ columns of it: the remainder sits inside that box as blank desk between the
+  last pile and the Sideboard. **It is not a fixed cost** — it is whatever the desk's width leaves
+  over, up to very nearly a whole column, and it moves with `stackColumnWidth`, so every zoom step
+  changes it. Measured on the screenshot that first reported it: a 1606px flowing box at 224px
+  columns uses 1424, so the Sideboard stood **198px** from the deck where two piles are 16 apart.
+  **`flowMaxWidth` was the answer to that for one day and is deleted.** It capped the flowing box at
+  `min(<columns the deck has>, round(down, 100% − <one column>, <column + gap>) − <gap>)`, freeing
+  the remainder to sit past the rail, and it worked — at the price of the rail moving with the
+  deck's own width, so the piles played beside the deck were wherever the deck happened to end. The
+  reader's call is that they are looked for **on the right**, at every width and every zoom, and
+  that a gap in front of them is the cheaper of the two. So the box is capped by nothing and
+  `ml-auto` is back on both rails. **The deck's own gutters were never what moved**: `auto-fill`
+  over a definite width spends whole columns, and `gap-x-4`/`gap-6` is one number at every zoom.
+  **The margin is inert beside the flow and acts only on the wrapped line** — `flex-1` has already
+  eaten the line's free space, so the rail is at the right edge for want of anything to its right;
+  see the bullet below for the line where that stops being true. **jsdom can see none of it** — it
+  lays nothing out — so the view suites assert the margin's presence and the cap's absence, and
+  where the pixels land is a live claim. **Driven in the shipped window 2026-08-18** (debug build,
+  1280×800, real corpus): the rail's right edge on the view's content edge at **1187** at 1× and
+  again three zoom steps up, the deck's own gutters **16** at both, the gap in front of the rail
+  **25px** at 1× and **295** at 1.5×, and a wrapped rail at 1024 landing at the **right** of its
+  own line. Every figure:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
   column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
-  own `flex-wrap` drops the rail onto the next line — and since 2026-08-17 it lands at the **left**,
-  under the first column, where `ml-auto` used to hold it right. That is deliberate and was the
-  reader's call: once the rail is _under_ the deck there is no "right of the deck" left to be at,
-  and everything else in both views starts at the left edge. **A `max-width` cannot disturb this** —
-  CSS resolves one below a `min-width` in the minimum's favour, so the wrap is decided before the
-  cap is consulted. `min-w-0`/`flex-1` cannot say this, because a
+  own `flex-wrap` drops the rail onto the next line — and it lands at the **right** of that line,
+  which is the one place `ml-auto` is doing any work at all. It landed at the **left**, under the
+  first column, for the day the margin was gone, on the argument that once the rail is _under_ the
+  deck there is no "right of the deck" left to be at. True, and the reader's answer (2026-08-18) is
+  that the rail's place is the right edge of the _desk_, beside the deck or under it.
+  `min-w-0`/`flex-1` cannot say this, because a
   flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
   **this view has no business observing its own box** — the rule that outlived
   `DEFAULT_COLUMN_HEIGHT`, and which the masonry above does **not** weaken: what that observes is
@@ -1411,9 +1415,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   `LAYER.raised` with a leftward seam shadow, and all four existed for a single reason: to hold the
   rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
   downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
-  shadow draws a permanent divider across a layout in which nothing moves. **`ml-auto` was the last
-  mechanism it had and it went on 2026-08-17** — see the cap bullet above — so the rail is now a
-  plain flex child in document order after the deck, with no positioning of its own at all. The rail
+  shadow draws a permanent divider across a layout in which nothing moves. **`ml-auto` is the only
+  mechanism it has left** — gone on 2026-08-17, back on 2026-08-18, see the bullet above — and a
+  margin is not positioning: the rail is a plain flex child in document order after the deck, with
+  no `position`, no z-index and no backdrop of its own. The rail
   therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
   `STACK_ATTR` means "a pile drawn in the flow", and the rail's piles are by construction the ones
   that never reach it, so a sweep counting the deck's own piles goes on counting those. The

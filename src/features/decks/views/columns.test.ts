@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CategoryKind } from "@/lib/ipc";
-import { flowMaxWidth, packColumns, splitRail } from "./columns";
+import { packColumns, splitRail } from "./columns";
 
 const heights = (columns: number[][]) => columns.map((c) => c.reduce((n, h) => n + h, 0));
 
@@ -45,57 +45,6 @@ describe("packColumns", () => {
   it("keeps every item exactly once", () => {
     const items = [10, 20, 30, 40, 50, 60, 70];
     expect(packColumns(items, (h) => h, 100).flat()).toEqual(items);
-  });
-});
-
-/**
- * **This is the only place the expression itself can be asserted, and that is a fact about jsdom
- * rather than a preference.**
- *
- * `flowMaxWidth` returns CSS for an inline `max-width`, so the obvious test is to render a view and
- * read the style back. jsdom's `cssstyle` does not reject what it cannot parse — it **rewrites**
- * it, and this exact value comes back out as
- * `min(464px * , * calc(round(100% * , * down - (224px * 224px) * , + 16px) - 16px))`: the
- * pile-count term folded, the `round()` shredded, and no error anywhere. So a string assertion over
- * there would pin a jsdom bug and go red the day it is fixed. The views assert that a cap is
- * *present* and that it goes away with the rail; the arithmetic is here, on the pure function; and
- * whether the browser then draws one gutter is a story play's, in a real engine that lays out.
- *
- * Verified in Chromium 151 (the version of the WebView2 runtime this app ships against) before any
- * of it was written: `round()` is CSS's own floor, it takes a percentage, and the percentage is
- * resolved against the flex container at layout time.
- */
-describe("flowMaxWidth", () => {
-  /**
-   * Both terms, spelled out once. The `min()` is the whole design — the desk's answer and the
-   * deck's, whichever is smaller — so the test is the literal string rather than a shape match: a
-   * refactor that drops either term still produces valid CSS that lays out plausibly and is wrong
-   * in exactly one of the two directions this exists to cover.
-   */
-  it("caps at the columns that fit and at the columns the deck has", () => {
-    expect(flowMaxWidth("224px", "16px", 6)).toBe(
-      "min(calc(6 * (224px + 16px) - 16px), calc(round(down, 100% - 224px, 224px + 16px) - 16px))",
-    );
-  });
-
-  /** `TextView` states its column in `rem` and `StackView` in pixels off the zoom, and every
-   *  operation here is arithmetic CSS does in whatever unit it is handed — which is the whole
-   *  reason the lengths are strings. A helper that had taken numbers could not have served both. */
-  it("works in whatever unit the view states its column in", () => {
-    expect(flowMaxWidth("18.75rem", "1.5rem", 3)).toBe(
-      "min(calc(3 * (18.75rem + 1.5rem) - 1.5rem), " +
-        "calc(round(down, 100% - 18.75rem, 18.75rem + 1.5rem) - 1.5rem))",
-    );
-  });
-
-  /**
-   * **A `max-width` that resolves negative is clamped to zero, and the flowing box carries a
-   * `min-width` of one column** — so at nought columns the two would disagree in writing while
-   * agreeing on screen, which is the kind of rule that gets "simplified" in the wrong direction
-   * later. The floor makes the ceiling say what the minimum beside it already does.
-   */
-  it("never asks for less than one column", () => {
-    expect(flowMaxWidth("224px", "16px", 0)).toBe(flowMaxWidth("224px", "16px", 1));
   });
 });
 
