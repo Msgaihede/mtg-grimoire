@@ -23,7 +23,7 @@ import { useCategoryDragSource, useCategoryReorderDrop } from "../categoryDrag";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import type { ValidationIssue } from "../validation/types";
-import { flowMaxWidth, RAIL_ATTR, splitRail } from "./columns";
+import { RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -101,18 +101,6 @@ const FLOW_ROW = 1;
  * foot of every column — 20px of slack under the last pile, on top of the root's `pb-2`.
  */
 const FLOW_GAP_Y = 20;
-
-/**
- * The gutter between two piles side by side, in pixels — the `gap-4` on the root and the `gap-x-4`
- * on the flowing grid, which are **one number that happens to be written twice**.
- *
- * They have to stay one number. The first spaces the rail from the deck and the second spaces two
- * piles from each other, and {@link flowMaxWidth}'s whole promise is that a reader cannot tell
- * which of the two they are looking at. This constant is the third spelling, and it exists because
- * that promise is arithmetic: the cap has to subtract exactly the gutter the classes draw, or the
- * flowing box is capped a pixel off its own last column and the gap comes back a pixel at a time.
- */
-const FLOW_GAP_X = 16;
 
 /**
  * How many rows of the flowing grid a pile of this pixel height claims — its height, plus the one
@@ -372,18 +360,20 @@ export function StackView({
           sideways. `min-w-0`/`flex-1` cannot say it — they describe how a box shares slack, not
           the width at which it must stop sharing.
 
-          **`maxWidth` is the other end of that sentence, and it is what puts the rail one gutter
-          from the deck rather than a zoom step away from it** (added 2026-08-17). `flex-1` takes
-          every pixel the rail leaves and `auto-fill` then spends only whole ones, so the remainder
-          sat *inside* this box as dead desk between the last pile and the Sideboard — 182px of it
-          on the reader's own screenshot, and a different number at every stop on the zoom ladder,
-          which is what made it read as a zoom bug. {@link flowMaxWidth} caps this box at the
-          columns it can actually use, and at `flow.length` when the desk holds more than the deck
-          has piles for. **It is `min-width`'s junior**: CSS resolves a `max-width` below a
-          `min-width` in the minimum's favour, so the narrow case above is decided before this is
-          consulted and the wrap it describes is untouched. **Only while a rail is drawn** — with
-          nothing after this box, the remainder is desk nobody is looking at, and capping it would
-          be a rule with no reader.
+          **There is no `maxWidth` here any more, and the rail sits at the right edge because this
+          box takes everything else** (changed 2026-08-18). `flowMaxWidth` capped it at whole
+          columns for a day, which freed the leftover — up to very nearly a whole column, and a
+          different number at every stop on the zoom ladder — to sit *after* the rail, so the rail
+          came to rest one gutter from the deck's last pile wherever the deck happened to end. The
+          reader's call reverses that: the piles played beside the deck are looked for **on the
+          right**, at every width and every zoom, and the leftover is what pays for it. With
+          nothing capping it, `flex-1` swallows every pixel the rail leaves, so the remainder is
+          dead desk *inside* this box, between the last pile and the rail, and the rail is flush
+          against the right edge of the desk. **The deck's own gutters are untouched, which is the
+          half of this the reader asked to keep**: `auto-fill` over a definite width spends whole
+          columns and `gap-x-4` is 16px at every stop on the ladder. **The column count is
+          untouched too** — a capped box was exactly `n × (column + gap) − gap` wide, so
+          `auto-fill` counts the same `n` either way, and dropping the cap moved no pile.
 
           **`items-start` is load-bearing twice over now.** It keeps each pile its own height —
           stretched, a switched-off pile's `bg-surface/60` wash would grow to fill its whole grid
@@ -404,10 +394,6 @@ export function StackView({
       <div
         style={{
           minWidth: columnWidth,
-          maxWidth:
-            rail.length > 0
-              ? flowMaxWidth(`${columnWidth}px`, `${FLOW_GAP_X}px`, flow.length)
-              : undefined,
           gridTemplateColumns: `repeat(auto-fill, ${columnWidth}px)`,
           gridAutoRows: `${FLOW_ROW}px`,
         }}
@@ -451,21 +437,20 @@ export function StackView({
           **The Maybeboard is seeded switched off, so this rail has always held a dimmed pile** —
           which is why the change above needed no new drawing code at all.
 
-          **There is no `ml-auto` here any more, and its absence is the fix** (changed 2026-08-17).
-          It pinned the rail to the right *edge of the desk* rather than to the right of the deck,
-          so it absorbed the whole of the flowing box's leftover width and drew the gap this change
-          exists to close — a margin that eats free space cannot be told to eat all but 16px of it.
-          The rail is a plain flex child now, one `gap-4` after a box that {@link flowMaxWidth} has
-          already capped at whole columns, which is the same gutter as between any two piles.
-          **What it cost is the wrapped line**: a desk too narrow for one pile beside the rail drops
-          the rail below the deck, and it lands at the **left**, under the first column, where
-          `ml-auto` used to hold it right. That is the reader's own call and the honest one — once
-          the rail is under the deck rather than beside it there is no "right of the deck" left to
-          be at, and everything else in this view starts at the left edge.
+          **`ml-auto` is back, and it earns its keep on the wrapped line rather than beside the
+          deck** (changed 2026-08-18). On the ordinary line it does nothing at all: the flowing box
+          is `flex-1` with no cap since the change above, so `flex-grow` has already taken every
+          free pixel and an auto margin resolves to zero — the rail is at the right edge because
+          there is no line left to its right, not because a margin put it there. The line where
+          free space survives is the **wrapped** one: a desk too narrow to hold a pile beside the
+          rail drops the rail below the deck, alone on its own line, and this is what holds it at
+          the right edge there too. That reverses the call of 2026-08-17 — the rail landed at the
+          **left**, under the first column, on the argument that once it is under the deck there is
+          no "right of the deck" left to be at. True, and the reader's answer is that the rail's
+          place is the right edge of the *desk*, whether or not the deck is beside it.
 
           The width is the same `stackColumnWidth` the flowing piles are, inline and in both halves
-          of the shorthand, because a Tailwind class built from a number emits no CSS rule at all —
-          and it is the length `flowMaxWidth` subtracts for this box, so the two must not drift.
+          of the shorthand, because a Tailwind class built from a number emits no CSS rule at all.
 
           **The piles inside carry no `flowWidth`, and that is not tidiness.** This box is
           `flex-col`, so a `flex: 0 0 224px` on a child would be read down the *main* axis and
@@ -475,7 +460,7 @@ export function StackView({
         <div
           {...{ [RAIL_ATTR]: "" }}
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
-          className="flex flex-col gap-5"
+          className="ml-auto flex flex-col gap-5"
         >
           {rail.map((group) => (
             <StackGroup

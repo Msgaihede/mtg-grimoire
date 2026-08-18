@@ -129,13 +129,33 @@ Every one of these has its measurement and its story in
   resemblance is N independent decisions that happen to agree today. Each of those is settled
   once in `DeckDialog.tsx` with the reason at its own site, and the shell's three optional
   header props (`title: ReactNode`, `ariaLabel`, `subtitle`) exist because folding the last
-  three in needed exactly that much and no more. `DeckEditor.test.tsx`'s Tab sweep is still
+  three in needed exactly that much and no more. **Clamping the panel to the window takes two
+  classes and they only work together** (2026-08-18): the panel's `max-h-full` is a percentage
+  against its *grid area*, so the scrim needs `grid-rows-[minmax(0,1fr)]` to bound that area — an
+  implicit grid row is `auto`, an `auto` row sizes to its own content, and the clamp was therefore
+  circular and clamped **nothing**. Measured headless at a 708px viewport with a 140-line export,
+  the panel drew **2963px**, every body's `overflow-y-auto` was inert because it had every pixel it
+  asked for, and the dialog's buttons sat at y≈2930 — off the window, reachable by neither pointer
+  nor wheel. `minmax(0,` is load-bearing: a bare `1fr` is `minmax(auto, 1fr)`, whose `auto` floor
+  is the content again. **jsdom has no layout engine, so nothing in the suite can see any of it** —
+  `DeckDialog.test.tsx` pins the two classes and the numbers come from a browser. `DeckEditor.test.tsx`'s Tab sweep is still
   driven per surface rather than pointed at the shell, and it is what would go red if a modality
   fix reached one dialog and stopped there. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
   column, whose tiles are drag sources into the deck's own category columns, and the card detail
   pane, which is how a reader flips through a card's printings — and both of those are
   collapsible or dismissible and **neither opens by default**.
+- **A modal is clamped to the window and scrolls inside itself — its content never decides its
+  height.** Every panel here has something in it that can grow without a ceiling: a decklist, a
+  validation list, a category list, an error carrying a Scryfall message. Unclamped, the panel
+  grows past the viewport and takes its footer buttons off the bottom of the window, where
+  neither pointer nor wheel reaches them — which makes the dialog unusable rather than merely
+  ugly, because the way out of a modal is a control it has just scrolled away. A body carries
+  `min-h-0 flex-1 overflow-y-auto`, and **that is inert on its own**: it scrolls nothing until
+  the panel above it is bounded, which takes the two classes and the reason given in the
+  `DeckDialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
+  for this** — build a modal on `DeckDialog` rather than beside it, and check a new one in the
+  running window at a short viewport with more content than fits.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
   left. Nothing clips these popups, so one that overflows scrolls the whole app sideways; and

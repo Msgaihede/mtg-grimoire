@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, CircleCheck, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
-import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
+import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -137,13 +137,19 @@ export interface ValidationPanelProps {
 }
 
 /**
- * What the rules make of this deck, behind one chip.
+ * What the rules make of this deck, behind one glyph.
  *
  * **Advisory, never blocking** — spec §7, and the engine's own design: nothing here refuses a
  * write, greys out a control or stops a deck from being saved, because an illegal deck is a
- * deck somebody is still building. The chip says how many findings there are; opening it says
- * what they are, in the engine's own sentences, with the card each one is about reachable from
- * the sentence itself.
+ * deck somebody is still building. The button says whether there is anything to fix and how
+ * much of it; opening it says what, in the engine's own sentences, with the card each finding is
+ * about reachable from the sentence itself.
+ *
+ * **It was a chip reading "No issues · Modern" or "3 issues" until 2026-08-18**, and what
+ * retired that is the deck it sits over having two lists: Live and Theory hold different cards,
+ * fail different rules, and are switched between two controls to the left of this one — so the
+ * readout changed width as the reader flipped between them and took the rest of the row with it.
+ * The button's own site below carries the rest of that argument.
  *
  * The bracket estimate rides in the same panel for the commander formats, and is an estimate
  * in the copy as well as in the code: `estimateBracket` emits no issue, and a number that
@@ -196,6 +202,20 @@ export function ValidationPanel({
   useDismissOnEscape({ layer: "inner", onDismiss, enabled: open });
 
   const count = issues.length;
+  /**
+   * The whole of what this control says, now that it says nothing in words.
+   *
+   * **It names the format in both states, which it did not before.** The count used to be
+   * visible text and the format rode along only on the empty state, where there was nothing
+   * else to print; a label is now the only place either fact exists, and one that named the
+   * ruleset for a clean deck and withheld it for a broken one would be answering "checked
+   * against what?" exactly when the question stops being worth asking.
+   */
+  const label =
+    count === 0
+      ? `No issues · ${spec.displayName}`
+      : `${count} ${count === 1 ? "issue" : "issues"} · ${spec.displayName}`;
+
   return (
     <div
       ref={rootRef}
@@ -209,29 +229,95 @@ export function ValidationPanel({
         if (open && !rootRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >
+      {/**
+       * **A glyph in a fixed 36px box, because the two lists disagree and this control is
+       * beside the switch between them.** Live and Theory hold different cards, so they fail
+       * different rules: flipping the switch took this from "No issues · Modern" to
+       * "3 issues" and back, and every control to its right — Built, the two action buttons —
+       * slid along with it. A readout that moves the row when the reader changes what it is
+       * describing is a readout they have to find again each time, and at the widths this row
+       * already wraps at (see the header's `flex-wrap` note) it could also change *which line*
+       * those buttons are on.
+       *
+       * The box is `w-9` for the same reason the undo/redo pair on the row below is: 36px is
+       * {@link FILTER_CONTROL}'s own height, so a square is the one width that cannot sit off
+       * the line. Nothing inside it may change that width — which is what the count being
+       * absolutely positioned is for, below.
+       */}
       <button
         ref={buttonRef}
         type="button"
         aria-expanded={open}
         aria-haspopup="dialog"
+        // The name and the tooltip are one string: a glyph says nothing to a screen reader and
+        // nothing to a pointer either, and two hand-written copies of a sentence are two
+        // sentences waiting to disagree. Same arrangement as the undo/redo buttons'.
+        aria-label={label}
+        title={label}
         onClick={() => (open ? onDismiss() : onOpen())}
-        className={cn(FILTER_CONTROL, FILTER_FOCUS, "px-3", filterChipState(open))}
+        className={cn(
+          FILTER_CONTROL,
+          FILTER_FOCUS,
+          // `relative` for the count; `px-0` because the padding was for words.
+          "relative grid w-9 place-items-center px-0",
+          // **Not `filterChipState`**, which is this row's recipe and stays so for every
+          // control on it that is made of text. It says on, off and hover in the *text*
+          // colour, and there is no text here: the glyph's colour is its meaning, so a state
+          // that repainted it would be a green check that turns gold when the panel opens.
+          // The border carries both instead — the on half of `filterChipState` unchanged, and
+          // a hover that brightens the same edge rather than a word.
+          open ? "border-accent" : "border-border hover:border-dim",
+        )}
       >
-        {count === 0 ? (
-          `No issues · ${spec.displayName}`
-        ) : (
-          <>
-            {/* The number is the only red on the chip: a coloured *surface* would make a deck
-                somebody is still building look broken, and this panel refuses nothing.
+        {/* Red for a break, green for none, and **the glyph is the only thing coloured** — a
+            tinted surface would make a deck somebody is still building look broken, and this
+            panel refuses nothing. That was the old chip's rule when the count was the one red
+            thing on it, and it survives the change intact.
 
-                It counts warnings with errors, and colours the total either way — the brief's
-                wording, kept deliberately. A warning is "a fact worth a look" rather than a
-                broken rule, so a two-tone count would be more precise; it would also be a chip
-                with two numbers on it, and the panel behind it already tells the two apart per
-                sentence. One number, one press to see what it is made of. */}
-            <span className="font-mono tabular-nums text-destructive">{count}</span>{" "}
-            {count === 1 ? "issue" : "issues"}
-          </>
+            Both shapes are already the app's: `TriangleAlert` is what the shell's error banner
+            draws, `CircleCheck` is what both Settings panels draw when there is nothing to
+            report. Deliberately *not* `OctagonAlert` — a stop sign says blocked, and nothing
+            here blocks anything.
+
+            It counts warnings with errors, and colours the total either way — the brief's
+            wording, kept deliberately. A warning is "a fact worth a look" rather than a broken
+            rule, so a two-tone count would be more precise; it would also be a control with two
+            numbers on it, and the panel behind it already tells the two apart per sentence. */}
+        {count === 0 ? (
+          <CircleCheck className="size-4 text-ok" aria-hidden="true" />
+        ) : (
+          <TriangleAlert className="size-4 text-destructive" aria-hidden="true" />
+        )}
+
+        {count > 0 && (
+          // **Out of flow, so the box cannot grow.** `absolute` takes the count out of the
+          // `grid` above, which is the whole mechanism: 3 issues and 47 issues draw the same
+          // 36px control, and so does a clean deck. The ring is the page's own background, so
+          // the bubble reads as sitting *on* the button rather than welded to its border.
+          //
+          // **It hangs off the top and never off the right, and that asymmetry is a scrollbar.**
+          // The block this control is in is `flex-wrap justify-end`, so every folded line ends
+          // flush against the header's right edge — which is the deck editor's own edge, and
+          // that editor is the page scroller. `overflow-y: auto` computes `overflow-x` to
+          // `auto` as well, so a bubble 4px past that edge on any width where the wrap happens
+          // to fall right here is 4px of horizontal scroll on a page that must never have any.
+          // Up it costs nothing: the header's `py-1.5` leaves the row 6px of room and the
+          // bubble asks for 3.
+          //
+          // `aria-hidden`, because the number is already in the button's name and a reader who
+          // hears "3 issues · Modern, 3" has been told twice. Capped at two digits — sixty
+          // findings is a real state (a Standard deck full of cards from other formats), and
+          // "99+" is the same shape as "12".
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute -top-1 right-0 grid h-4 min-w-4 place-items-center",
+              "rounded-full px-1 font-mono text-[0.625rem] leading-none tabular-nums",
+              "bg-destructive text-bg ring-2 ring-bg",
+            )}
+          >
+            {count > 99 ? "99+" : count}
+          </span>
         )}
       </button>
 

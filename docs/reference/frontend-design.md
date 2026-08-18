@@ -526,10 +526,16 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   and the rail is a plain
   flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
   before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
-  it, at the same inline width and `flex` basis. **Nothing positions that box** — since 2026-08-17
-  it is document order and a gutter, the `ml-auto` that used to hold it against the desk's right
-  edge having been the cause of the gap between the deck and the rail rather than the end of the
-  fix; what keeps the spacing even is `flowMaxWidth`'s cap on the flowing half. The failure it
+  it, at the same inline width and `flex` basis. **The box is pinned to the desk's right edge and nothing else
+  positions it** — `ml-auto`, which went on 2026-08-17 and came back on **2026-08-18** with the cap
+  on the flowing half removed (`flowMaxWidth` is deleted). The day between is the whole argument:
+  capping the flow at whole columns did put the rail one gutter from the deck's last pile, and it
+  did so by letting the rail drift left with the deck's own width — which is the thing the reader
+  wanted fixed in place. The leftover is the price, up to very nearly a whole column and a
+  different number at every zoom stop, and it is dead desk between the deck and the rail. **What
+  the margin actually does is the wrapped line**: beside the flow it resolves to zero, because
+  `flex-1` has already taken every free pixel of the line and the rail is at the right edge for
+  want of anything to its right. The failure it
   prevents is a drag with no destination on screen: both piles sort last, so packed they were the
   far end of the run, and a card dragged out of the main deck had nowhere to be let go of. The
   Maybeboard earns the rail on the same three counts as the Sideboard — played beside the deck
@@ -570,7 +576,10 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   the rail is one column wide however many piles are in it, and each one costs height.
 - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build, 1280×800,
   against a real synced corpus — a 14-card Commander deck of nine categories). Every figure is a
-  `getBoundingClientRect` off the running window.
+  `getBoundingClientRect` off the running window. **Two of the numbers below are the capped
+  build's and are no longer what this app draws** (the cap was deleted 2026-08-18): the rail's
+  16px gutter and the 1184px flowing box. Everything about _which pile is where_ — the split, the
+  order, the masonry closing up — is unaffected, which is what this pass was for.
   - **Before**: flow `Commander, Instant, Artifact, Creature, Test` at x **234 / 474 / 714**, the
     last two wrapping to a second line at y **699** and **767**; rail at x **954**, 224 wide, 480
     tall. The last flow column ends at 938, so the gutter is exactly **16** — `flowMaxWidth` holding.
@@ -589,9 +598,34 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     on one line, the flowing box capped at **1184px** (= 5 × 240 − 16, `flowMaxWidth`'s deck term
     rather than the desk's), rail at 1434, and `documentElement.scrollWidth` **2560** against a
     `clientWidth` of **2560** — no horizontal page scrollbar, which is what the 1024px floor forbids.
-  - **Not driven**: an entirely switched-off deck (the empty flow `flowMaxWidth` now documents), and
+  - **Not driven**: an entirely switched-off deck (an empty flow beside a rail holding the lot), and
     a switched-off pile under a derived grouping — that one is `views.test.tsx`'s and the
     Maybeboard's ordinary path.
+- **Driven in the shipped window 2026-08-18** (`npm run tauri dev`, a **debug** build, against a
+  real synced corpus — a 14-card Commander deck of five flowing piles and the two railed ones),
+  for the reversal above: the cap deleted, `ml-auto` back on both rails. Every figure is a
+  `getBoundingClientRect` off the running window, with `innerWidth` read in the same expression
+  as the rect (the window can be resized under a pass, and a wide desk reads exactly like an
+  overflow).
+  - **Beside the deck, at 1280×800 and 1× zoom.** The view root spans 228 → **1193** and carries
+    `DROP_MARK_ROOM`'s 6px, so its content edge is 1187 — and the rail's right edge is **1187**,
+    flush. Flow 234 → 947 (**713** wide = 965 − 12 padding − 224 rail − 16 gap) with **no**
+    `max-width` in the style attribute. Three columns at x **234 / 474 / 714**, 224 wide, so every
+    gutter between two piles is **16** and the deck's own rhythm is untouched. The leftover shows
+    up where the change puts it: the last column ends at 938 and the rail starts at 963, a
+    **25px** gap where two piles are 16 apart.
+  - **It moves with the zoom, which is the accepted price.** Three ctrl+wheel steps up (column
+    **329**) left the rail's right edge at **1187** and the flow at 608 — one column, since
+    329 + 16 + 329 = 674 does not fit — so the gap between the deck and the rail was **295**. The
+    rail did not move; the deck did.
+  - **The wrapped line is where `ml-auto` actually acts**, and it was reached at five steps up
+    (column **434**) in a 1024px window: the rail took its own line at y **4519** under a flow at
+    y 339, and its right edge was **931** — the flow's own right edge — rather than x 234 under
+    the first column, which is where the day without the margin left it. `scrollWidth` **1024**
+    against a `clientWidth` of 1024: no horizontal page scrollbar, which the 1024px floor forbids.
+  - **`TextView` agrees**, measured on a 2560px desk: rail right edge **2467** against a root
+    content edge of 2467, `ml-auto flex flex-col gap-4` on the box, and the flowing half **1909**
+    wide with no `max-width` — one 300px column in it and the rest blank desk before the rail.
 - **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
   shipped window.** Against `.storybook/fake`, reading each group's accessible name off
   `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no
@@ -766,6 +800,28 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   which is what lets each body start its queries and its state clean on every open. The shell
   does not own the body's scroller — the history body has a sticky roll-up inside its own — so
   each body renders its own `min-h-0 flex-1 overflow-y-auto`.
+  **A body's scroller only works if the panel above it is clamped, and for two days it was not**
+  (2026-08-18). The panel's `max-h-full` is a percentage against its *grid area*, and the scrim's
+  `grid place-items-center` gave it an **implicit** row — which is `auto`, and an `auto` row sizes
+  to its own content, so the clamp was circular and clamped nothing. Measured in a headless
+  browser at a 708px viewport with a 140-line export: the panel drew **2963px**, the body's
+  `overflow-y-auto` never scrolled because it had every pixel it asked for, and the dialog's
+  buttons sat at y≈2930 — off the window, reachable by neither pointer nor wheel. The scrim now
+  names one explicit `grid-rows-[minmax(0,1fr)]` row; the same panel draws **660px**, the preview
+  scrolls its own 2754px, and the buttons are on screen. `minmax(0,` is load-bearing: a bare `1fr`
+  is `minmax(auto, 1fr)`, whose `auto` floor is the content again. It reached every dialog on the
+  shell and was reported against one of them, and **jsdom can see none of it** — no layout engine,
+  every box 0px — so the suite pins the two classes and the numbers come from a browser.
+
+  **A dialog's tallest block opens shut when it is not what the reader came for** (2026-08-18),
+  which is `DeckSearchPanel`'s collapsed default one rung down. `ExportDialog`'s decklist preview
+  is a disclosure starting closed: the presses that do the work are Copy and Save as…, and a
+  whole-deck export put both of them a screenful of text away from the format that chose them.
+  Shut, the dialog is the format row, whatever that format leaves out, the toggle and the
+  buttons. The toggle's own label carries the line count, so "nothing is showing" is never
+  mistaken for "nothing is there" — and the block is **unmounted** rather than hidden, because a
+  hidden `<pre>` still holding the text is the shape that lets a test assert a line no reader can
+  see.
   **The argument is width, and it is the desk row's own number.** At the app's own 1280×800 with
   the card pane docked that row measures **602px** (`DeckEditor`'s `DECK_FLOOR`), so the 384px
   search panel plus its 16px gap leave the deck **202px** — one stack column. A drawer that is
@@ -958,8 +1014,9 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   is room for that rail is decided by
   the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
   the desk holds two columns and the gap between them the rail sits beside the flow, and below
-  that width it wraps onto its own line — at the **left**, under the first column, since
-  2026-08-17. **`content-start`
+  that width it wraps onto its own line — at the **right** of that line, which is where `ml-auto`
+  put it until 2026-08-17, where the day without that margin left it (the left, under the first
+  column), and where it is again since 2026-08-18. **`content-start`
   belongs on the view's root and nowhere else**, and it is what keeps a wrapped rail immediately
   under the flow: that root is a `flex-1` item of a `min-h-0 flex-col` parent, so it is as tall as
   the scroller rather than as tall as its content, and `align-content`'s initial `normal` behaves
@@ -989,10 +1046,9 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     884, and the rail wrapped there too, still with no sideways scroll.
   - **`ml-auto` is what puts a wrapped rail back on the right**, and it does: at 1024 the rail
     took its own line with its right edge on the flow's, 15px of scrollbar in from the
-    scroller's own edge. **Superseded 2026-08-17** — `ml-auto` is gone from both rails and a
-    wrapped rail lands at the left now. The reading stands as what that build did; it is not what
-    the current one does, and it is kept because the *rest* of this pass's figures were taken on
-    the same run.
+    scroller's own edge. **Superseded 2026-08-17 and restored 2026-08-18** — the margin was gone
+    for a day, and a wrapped rail landed at the left under the first column in that build only.
+    The reading describes what the current build does again; it has not been re-driven since.
   - **The sticky machinery really is gone** — the rail computes `position: static`,
     `box-shadow: none`, `z-index: auto` and a transparent background — and **`content-start`
     is on the box that has a height**: the view root computes `align-content: flex-start`.
@@ -1454,6 +1510,63 @@ rect is zero, and a rendering assertion passes just as happily against a view th
 padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-auto` **and**
 `DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
 of the `overflow`.
+
+## The format check that changed width with the deck
+
+**2026-08-18.** Reported from the shipped window: a deck that keeps a plan has two lists, Live and
+Theory hold different cards, and the two therefore fail different rules — so pressing the variant
+switch took the format check from `No issues · Modern` to `3 issues` and moved everything beside
+it.
+
+**Measured, in the old spelling and the new, in one frame.** Both blocks are the deck header's own
+`flex flex-wrap items-center justify-end gap-2` at 1000px, drawn with the same six action buttons
+after them:
+
+| the check reads | width |
+| --- | --- |
+| `No issues · Modern` (clean) | **144.81px** |
+| `3 issues` (broken) | **74px** |
+| the glyph, 0 findings | **36px** |
+| the glyph, 3 findings | **36px** |
+| the glyph, 147 findings | **36px** |
+
+**70.81px** is what the switch was worth, on a block that already wraps at the app's own 1280 — so
+the cost was never only that `Built` and the six buttons slid sideways, it was that a fold could
+fall on the other side of them.
+
+**The glyph is `CircleCheck` in `--color-ok` or `TriangleAlert` in `--destructive`**, computed
+`oklch(0.72 0.14 152)` and `oklch(0.704 0.191 22.216)` — a new token beside the red rather than
+one of the palette's two greens, both of which belong to mana (`src/index.css` says why at the
+token). Nothing but the glyph is coloured: the control's surface stays what every other chip on
+that row is, because this panel refuses nothing.
+
+**The count is a 16×16 bubble, `absolute`, and it hangs off the top and never off the right.**
+That asymmetry is a scrollbar rather than a preference. The block is `justify-end`, so every
+folded line ends flush against the header's right edge — which is the deck editor's own edge, and
+the editor is the page scroller, where `overflow-y: auto` computes `overflow-x` to `auto` as
+well. Driven at the two widths where the fold lands right after the check:
+
+| badge anchored | horizontal scroll in the scroller |
+| --- | --- |
+| `-top-1 right-0` (shipped), block 240px | **0** |
+| `-top-1 right-0` (shipped), block 260px | **0** |
+| `-top-1` + `right: -4px`, block 240px | **3px**, and a scrollbar drawn |
+| `-top-1` + `right: -4px`, block 260px | **3px**, and a scrollbar drawn |
+
+Shipped, the bubble's right edge sits **1px inside** the button's own (an `absolute` inset resolves
+against the padding box, so `right-0` is inside the border) and **3px above** its top, which the
+header's `py-1.5` has six of to spare.
+
+**Photographed rather than reasoned about, and without either lock**: a `file://` page against the
+built `dist/assets/index-*.css`, every state in one frame, shot by headless Edge, with the retired
+anchor spelled as an inline `style` because a class that has left the source is not in the built
+sheet. **That is a real layout engine and it is not the shipped window** — WebView2 at the app's own
+width, with the deck's real controls in the row, has not been driven for this change.
+
+**Why the suite cannot hold any of it.** jsdom has no layout engine, so every rect is zero and
+nothing clips. `ValidationPanel.test.tsx` asserts the two states' **class lists are identical**
+instead, which is the same claim written where it can fail, plus the bubble being `absolute` and
+`aria-hidden`.
 
 ## Vendored components and tokens
 

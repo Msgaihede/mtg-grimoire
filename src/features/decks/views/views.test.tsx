@@ -1111,10 +1111,10 @@ describe("StackView flow", () => {
       `repeat(auto-fill, ${stackColumnWidth(DEFAULT_ZOOM)}px)`,
     );
     expect(box.style.gridAutoRows).toBe("1px");
-    // **And no cap, because this deck has no rail.** The cap exists to leave the Sideboard one
-    // gutter from the deck; with nothing drawn after this box, the width past its last column is
-    // desk nobody is looking at, and capping it would narrow the flow for no reader. The `$name
-    // rail` block asserts the other side of the same `if`.
+    // **And no `max-width`, rail or no rail** (changed 2026-08-18). A cap lived here for a day so
+    // that the desk's leftover was freed to sit *after* the rail; the rail is pinned to the right
+    // edge now, so the leftover belongs inside this box and a cap would only push the rail back
+    // in towards the deck. The `$name rail` block asserts the same absence with a rail drawn.
     expect(box.style.maxWidth).toBe("");
   });
 
@@ -1204,18 +1204,18 @@ describe("StackView flow", () => {
    * under the rail — an opaque backdrop would occlude nothing and the seam shadow would draw a
    * permanent divider across a layout in which nothing moves.
    *
-   * **`ml-auto` is asserted absent, and that reverses what this test said until 2026-08-17.** It
-   * was the last mechanism the rail had, and it turned out to be the bug rather than the remainder
-   * of the fix: a margin that eats free space pinned the rail to the right edge of the *desk*, so
-   * everything the flowing box left over — up to very nearly a whole column, and a different
-   * number at every zoom stop — opened as a gap between the deck and the Sideboard. The rail hugs
-   * the deck now, and what holds it one gutter away is the cap on the flowing box
-   * (`flowMaxWidth`), not a margin here. Putting `ml-auto` back restores the gap in full.
+   * **`ml-auto` is asserted _present_, and that reverses this test twice over** (2026-08-18). It
+   * was asserted present until 2026-08-17, absent for a day, and is back: the reader's call is that
+   * the piles played beside the deck are looked for on the right, at every width. Where it acts is
+   * the **wrapped** line — beside the flow, `flex-1` with no cap leaves an auto margin nothing to
+   * eat, and the rail is at the right edge because no line remains to its right. The day it was
+   * absent bought a rail one gutter from the deck's last pile and cost the right edge; what it
+   * costs now is the leftover, which sits between the deck and the rail and moves with the zoom.
    *
    * The negatives are asserted rather than assumed because the alternative shipped: reinstating a
    * sticky rail is a two-word edit that no other test in this file would notice.
    */
-  it("draws the rail as a plain flex child, with nothing sticky about it", () => {
+  it("draws the rail as a plain flex child pinned right, with nothing sticky about it", () => {
     render(
       <StackView
         groups={buildGroups(
@@ -1231,7 +1231,7 @@ describe("StackView flow", () => {
     // Whole class names, never a substring: `bg-bg` is a prefix of nothing here, but `border`
     // inside `border-transparent` is exactly the trap this file's group-chrome block names.
     const classes = rail()!.className.split(" ");
-    expect(classes).not.toContain("ml-auto");
+    expect(classes).toContain("ml-auto");
     // A column of groups — the one box in this view that still stacks piles vertically, which is
     // why the rail changes where a pile sits and nothing about what is in it.
     expect(classes).toContain("flex-col");
@@ -1708,26 +1708,27 @@ describe.each(COLUMN_VIEWS)(
     });
 
     /**
-     * **And a `maxWidth` at the other end, which is what puts the rail one gutter from the deck**
-     * (added 2026-08-17).
+     * **And nothing at the other end: the rail is held at the right edge by a margin, and the
+     * flowing box is capped by nothing** (changed 2026-08-18, both views).
      *
-     * `flex-1` takes every pixel the rail leaves; a column layout spends only whole columns of it.
-     * The remainder — up to very nearly one column, and a different number at every zoom stop —
-     * used to sit inside the flowing box as dead desk in front of the rail, which is the gap the
-     * reader photographed. `flowMaxWidth` caps the box at the columns it can use, so what is
-     * between the last pile and the Sideboard is the gutter and nothing else.
+     * A `maxWidth` off `flowMaxWidth` lived on that box for a day. It capped the flow at whole
+     * columns so that the desk's leftover — up to very nearly one column, and a different number
+     * at every zoom stop — was freed for the line's own `justify-content` to leave *after* the
+     * rail, which brought the rail to rest one gutter from the deck's last column and took it off
+     * the right edge. The reader's call is the right edge, so the cap is gone and the leftover is
+     * dead desk inside the flowing box, between the deck and the rail.
      *
-     * **What this can assert is that a cap is there and that it is the floor expression**, and
-     * that limit is jsdom's. `cssstyle` does not reject the value, it rewrites it — the real
-     * string comes back as `min(464px * , * calc(round(100% * , * down - (224px * 224px) …` — so
-     * an exact match here would pin that mangling and go red the day it is fixed. `round(` is the
-     * one substring that survives both readings. The arithmetic is asserted on the pure function
-     * in `columns.test.ts`; whether the browser then draws one gutter is a story play's, in an
-     * engine that lays out.
+     * **Both halves are asserted, because either one alone passes against the wrong layout.** A
+     * capped box with a margin puts the rail right *and* the leftover after the deck; an uncapped
+     * box with no margin puts the rail right in every case but the wrapped line. Which of the two
+     * is on screen is jsdom-invisible either way — it lays nothing out — so this reads the
+     * declarations and the pixels are the live pass's.
      */
-    it("caps the flowing area at whole columns, so nothing is left over before the rail", () => {
+    it("pins the rail right with a margin and leaves the flowing area uncapped", () => {
       draw();
-      expect(flow().style.maxWidth).toContain("round(");
+
+      expect(flow().style.maxWidth).toBe("");
+      expect(rail()!.className.split(" ")).toContain("ml-auto");
     });
 
     /**

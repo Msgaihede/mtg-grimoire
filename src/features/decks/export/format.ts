@@ -11,11 +11,11 @@
  * one every other tool in this space emits.
  *
  * **A format is a whole file rather than a row of lines**, which is why there is no
- * `Record<ExportFormat, (card) => string>` here any more: three of the six write *headings* as
+ * `Record<ExportFormat, (card) => string>` here any more: three of them write *headings* as
  * well as lines, and two of those decide which headings exist by grouping the input. What is
  * left of that record is the per-line writers — {@link plainLine}, {@link printedLine},
- * {@link archidektLine} — assembled by {@link formatExport}'s one switch, which is also the
- * only place that knows a format writes sections at all.
+ * {@link archidektLine}, {@link tcgplayerLine} — assembled by {@link formatExport}'s one switch,
+ * which is also the only place that knows a format writes sections at all.
  *
  * An empty list is an empty string in every format, **CSV included**. A header row over no
  * rows is a file that claims to be a decklist and is not one. **That now covers a list a
@@ -25,7 +25,15 @@
  */
 import type { CategoryKind, DeckCard } from "@/lib/ipc";
 
-export const EXPORT_FORMATS = ["plain", "mtgo", "arena", "moxfield", "archidekt", "csv"] as const;
+export const EXPORT_FORMATS = [
+  "plain",
+  "mtgo",
+  "arena",
+  "moxfield",
+  "archidekt",
+  "tcgplayer",
+  "csv",
+] as const;
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 export const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
@@ -34,6 +42,7 @@ export const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
   arena: "Arena",
   moxfield: "Moxfield",
   archidekt: "Archidekt",
+  tcgplayer: "TCGplayer",
   csv: "CSV",
 };
 
@@ -43,6 +52,7 @@ export const EXPORT_FORMAT_EXTENSION: Record<ExportFormat, string> = {
   arena: "txt",
   moxfield: "txt",
   archidekt: "txt",
+  tcgplayer: "txt",
   csv: "csv",
 };
 
@@ -197,6 +207,33 @@ function archidektLine(card: ExportCard): string {
 }
 
 /**
+ * TCGplayer Mass Entry's line: `2 Lightning Bolt [2X2] 117`.
+ *
+ * **A cart rather than a decklist, which decides all three of the ways it differs from the
+ * writers above it.** Mass Entry reads every line as one item and has no section vocabulary at
+ * all, so this format writes a flat list — a heading would be read as a card nobody sells. It
+ * therefore has nowhere to put a maybeboard either, and unlike Arena and MTGO it does not *lose*
+ * one: a switched-off pile is usually the half a reader still has to buy, so every row is
+ * written and {@link omittedCount} stays 0 here. And there is no finish marker, because a
+ * printing's foil is chosen in the cart rather than named in the text.
+ *
+ * The set code goes in **square brackets** and the collector number bare after it — the most
+ * specific of the three shapes TCGplayer documents, so the cart lands on the printing the deck
+ * names rather than on whatever art is cheapest. Uppercased for `printedLine`'s reason: `[2x2]`
+ * and `[2X2]` are the same set and a file this app writes should pick one spelling.
+ *
+ * **Write-only, and the second such format after CSV** — verified against `parse.ts` rather than
+ * assumed. Our own `BRACKET` is anchored to the end of the line, so a bracket with a collector
+ * number after it is not a bracket to that parser at all, and the whole tail lands in the name:
+ * `2 Lightning Bolt [2X2] 117` comes back as a card *called* `Lightning Bolt [2X2] 117`. The
+ * copies survive and the name does not, which is why `decklists.test.ts` excludes this format
+ * from the round trip by name beside CSV rather than leaving it to fail there.
+ */
+function tcgplayerLine(card: ExportCard): string {
+  return `${card.quantity} ${card.name} [${card.setCode.toUpperCase()}] ${card.collectorNumber}`;
+}
+
+/**
  * The cards a format will not write, in **copies**.
  *
  * Only `arena` and `mtgo` leave anything out, and only a pile the reader has switched off:
@@ -299,6 +336,11 @@ export function formatExport(cards: readonly ExportCard[], format: ExportFormat)
         grouped(rows, (card) => card.categoryName),
         archidektLine,
       );
+      break;
+    case "tcgplayer":
+      // Flat, and grouped by nothing: Mass Entry reads every line as one item, so a heading here
+      // would be read as a card. `written` has left the switched-off piles in — see the writer.
+      text = rows.map(tcgplayerLine).join("\n");
       break;
     case "csv":
       text = [

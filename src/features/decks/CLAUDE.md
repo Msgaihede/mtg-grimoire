@@ -370,7 +370,7 @@ reader to configure the deck they had just made; it now asks all of them.
   `QuickZones.tsx` draws four boxes across the top of the editor for the length of a drag —
   `Auto`, `New category`, and the deck's own Maybeboard and Sideboard — against the remove tray's
   `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
-  means the pile it landed on. Five things about it are decisions rather than details:
+  means the pile it landed on. Everything below is a decision rather than a detail:
   - **It owns its own `monitorForElements`, and that is the point of it being a component.**
     `PriceStrip`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
     answered for the docked panel's tiles would re-render the strip — and, while that monitor
@@ -428,6 +428,16 @@ reader to configure the deck they had just made; it now asks all of them.
     moment the reader was aiming at it. `sticky` rather than `fixed` so the bar is the editor's
     width with nothing measured; the editor **is** the page scroller, so `top-0` is the top of what
     the reader can see.
+  - **Its height is the deck's name/settings ribbon's, because that is the row it lands on**
+    (2026-08-18). `h-[5.75rem]` — 92px, which is that row wrapped to two lines at the app's own
+    1280×800, measured. **So a change to the ribbon's height is a change to this number**: at 74px
+    the bar left the last 18px of the ribbon showing under it and stopped reading as a replacement
+    for it. The height sits on the bar and the boxes stretch into it (`flex-1`, no `h-*` of their
+    own, capped at `max-w-[300px]` with the bar `justify-center` so four targets do not span a
+    2560px window). It deliberately does **not** follow the ribbon back down to 48px where that
+    row stops wrapping (≥1600px): the boxes would be 30px, under the 40px that was reported as
+    easy to miss. Every clearance is in
+    [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   - **`aria-hidden`, like the tray**, and for the same argument: all four have a click path a caret
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
@@ -759,10 +769,10 @@ controls open that dialog** — the editor header's `Export deck` and a category
   that is what the whole `## Import` section above is about — and each writer here emits **one**
   spelling. It is the same rule that makes the output LF with a trailing newline whatever the
   parser would tolerate: a file this app wrote should have one answer.
-- **Six formats, and three of the decisions inside them are worth carrying.** `EXPORT_FORMATS` is
-  `plain · mtgo · arena · moxfield · archidekt · csv`, and the dialog's radio row **maps that
-  array** rather than listing them, so the count is the array's and never a number written down
-  twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
+- **Four of the decisions inside the formats are worth carrying.** `EXPORT_FORMATS` is
+  `plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`, and the dialog's radio row
+  **maps that array** rather than listing them, so the count is the array's and never a number
+  written down twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
   was no whole-deck export and therefore no sideboard to prefix; it writes `SB: ` on a side or
   companion card now, which is a one-line override rather than a heading — exactly how `parse.ts`
   reads it back. **(2) `arena` and `mtgo` write only switched-on piles**, because neither format
@@ -773,7 +783,15 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `{noDeck}` and a lowercase set code.** The flag is the only thing any of these formats can say
   about a pile that counts toward nothing, which makes Archidekt the one format that writes an
   inactive pile _and_ leaves nothing out; it is the round trip that makes the flag worth writing,
-  not fidelity to the site for its own sake. The lowercase set code is what Archidekt itself emits
+  not fidelity to the site for its own sake. **(4) `tcgplayer` is a _cart_ rather than a decklist**
+  (added 2026-08-18), and that decides all three of the ways it differs. Its line is
+  `2 Lightning Bolt [2X2] 117` — the most specific of the three shapes TCGplayer Mass Entry
+  documents, so the cart lands on the printing the deck names. It is **flat**, because Mass Entry
+  reads every line as one item and a heading would be read as a card nobody sells. It writes **no
+  finish marker**, because a printing's foil is chosen in the cart. And it is the one flat format
+  that **keeps a switched-off pile**, where Arena and MTGO cut theirs: the pile a reader switched
+  off is usually exactly what they still have to buy, so `omittedCount` is 0 here and the dialog's
+  omission line never fires for it. The lowercase set code is what Archidekt itself emits
   and what its own importer round-trips, and our parser uppercases on read, so it costs the round
   trip nothing.
 - **`KIND_SECTION` maps `maybe` to `Deck` and `sectionOf` asks `categoryActive`. That is "nothing
@@ -784,13 +802,19 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `Maybeboard` "because that is what it is called" files a switched-on Maybeboard out of the deck
   it counts toward **and** leaves a reader's own switched-off `Ramp` under `Deck` beside it — one
   edit, both errors, and nothing about it reads as wrong.
-- **CSV is write-only and stays so**, and `decklists.test.ts` excludes it **by name** rather than by
+- **Two formats are write-only**, and `decklists.test.ts` excludes each **by name** rather than by
   omission (`expect(READABLE).toEqual([…])`), so a format dropped out of that table by accident is a
-  failure rather than a quietly smaller matrix. Nothing in `parse.ts` reads a comma-separated
-  decklist, and teaching it one would be a second grammar rather than a rule inside the one there
-  is.
+  failure rather than a quietly smaller matrix. **CSV**, because nothing in `parse.ts` reads a
+  comma-separated decklist and teaching it one would be a second grammar rather than a rule inside
+  the one there is. **TCGplayer**, because its line is addressed to a shopping cart rather than to
+  us: `parse.ts`'s `BRACKET` is anchored to the **end of the line**, so a bracket with a collector
+  number after it is not a bracket to that parser at all and the whole tail lands in the card's
+  name — `2 Lightning Bolt [2X2] 117` comes back as a card *called* `Lightning Bolt [2X2] 117`, the
+  copies surviving and the name not. That is **measured in `format.test.ts` rather than asserted
+  here**, so the day `parse.ts` learns to read an unanchored bracket the exclusion fails rather
+  than quietly outliving its reason.
 - **`decklists.test.ts` is where a writer drifting from the parser shows up.** Three real decklists
-  crossed with all six formats, driven text → planner → writer → parser, and **every readable
+  crossed with every format, driven text → planner → writer → parser, and **every readable
   format is a fixed point**: export → import → export is byte-identical. One cycle cannot see a
   writer that is not idempotent, because there is nothing to compare the first answer against.
   Every count this branch turns on is re-derived there or in `parse.test.ts` rather than restated
@@ -816,6 +840,17 @@ controls open that dialog** — the editor header's `Export deck` and a category
   app grants nowhere, so `export_write_file` takes the path and the text — the same shape
   `deck_set_cover_image` has, for the same reason.
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both.
+- **The preview opens shut** (2026-08-18), which is `DeckSearchPanel`'s collapsed default one rung
+  down: a decklist is the tallest thing this dialog draws and the least of what a reader came for,
+  and the two presses that do the work are Copy and Save as…. Shut, the dialog is the format row,
+  whatever that format leaves out, the toggle and the buttons — and the **toggle's own label
+  carries the line count**, so "nothing is showing" is never mistaken for "nothing is there". The
+  `<pre>` is **unmounted** rather than hidden, which is the half worth enforcing: a hidden block
+  still holding the text is exactly the shape that lets a test assert a line no reader can see, so
+  every play and test that reads a rendered line presses the toggle first, as a reader would.
+  **It is not the fix for the reported bug it arrived with**, and the two are worth keeping apart —
+  the panel itself grew past the window and took the buttons off screen with it, which is
+  `DeckDialog`'s scrim and is fixed there for every dialog on the shell.
 - **`save()` resolves `null` on Cancel**, and writing that string to disk is the trap the guard in
   `handleSaveAs` exists to prevent. A refused write is **reported and does not close the dialog**:
   the reader's text is still on screen and still copyable, so the failure costs them nothing they
@@ -861,6 +896,35 @@ controls open that dialog** — the editor header's `Export deck` and a category
   **Every width on this page was measured with _five_ buttons in that block**; `Export deck` made
   it six and none of them has been re-taken, so the standing claim is "it already wrapped", not a
   number for what it costs now.
+- **The format check on that block is a glyph in a 36px box, and it is a glyph because the deck
+  has two lists** (2026-08-18). Live and Theory hold different cards and so fail different rules,
+  so the readout's two states are one press of the variant switch apart — and while it was
+  `No issues · Modern` against `3 issues` that press changed its width and slid `Built` and all
+  six action buttons along with it, on a block that already wraps at the app's own window. It is
+  `CircleCheck` in `--color-ok` for a clean deck and `TriangleAlert` in `--destructive` for a
+  broken one, with the count in a bubble that is `absolute` — **out of the box's flow, which is
+  the whole mechanism**: nothing inside a 36px square may change its width, so 0, 3 and 47
+  findings draw the same control. Three rules hold it:
+  - **`--color-ok` is the app's first success colour and had to be a new token.** The palette's
+    two greens are `--color-mana-g` ("Mana UI only — chips, pips, the line. Never a panel, never
+    a border, never text") and `--color-pie-g`, a colour-identity deep that reads as grey at
+    16px on this background; a check mark in either says "green cards" to the one reader who has
+    learned what those colours mean here. It is a peer of `--destructive` — same lightness, less
+    chroma — and like it, it colours a glyph and never a panel.
+  - **The bubble hangs off the _top_ and never off the right**, and that asymmetry is a
+    scrollbar. The block is `flex-wrap justify-end`, so every folded line ends flush against the
+    editor's own right edge, and the editor is the page scroller — where `overflow-y: auto`
+    computes `overflow-x` to `auto` as well. A bubble 4px past that edge, at whatever width the
+    wrap happens to fall right there, is 4px of horizontal scroll on the page this folder has
+    twice gone looking for phantom scrollbars on. Up costs nothing: the header's `py-1.5` leaves
+    6px and the bubble asks for 3.
+  - **The accessible name names the format in both states** — `No issues · Modern`,
+    `3 issues · Modern` — and is the `title` as well, because a glyph says nothing to a screen
+    reader or to a pointer. It used to carry the format only when there was nothing to count,
+    where there was nothing else to print; now that the name is the only place either fact
+    exists, withholding the ruleset for a broken deck would answer "checked against what?"
+    exactly when the question stops being worth asking. **It is what every test and story
+    addresses this control by**, so a reworded label is a red suite.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long
@@ -1382,36 +1446,40 @@ price | type`). An **inactive category stays its own group in all three grouping
   put it behind the Sideboard and the Maybeboard, which is the kind-before-switch order proved
   where it can fail. Switching both back on restored the original flow order exactly. Every figure:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
-- **The rail hugs the deck, and what holds it one gutter away is a cap on the flowing box**
-  (changed 2026-08-17, both column views). The flowing half is `flex-1`, so it takes every pixel the
-  rail leaves, and a column layout then spends only _whole_ columns of it: the remainder sat inside
-  that box as blank desk between the last pile and the Sideboard. **It is not a fixed cost** — it is
-  whatever the desk's width leaves over, up to very nearly a whole column, and it moves with
-  `stackColumnWidth`, so every zoom step changed it and the reader met it as a zoom bug. Measured on
-  the screenshot that reported it: a 1606px flowing box at 224px columns uses 1424, so the Sideboard
-  stood **198px** from the deck where two piles are 16 apart. `flowMaxWidth` (`views/columns.ts`,
-  shared by both views) caps the box at
-  `min(<columns the deck has>, round(down, 100% − <one column>, <column + gap>) − <gap>)` —
-  **`round(down, …)` is CSS's own floor**, so the count is still the browser's and this file's rule
-  that nothing here measures the desk survives whole. Verified in Chromium 151, the WebView2
-  runtime's version, before it was written: `round()` takes a percentage and resolves it against the
-  flex container at layout. The second term is the one that matters on a wide desk — a freshly
-  created deck flows two piles, and the first term alone would hand it seven columns of box.
-  **`ml-auto` is gone from both rails and its absence _is_ the fix**: a margin that eats free space
-  cannot be asked to eat all but 16px of it, so it was pinning the rail to the right edge of the
-  desk rather than to the right of the deck. What that costs is the wrapped line — see the bullet
-  below. **jsdom cannot check any of this**: `cssstyle` does not reject the value, it rewrites it
-  (`min(464px * , * calc(round(100% * , * down − …`), so `columns.test.ts` asserts the expression on
-  the pure function, the view suites assert only that a cap is present and that it goes with the
-  rail, and the gutter itself is a live claim.
+- **The rail is pinned to the right edge of the desk, and the leftover is what it costs**
+  (changed 2026-08-18, both column views — reversing 2026-08-17, which reversed the day before it).
+  The flowing half is `flex-1`, so it takes every pixel the rail leaves, and a column layout then
+  spends only _whole_ columns of it: the remainder sits inside that box as blank desk between the
+  last pile and the Sideboard. **It is not a fixed cost** — it is whatever the desk's width leaves
+  over, up to very nearly a whole column, and it moves with `stackColumnWidth`, so every zoom step
+  changes it. Measured on the screenshot that first reported it: a 1606px flowing box at 224px
+  columns uses 1424, so the Sideboard stood **198px** from the deck where two piles are 16 apart.
+  **`flowMaxWidth` was the answer to that for one day and is deleted.** It capped the flowing box at
+  `min(<columns the deck has>, round(down, 100% − <one column>, <column + gap>) − <gap>)`, freeing
+  the remainder to sit past the rail, and it worked — at the price of the rail moving with the
+  deck's own width, so the piles played beside the deck were wherever the deck happened to end. The
+  reader's call is that they are looked for **on the right**, at every width and every zoom, and
+  that a gap in front of them is the cheaper of the two. So the box is capped by nothing and
+  `ml-auto` is back on both rails. **The deck's own gutters were never what moved**: `auto-fill`
+  over a definite width spends whole columns, and `gap-x-4`/`gap-6` is one number at every zoom.
+  **The margin is inert beside the flow and acts only on the wrapped line** — `flex-1` has already
+  eaten the line's free space, so the rail is at the right edge for want of anything to its right;
+  see the bullet below for the line where that stops being true. **jsdom can see none of it** — it
+  lays nothing out — so the view suites assert the margin's presence and the cap's absence, and
+  where the pixels land is a live claim. **Driven in the shipped window 2026-08-18** (debug build,
+  1280×800, real corpus): the rail's right edge on the view's content edge at **1187** at 1× and
+  again three zoom steps up, the deck's own gutters **16** at both, the gap in front of the rail
+  **25px** at 1× and **295** at 1.5×, and a wrapped rail at 1024 landing at the **right** of its
+  own line. Every figure:
+  [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **The narrow case is CSS, and has to stay CSS.** The flowing area carries a `minWidth` of one
   column, so when the desk cannot hold a column _and_ the rail side by side, the outer container's
-  own `flex-wrap` drops the rail onto the next line — and since 2026-08-17 it lands at the **left**,
-  under the first column, where `ml-auto` used to hold it right. That is deliberate and was the
-  reader's call: once the rail is _under_ the deck there is no "right of the deck" left to be at,
-  and everything else in both views starts at the left edge. **A `max-width` cannot disturb this** —
-  CSS resolves one below a `min-width` in the minimum's favour, so the wrap is decided before the
-  cap is consulted. `min-w-0`/`flex-1` cannot say this, because a
+  own `flex-wrap` drops the rail onto the next line — and it lands at the **right** of that line,
+  which is the one place `ml-auto` is doing any work at all. It landed at the **left**, under the
+  first column, for the day the margin was gone, on the argument that once the rail is _under_ the
+  deck there is no "right of the deck" left to be at. True, and the reader's answer (2026-08-18) is
+  that the rail's place is the right edge of the _desk_, beside the deck or under it.
+  `min-w-0`/`flex-1` cannot say this, because a
   flex item that may shrink to nothing never wraps; a `ResizeObserver` could, and is refused —
   **this view has no business observing its own box** — the rule that outlived
   `DEFAULT_COLUMN_HEIGHT`, and which the masonry above does **not** weaken: what that observes is
@@ -1425,9 +1493,10 @@ price | type`). An **inactive category stays its own group in all three grouping
   `LAYER.raised` with a leftward seam shadow, and all four existed for a single reason: to hold the
   rail in view **while the packed columns scrolled sideways underneath it**. The columns wrap
   downward now, so nothing passes under the rail — an opaque backdrop occludes nothing and a seam
-  shadow draws a permanent divider across a layout in which nothing moves. **`ml-auto` was the last
-  mechanism it had and it went on 2026-08-17** — see the cap bullet above — so the rail is now a
-  plain flex child in document order after the deck, with no positioning of its own at all. The rail
+  shadow draws a permanent divider across a layout in which nothing moves. **`ml-auto` is the only
+  mechanism it has left** — gone on 2026-08-17, back on 2026-08-18, see the bullet above — and a
+  margin is not positioning: the rail is a plain flex child in document order after the deck, with
+  no `position`, no z-index and no backdrop of its own. The rail
   therefore carries `RAIL_ATTR` (`data-deck-rail`) **only**:
   `STACK_ATTR` means "a pile drawn in the flow", and the rail's piles are by construction the ones
   that never reach it, so a sweep counting the deck's own piles goes on counting those. The

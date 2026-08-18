@@ -67,6 +67,11 @@ function threeIssues(): DeckCard[] {
   ];
 }
 
+/** More findings than the bubble has room for: a hundred and one cards on the ban list. */
+function overAHundredIssues(): DeckCard[] {
+  return Array.from({ length: 101 }, (_, at) => listed(`Banned ${at}`, "banned"));
+}
+
 async function open(ui: Parameters<typeof render>[0]) {
   render(ui);
   await userEvent.click(screen.getByRole("button", { name: /issue|No issues/ }));
@@ -102,13 +107,59 @@ describe("ValidationPanel", () => {
   it("counts what is wrong", () => {
     render(<Harness cards={threeIssues()} format={spec("modern")} />);
 
-    expect(screen.getByRole("button", { name: "3 issues" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "3 issues · Modern" })).toBeInTheDocument();
   });
 
   it("counts one issue in the singular", () => {
     render(<Harness cards={[islands(59)]} format={spec("modern")} />);
 
-    expect(screen.getByRole("button", { name: "1 issue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 issue · Modern" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The whole reason this control is a glyph, and the one half of it jsdom can be asked
+   * about.** Live and Theory hold different cards and so fail different rules, which put the
+   * two states of this readout one switch apart — and while it was words, flipping that switch
+   * changed its width and slid every control to its right along with it. There is no layout
+   * engine here, so the claim is made about the class list rather than about a rect: one
+   * recipe, one fixed width, whatever the deck is doing.
+   */
+  it("draws the same box whether or not anything is wrong", () => {
+    const clean = render(<Harness cards={[islands(60)]} format={spec("modern")} />).container;
+    const broken = render(<Harness cards={threeIssues()} format={spec("modern")} />).container;
+    const box = (root: HTMLElement) => root.querySelector<HTMLElement>("[aria-haspopup=dialog]")!;
+
+    expect(box(clean).className).toBe(box(broken).className);
+    expect(box(clean).className).toContain("w-9");
+  });
+
+  /** Red for a break, green for none — and the glyph is the only thing either colour touches,
+   *  because a tinted surface would make a deck somebody is still building look broken. */
+  it("colours the glyph rather than the control", () => {
+    const clean = render(<Harness cards={[islands(60)]} format={spec("modern")} />).container;
+    const broken = render(<Harness cards={threeIssues()} format={spec("modern")} />).container;
+    const glyph = (root: HTMLElement) => root.querySelector("[aria-haspopup=dialog] svg")!;
+
+    expect(glyph(clean).getAttribute("class")).toContain("text-ok");
+    expect(glyph(broken).getAttribute("class")).toContain("text-destructive");
+  });
+
+  /** The count is a bubble hung off the corner: out of the box's flow, so it cannot widen it,
+   *  and out of the accessible name, which already says the number once. */
+  it("prints the count in a bubble that is out of flow and out of the name", () => {
+    render(<Harness cards={threeIssues()} format={spec("modern")} />);
+    const bubble = within(screen.getByRole("button", { name: "3 issues · Modern" })).getByText("3");
+
+    expect(bubble).toHaveAttribute("aria-hidden", "true");
+    expect(bubble.className).toContain("absolute");
+  });
+
+  /** Sixty findings is a real state and three digits are not — the name still says how many. */
+  it("caps the bubble at two digits, and the name never is", () => {
+    render(<Harness cards={overAHundredIssues()} format={spec("modern")} />);
+    const chip = screen.getByRole("button", { name: /^101 issues · Modern$/ });
+
+    expect(within(chip).getByText("99+")).toBeInTheDocument();
   });
 
   /** The engine writes the sentences; the panel prints them. A panel that paraphrased would
@@ -172,7 +223,7 @@ describe("ValidationPanel", () => {
    */
   it("closes on Escape, consuming the press, and hands the caret back to its chip", async () => {
     render(<Harness cards={threeIssues()} format={spec("modern")} />);
-    const chip = screen.getByRole("button", { name: "3 issues" });
+    const chip = screen.getByRole("button", { name: "3 issues · Modern" });
     await userEvent.click(chip);
     await screen.findByRole("dialog");
 
@@ -193,14 +244,14 @@ describe("ValidationPanel", () => {
    *  somewhere else. */
   it("closes when the caret leaves it, and leaves the caret where it went", async () => {
     render(<Harness cards={threeIssues()} format={spec("modern")} />);
-    await userEvent.click(screen.getByRole("button", { name: "3 issues" }));
+    await userEvent.click(screen.getByRole("button", { name: "3 issues · Modern" }));
     const panel = await screen.findByRole("dialog");
     const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
 
     fireEvent.focusOut(panel, { relatedTarget: elsewhere });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "3 issues" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "3 issues · Modern" })).not.toHaveFocus();
   });
 
   /** A trigger with `aria-expanded` has to be able to close what it opened — the press
@@ -208,7 +259,7 @@ describe("ValidationPanel", () => {
    *  reopen it forever. */
   it("closes from the chip that opened it", async () => {
     render(<Harness cards={threeIssues()} format={spec("modern")} />);
-    const chip = screen.getByRole("button", { name: "3 issues" });
+    const chip = screen.getByRole("button", { name: "3 issues · Modern" });
 
     await userEvent.click(chip);
     expect(screen.getByRole("dialog")).toBeInTheDocument();

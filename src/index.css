@@ -199,6 +199,21 @@
   --color-accent: oklch(0.75 0.12 85); /* gold */
   --color-accent-fg: oklch(0.2 0.02 85);
 
+  /* "Nothing to fix" — and the app's first success colour, added 2026-08-18 when the deck
+     check became a glyph and its two states had to be told apart without words.
+
+     The palette had no green a *reader* could be shown: `--color-mana-g` is a mana fill
+     ("Mana UI only — chips, pips, the line. Never a panel, never a border, never text") and
+     `--color-pie-g` is a colour-identity deep, dark enough on this background to read as
+     grey at 16px. A check mark in either would be saying "green cards" to the one reader who
+     has learned what those colours mean here.
+
+     So it is a peer of `--destructive` rather than of the mana families, and is tuned like
+     one: the same lightness (0.70–0.72 against an oklch(0.16) background), a chroma pulled
+     back from it so a legal deck is stated rather than celebrated, and — like the red — it
+     colours a *glyph* or a hairline, never a panel. */
+  --color-ok: oklch(0.72 0.14 152);
+
   /* The five colours, as printed symbols are filled. Mana UI only — chips, pips, the
      line. Never a panel, never a border, never text. Glyphs sit on these in near-black,
      exactly like a real symbol. */

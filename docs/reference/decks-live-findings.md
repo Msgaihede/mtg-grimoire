@@ -292,10 +292,11 @@ jsdom has no layout engine and every one of them is a claim about a box.
   lines at 1280 and does not at 1920, and the tighter figure is still the whole bar clear of every
   pile.
 
-  > **Superseded 2026-08-17 — the bar is 74px now.** See _"The quick zones, drawn to be found"_
-  > below. The spans become **49–123**, and the clearances **139px** at 1280×800 and **49px** at
-  > 1920×1080. Everything else in this section still holds: the wrapper is `h-0`, so the desk row
-  > did not move and only the gap under the bar was spent.
+  > **Superseded twice — the bar is 92px since 2026-08-18.** It went 58 → 74 in _"The quick zones,
+  > drawn to be found"_ and 74 → 92 in _"The quick zones become the ribbon"_, both below, the
+  > second so that it is exactly the height of the ribbon it lands on. The clearances become
+  > **121px** at 1280×800 and **29px** at 1920×1080. Everything else in this section still holds:
+  > the wrapper is `h-0`, so the desk row did not move and only the gap under the bar was spent.
 - **It is the editor's width, minus the scrollbar.** Bar left **228** = the editor's left; bar
   right **1230** against the editor's **1245**, the 15px being the page scroller's own bar, which
   `inset-x-0` correctly excludes. Zones measured **240px** each at 1280, **400** at 1920 and
@@ -539,7 +540,7 @@ the desk row therefore does not move.
 | outline | 1px dashed `oklch(0.3 0.01 270)` (`border-border`) | **2px dashed `oklch(0.65 0.01 90)`** (`border-dim`) |
 | glyph | 14px (`size-3.5`) | **20px** (`size-5`) |
 | fill | `oklch(0.16 0.01 270)` (`bg-bg`) | unchanged |
-| whole bar | **58px** | **74px** |
+| whole bar | **58px** | **74px** (and **92px** since 2026-08-18 — see the section at the foot of this file) |
 
 - **The zone width does not move**, and that is worth stating because it is what keeps the
   2026-08-15 widths (240 at 1280, 400 at 1920, 176 at 1024, no label truncated at any of them)
@@ -548,7 +549,8 @@ the desk row therefore does not move.
   is the editor's content width at 1280×800 on `main` since the horizontal overhang closed.
 - **The clearance the growth spends is 16px**, off the gap between the bar and the desk row and
   off nothing else: **155 → 139** at 1280×800, **65 → 49** at 1920×1080. Both still clear every
-  pile, and 49 is the figure a fifth zone or a taller box would be spending.
+  pile, and 49 is the figure a fifth zone or a taller box would be spending. **A taller bar is
+  exactly what 2026-08-18 spent it on: 29px now**, re-measured rather than derived.
 - **What was wrong was four defensible decisions taken together.** The label was `text-dim`, the
   second-dimmest colour in the palette; the outline was `border-border`, four hundredths of a
   lightness step off the `bg-bg` it enclosed; the box was 40px; and all of it had to be found
@@ -631,3 +633,68 @@ the `deck` kind's `field`.
 **The general lesson, since it is the second time this exact shape has cost something here:** a
 reused audit kind is a reused *sentence* until somebody writes the second one. The kind list stays
 short for a good reason; the renderer is where the cost lands.
+
+## The quick zones become the ribbon — 2026-08-18, `npm run tauri dev` (debug), 1280×800
+
+Driven in the shipped window against the real synced corpus copied out of the main checkout, on a
+14-card Commander deck. Every figure below is a `cdp.mjs drag … --probe` reading taken **while a
+card was in the air**, which is the only state this bar exists in.
+
+The reader's report was that the bar does not look like it replaces the row it lands on. It does
+not, and the number says why: **the bar and the deck's name/settings ribbon both start at y=78,
+and the ribbon is 92px against the bar's 74.** The last **18px** of the ribbon's second line
+stayed showing under a box plainly meant to stand in for it.
+
+### The ribbon is 92px only while it wraps, and where that boundary sits
+
+| window width | ribbon height |
+| --- | --- |
+| 1280 · 1400 · 1500 | **92px** (two lines) |
+| 1600 · 1700 · 1800 · 1920 · 2560 | **48px** (one line) |
+
+92 is `py-1.5` either side of two 36px lines with `gap-y-2` between them (6 + 36 + 8 + 36 + 6);
+48 is the same padding around one. The app ships **1280×800** and registers no window-state
+plugin, so every first run is in the wrapping half of that table.
+
+### What changed
+
+| | before | after |
+| --- | --- | --- |
+| whole bar | **74px** | **92px** (`h-[5.75rem]`) |
+| zone box | 56px (`h-14`) | **74px** — no height of its own; the bar's, less `py-2` and the border |
+| gap between boxes | `gap-2` (8px) | **`gap-3`** (12px) |
+| padding outside the outermost boxes | `p-2` (8px) | **`px-4`** (16px), `py-2` unchanged |
+| zone width | `flex-1`, unbounded | **`flex-1 max-w-[300px]`**, and the bar `justify-center` |
+
+- **It lands on the ribbon exactly at 1280×800**: bar top **78**, bottom **170**, against a ribbon
+  of 78→170. Boxes **74 × 236.8**, all four labels unclipped (`scrollWidth === clientWidth` on
+  every one).
+- **The 300px cap binds only on a wide window.** At 1280 each box is 236.8px, inside the cap and
+  unchanged by it. Maximised at 2560 the four measure **300px each at x=759, 1071, 1383, 1695** —
+  centred to the pixel in a 2297px bar (group centre 1377, bar centre 1376.5). Four boxes spanning
+  a 2560px window read as a banner rather than as four things to choose between, and a drop target
+  twice the width of its label is not twice as easy to hit: the pointer is already inside it.
+- **The height does not follow the ribbon back down at ≥1600, and that is the decision rather than
+  an oversight.** Matching it there would leave the boxes **30px** — shorter than the 40px the
+  2026-08-17 pass replaced for being easy to miss, on a surface that exists for two seconds. So
+  the bar keeps 92 and on a wide window covers the one-line ribbon plus most of the toolbar row
+  beneath it, which is not a row a hand mid-drag can use. It already overhung that row at 74px
+  (by 14px, now 32).
+- **No pile is covered at either size.** The wrapper is still `h-0`, so the desk row does not move
+  and the clearance arithmetic is exact rather than a second estimate: **139 → 121px** at 1280×800
+  and **47 → 29px** at 1920×1080 (the 1920 desk row measured at y=199 on this deck, against the
+  49px the 2026-08-17 note derived from a different one).
+
+### Two traps this pass paid for
+
+- **The window resized under the pass, and nothing on screen said so.** Two screenshots minutes
+  apart came out 1280×800 and 2560×1369: the window had been maximised between them, so a "before"
+  frame shot for comparison was at a different viewport and a different ribbon state — the two
+  frames answer different questions and neither says which. `innerWidth` belongs in the same
+  `--probe` as every rect, and `IsZoomed` on the window handle is the cheap tell afterwards.
+- **A bar that only exists during a drag can still be photographed.** `--probe` cannot take a
+  screenshot, and the drag ends when the `cdp.mjs` process exits. Cloning the bar inside the probe
+  — `cloneNode(true)` positioned `fixed` at the rect it was measured at — leaves real pixels of
+  the real element in the page for a `shot` afterwards, and setting the clone's own
+  `style.height`/`gap`/`padding` back to the old values photographs before and after from one
+  build. The clone must be removed afterwards; it is not React's and nothing else will.
