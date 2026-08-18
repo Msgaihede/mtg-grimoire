@@ -356,7 +356,7 @@ reader to configure the deck they had just made; it now asks all of them.
   `QuickZones.tsx` draws four boxes across the top of the editor for the length of a drag —
   `Auto`, `New category`, and the deck's own Maybeboard and Sideboard — against the remove tray's
   `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
-  means the pile it landed on. Five things about it are decisions rather than details:
+  means the pile it landed on. Everything below is a decision rather than a detail:
   - **It owns its own `monitorForElements`, and that is the point of it being a component.**
     `PriceStrip`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
     answered for the docked panel's tiles would re-render the strip — and, while that monitor
@@ -414,6 +414,16 @@ reader to configure the deck they had just made; it now asks all of them.
     moment the reader was aiming at it. `sticky` rather than `fixed` so the bar is the editor's
     width with nothing measured; the editor **is** the page scroller, so `top-0` is the top of what
     the reader can see.
+  - **Its height is the deck's name/settings ribbon's, because that is the row it lands on**
+    (2026-08-18). `h-[5.75rem]` — 92px, which is that row wrapped to two lines at the app's own
+    1280×800, measured. **So a change to the ribbon's height is a change to this number**: at 74px
+    the bar left the last 18px of the ribbon showing under it and stopped reading as a replacement
+    for it. The height sits on the bar and the boxes stretch into it (`flex-1`, no `h-*` of their
+    own, capped at `max-w-[300px]` with the bar `justify-center` so four targets do not span a
+    2560px window). It deliberately does **not** follow the ribbon back down to 48px where that
+    row stops wrapping (≥1600px): the boxes would be 30px, under the 40px that was reported as
+    easy to miss. Every clearance is in
+    [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   - **`aria-hidden`, like the tray**, and for the same argument: all four have a click path a caret
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
