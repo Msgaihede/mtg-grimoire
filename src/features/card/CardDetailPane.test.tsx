@@ -973,6 +973,40 @@ describe("the foil view", () => {
     );
   });
 
+  /**
+   * **The press moves the row's address, so it moves the context with it** — the other half of
+   * the 2026-08-18 defect, reached from the pane instead of the deck's menu.
+   *
+   * A row is addressed by `(deck, category, card, variant, finish)`, and this write changes the
+   * fifth part. A context left pointing at the finish that has just been left names no row: the
+   * deck editor's mark goes out, and the *next* press of this very button sends `null → null`,
+   * which the backend refuses as `SAME_FINISH` — so a toggle that has been pressed once can
+   * never be pressed back. Re-anchoring is `swapPrinting`'s answer one axis over.
+   */
+  it("re-anchors the deck context on the finish it just set, so the toggle comes back", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardFromDeck(MAIN);
+
+    wrap("p1");
+    await userEvent.click(await screen.findByRole("button", { name: "Set as foil" }));
+
+    await waitFor(() =>
+      expect(useAppStore.getState().paneDeckContext).toEqual({ ...MAIN, finish: "foil" }),
+    );
+
+    // The way back: addressed from `foil` because that is the row the deck now holds.
+    await userEvent.click(screen.getByRole("button", { name: "Set as regular" }));
+    expect(deckSetCardFinish).toHaveBeenLastCalledWith(
+      4,
+      "p1",
+      MAIN.categoryId,
+      "live",
+      "foil",
+      null,
+    );
+  });
+
   /** The pane opens on the copy the deck actually plays, rather than on the plain photograph of
    *  it — which is the one thing the `key={cardId}` reset cannot do on its own. */
   it("opens showing the finish the deck row already plays", async () => {

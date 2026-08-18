@@ -324,6 +324,20 @@ reader to configure the deck they had just made; it now asks all of them.
   moves. The card pane's foil button is the second entrance: inside the editor, on a card the
   deck holds, it **writes** and says `Set as foil`; anywhere else it stays the view toggle it has
   always been and says `View as foil`.
+- **Setting a finish moves the row's _address_, so the write re-anchors the card pane's context on
+  it** — `useDeck`'s `reanchorPane`, on the mutation rather than at either call site because both
+  entrances above press it. A row is `(deck, category, card, variant, finish)` and this write
+  changes the fifth part, so a context left where it was names a row that no longer exists: the
+  reported defect (2026-08-18) was `Set as foil` **unpicking the card it was pressed on** — the
+  gold ring is `selectedSlot`, derived from that context — while the pane stayed open beside it
+  saying nothing about any row. Two more went with it and neither had been reported: the pane's
+  close had no control to hand the caret back to (`deckControlFor` searches by the same slot), and
+  the pane's own toggle sent `null → null` on its next press, refused as `SAME_FINISH`, so it
+  could be pressed once and never pressed back. `swapPrinting` met this one axis over and answered
+  it the same way — `openCardFromDeck` is both "which card is open" and "which row it came from".
+  **The fold needs no arm**: two rows becoming one leaves the survivor at the target finish, which
+  is where the context lands either way. **`move` and `refile` change the third part and have the
+  same hole**; they are not fixed and the mark goes out there too.
 - **What a deck card is drawn as is `playedFinish(card.finish, card.finishes)`** — the reader's
   own statement first, `soleFinish`'s second. The order carries the argument: `soleFinish` says
   what the *object* is and deliberately says nothing about a printing sold in both (a sheen on
@@ -356,7 +370,7 @@ reader to configure the deck they had just made; it now asks all of them.
   `QuickZones.tsx` draws four boxes across the top of the editor for the length of a drag —
   `Auto`, `New category`, and the deck's own Maybeboard and Sideboard — against the remove tray's
   `sticky bottom-0` at the foot of it. Everything between them is the deck, where a drop still
-  means the pile it landed on. Five things about it are decisions rather than details:
+  means the pile it landed on. Everything below is a decision rather than a detail:
   - **It owns its own `monitorForElements`, and that is the point of it being a component.**
     `PriceStrip`'s monitor is narrowed by `canMonitor` to the deck's own cards, because one that
     answered for the docked panel's tiles would re-render the strip — and, while that monitor
@@ -414,6 +428,16 @@ reader to configure the deck they had just made; it now asks all of them.
     moment the reader was aiming at it. `sticky` rather than `fixed` so the bar is the editor's
     width with nothing measured; the editor **is** the page scroller, so `top-0` is the top of what
     the reader can see.
+  - **Its height is the deck's name/settings ribbon's, because that is the row it lands on**
+    (2026-08-18). `h-[5.75rem]` — 92px, which is that row wrapped to two lines at the app's own
+    1280×800, measured. **So a change to the ribbon's height is a change to this number**: at 74px
+    the bar left the last 18px of the ribbon showing under it and stopped reading as a replacement
+    for it. The height sits on the bar and the boxes stretch into it (`flex-1`, no `h-*` of their
+    own, capped at `max-w-[300px]` with the bar `justify-center` so four targets do not span a
+    2560px window). It deliberately does **not** follow the ribbon back down to 48px where that
+    row stops wrapping (≥1600px): the boxes would be 30px, under the 40px that was reported as
+    easy to miss. Every clearance is in
+    [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   - **`aria-hidden`, like the tray**, and for the same argument: all four have a click path a caret
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because

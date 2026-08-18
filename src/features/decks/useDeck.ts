@@ -10,7 +10,7 @@ import {
   type DeckVariant,
   type DeckViewState,
 } from "@/lib/ipc";
-import type { PaneDeckContext } from "@/lib/store";
+import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor } from "./autoCategory";
 
@@ -89,6 +89,57 @@ interface Slot {
    * existing call site and been wrong at half of them.
    */
   finish: DeckFinish;
+}
+
+/**
+ * Move the card pane's context onto the finish a row has just been set to.
+ *
+ * **A deck row is addressed by `(deck, category, card, variant, finish)`**, and `set_card_finish`
+ * changes the fifth part — so a context left pointing at the finish that was *left* names a row
+ * that no longer exists. Three things break at once when it does, and all three were reported as
+ * one on 2026-08-18: the editor's `selectedSlot` matches nothing, so the picked card is silently
+ * unpicked while the pane stays open beside it; `CardDetailPane`'s `deckControlFor` finds no
+ * control to hand the caret back to on close; and the pane's own foil button sends
+ * `null → null` on its next press, which the backend refuses as `SAME_FINISH` — a toggle that
+ * could be pressed once and never pressed back.
+ *
+ * `swapPrinting` met exactly this one axis over and answered it the same way, with
+ * `openCardFromDeck({ ...deckRow, cardId })` — the store action is both "which card is open" and
+ * "which row it came from" in one write. This is that, for the finish.
+ *
+ * **It lives on the mutation rather than at a call site**, which is the one design decision
+ * here: two surfaces press this write — the deck card menu's `Set as foil` and the pane's own
+ * button — and a rule about what a write does to the address it wrote is not something two
+ * callers should have to remember separately. `swapPrinting`'s re-anchor is at its call site
+ * because the pane is its only presser and it carries a `handover` only the pane can build.
+ *
+ * **Only the row that was written**, hence the whole address is compared: a reader can have the
+ * pane open on one row and right-click another, and a card open from a different deck, a
+ * different pile or the other variant must not be dragged along. Nothing to move is the common
+ * case — most finish writes happen with no pane open at all.
+ *
+ * The **fold** needs no arm of its own: setting a row to a finish the pile already holds turns
+ * two rows into one, and the surviving row is the one at `to`. That is where the context lands
+ * either way.
+ */
+function reanchorPane(
+  /** The row the write named — `useDeck`'s own `id` and `variant`, and the mutation's {@link Slot}.
+   *  A `null` id is a hook nothing can write through, and equals no context's `deckId`. */
+  wrote: Slot & { deckId: number | null; variant: DeckVariant },
+  to: DeckFinish,
+) {
+  const { paneDeckContext: pane, openCardFromDeck } = useAppStore.getState();
+  if (
+    pane === null ||
+    pane.deckId !== wrote.deckId ||
+    pane.variant !== wrote.variant ||
+    pane.categoryId !== wrote.categoryId ||
+    pane.cardId !== wrote.cardId ||
+    pane.finish !== wrote.finish
+  ) {
+    return;
+  }
+  openCardFromDeck({ ...pane, finish: to });
 }
 
 /**
@@ -479,7 +530,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   const setCardFinish = useMutation({
     mutationFn: ({ cardId, categoryId, finish, to }: Slot & { to: DeckFinish }) =>
       ipc.deckSetCardFinish(opened(id), cardId, categoryId, variant, finish, to),
-    onSuccess: invalidate,
+    onSuccess: (_result, { cardId, categoryId, finish, to }) => {
+      reanchorPane({ deckId: id, variant, cardId, categoryId, finish }, to);
+      invalidate();
+    },
   });
 
   /**
