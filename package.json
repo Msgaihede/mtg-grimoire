@@ -1,7 +1,7 @@
 {
   "name": "mtg-grimoire",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "types": ".design-sync/dist/.design-sync/entry.d.ts",
   "scripts": {
