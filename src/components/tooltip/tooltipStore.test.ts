@@ -69,4 +69,13 @@ describe("the tooltip store", () => {
     store.getState().hide(anchorOf("a"));
     expect(writes).toBe(0);
   });
+
+  it("keeps counting across a close, so a reopened panel is never handed an id it has already measured", () => {
+    const store = createTooltipStore();
+    const a = anchorOf("a");
+    store.getState().show(shown(a));
+    store.getState().hide(a);
+    store.getState().show(shown(a));
+    expect(store.getState().open?.openId).toBe(2);
+  });
 });

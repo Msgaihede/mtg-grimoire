@@ -47,16 +47,27 @@ export interface TooltipState {
  * already records `useAppStore` as *the* global that cannot be, and this should not become the second.
  */
 export const createTooltipStore = (): StoreApi<TooltipState> =>
-  createStore<TooltipState>((set, get) => ({
-    open: null,
-    show: (next) => set({ open: { ...next, openId: (get().open?.openId ?? 0) + 1 } }),
-    hide: (anchor) => {
-      if (get().open?.anchor === anchor) set({ open: null });
-    },
-    // The `!== null` check is not a micro-optimisation: `hideAny` is called from a capture-phase
-    // `scroll` listener, i.e. on every frame of every scroll in the app. Writing `null` over
-    // `null` would notify every subscriber each time.
-    hideAny: () => {
-      if (get().open !== null) set({ open: null });
-    },
-  }));
+  createStore<TooltipState>((set, get) => {
+    // **Outside `open`, so it survives a close.** An id that restarted at 1 on every reopen would
+    // collide with the id the panel last measured for: `TooltipPanel` is rendered under a constant
+    // key inside `AnimatePresence` and its measuring layout effect keys on this, so a reopen on the
+    // same control while the exit fade is still running would leave the panel holding a measurement
+    // it never re-took. Monotonic here means the panel never has to reason about that.
+    let opens = 0;
+    return {
+      open: null,
+      show: (next) => {
+        opens += 1;
+        set({ open: { ...next, openId: opens } });
+      },
+      hide: (anchor) => {
+        if (get().open?.anchor === anchor) set({ open: null });
+      },
+      // The `!== null` check is not a micro-optimisation: `hideAny` is called from a capture-phase
+      // `scroll` listener, i.e. on every frame of every scroll in the app. Writing `null` over
+      // `null` would notify every subscriber each time.
+      hideAny: () => {
+        if (get().open !== null) set({ open: null });
+      },
+    };
+  });
