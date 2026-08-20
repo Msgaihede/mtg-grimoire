@@ -8,6 +8,16 @@
  * say, and the same two rows separate again the moment Condition is switched on.
  *
  * The two quantity fields are **summed, never keyed on**: they are what folding accumulates.
+ *
+ * **The chosen `fields` are not the only thing a writer can tell rows apart by — the optional
+ * `discriminator` is for the rest.** A field is something the reader can switch on or off; a
+ * *structural* fact — which section a line lands under, whether a bracket carries `{noDeck}` —
+ * is something the writer branches on unconditionally, whether or not the field that names it
+ * (`category`) is in the chosen set. Folding on `fields` alone can merge a Sideboard row into a
+ * Main deck row: the merged row inherits the *first* card's section, so the caller's own
+ * `formatExport` passes each format's own discriminator (`sectionOf` for the three that group or
+ * prefix by it, category name **and** the active flag for Archidekt's `{noDeck}`) so a fold can
+ * never cross a line the file itself draws.
  */
 import { TRANSFER_FIELDS, type TransferFieldId } from "../fields";
 import type { TransferCard } from "../TransferCard";
@@ -17,14 +27,20 @@ const SUMMED: readonly TransferFieldId[] = ["quantity", "tradelistQuantity"];
 export function foldForFields(
   cards: readonly TransferCard[],
   fields: readonly TransferFieldId[],
+  discriminator?: (card: TransferCard) => string,
 ): TransferCard[] {
   const keyed = fields.filter((id) => !SUMMED.includes(id));
   // A Map preserves insertion order, which is what keeps the caller's order the file's order.
   const out = new Map<string, TransferCard>();
   for (const card of cards) {
-    // JSON rather than a joined string: it escapes, so no separator a card name could
-    // contain can make two different rows share one key.
-    const key = JSON.stringify(keyed.map((id) => TRANSFER_FIELDS[id].read(card)));
+    // JSON rather than a joined string: it escapes, so no separator a card name — or a
+    // discriminator's own return value — could contain can make two different rows share one
+    // key. The discriminator rides as one more entry in the same flat array as the fields, not
+    // nested — a nested array would still be safe, but flat is what the rest of this file reads.
+    const key = JSON.stringify([
+      ...keyed.map((id) => TRANSFER_FIELDS[id].read(card)),
+      discriminator?.(card) ?? "",
+    ]);
     const seen = out.get(key);
     if (seen === undefined) {
       out.set(key, { ...card });

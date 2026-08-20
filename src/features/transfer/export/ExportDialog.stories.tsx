@@ -215,8 +215,9 @@ export const PlainText: Story = {
  *
  * MTGO's export omits the printing entirely: it resolves a name against whatever copies a player
  * owns rather than pinning one, so naming a set would be a promise this format was never in a
- * position to keep. Both arms share `plainLine`, and what MTGO adds is a per-line `SB:` prefix on
- * a sideboard or a companion — a one-line override rather than a heading, which is exactly how
+ * position to keep — MTGO's defaults leave `setCode`/`collectorNumber` off `writeLine`'s field
+ * set, the same way plain text's do. What MTGO adds on top is a per-line `SB:` prefix on a
+ * sideboard or a companion — a one-line override rather than a heading, which is exactly how
  * this app's own importer reads it back. A one-pile export has none, so the two agree here.
  */
 export const Mtgo: Story = {

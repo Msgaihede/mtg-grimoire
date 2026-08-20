@@ -213,6 +213,29 @@ function sectioned(
 }
 
 /**
+ * What each format can tell two rows apart by **beyond the fields the reader chose** — the
+ * structural facts `formatExport`'s own switch below branches on unconditionally, passed to
+ * {@link foldForFields} as its discriminator.
+ *
+ * A field is something the reader can switch on or off; a format's *structure* is not — Arena
+ * and Moxfield group by section and MTGO prefixes `SB:` from it whether or not `category` is
+ * among the chosen fields, so a Main deck row and a Sideboard row of the same printing must
+ * never fold together on the strength of `category` being off. Archidekt keys on the category
+ * name **and** the active flag together, because it writes `{noDeck}` from the second and would
+ * otherwise fold a switched-off copy into a switched-on one and silently drop the flag. `plain`,
+ * `tcgplayer` and `csv` are absent — they are flat and branch on nothing structural, so two rows
+ * that agree on the chosen fields really are indistinguishable in that file.
+ */
+const DISCRIMINATOR: Partial<Record<ExportFormat, (card: TransferCard) => string>> = {
+  // `sectionOf` answers `null` on a category-less surface, where there is nothing structural
+  // to key on and every row shares the same `""` — folding is untouched there.
+  arena: (card) => sectionOf(card) ?? "",
+  moxfield: (card) => sectionOf(card) ?? "",
+  mtgo: (card) => sectionOf(card) ?? "",
+  archidekt: (card) => JSON.stringify([card.categoryName, card.categoryActive]),
+};
+
+/**
  * Render a pile of cards as decklist text in one of {@link EXPORT_FORMATS}, over the fields the
  * reader chose.
  *
@@ -227,6 +250,12 @@ function sectioned(
  * `categoryActive` — so an Arena export would carry copies that `omittedCount` reports as
  * omitted in the same breath. Filtering first means nothing inactive survives to be folded, and
  * the sentence beside the format stays true of the file under it.
+ *
+ * **Fold may only merge rows the file itself cannot tell apart — see {@link DISCRIMINATOR}.** A
+ * foil and a regular copy of one printing in one Arena-eligible category really do collapse to
+ * `3 Bolt (LTC) 285`, because Arena has no finish channel and two identical lines would be a
+ * malformed decklist; the same two rows in different sections must not, because the merged row
+ * would silently move one of them to the other's zone.
  */
 export function formatExport(
   cards: readonly TransferCard[],
@@ -234,7 +263,7 @@ export function formatExport(
   fields: readonly TransferFieldId[],
 ): string {
   const set = new Set(fields);
-  const rows = foldForFields(written(cards, format), fields);
+  const rows = foldForFields(written(cards, format), fields, DISCRIMINATOR[format]);
   if (rows.length === 0) return "";
   const spec = LINE_SPEC[format];
   const line = (card: TransferCard) => writeLine(card, set, spec);

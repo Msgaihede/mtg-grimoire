@@ -344,3 +344,77 @@ describe("field selection", () => {
     expect(formatExport([nm, lp], "plain", ["quantity", "name"])).toBe("3 Bolt\n");
   });
 });
+
+/**
+ * **A fold may only merge rows the file itself cannot tell apart.** `fields` is what the reader
+ * switched on, but a format's own structure — which section a line lands under, whether a
+ * bracket carries `{noDeck}` — is not something the reader can switch off, and folding on
+ * `fields` alone can merge across it. Every card here is deck-shaped (a real `categoryKind`,
+ * never `null`), because the bug this section pins only exists where a section is real.
+ */
+describe("fold discriminators", () => {
+  const DECK = "deck" as const;
+
+  it("keeps a printing in Main deck and the same printing in Sideboard as two rows, under their own headings", () => {
+    const main = card({ name: "Lightning Bolt", setCode: "LEA", collectorNumber: "161" });
+    const side = card({
+      name: "Lightning Bolt",
+      setCode: "LEA",
+      collectorNumber: "161",
+      categoryName: "Sideboard",
+      categoryKind: "side",
+    });
+
+    expect(formatExport([main, side], "arena", defaultFields("arena", DECK))).toBe(
+      "Deck\n1 Lightning Bolt (LEA) 161\n\nSideboard\n1 Lightning Bolt (LEA) 161\n",
+    );
+    expect(formatExport([main, side], "moxfield", defaultFields("moxfield", DECK))).toBe(
+      "Deck\n1 Lightning Bolt (LEA) 161\n\nSideboard\n1 Lightning Bolt (LEA) 161\n",
+    );
+  });
+
+  it("keeps a printing in Main deck and the same printing in Sideboard as two MTGO lines, one SB:", () => {
+    const main = card({ name: "Lightning Bolt" });
+    const side = card({ name: "Lightning Bolt", categoryName: "Sideboard", categoryKind: "side" });
+
+    expect(formatExport([main, side], "mtgo", defaultFields("mtgo", DECK))).toBe(
+      "1 Lightning Bolt\nSB: 1 Lightning Bolt\n",
+    );
+  });
+
+  it("folds a foil and a regular copy in one category for Arena, which has no finish channel, and keeps them apart in Moxfield, which has one", () => {
+    const regular = card({ name: "Lightning Bolt", setCode: "LEA", collectorNumber: "161" });
+    const foil = card({
+      name: "Lightning Bolt",
+      setCode: "LEA",
+      collectorNumber: "161",
+      finish: "foil",
+    });
+
+    expect(formatExport([regular, foil], "arena", defaultFields("arena", DECK))).toBe(
+      "Deck\n2 Lightning Bolt (LEA) 161\n",
+    );
+    expect(formatExport([regular, foil], "moxfield", defaultFields("moxfield", DECK))).toBe(
+      "Deck\n1 Lightning Bolt (LEA) 161\n1 Lightning Bolt (LEA) 161 *F*\n",
+    );
+  });
+
+  it("keeps a switched-on and a switched-off row of one pile as two Archidekt lines, only one carrying {noDeck}", () => {
+    const on = card({ name: "Mox Amber", categoryName: "Ramp" });
+    const off = card({ name: "Mox Amber", categoryName: "Ramp", categoryActive: false });
+
+    expect(formatExport([on, off], "archidekt", defaultFields("archidekt", DECK))).toBe(
+      "Ramp\n1x Mox Amber (ltc) 285 [Ramp]\n1x Mox Amber (ltc) 285 [Ramp{noDeck}]\n",
+    );
+  });
+
+  it("keeps two different printings of one card as two Arena rows and folds them to one in plain text, which has no printing channel", () => {
+    const lea = card({ name: "Forest", setCode: "LEA", collectorNumber: "1" });
+    const unf = card({ name: "Forest", setCode: "UNF", collectorNumber: "239" });
+
+    expect(formatExport([lea, unf], "arena", defaultFields("arena", DECK))).toBe(
+      "Deck\n1 Forest (LEA) 1\n1 Forest (UNF) 239\n",
+    );
+    expect(formatExport([lea, unf], "plain", defaultFields("plain", DECK))).toBe("2 Forest\n");
+  });
+});
