@@ -12,12 +12,15 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 
 | File            | Owns                                                                           |
 | --------------- | ------------------------------------------------------------------------------ |
-| `engine.ts`     | Size, copy limits, restricted semantics, legality                              |
+| `engine.ts`     | Size, copy limits, restricted semantics, legality — **and two entry points**   |
 | `singleton.ts`  | Exact-phrase exceptions, **re-derived from oracle text and never a card list** |
 | `commanders.ts` | Eligibility, partners, colour identity                                         |
 | `companions.ts` | Companion rules                                                                |
 | `bracket.ts`    | **Advisory only — `engine.ts` does not import it**                             |
 
+- **`validateDeck` answers for the deck and `validateForMarks` answers for every card drawn**, and
+  which one a surface calls is the whole of issue #134 — see the second bullet of **The category
+  model** for what a switched-off pile is and is not judged on.
 - `oldschool` is the one printing-sensitive legality key, and it comes out right with no special
   case because each row carries its own printing's answer.
 - `format_specs` is data seeded in a migration, never an engine branch. `restricted_semantic`
@@ -44,6 +47,23 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   branch on the kind being `maybe`.** An inactive category counts toward nothing — not size, not
   copies, not legality — and the allocator claims no copy for it. That was measured: the old
   shape looked correct and was wrong the first time a user deactivated a pile of their own.
+- **"Counts toward nothing" is a rule about the _deck_, and since 2026-08-20 it is emphatically
+  not a rule about the _card's mark_** (issue #134). A card in a switched-off pile still draws
+  its `RULE BREAK` outline and badge, and the two answers are two functions in `engine.ts`:
+  `validateDeck` is what the deck is — the header's check chip, the validation panel, the
+  sentence a reader acts on — and `validateForMarks` is that plus what is wrong with each parked
+  card, which is what `DeckEditor` files through `violationsByCard` for the four views.
+  `ValidationPanel` calls the first and must go on calling it. **What a parked card is judged on
+  is the card's own facts under this format and never a fact about a pile**: legality, the
+  mana-value ceiling, and colour identity against the *active* command zone — each answerable
+  from one row and one seeded spec, so asking it moves no number and no other card's mark. Size,
+  sideboard size, copy limits and commander eligibility are arithmetic over a pile and stay out;
+  counting them would not merely re-admit the parked card, it would move marks onto the **active**
+  cards it was counted against. An inactive `commander` row is left out of the identity pass for
+  the same reason it is left out of the union — a card parked as an alternative commander is not
+  a card being held to the current one. The reader's report was the reverse of a false alarm: a
+  Golgari card in a mono-white deck's Maybeboard drew nothing at all, and on a surface where a
+  mark is the only way a card speaks, nothing reads as *fine*.
 - **`SIZE_KINDS` is `main`, `commander` and `maybe`** — the switch decides whether a pile counts
   at all; the kind decides only whether it is played _beside_ the deck or _in_ it, and only
   `side` and `companion` are beside it (CR 100.4a; EDH's companion is "effectively a 101st
