@@ -29,7 +29,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { useDeckImport } from "./useDeckImport";
+import { useImport } from "./useImport";
 
 const MADE: DeckRow = {
   gameKey: "any",
@@ -92,14 +92,14 @@ beforeEach(() => {
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
-describe("useDeckImport", () => {
+describe("useImport", () => {
   /**
    * The one rule that lives on this hook and nowhere else: the create and the commit are two
    * transactions, so a refusal between them has to be undone by hand.
    */
   it("deletes the deck it just made when the import is refused", async () => {
     deckImportCommit.mockRejectedValue("The card database is busy finishing a sync.");
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     await expect(
       result.current.importIntoNewDeck.mutateAsync({
@@ -121,7 +121,7 @@ describe("useDeckImport", () => {
   it("still reports the import's refusal when the rollback fails too", async () => {
     deckImportCommit.mockRejectedValue("A category name cannot be blank.");
     deckDelete.mockRejectedValue("The card database is busy finishing a sync.");
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     await expect(
       result.current.importIntoNewDeck.mutateAsync({
@@ -133,7 +133,7 @@ describe("useDeckImport", () => {
   });
 
   it("keeps the deck when the import lands", async () => {
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     const landed = await result.current.importIntoNewDeck.mutateAsync({
       name: "Selvala",
@@ -154,7 +154,7 @@ describe("useDeckImport", () => {
   it("invalidates the deck and the deck list after a commit", async () => {
     client.setQueryData(["decks", "list"], []);
     client.setQueryData(["decks", "detail", 4, "live"], null);
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     await result.current.commit.mutateAsync({
       deckId: 4,
@@ -173,7 +173,7 @@ describe("useDeckImport", () => {
   it("invalidates when a commit is refused", async () => {
     deckImportCommit.mockRejectedValue("That deck is gone.");
     client.setQueryData(["decks", "list"], []);
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     await expect(
       result.current.commit.mutateAsync({
@@ -210,7 +210,7 @@ describe("the Oracle tags a resolve reads", () => {
       row(3, "bolt"),
     ]);
     oracleTagsForPrintings.mockResolvedValue([{ cardId: "bolt", slugs: ["removal"] }]);
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     const resolved = await result.current.resolve.mutateAsync(LINES);
 
@@ -225,7 +225,7 @@ describe("the Oracle tags a resolve reads", () => {
    *  so nothing is asked. */
   it("asks nothing when no line resolved", async () => {
     importResolve.mockResolvedValue([row(0, null), row(1, null)]);
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     const resolved = await result.current.resolve.mutateAsync(LINES);
 
@@ -241,7 +241,7 @@ describe("the Oracle tags a resolve reads", () => {
   it("resolves with no tags when the tag read is refused", async () => {
     importResolve.mockResolvedValue([row(0, "bolt")]);
     oracleTagsForPrintings.mockRejectedValue("The card database is busy finishing a sync.");
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     const resolved = await result.current.resolve.mutateAsync(LINES);
 
@@ -253,7 +253,7 @@ describe("the Oracle tags a resolve reads", () => {
    *  fails quietly, and only that half. */
   it("still refuses when the printings themselves could not be looked up", async () => {
     importResolve.mockRejectedValue("The card database is busy finishing a sync.");
-    const { result } = renderHook(() => useDeckImport(), { wrapper });
+    const { result } = renderHook(() => useImport(), { wrapper });
 
     await expect(
       result.current.resolve.mutateAsync(LINES),

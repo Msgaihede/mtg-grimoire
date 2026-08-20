@@ -26,7 +26,12 @@ import { transferCard } from "./fixtures";
 import type { TransferCard } from "./TransferCard";
 import { ARCHIDEKT_FLAT, ARCHIDEKT_SECTIONED, EMPTY_HINT_LIST, match } from "./import/fixtures";
 import { parseDecklist, type ParsedList } from "./import/parse";
-import { buildImportPlan, tallyOf, toImportItems, type ImportPlan } from "./import/plan";
+import {
+  buildImportPlan,
+  tallyOf,
+  toImportItems,
+  type ImportPlan,
+} from "./import/destinations/deck";
 
 /** The field set every export in this file is written with — a deck's defaults, at each
  *  format, so this file measures the same file a reader gets from the app today. */

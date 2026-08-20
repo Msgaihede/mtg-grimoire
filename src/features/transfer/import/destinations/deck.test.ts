@@ -10,8 +10,8 @@ import { PREDEFINED_CATEGORY_NAMES, UNCATEGORIZED } from "@/features/decks/autoC
 import { spec } from "@/features/decks/validation/fixtures";
 // `match` is the stubbed resolver, and it lives beside the corpus because `decklists.test.ts`
 // needs the same one — see its doc for what it claims and what it refuses to claim.
-import { ARCHIDEKT_SECTIONED, match } from "./fixtures";
-import { parseDecklist } from "./parse";
+import { ARCHIDEKT_SECTIONED, match } from "../fixtures";
+import { parseDecklist } from "../parse";
 import {
   SECTION_CATEGORY,
   buildImportPlan,
@@ -19,7 +19,7 @@ import {
   toImportItems,
   type CategoryTally,
   type ImportPlan,
-} from "./plan";
+} from "./deck";
 
 /**
  * A pasted list, resolved by a lookup on the name each line wrote. A name this record has
@@ -434,7 +434,7 @@ describe("filing an imported line by what the card does", () => {
   });
 
   /**
-   * **A refused tag read is not a refused import.** `useDeckImport` answers `tags: []` when the
+   * **A refused tag read is not a refused import.** `useImport` answers `tags: []` when the
    * command rejects, and what that plans is the whole list, complete, filed exactly as this
    * app filed it before Oracle tags existed. An import is a large deliberate action and must
    * never be lost to a taxonomy fetch.

@@ -61,7 +61,12 @@ import {
   GROUP_BY_OPTIONS,
   type GroupBy,
 } from "./grouping";
-import { ImportDeckDialog } from "@/features/transfer/import/ImportDeckDialog";
+import type { ImportDestination } from "@/features/transfer/import/destination";
+import {
+  DeckImportSubtitle,
+  deckDestination,
+} from "@/features/transfer/import/destinations/DeckPreview";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { NewTagDialog } from "./NewTagDialog";
 import { PriceStrip } from "./PriceStrip";
@@ -482,7 +487,7 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  *
  * **Every overlay here is a `Dialog`** — where the scrim, the centring, `aria-modal`, the
  * trap, the ✕ and the `"inner"` rung are written once, and since 2026-08-16 that shell is the
- * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDeckDialog` were the
+ * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDialog` were the
  * last two here carrying their own copy of that chrome, with `CreateDeckDialog` a third copy
  * outside this editor; all three moved onto the shell on that date.
  *
@@ -1136,6 +1141,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const cardsInVariant = useMemo(
     () => deck.cards.reduce((copies, card) => copies + card.quantity, 0),
     [deck.cards],
+  );
+
+  /** The pile a right-click aimed the importer at, or nothing for the toolbar's own press. */
+  const forcedCategoryName = layer?.kind === "import" ? layer.forcedCategoryName : undefined;
+
+  /**
+   * The one destination this surface offers: the deck that is open.
+   *
+   * **Memoised on the four facts it closes over, because `Preview` is a component identity** —
+   * a new one each render would remount the preview step and take the reader's commander choice
+   * with it. It has to be the list on screen: an import lands in one variant and a `replace`
+   * clears at most one, so a paste made while Theory is up must never touch what is sleeved.
+   */
+  const importInto = useMemo<ImportDestination>(
+    () => deckDestination({ deckId, variant, cardsInVariant, forcedCategoryName }),
+    [deckId, variant, cardsInVariant, forcedCategoryName],
   );
 
   /** The pile the delete confirmation is about, read from the **live** list — a rename made
@@ -3269,27 +3290,34 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The one whose target has to be **the list on screen**: an import lands in one variant
-          and a `replace` clears at most one, so a paste made while Theory is up must never touch
-          what is sleeved. `cardsInVariant` is what a `replace` would clear, said in words before
-          it is chosen.
+      {/* One destination — the deck that is open — so no destination radios are drawn: a
+          choice between one thing is not a choice. Everything that used to be spelled out
+          here is `importInto` above, built where the deck's own facts are.
 
           `forcedCategoryName` is set only when the dialog was opened from a category heading's
           right-click, and it is the whole of the difference between "import into this deck" and
-          "import into this pile" — applied in `buildImportPlan`, not here, because `plan.ts`
-          makes every deck decision. The toolbar's own press carries none and is unchanged.
+          "import into this pile" — applied in `buildImportPlan`, not here, because
+          `destinations/deck.ts` makes every deck decision. The toolbar's own press carries none
+          and is unchanged.
 
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
           away in the toolbar and the deck it wrote into is already on screen — the editor
-          re-reads it, because every write in `useDeckImport` takes the `["decks"]` root with
-          it. */}
-      <ImportDeckDialog
-        target={{ kind: "deck", deckId, variant, cardsInVariant }}
-        forcedCategoryName={layer?.kind === "import" ? layer.forcedCategoryName : undefined}
+          re-reads it, because every write in `useImport` takes the `["decks"]` root with
+          it. The subtitle is an *element* rather than a string because it reads the deck's
+          name, and a dialog nobody opened must not. */}
+      <ImportDialog
+        destinations={[importInto]}
+        subtitle={
+          <DeckImportSubtitle
+            deckId={deckId}
+            variant={variant}
+            forcedCategoryName={forcedCategoryName}
+          />
+        }
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}
-        onImported={dismiss}
+        onDone={dismiss}
       />
       {/* The confirmation a `Delete…` owes, and it is **`CategoriesDialog`'s own component**
           rather than a second one written here. That dialog asks a careful question — the cards

@@ -149,7 +149,7 @@ export interface DialogProps {
  * reads as that file's: it is that file's.
  *
  * **The last three copies were folded in on 2026-08-16** — `CreateDeckDialog`,
- * `ImportDeckDialog` and `TheoryDiffDialog` — and what they brought with them is the argument
+ * `ImportDialog` and `TheoryDiffDialog` — and what they brought with them is the argument
  * for this file restated. Between the three of them one editor drew **two scrim darknesses**,
  * the ✕ at **two geometries and two speeds**, and the panel at **three** `max-h` values, none of
  * which anybody decided: they are what four independent copies of one design look like after a

@@ -69,7 +69,7 @@ vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
  * `Could not save that export — Cannot read properties of undefined (reading 'invoke')` — the
  * app's own refusal banner reporting the workbench's plumbing. The five component tests that
  * touch a plugin all mock the **plugin package** rather than relying on the core mock
- * (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`, `ImportDeckDialog`,
+ * (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`, `ImportDialog`,
  * `ExportDialog`); a story cannot, because CSF indexes every non-default export and a `vi.mock`
  * belongs to a test file. So it belongs here, once, for every story.
  *

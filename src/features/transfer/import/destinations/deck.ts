@@ -10,7 +10,7 @@
  * every one of them is made here.
  *
  * **The tag slugs arrive as an argument, and that is what keeps this file pure.** Fetching them
- * is IO, IO belongs in `useDeckImport`, and a planning function that reached for the network
+ * is IO, IO belongs in `useImport`, and a planning function that reached for the network
  * could no longer be called synchronously by a test or a preview. So the caller makes **one**
  * read for the whole list and hands the answers in; see {@link buildImportPlan}.
  *
@@ -37,7 +37,7 @@ import {
 } from "@/features/decks/autoCategory";
 import { commanderIneligibility } from "@/features/decks/validation/commanders";
 import type { CardIdentity } from "@/features/decks/validation/types";
-import type { ParseIssue, ParsedLine, ParsedList, SectionKind } from "./parse";
+import type { ParseIssue, ParsedLine, ParsedList, SectionKind } from "../parse";
 
 /**
  * What a section heading calls the pile it opens.
@@ -323,7 +323,7 @@ function tallyOrder(name: string): number {
  * as a format with no command zone: no commander question is asked.
  *
  * `tags` is what one `oracle_tags_for_printings` over every resolved card id answered — the
- * whole list in a single read, made by {@link useDeckImport} before this is called. Three
+ * whole list in a single read, made by {@link useImport} before this is called. Three
  * things about it are load-bearing:
  *
  * * **It is matched by `cardId` and never by position.** The command drops blank and duplicate
@@ -346,7 +346,10 @@ function tallyOrder(name: string): number {
  */
 export function buildImportPlan(
   parsed: ParsedList,
-  rows: ImportResolveRow[],
+  // `readonly`, because {@link DestinationPreviewProps} hands the rows to every destination as a
+  // read-only array and a planner that decides nothing has no business asking for a mutable one.
+  // Widening a parameter costs no caller: an `ImportResolveRow[]` is assignable to this.
+  rows: readonly ImportResolveRow[],
   spec: FormatSpec | null,
   tags: readonly PrintingTags[] = [],
   forcedCategoryName?: string,

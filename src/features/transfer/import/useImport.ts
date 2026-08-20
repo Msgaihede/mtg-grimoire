@@ -2,8 +2,14 @@
  * The four writes an import makes, and the one rule that only lives here.
  *
  * Three of them are `ipc.ts`'s import commands wrapped in a mutation apiece. The fourth,
- * {@link useDeckImport}'s `importIntoNewDeck`, is two commands with a rollback between them and
+ * {@link useImport}'s `importIntoNewDeck`, is two commands with a rollback between them and
  * is the whole reason this file exists rather than a `useMutation` at the call site.
+ *
+ * **It is the shell's hook and the deck destinations', both** — `resolve` and `readFile` belong
+ * to the source step, which every destination shares, and `commit`/`importIntoNewDeck` belong to
+ * the two that write a deck. A `useMutation` with no key is one observer per caller and shares
+ * nothing, so two components calling this hook is two independent sets of mutation state rather
+ * than a leak between them — which is what lets the preview's refusal die with the preview.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -98,7 +104,7 @@ async function tagsFor(rows: readonly ImportResolveRow[]): Promise<PrintingTags[
  *
  * `resolve` and `readFile` take no key at all: neither writes anything.
  */
-export function useDeckImport() {
+export function useImport() {
   const queryClient = useQueryClient();
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["decks"] });
   const writes = { onSuccess: invalidate, onError: invalidate };
@@ -180,4 +186,4 @@ export function useDeckImport() {
 }
 
 /** The whole of what the import dialog consumes, named so the surface and the hook agree. */
-export type DeckImport = ReturnType<typeof useDeckImport>;
+export type ImportWrites = ReturnType<typeof useImport>;

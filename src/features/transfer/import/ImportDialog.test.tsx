@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactElement } from "react";
+import { useMemo, useState, type ReactElement } from "react";
 import type {
   DeckDetail,
   DeckRow,
@@ -44,7 +44,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const pickFile = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
-import { ImportDeckDialog, type ImportTarget } from "./ImportDeckDialog";
+import type { ImportDestination } from "./destination";
+import { deckDestination, type DeckImportInto } from "./destinations/DeckPreview";
+import { NewDeckPreview } from "./destinations/NewDeckPreview";
+import { newDeckDestination } from "./destinations/newDeck";
+import { ImportDialog } from "./ImportDialog";
 
 /** One resolved printing, with everything this surface does not read filled in as nothing —
  *  `plan.test.ts`'s builder, for its reason: the workbench's fixtures are the workbench's. */
@@ -159,7 +163,7 @@ const IDLE: SyncStatus = {
   imageStoreFailures: 0,
 };
 
-const INTO_DECK: ImportTarget = { kind: "deck", deckId: 4, variant: "live", cardsInVariant: 42 };
+const INTO_DECK: DeckImportInto = { deckId: 4, variant: "live", cardsInVariant: 42 };
 
 const onDismiss = vi.fn();
 const onClose = vi.fn();
@@ -170,26 +174,49 @@ const onImported = vi.fn();
  *
  * The trigger is real because Escape's contract is "hand the caret back to whatever opened
  * this", and there is nothing to hand it back to without a button still on screen.
+ *
+ * **One destination, built the way its host builds it** — `DeckEditor` calls `deckDestination`
+ * with the deck on screen, `DecksPage` spreads `newDeckDestination` and closes over the format
+ * it resolved. The shell is handed an array of one either way, so no destination radios are
+ * drawn: that is what both entry points look like until Task 14 gives one of them a second
+ * destination.
  */
 function Harness({
-  target = { kind: "new" } as ImportTarget,
-  /** What the host resolved for a `new` target — the gallery's `useNewDeckFormat()`. Left
+  /** The deck the cards go into, or absent for the gallery's arm: the list becomes a deck. */
+  into,
+  /** What the host resolved for the new-deck arm — the gallery's `useNewDeckFormat()`. Left
    *  `undefined` by default, which is the editor's mount of this dialog: it imports into a deck
-   *  that already has a format, so it passes nothing and the prop's own fallback applies. */
+   *  that already has a format, so it passes nothing and the destination's own fallback
+   *  applies. */
   defaultFormatKey,
 }: {
-  target?: ImportTarget;
+  into?: DeckImportInto;
   defaultFormatKey?: string;
 }) {
   const [open, setOpen] = useState(true);
+  const destination = useMemo<ImportDestination>(
+    () =>
+      into === undefined
+        ? {
+            ...newDeckDestination,
+            Preview: (props) => (
+              <NewDeckPreview
+                {...props}
+                defaultFormatKey={defaultFormatKey}
+                onImported={onImported}
+              />
+            ),
+          }
+        : deckDestination({ ...into, onImported }),
+    [into, defaultFormatKey],
+  );
   return (
     <div>
       <button type="button" data-testid="trigger" onClick={() => setOpen(true)}>
         Import deck
       </button>
-      <ImportDeckDialog
-        target={target}
-        defaultFormatKey={defaultFormatKey}
+      <ImportDialog
+        destinations={[destination]}
         open={open}
         onDismiss={() => {
           onDismiss();
@@ -200,10 +227,7 @@ function Harness({
           onClose();
           setOpen(false);
         }}
-        onImported={(deckId, outcome) => {
-          onImported(deckId, outcome);
-          setOpen(false);
-        }}
+        onDone={() => setOpen(false)}
       />
     </div>
   );
@@ -280,7 +304,7 @@ beforeEach(() => {
   onImported.mockReset();
 });
 
-describe("the import deck dialog", () => {
+describe("the import dialog", () => {
   it("will not advance from an empty box", async () => {
     wrap(<Harness />);
     await panel();
@@ -340,7 +364,7 @@ describe("the import deck dialog", () => {
    * card the editor's validation panel would accept.
    */
   it("asks for a commander when more than one card is eligible", async () => {
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
 
     expect(await screen.findByRole("heading", { name: "Commander" })).toBeInTheDocument();
@@ -355,11 +379,13 @@ describe("the import deck dialog", () => {
   });
 
   it("does not ask when the format has no commander rule", async () => {
-    // A `new` target is judged by the format picked in this dialog, and Modern has no command
-    // zone — so the question is not asked however many legends the list carries.
+    // The new-deck arm is judged by the format picked in this dialog, and Modern has no command
+    // zone — so the question is not asked however many legends the list carries. The select
+    // sits beside the tally it changes since Task 12, so it is pressed after Preview rather than
+    // before it; either way the plan is rebuilt live, which is that arm's whole difference.
     wrap(<Harness />);
-    await userEvent.selectOptions(await screen.findByLabelText("Format"), "modern");
     await preview("1 Captain Sisay\n1 Kenrith, the Returned King");
+    await userEvent.selectOptions(await screen.findByLabelText("Format"), "modern");
 
     expect(await screen.findByText("2 cards")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Commander" })).not.toBeInTheDocument();
@@ -376,7 +402,7 @@ describe("the import deck dialog", () => {
    * So: press a candidate, and both the headline and the piles must move with it.
    */
   it("counts the commander in the pile the import will actually use", async () => {
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
 
     // A regex, because the count sits in its own `<span>` beside a separator and `getByText`
@@ -403,7 +429,7 @@ describe("the import deck dialog", () => {
    *  the commander in words, and a tally that filed him under Creature contradicted the
    *  sentence directly above it. */
   it("counts an automatic commander the reader was never asked about", async () => {
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     await preview("1 Captain Sisay\n1 Sol Ring");
 
     expect(await screen.findByText("Captain Sisay goes in the command zone.")).toBeInTheDocument();
@@ -414,7 +440,7 @@ describe("the import deck dialog", () => {
   });
 
   it("sends the chosen commander in the Commander category", async () => {
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     const go = await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
 
     await userEvent.click(screen.getByRole("button", { name: /Captain Sisay/ }));
@@ -464,7 +490,7 @@ describe("the import deck dialog", () => {
       { cardId: SOL_RING.cardId, slugs: ["ramp", "mana-producer"] },
       { cardId: BOLT.cardId, slugs: ["removal"] },
     ]);
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     const go = await preview("1 Lightning Bolt\n1 Sol Ring\n2 Llanowar Elves");
 
     // One read for the whole list — an import is one round trip, and a lookup per line would
@@ -505,7 +531,7 @@ describe("the import deck dialog", () => {
    */
   it("imports the whole list by type line when the tag read is refused", async () => {
     oracleTagsForPrintings.mockRejectedValue("The card database is busy finishing a sync.");
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     const go = await preview("1 Lightning Bolt\n1 Sol Ring\n2 Llanowar Elves");
 
     expect(await piles()).toEqual([
@@ -556,7 +582,7 @@ describe("the import deck dialog", () => {
       { cardId: SELVALA.cardId, slugs: ["ramp", "mana-producer"] },
       { cardId: SOL_RING.cardId, slugs: ["ramp"] },
     ]);
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     const go = await preview("1 Selvala, Heart of the Wilds\n1 Sol Ring");
 
     expect(
@@ -600,17 +626,17 @@ describe("the import deck dialog", () => {
 
     await userEvent.click(await screen.findByLabelText("Decklist"));
     await userEvent.paste(ARENA_LIST);
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     // Prefilled rather than typed, and still the reader's to overwrite.
     await waitFor(() => expect(screen.getByLabelText("Name")).toHaveValue("Bant Ramp"));
-    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
     await userEvent.click(await screen.findByRole("button", { name: "Import" }));
 
     await waitFor(() =>
       expect(deckCreate).toHaveBeenCalledWith({
         name: "Bant Ramp",
         formatKey: "casual",
-        // The dialog's own game select, on the row it starts on: `any`, so the format list it
-        // offered was the unnarrowed one.
+        // The dialog's own game select, on the value it starts on: `any`, so the format list
+        // it offered was the unnarrowed one.
         gameKey: "any",
       }),
     );
@@ -642,19 +668,20 @@ describe("the import deck dialog", () => {
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(MADE.id, OUTCOME));
   });
 
-  /** The one reason the button can be dark that the reader cannot see from the preview, said
-   *  where the button is — Back keeps everything, so it costs one press. */
+  /** The one reason the button can be dark, said where the button is. Since Task 12 the field
+   *  it is about is on this step too, so the sentence names the field rather than the way back
+   *  to it — same region, same place, same reason. */
   it("will not make a deck with no name", async () => {
     wrap(<Harness />);
     const go = await preview("1 Sol Ring");
 
     await waitFor(() => expect(go).toBeDisabled());
-    expect(await screen.findByRole("status")).toHaveTextContent("Go back and name the deck first.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Name the deck first.");
     expect(deckCreate).not.toHaveBeenCalled();
   });
 
   it("disables Import when nothing resolved", async () => {
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     const go = await preview("1 Definitely Not A Card\n2 Nor This One");
 
     await waitFor(() => expect(go).toBeDisabled());
@@ -671,6 +698,7 @@ describe("the import deck dialog", () => {
    */
   it("starts a new deck on the format the host resolved", async () => {
     wrap(<Harness defaultFormatKey="commander" />);
+    await preview("1 Sol Ring");
 
     const format = await screen.findByLabelText("Format");
     await waitFor(() =>
@@ -691,6 +719,7 @@ describe("the import deck dialog", () => {
    */
   it("falls back to Casual when the host passes no default", async () => {
     wrap(<Harness />);
+    await preview("1 Sol Ring");
 
     const format = await screen.findByLabelText("Format");
     await waitFor(() => expect(within(format).getAllByRole("option")).toHaveLength(3));
@@ -706,7 +735,7 @@ describe("the import deck dialog", () => {
   });
 
   it("names what Replace would clear", async () => {
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     await preview("1 Sol Ring");
 
     const merge = await screen.findByLabelText(/^Merge/);
@@ -730,7 +759,7 @@ describe("the import deck dialog", () => {
 
   it("shows a refused commit and stays open with the pasted text", async () => {
     deckImportCommit.mockRejectedValue("The card database is busy finishing a sync.");
-    wrap(<Harness target={INTO_DECK} />);
+    wrap(<Harness into={INTO_DECK} />);
     const go = await preview("1 Sol Ring");
 
     await userEvent.click(go);
@@ -761,6 +790,38 @@ describe("the import deck dialog", () => {
     expect(await screen.findByText(/Card data is still syncing/)).toBeInTheDocument();
     expect(screen.queryByText('line 1 · "1 Sol Ring"')).not.toBeInTheDocument();
     expect(go).toBeDisabled();
+  });
+
+  /**
+   * **The seam, from the shell's side.** Handed two destinations it draws a radio each, mounts
+   * whichever is chosen and knows nothing about either — which is what lets Task 14 add the
+   * collection and the wishlist without touching that file. Handed one, as both deck entry
+   * points do, it draws no radios at all: a choice between one thing is not a choice.
+   */
+  it("offers the destinations when the host gives it more than one", async () => {
+    const both: ImportDestination[] = [
+      deckDestination({ ...INTO_DECK, onImported }),
+      newDeckDestination,
+    ];
+    wrap(
+      <ImportDialog
+        destinations={both}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    await panel();
+
+    expect(await screen.findByLabelText("Import into this deck")).toBeChecked();
+    await userEvent.click(screen.getByLabelText("Import into a new deck"));
+    await preview("1 Sol Ring");
+
+    // The second destination's own step, drawn by it: a name to give the deck, and none of the
+    // merge/replace question that only a deck already on screen can be asked.
+    expect(screen.getByLabelText("Name")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
   });
 
   it("closes on Escape and hands focus back", async () => {

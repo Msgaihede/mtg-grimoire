@@ -139,7 +139,7 @@ Every one of these has its measurement and its story in
   the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
   because the panel outlives the flag by the length of its fade. **A new modal in the deck
   surface is built _on_ that file rather than beside it, and since 2026-08-16 it is the only
-  definition of one** — `ImportDeckDialog`, `TheoryDiffDialog` and `CreateDeckDialog` were the
+  definition of one** — `ImportDialog`, `TheoryDiffDialog` and `CreateDeckDialog` were the
   last three carrying their own copy of that chrome and are on the shell now. A change to
   modality here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
   is one edit to one file. **What the copies cost while they lasted is the argument for keeping

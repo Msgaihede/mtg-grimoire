@@ -74,7 +74,7 @@ export interface CategoryMenuDeps {
    *  name the heading is showing. */
   startRename: (category: DeckCategory) => void;
   /** Open the importer with every line aimed at this pile — `buildImportPlan`'s trailing
-   *  argument, threaded through `ImportDeckDialog`. */
+   *  argument, threaded through `ImportDialog`. */
   openImport: (request: { forcedCategoryName: string }) => void;
   openExport: (request: CategoryExport) => void;
   /**

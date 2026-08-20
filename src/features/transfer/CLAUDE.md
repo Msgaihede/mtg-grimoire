@@ -9,12 +9,32 @@ validation, formats — still live in
 
 ## Import
 
-`import/` is `parse.ts` (text → lines), `plan.ts` (lines + the printings Rust resolved + **their
-Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the writes) and
-`ImportDeckDialog.tsx` (two steps, one panel, nothing written until Import).
+`import/` is `parse.ts` (text → lines), `destinations/deck.ts` (lines + the printings Rust
+resolved + **their Oracle tag slugs** → piles, a commander, tallies), `useImport.ts` (the writes)
+and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
 
-- **`plan.ts` stays pure and takes the slugs as an argument.** The tag read is chained inside
-  `useDeckImport`'s `resolve` mutation, after `import_resolve` and in the **same**
+- **The dialog is a shell over an `ImportDestination`, and the second step belongs to the
+  destination** (2026-08-20). `destination.ts` is the seam: the shell owns the pasted text, the
+  file picker, the one `import_resolve` call, the step machine and the dismissal rungs — the
+  three questions that are the same wherever the cards are going — and a destination owns its
+  options, its preview, its mode radios and its Import button. **It is deliberately not
+  generic**: an `ImportDestination<TItem, TOptions>` cannot be held in one array by a shell that
+  does not know which it has, because parameter positions are contravariant and nothing widens
+  to `ImportDestination<unknown, unknown>`; every escape from that (a union to narrow, a cast, a
+  hook whose identity changes when the reader switches destination) is worse than four short
+  bodies over shared furniture. Two consequences worth carrying: **the new deck's name, format
+  and game are drawn on the preview step**, beside the tally its format changes, rather than
+  under the paste box where they used to be — the shell asks one question, what is the list, and
+  every question after it belongs to whatever the list is going into; and **`deckDestination` is
+  a function while `newDeckDestination` is a value**, because the deck preview's extra props are
+  required and a bare descriptor behind a cast would be a value that type-checks and crashes
+  wherever anybody mounted it without the wrapper.
+
+- **`destinations/deck.ts` stays pure and takes the slugs as an argument.** It is React-free on
+  purpose and not merely by habit: `decklists.test.ts` imports it for the round trip, and a
+  descriptor at the bottom of it would drag the whole React and IPC graph into a suite that only
+  wants a planner. The tag read is chained inside
+  `useImport`'s `resolve` mutation, after `import_resolve` and in the **same**
   `mutationFn` — **one** `oracleTagsForPrintings` over the deduped matched ids for the whole list,
   never one per line. Putting it there rather than in the planner is what closes the tally-flicker
   hole _by construction_: the dialog crosses to step two in that mutation's `onSuccess`, so the
@@ -109,8 +129,8 @@ Pathway` is one card and there are seven such names in the reference list alone,
 - **Nothing is ever silently dropped.** A line the parser cannot read becomes a `ParseIssue`
   carrying its number and its raw text, and one bad line never aborts the parse. The only lines
   that leave no trace are the ones making no claim — blanks and comments.
-- **`plan.ts` makes every deck decision and the dialog makes none.** The pile is `autoCategoryFor`
-  (the app's one rule, never copied — a plain add, a drag with no column under it and an imported
+- **`destinations/deck.ts` makes every deck decision and the dialog makes none.** The pile is
+  `autoCategoryFor` (the app's one rule, never copied — a plain add, a drag with no column under it and an imported
   line have to agree) and the commander is `commanderIneligibility`, the same rule the validation
   panel judges a built deck by. A looser "looks like a commander" test here would offer a card the
   panel then refuses.
@@ -125,7 +145,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
   satisfies a `Pick` of itself, so the widening changed no call site.
 - **An import is not an add path and must never become one.** Routing a list through
   `useDeck.addCard` would be one transaction and one **allocator run per line**;
-  `deck_import_commit` is one of each. `useDeckImport`'s fourth mutation, `importIntoNewDeck`, is
+  `deck_import_commit` is one of each. `useImport`'s fourth mutation, `importIntoNewDeck`, is
   `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
   transactions, and a refused import must not leave half a deck in the gallery. The commit's
   refusal is what the caller hears, never the clean-up delete's.
@@ -177,8 +197,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
   column of their own a moment ago, so the later and more specific naming wins. **The command zone
   still outranks it**, applied in `toImportItems` after the pile is chosen — a commander goes to
   the command zone whichever heading was right-clicked. It is applied in `categoryFor` and nowhere
-  else, because **`plan.ts` makes every deck decision**;
-  the dialog only reports it, in the step-two heading (`Into <pile> · <deck>`). The argument is
+  else, because **`destinations/deck.ts` makes every deck decision**; the dialog only reports it, in the step-two heading (`Into <pile> · <deck>`). The argument is
   **optional and defaults to today's behaviour**, so the toolbar's own Import passes nothing and is
   unchanged — which is what keeps a shared importer from being reshaped by one caller.
 

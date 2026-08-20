@@ -339,7 +339,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `coverCardId`, `folderId` and `theoryEnabled`, because the "New deck" dialog now hosts the same
   settings form the settings dialog does and would otherwise be create-then-patch-then-setFolder:
   three transactions, and a half-made deck to roll back by hand the way
-  `useDeckImport.importIntoNewDeck` has to. Four things about it that are **not** `deck_update`'s
+  `useImport.importIntoNewDeck` has to. Four things about it that are **not** `deck_update`'s
   rules, each of which a reader who knows the patch will get wrong:
   **(1)** nothing here is written with `coalesce(?n, column)` — this is an INSERT, so an absent
   `folderId` genuinely is the top level and means it, where `DeckPatch.folderId` cannot un-file a

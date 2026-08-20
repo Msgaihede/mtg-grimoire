@@ -637,6 +637,14 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
+    // The select belongs to the new-deck **destination** since Task 12 and is drawn on the
+    // preview step, beside the tally its format changes — so the list has to be read before
+    // there is a select to look at. What the claim is about is unchanged: the answer this
+    // screen resolved reaches both surfaces that make a deck.
+    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
     const format = await screen.findByLabelText("Format");
     await waitFor(() => expect(format).toHaveValue("modern"));
   });
@@ -714,11 +722,12 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
-    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
-    await userEvent.click(screen.getByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Decklist"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+    // The name is the destination's question and is asked on its own step.
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     // Commander rather than Casual, and untouched by the reader: nothing has been created on
     // this install, so the gallery's remembered format is what a first deck starts on — and it

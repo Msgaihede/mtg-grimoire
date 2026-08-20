@@ -30,16 +30,19 @@ import {
   type FolderNode,
   type FolderRowMenu,
 } from "./FolderTree";
-import { ImportDeckDialog, type ImportTarget } from "@/features/transfer/import/ImportDeckDialog";
+import type { ImportDestination } from "@/features/transfer/import/destination";
+import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
+import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { Panel } from "./panels";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
 import { useNewDeckFormat } from "./useNewDeckFormat";
 
 /** The gallery imports into a deck of its own and never into an existing one — there is no
- *  deck open here to import into. A module constant so the prop keeps one identity across
- *  every render of a view that redraws on every drag. */
-const NEW_DECK: ImportTarget = { kind: "new" };
+ *  deck open here to import into, so the dialog is handed one destination and draws no
+ *  destination radios at all. */
+const NEW_DECK_SUBTITLE = "Paste a list or choose a file, and it becomes a deck of its own.";
 
 /**
  * The wall.
@@ -104,7 +107,7 @@ export function DecksPage() {
    *
    * `Dialog` renders its panel inside an `AnimatePresence`, so an `{open && …}` around the
    * dialog would unmount the surface on the render that closes it and take its exit tween with
-   * it (the rule `ImportDeckDialog` is mounted by, one control along). The dialog therefore has
+   * it (the rule `ImportDialog` is mounted by, one control along). The dialog therefore has
    * to keep a deck id for the length of the fade, while `panel` — which is what says *open* —
    * has already gone back to null.
    */
@@ -289,7 +292,7 @@ export function DecksPage() {
   /** The click-away way out: the layer goes, the caret stays where the reader put it. */
   const close = useCallback(() => setPanel(null), []);
 
-  // Every panel on this screen but the three modals. `CreateDeckDialog`, `ImportDeckDialog` and
+  // Every panel on this screen but the three modals. `CreateDeckDialog`, `ImportDialog` and
   // `DeckSettingsDialog` register their own rungs, because each outlives `panel` by the length
   // of its fade and a rung that came up with the *element* would still be consuming Escape
   // while the next layer opened. Two `"inner"` peers are not ordered by this protocol at all,
@@ -428,13 +431,33 @@ export function DecksPage() {
   );
 
   /** The same thing one door along: a list imported as a deck opens as one. The outcome's
-   *  numbers belong to the dialog that was showing them and are not repeated out here. */
+   *  numbers belong to the dialog that was showing them and are not repeated out here — and
+   *  closing is `ImportDialog`'s `onDone`, which fires alongside this. */
   const onImported = useCallback(
     (deckId: number) => {
       setOpenDeckId(deckId);
-      dismiss();
     },
-    [dismiss, setOpenDeckId],
+    [setOpenDeckId],
+  );
+
+  /**
+   * The gallery's one import destination: a deck this list is about to become.
+   *
+   * The wrapper is where the two facts only this screen has are closed over — the format the
+   * reader last built for (see {@link useNewDeckFormat}'s call above; both surfaces that make a
+   * deck take the same answer, so a list pasted into a new deck starts where the gallery's own
+   * dialog would) and where to go once it exists. **Memoised because `Preview` is a component
+   * identity**: a new one each render would remount the preview step and take the name the
+   * reader had typed with it.
+   */
+  const importIntoNewDeck = useMemo<ImportDestination>(
+    () => ({
+      ...newDeckDestination,
+      Preview: (props) => (
+        <NewDeckPreview {...props} defaultFormatKey={newDeckFormatKey} onImported={onImported} />
+      ),
+    }),
+    [newDeckFormatKey, onImported],
   );
 
   /**
@@ -793,16 +816,13 @@ export function DecksPage() {
                 {/* Rendered always and told whether it is open, so the panel can fade *out*:
                     an `{open && …}` here would unmount the surface on the render that closes
                     it, and take its exit tween with it. */}
-                <ImportDeckDialog
-                  target={NEW_DECK}
-                  // Resolved by this screen and handed down — see {@link useNewDeckFormat}'s
-                  // call above. Both surfaces that make a deck take the same answer, so a list
-                  // pasted into a new deck starts on the format the reader last built for.
-                  defaultFormatKey={newDeckFormatKey}
+                <ImportDialog
+                  destinations={[importIntoNewDeck]}
+                  subtitle={NEW_DECK_SUBTITLE}
                   open={panel?.kind === "importDeck"}
                   onDismiss={dismiss}
                   onClose={close}
-                  onImported={onImported}
+                  onDone={dismiss}
                 />
               </div>
 

@@ -10,7 +10,7 @@
  * scopes are resolved, and `layerMatches` is why one layer can carry both.
  *
  * **Built on `Dialog`**, the deck surface's shared modal shell (`src/CLAUDE.md`), rather
- * than carrying its own copy of the chrome — `ImportDeckDialog`, `TheoryDiffDialog` and
+ * than carrying its own copy of the chrome — `ImportDialog`, `TheoryDiffDialog` and
  * `CreateDeckDialog` are the three still doing that, named as the ones to move onto the shell,
  * and this file must not become a fourth. The body lives in {@link Body}, one floor down, so a
  * closed dialog — `open={false}` — mounts nothing: no format state, no memoized preview text.
@@ -20,7 +20,7 @@
  * `dialog:allow-save` opens a native window CDP cannot reach, and nothing in a test or a browser
  * can drive it either. So this file's tests cover **path → write**, not **click → path** — `save`
  * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way
- * `DeckCoverPicker`'s and `ImportDeckDialog`'s tests stub `open`.
+ * `DeckCoverPicker`'s and `ImportDialog`'s tests stub `open`.
  *
  * **The preview is a disclosure and opens shut** (2026-08-18). A decklist is the tallest thing
  * this dialog draws and the least of what a reader came for — the two presses that do the work

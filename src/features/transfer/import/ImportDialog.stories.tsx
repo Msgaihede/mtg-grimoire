@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useDeck } from "@/features/decks/useDeck";
+import type { ImportDestination } from "./destination";
+import { DeckImportSubtitle, deckDestination } from "./destinations/DeckPreview";
+import { NewDeckPreview } from "./destinations/NewDeckPreview";
+import { newDeckDestination } from "./destinations/newDeck";
 import { REFERENCE_LIST } from "./fixtures";
-import { ImportDeckDialog, type ImportTarget } from "./ImportDeckDialog";
+import { ImportDialog } from "./ImportDialog";
 
 /**
  * The dialog with the trigger both entry points give it.
@@ -17,6 +21,10 @@ import { ImportDeckDialog, type ImportTarget } from "./ImportDeckDialog";
  * **`cardsInVariant` is read from the deck rather than passed in**, which is what `DeckEditor`
  * does with the same number: it is the count of the list on screen, and a story that stated it
  * would be the one thing here not computed from the seeded data.
+ *
+ * **One destination either way**, which is what both entry points hand it: the editor builds the
+ * deck that is open, the gallery the deck a list is about to become. A shell given one draws no
+ * destination radios — a choice between one thing is not a choice.
  */
 function Dialog({
   deckId,
@@ -34,8 +42,23 @@ function Dialog({
   const [open, setOpen] = useState(true);
   const deck = useDeck(deckId, variant);
   const cardsInVariant = deck.cards.reduce((n, card) => n + card.quantity, 0);
-  const target: ImportTarget =
-    deckId === null ? { kind: "new" } : { kind: "deck", deckId, variant, cardsInVariant };
+
+  const destination = useMemo<ImportDestination>(() => {
+    const landed = (id: number, added: number) => onImported(id, added);
+    return deckId === null
+      ? {
+          ...newDeckDestination,
+          Preview: (props) => (
+            <NewDeckPreview {...props} onImported={(id, out) => landed(id, out.added)} />
+          ),
+        }
+      : deckDestination({
+          deckId,
+          variant,
+          cardsInVariant,
+          onImported: (id, out) => landed(id, out.added),
+        });
+  }, [deckId, variant, cardsInVariant, onImported]);
 
   return (
     <div className="grid min-h-[30rem] place-items-start">
@@ -51,25 +74,29 @@ function Dialog({
       >
         Import deck
       </button>
-      <ImportDeckDialog
-        target={target}
+      <ImportDialog
+        destinations={[destination]}
+        subtitle={
+          deckId === null ? (
+            "Paste a list or choose a file, and it becomes a deck of its own."
+          ) : (
+            <DeckImportSubtitle deckId={deckId} variant={variant} />
+          )
+        }
         open={open}
         onDismiss={() => {
           onDismiss();
           setOpen(false);
         }}
         onClose={() => setOpen(false)}
-        onImported={(id, outcome) => {
-          onImported(id, outcome.added);
-          setOpen(false);
-        }}
+        onDone={() => setOpen(false)}
       />
     </div>
   );
 }
 
 const meta = {
-  title: "Transfer/Import deck dialog",
+  title: "Transfer/Import dialog",
   component: Dialog,
   tags: ["autodocs"],
   args: { deckId: null, variant: "live" as DeckVariant, onDismiss: fn(), onImported: fn() },
@@ -82,11 +109,16 @@ const meta = {
       story: { inline: false, height: "40rem" },
       description: {
         component:
-          "A decklist, from anywhere, into a deck — in two steps and one panel.\n\n" +
+          "A decklist, from anywhere, into whatever the host offered — in two steps and one " +
+          "panel.\n\n" +
           "**Nothing is written until Import.** The reader pastes or picks a file, presses " +
           "Preview, and is shown what the import would do: which pile every card lands in, " +
           "which lines nothing answered, which printing was used where theirs could not be " +
           "found, and who the commander is going to be.\n\n" +
+          "**The second step belongs to the destination**, which is why the new deck's name, " +
+          "format and game are drawn beside the tally they change rather than under the paste " +
+          "box. The shell owns the text, the file picker and the one `import_resolve` call, " +
+          "and knows nothing else about where the cards are going.\n\n" +
           "Driven end to end by `.storybook/fake/`: `import_resolve` really looks every " +
           "name up and `deck_import_commit` really writes. **The workbench's corpus is 43 " +
           "printings**, not the app's 116 k, so a list of real cards mostly quotes itself back " +
@@ -123,15 +155,18 @@ export const Empty: Story = {
  * eight piles. What the story is worth is the shape at that size: a hundred quoted lines in a
  * box that scrolls inside the dialog rather than growing it, with the tally of what *did*
  * resolve still readable above them.
+ *
+ * The name is typed on the preview step, which is where the new-deck destination asks for it —
+ * beside the tally its format changes rather than under the box the list was pasted into.
  */
 export const PastedReferenceList: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(await canvas.findByLabelText("Name"), "Selvala");
-    await userEvent.click(canvas.getByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
     await userEvent.paste(REFERENCE_LIST);
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+    await userEvent.type(await canvas.findByLabelText("Name"), "Selvala");
 
     // Something landed, so the import is live — and the rest is quoted with its line number.
     await waitFor(async () => {
@@ -151,10 +186,10 @@ export const WithUnmatchedLines: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(await canvas.findByLabelText("Name"), "Burn");
-    await userEvent.click(canvas.getByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
     await userEvent.paste("4 Lightning Bolt\n2 Sol Ring\n1 Lightning Bolth\n1 Counterspell");
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+    await userEvent.type(await canvas.findByLabelText("Name"), "Burn");
 
     await expect(await canvas.findByText('line 3 · "1 Lightning Bolth"')).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
@@ -168,20 +203,20 @@ export const WithUnmatchedLines: Story = {
  * a choice, and the editor's own validation panel judges it once the deck exists — so this play
  * sends the pair back and the preview files both under Commander.
  *
- * The format is picked here rather than read from a deck, which is the `new` target's whole
- * difference: change the select and the commander question changes with it.
+ * The format is picked here rather than read from a deck, which is the new-deck arm's whole
+ * difference: change the select and the commander question changes with it, on the same step.
  */
 export const AmbiguousCommander: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(await canvas.findByLabelText("Name"), "Partners");
-    await userEvent.selectOptions(canvas.getByLabelText("Format"), "commander");
-    await userEvent.click(canvas.getByLabelText("Decklist"));
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
     await userEvent.paste(
       "1 Tymna the Weaver\n1 Thrasios, Triton Hero\n1 Kenrith, the Returned King\n1 Sol Ring",
     );
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+    await userEvent.type(await canvas.findByLabelText("Name"), "Partners");
+    await userEvent.selectOptions(canvas.getByLabelText("Format"), "commander");
 
     const tymna = await canvas.findByRole("button", { name: /Tymna the Weaver/ });
     await userEvent.click(tymna);
@@ -216,7 +251,9 @@ export const IntoExistingDeck: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
     await expect(await canvas.findByLabelText(/^Merge/)).toBeChecked();
-    await expect(canvas.getByLabelText(/^Replace — removes the \d+ cards in Live first/)).toBeInTheDocument();
+    await expect(
+      canvas.getByLabelText(/^Replace — removes the \d+ cards in Live first/),
+    ).toBeInTheDocument();
   },
 };
 
