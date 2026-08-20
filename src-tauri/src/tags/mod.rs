@@ -41,6 +41,7 @@
 //! dataset, a truncated download — which is refused outright and swaps nothing.
 
 pub mod art;
+pub mod muted;
 pub mod oracle;
 pub mod query;
 
