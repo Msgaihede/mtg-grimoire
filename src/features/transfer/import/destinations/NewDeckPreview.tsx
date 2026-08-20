@@ -19,7 +19,6 @@
  * commands are two transactions, and a refused import must not leave half a deck in the gallery.
  */
 import { useId, useMemo, useState, type JSX } from "react";
-import { plural } from "@/lib/counts";
 import { ipcError, type DeckGame } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { DEFAULT_FORMAT, FormatSelect, GameSelect } from "@/features/decks/FormatSelect";
@@ -35,6 +34,7 @@ import {
   Problems,
   Tally,
   commanderIdsOf,
+  reportOf,
   useBlameSync,
   type DeckImportInto,
 } from "./DeckPreview";
@@ -108,7 +108,9 @@ export function NewDeckPreview({
       {
         onSuccess: ({ deck, outcome }) => {
           onImported?.(deck.id, outcome);
-          onDone(`${deck.name} — ${plural(outcome.added, "card")} imported.`);
+          // The deck's own name in front of the shared sentence: the gallery is about to open
+          // a tile the reader has never seen, and "6 cards imported" alone does not say into what.
+          onDone(`${deck.name} — ${reportOf(outcome)}`);
         },
       },
     );

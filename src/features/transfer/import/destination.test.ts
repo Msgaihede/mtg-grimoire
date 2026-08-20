@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deckDestination } from "./destinations/DeckPreview";
+import { deckDestination } from "./destinations/deckInto";
 import { newDeckDestination } from "./destinations/newDeck";
 
 /**
@@ -11,10 +11,7 @@ import { newDeckDestination } from "./destinations/newDeck";
  * type-checks and crashes wherever anybody mounted it, which is the whole reason it is a
  * function.
  */
-const ALL = [
-  deckDestination({ deckId: 1, variant: "live", cardsInVariant: 0 }),
-  newDeckDestination,
-];
+const ALL = [deckDestination({ deckId: 1, variant: "live" }), newDeckDestination];
 
 describe("every destination", () => {
   it("has a unique key and a label the radio group can show", () => {
@@ -24,5 +21,13 @@ describe("every destination", () => {
 
   it("is a component, so the shell needs no knowledge of which one it holds", () => {
     for (const d of ALL) expect(typeof d.Preview).toBe("function");
+  });
+
+  /** Optional, because a destination whose line names nothing the shell cannot say leaves the
+   *  host's fallback in place — the new deck, which has no deck to name yet. */
+  it("says its own header line, or leaves it to the host", () => {
+    for (const d of ALL) {
+      expect(d.Subtitle === undefined || typeof d.Subtitle === "function").toBe(true);
+    }
   });
 });

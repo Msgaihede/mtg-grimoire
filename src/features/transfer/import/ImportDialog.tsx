@@ -30,12 +30,15 @@ export interface ImportDialogProps {
    */
   destinations: readonly ImportDestination[];
   /**
-   * The line under the heading — where the cards are going, in the host's own words.
+   * The line under the heading, **as a fallback** — used for whichever destination has no
+   * `Subtitle` of its own.
    *
-   * **The host's and not this file's, because saying it needs facts the shell must not have**:
-   * `Into Removal · Burn · Live` is a pile name, a deck name and a variant. `DeckImportSubtitle`
-   * is the deck's, rendered as an *element* so that the `deck_get` behind the name is mounted
-   * only while the dialog is open — which is `Dialog`'s guarantee rather than this file's.
+   * **Never this file's own words, because saying it needs facts the shell must not have**:
+   * `Into Removal · Burn · Live` is a pile name, a deck name and a variant. And never *only* the
+   * host's either: the header is drawn on both steps while the destination radios are only on
+   * the first, so a host prop cannot follow the reader's choice. A destination that has
+   * something specific to say says it through `ImportDestination.Subtitle`; this is what is left
+   * for the ones that do not — the new deck, which has no deck to name yet.
    */
   subtitle?: ReactNode;
   /**
@@ -107,11 +110,28 @@ export function ImportDialog({
   onClose,
   onDone,
 }: ImportDialogProps): JSX.Element {
+  /**
+   * Which of {@link ImportDialogProps.destinations} the cards are going into. An **index** rather
+   * than a key, because the array is the host's and this file has no opinion about what is in it.
+   *
+   * **The one answer that lives out here rather than in {@link ImportBody}**, and it is placed
+   * deliberately: the header band is `Dialog`'s and is drawn from this component, so a subtitle
+   * that follows the reader's choice has to be chosen where the choice is held. The consequence
+   * is that the destination — unlike the paste, the step and everything a preview owns — outlives
+   * a close, which is the right half of the trade: reopening on the surface you last imported
+   * into is a preference, not a stale answer to this question. With one destination it is always
+   * `0` and nothing about either deck entry point changes.
+   */
+  const [chosen, setChosen] = useState(0);
+  // Annotated rather than inferred: `noUncheckedIndexedAccess` is off, so a host that shortened
+  // its array between opens would type as a destination and render as a crash.
+  const destination: ImportDestination | undefined = destinations[chosen] ?? destinations[0];
+
   return (
     <Dialog
       open={open}
       title="Import a decklist"
-      subtitle={subtitle}
+      subtitle={destination?.Subtitle === undefined ? subtitle : <destination.Subtitle />}
       closeLabel="Close"
       // `max-w-2xl` written as the width it is (42rem), because the shell already carries
       // `max-w-full` and two `max-width` utilities on one element is whichever Tailwind emitted
@@ -120,7 +140,13 @@ export function ImportDialog({
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <ImportBody destinations={destinations} onDone={onDone} />
+      <ImportBody
+        destinations={destinations}
+        destination={destination}
+        chosen={chosen}
+        onChoose={setChosen}
+        onDone={onDone}
+      />
     </Dialog>
   );
 }
@@ -134,16 +160,23 @@ export function ImportDialog({
  * its own `min-h-0 flex-1` and owns the scroller and the footer inside it — and so does every
  * destination's `Preview`, which is the other half of that arrangement.
  */
-function ImportBody({ destinations, onDone }: Pick<ImportDialogProps, "destinations" | "onDone">) {
+function ImportBody({
+  destinations,
+  destination,
+  chosen,
+  onChoose,
+  onDone,
+}: Pick<ImportDialogProps, "destinations" | "onDone"> & {
+  /** The chosen one, resolved by the wrapper because the header needs it too. */
+  destination: ImportDestination | undefined;
+  chosen: number;
+  onChoose: (index: number) => void;
+}) {
   const id = useId();
   const listRef = useRef<HTMLTextAreaElement>(null);
 
   const [text, setText] = useState("");
   const [step, setStep] = useState<Step>("source");
-  /** Which of {@link ImportDialogProps.destinations} the cards are going into. An **index**
-   *  rather than a key, because the array is the host's and the shell has no opinion about what
-   *  is in it. */
-  const [chosen, setChosen] = useState(0);
   /** The picker itself could not be opened, which is a different failure from a file the
    *  backend could not read — and it belongs beside the button rather than in the footer. */
   const [pickerFailure, setPickerFailure] = useState<string | null>(null);
@@ -211,9 +244,6 @@ function ImportBody({ destinations, onDone }: Pick<ImportDialogProps, "destinati
         : null;
 
   const resolved = resolve.data ?? null;
-  // Annotated rather than inferred: `noUncheckedIndexedAccess` is off, so an index the host's
-  // array has no entry for would type as a destination and render as a crash.
-  const destination: ImportDestination | undefined = destinations[chosen];
 
   if (step === "preview" && resolved !== null && destination !== undefined) {
     return (
@@ -312,7 +342,7 @@ function ImportBody({ destinations, onDone }: Pick<ImportDialogProps, "destinati
                   name={`${id}-destination`}
                   value={option.key}
                   checked={index === chosen}
-                  onChange={() => setChosen(index)}
+                  onChange={() => onChoose(index)}
                   className="accent-accent"
                 />
                 Import into {option.label}

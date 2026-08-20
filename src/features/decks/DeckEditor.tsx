@@ -62,10 +62,7 @@ import {
   type GroupBy,
 } from "./grouping";
 import type { ImportDestination } from "@/features/transfer/import/destination";
-import {
-  DeckImportSubtitle,
-  deckDestination,
-} from "@/features/transfer/import/destinations/DeckPreview";
+import { deckDestination } from "@/features/transfer/import/destinations/deckInto";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { NewTagDialog } from "./NewTagDialog";
@@ -1135,28 +1132,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [reorderCategories],
   );
 
-  /** Copies in the list on screen — **copies, not rows**, because that is what a reader counts
-   *  and what an import's `replace` would clear. Every category, the inactive ones included:
-   *  a `replace` clears the variant, and a pile being switched off does not save it. */
-  const cardsInVariant = useMemo(
-    () => deck.cards.reduce((copies, card) => copies + card.quantity, 0),
-    [deck.cards],
-  );
-
   /** The pile a right-click aimed the importer at, or nothing for the toolbar's own press. */
   const forcedCategoryName = layer?.kind === "import" ? layer.forcedCategoryName : undefined;
 
   /**
    * The one destination this surface offers: the deck that is open.
    *
-   * **Memoised on the four facts it closes over, because `Preview` is a component identity** —
-   * a new one each render would remount the preview step and take the reader's commander choice
-   * with it. It has to be the list on screen: an import lands in one variant and a `replace`
-   * clears at most one, so a paste made while Theory is up must never touch what is sleeved.
+   * **Memoised on identity alone, because what comes back is a component identity** — a new one
+   * each render would remount the preview step and take the reader's commander choice with it,
+   * and a *presentational* value in this dependency list (the copy count used to be one) would
+   * do the same on any refetch. The three facts here are all "which deck, which list": an import
+   * lands in one variant and a `replace` clears at most one, so a paste made while Theory is up
+   * must never touch what is sleeved. Everything the preview has to draw — the deck's name, the
+   * count a `replace` would clear — it reads from the same `deck_get` this screen is reading.
    */
   const importInto = useMemo<ImportDestination>(
-    () => deckDestination({ deckId, variant, cardsInVariant, forcedCategoryName }),
-    [deckId, variant, cardsInVariant, forcedCategoryName],
+    () => deckDestination({ deckId, variant, forcedCategoryName }),
+    [deckId, variant, forcedCategoryName],
   );
 
   /** The pile the delete confirmation is about, read from the **live** list — a rename made
@@ -3303,17 +3295,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
           away in the toolbar and the deck it wrote into is already on screen — the editor
           re-reads it, because every write in `useImport` takes the `["decks"]` root with
-          it. The subtitle is an *element* rather than a string because it reads the deck's
-          name, and a dialog nobody opened must not. */}
+          it. No `subtitle` prop: the header line names *this deck*, which only the destination
+          can say, so it rides on `importInto` and follows the reader if a second destination
+          ever joins it. */}
       <ImportDialog
         destinations={[importInto]}
-        subtitle={
-          <DeckImportSubtitle
-            deckId={deckId}
-            variant={variant}
-            forcedCategoryName={forcedCategoryName}
-          />
-        }
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}

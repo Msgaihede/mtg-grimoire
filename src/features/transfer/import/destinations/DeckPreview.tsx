@@ -27,7 +27,7 @@ import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
 import { useDeck } from "@/features/decks/useDeck";
 import { useFormatSpecs } from "@/features/decks/useFormatSpecs";
-import type { DestinationPreviewProps, ImportDestination } from "../destination";
+import type { DestinationPreviewProps } from "../destination";
 import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
 import {
@@ -43,22 +43,25 @@ import {
 export const NO_COMMANDERS: readonly string[] = [];
 
 /**
- * The two facts about a deck that no parsed list can carry, and the one thing a host may want
- * back — closed over at the call site rather than threaded through the shell.
+ * **Which deck, and which list of it** — closed over at the call site rather than threaded
+ * through the shell, plus the one thing a host may want back.
  *
- * This is the reason {@link ImportDestination} is not generic: a shell holding four destinations
+ * This is the reason `ImportDestination` is not generic: a shell holding four destinations
  * must not know that one of them needs a deck id, so the deck's identity is bound where it is
  * known and the shell sees a `Preview` taking {@link DestinationPreviewProps} and nothing else.
+ *
+ * **Identity only, and that is a rule rather than a coincidence.** Every field here is a fact
+ * about *which* deck; nothing here is a fact about what is *in* it. A wrapper is memoised on
+ * what it closes over, so a presentational value in this interface would rebuild the wrapper
+ * whenever that value moved and remount the preview under a reader mid-step. `cardsInVariant`
+ * used to be here for exactly one sentence — the Replace radio's — and {@link DeckPreview}
+ * derives it from the `deck_get` it is already making instead.
  */
 export interface DeckImportInto {
   deckId: number;
   /** The list on screen. An import lands in one variant and clears at most one: a plan is never
    *  overwritten by a paste into the sleeved deck, and the other way round. */
   variant: DeckVariant;
-  /** Copies in that variant right now — what a `replace` would clear, said before it does it. A
-   *  count and not a flag, because "removes the 42 cards in Live first" is the whole of the
-   *  warning. */
-  cardsInVariant: number;
   /**
    * The pile every line of this paste lands in, whatever the filer would have said — a
    * right-click on a category heading and "Import cards…".
@@ -99,7 +102,6 @@ export function DeckPreview({
   onBack,
   deckId,
   variant,
-  cardsInVariant,
   forcedCategoryName,
   onImported,
 }: DestinationPreviewProps & DeckImportInto): JSX.Element {
@@ -113,7 +115,8 @@ export function DeckPreview({
   const { formatSpecFor } = useFormatSpecs();
 
   /**
-   * The deck being imported into, read for one field: its format.
+   * The deck being imported into, read for two fields: its format, and how much is in the list
+   * on screen.
    *
    * The whole hook rather than a mutation of its own, for `useSwapFromPane`'s reason — it is the
    * same `["decks", "detail", id, variant]` the editor beside this is already reading, and
@@ -126,6 +129,19 @@ export function DeckPreview({
   // command zone": the same answer as a format that has none, and the only honest one when there
   // are no rules to apply.
   const spec = formatSpecFor(into.deck?.formatKey ?? "");
+
+  /**
+   * Copies in the list on screen — what a `replace` would clear, said before it does it.
+   *
+   * **Copies, not rows**, because that is what a reader counts, and **every category, the
+   * inactive ones included**: a `replace` clears the variant, and a pile being switched off does
+   * not save it. `DeckEditor`'s own line, moved here — read off the query this component already
+   * holds rather than handed in, so the destination wrapper closes over identity alone.
+   */
+  const cardsInVariant = useMemo(
+    () => into.cards.reduce((copies, card) => copies + card.quantity, 0),
+    [into.cards],
+  );
 
   const plan = useMemo(
     () => buildImportPlan(list, resolved, spec, tags, forcedCategoryName),
@@ -196,27 +212,6 @@ export function DeckPreview({
       />
     </form>
   );
-}
-
-/**
- * The deck as a destination, with its own identity closed over.
- *
- * **A function and not a value**, and that is the one place this file departs from the shape the
- * other three destinations have. `DeckPreview` needs a deck id, and a `deckDestination` constant
- * whose `Preview` were `DeckPreview` behind a cast would be a value that type-checks everywhere
- * and crashes wherever anybody mounted it without the wrapper. So the wrapper *is* the
- * destination, and there is no unbound one to mount by mistake.
- *
- * Call it inside a `useMemo` keyed on what it closes over: the returned `Preview` is a component
- * identity, and a new one on every render would remount the preview and lose the reader's
- * commander choice mid-step.
- */
-export function deckDestination(into: DeckImportInto): ImportDestination {
-  return {
-    key: "deck",
-    label: "this deck",
-    Preview: (props) => <DeckPreview {...props} {...into} />,
-  };
 }
 
 /**

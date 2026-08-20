@@ -130,8 +130,9 @@ Pathway` is one card and there are seven such names in the reference list alone,
   carrying its number and its raw text, and one bad line never aborts the parse. The only lines
   that leave no trace are the ones making no claim — blanks and comments.
 - **`destinations/deck.ts` makes every deck decision and the dialog makes none.** The pile is
-  `autoCategoryFor` (the app's one rule, never copied — a plain add, a drag with no column under it and an imported
-  line have to agree) and the commander is `commanderIneligibility`, the same rule the validation
+  `autoCategoryFor` (the app's one rule, never copied — a plain add, a drag with no column under
+  it and an imported line have to agree) and the commander is `commanderIneligibility`, the same
+  rule the validation
   panel judges a built deck by. A looser "looks like a commander" test here would offer a card the
   panel then refuses.
 - **`row.index` is the address, never the array position.** `import_resolve` carries the
@@ -197,7 +198,9 @@ Pathway` is one card and there are seven such names in the reference list alone,
   column of their own a moment ago, so the later and more specific naming wins. **The command zone
   still outranks it**, applied in `toImportItems` after the pile is chosen — a commander goes to
   the command zone whichever heading was right-clicked. It is applied in `categoryFor` and nowhere
-  else, because **`destinations/deck.ts` makes every deck decision**; the dialog only reports it, in the step-two heading (`Into <pile> · <deck>`). The argument is
+  else, because **`destinations/deck.ts` makes every deck decision**; the dialog only reports
+  it, in the header line the deck destination supplies (`Into <pile> · <deck> · <variant>`). The
+  argument is
   **optional and defaults to today's behaviour**, so the toolbar's own Import passes nothing and is
   unchanged — which is what keeps a shared importer from being reshaped by one caller.
 

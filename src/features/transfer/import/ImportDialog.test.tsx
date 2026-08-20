@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useMemo, useState, type ReactElement } from "react";
 import type {
+  DeckCard,
   DeckDetail,
   DeckRow,
   ImportItem,
@@ -45,7 +46,8 @@ const pickFile = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
 import type { ImportDestination } from "./destination";
-import { deckDestination, type DeckImportInto } from "./destinations/DeckPreview";
+import type { DeckImportInto } from "./destinations/DeckPreview";
+import { deckDestination } from "./destinations/deckInto";
 import { NewDeckPreview } from "./destinations/NewDeckPreview";
 import { newDeckDestination } from "./destinations/newDeck";
 import { ImportDialog } from "./ImportDialog";
@@ -146,7 +148,63 @@ const DECK: DeckRow = {
   updatedAt: 1_800_000_000,
 };
 
-const DETAIL: DeckDetail = { deck: DECK, cards: [], categories: [], tags: [] };
+/**
+ * One row of the open deck. Everything but the quantity is filled in so this is a real
+ * {@link DeckCard} rather than a cast — `CategoriesDialog.test.tsx`'s builder, for its reason.
+ *
+ * It exists because `DeckPreview` **derives** what a `replace` would clear from the `deck_get`
+ * it is already making, rather than being handed a number: the fixture and the sentence on
+ * screen can no longer disagree.
+ */
+function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
+  return {
+    id: 1,
+    cardId: "sol-ring",
+    categoryId: 9,
+    categoryName: "Main deck",
+    categoryKind: "main",
+    categoryActive: true,
+    finish: null,
+    variant: "live",
+    tagId: null,
+    tagName: null,
+    tagColor: null,
+    name: "Sol Ring",
+    setCode: "lea",
+    setName: "Limited Edition Alpha",
+    collectorNumber: "1",
+    lang: "en",
+    needsReview: null,
+    oracleId: "o1",
+    manaCost: null,
+    cmc: null,
+    typeLine: "Artifact",
+    oracleText: null,
+    colors: null,
+    colorIdentity: null,
+    legalities: null,
+    power: null,
+    toughness: null,
+    layout: null,
+    rarity: null,
+    faces: null,
+    gameChanger: null,
+    finishes: null,
+    everUncommon: false,
+    unitPrice: null,
+    ownedQuantity: 0,
+    ...over,
+  };
+}
+
+/** Forty-two copies in Live, over **two** rows: the sentence a `replace` owes the reader counts
+ *  copies, not rows, and one row of 42 would not catch a `length` where a sum belongs. */
+const DETAIL: DeckDetail = {
+  deck: DECK,
+  cards: [deckCard({ quantity: 40 }), deckCard({ id: 2, cardId: "bolt", quantity: 2 })],
+  categories: [],
+  tags: [],
+};
 
 const MADE: DeckRow = { ...DECK, id: 12, name: "Burn", formatKey: "modern" };
 
@@ -163,7 +221,11 @@ const IDLE: SyncStatus = {
   imageStoreFailures: 0,
 };
 
-const INTO_DECK: DeckImportInto = { deckId: 4, variant: "live", cardsInVariant: 42 };
+const INTO_DECK: DeckImportInto = { deckId: 4, variant: "live" };
+
+/** What a host passes for the destinations that have no `Subtitle` of their own — the
+ *  gallery's sentence, near enough. */
+const HOST_SUBTITLE = "Paste a list, and it becomes a deck of its own.";
 
 const onDismiss = vi.fn();
 const onClose = vi.fn();
@@ -793,6 +855,59 @@ describe("the import dialog", () => {
   });
 
   /**
+   * **What Back keeps, and what it does not — the rule, pinned.**
+   *
+   * The paste belongs to the *shell* and survives, because the whole point of a two-step dialog
+   * is that a refusal or a second look costs one press rather than a retype. Everything a
+   * destination owns goes, because the preview unmounts: preserving it would mean the shell
+   * holding state whose shape it must not know, which is the coupling this seam exists to
+   * remove. Both halves are checked here rather than assumed, because Task 14's two
+   * destinations inherit the rule and neither of them can see this file.
+   *
+   * The deck arm's mode is the visible half; the new deck's name is the other, and it comes
+   * back **re-seeded from the list** rather than empty when the file named a deck — which is
+   * how anything that has to outlive a Back is supposed to survive one.
+   */
+  it("keeps the pasted text across Back and discards the destination's own options", async () => {
+    wrap(<Harness into={INTO_DECK} />);
+    await preview("1 Sol Ring");
+
+    await userEvent.click(await screen.findByLabelText(/^Replace/));
+    expect(screen.getByLabelText(/^Replace/)).toBeChecked();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(await screen.findByLabelText("Decklist")).toHaveValue("1 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    // The mode is the destination's, so it is back at the one that cannot clear anything.
+    await waitFor(async () => expect(await screen.findByLabelText(/^Merge/)).toBeChecked());
+    expect(screen.getByLabelText(/^Replace/)).not.toBeChecked();
+  });
+
+  /** The other arm, where the discarded option is a field the reader typed into — and where the
+   *  way back is re-deriving it from the list rather than keeping it. */
+  it("re-seeds a new deck's name from the list rather than keeping what was typed", async () => {
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.paste(ARENA_LIST);
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    const named = await screen.findByLabelText("Name");
+    await userEvent.clear(named);
+    await userEvent.type(named, "Something else");
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Preview" }));
+
+    // Not "Something else", and not empty either: the file said, and the file is still there.
+    await waitFor(async () =>
+      expect(await screen.findByLabelText("Name")).toHaveValue("Bant Ramp"),
+    );
+  });
+
+  /**
    * **The seam, from the shell's side.** Handed two destinations it draws a radio each, mounts
    * whichever is chosen and knows nothing about either — which is what lets Task 14 add the
    * collection and the wishlist without touching that file. Handed one, as both deck entry
@@ -806,6 +921,7 @@ describe("the import dialog", () => {
     wrap(
       <ImportDialog
         destinations={both}
+        subtitle={HOST_SUBTITLE}
         open
         onDismiss={onDismiss}
         onClose={onClose}
@@ -815,13 +931,24 @@ describe("the import dialog", () => {
     await panel();
 
     expect(await screen.findByLabelText("Import into this deck")).toBeChecked();
+    // The header line is the *chosen* destination's, which is why it cannot be a host prop: the
+    // header is drawn on both steps and the radios only on the first.
+    expect(await screen.findByText("Into Sisay · Live")).toBeInTheDocument();
+
     await userEvent.click(screen.getByLabelText("Import into a new deck"));
+
+    // The new deck has no deck to name, so it says nothing and the host's fallback stands.
+    await waitFor(() => expect(screen.queryByText("Into Sisay · Live")).not.toBeInTheDocument());
+    expect(screen.getByText(HOST_SUBTITLE)).toBeInTheDocument();
+
     await preview("1 Sol Ring");
 
     // The second destination's own step, drawn by it: a name to give the deck, and none of the
-    // merge/replace question that only a deck already on screen can be asked.
+    // merge/replace question that only a deck already on screen can be asked. The header still
+    // says what it said on the source step, which is the half a host prop got wrong.
     expect(screen.getByLabelText("Name")).toBeInTheDocument();
     expect(screen.queryByLabelText(/^Merge/)).not.toBeInTheDocument();
+    expect(screen.getByText(HOST_SUBTITLE)).toBeInTheDocument();
   });
 
   it("closes on Escape and hands focus back", async () => {

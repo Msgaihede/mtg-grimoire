@@ -39,9 +39,15 @@ import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";
 import { useNewDeckFormat } from "./useNewDeckFormat";
 
-/** The gallery imports into a deck of its own and never into an existing one — there is no
- *  deck open here to import into, so the dialog is handed one destination and draws no
- *  destination radios at all. */
+/**
+ * The gallery imports into a deck of its own and never into an existing one — there is no deck
+ * open here to import into, so the dialog is handed one destination and draws no destination
+ * radios at all.
+ *
+ * A plain string rather than an `ImportDestination.Subtitle`, and that is the distinction the
+ * two slots exist to draw: the deck destination's line names a deck and needs a `deck_get`, this
+ * one names nothing at all, because the deck it is about does not exist yet.
+ */
 const NEW_DECK_SUBTITLE = "Paste a list or choose a file, and it becomes a deck of its own.";
 
 /**

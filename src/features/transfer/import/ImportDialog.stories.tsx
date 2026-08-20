@@ -4,9 +4,8 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { useDeck } from "@/features/decks/useDeck";
 import type { ImportDestination } from "./destination";
-import { DeckImportSubtitle, deckDestination } from "./destinations/DeckPreview";
+import { deckDestination } from "./destinations/deckInto";
 import { NewDeckPreview } from "./destinations/NewDeckPreview";
 import { newDeckDestination } from "./destinations/newDeck";
 import { REFERENCE_LIST } from "./fixtures";
@@ -18,13 +17,16 @@ import { ImportDialog } from "./ImportDialog";
  * The trigger is real because Escape's contract is "hand the caret back to whatever opened
  * this", and there is nothing to hand it back to without a button still on screen.
  *
- * **`cardsInVariant` is read from the deck rather than passed in**, which is what `DeckEditor`
- * does with the same number: it is the count of the list on screen, and a story that stated it
- * would be the one thing here not computed from the seeded data.
+ * **Nothing about the deck's *contents* is stated here**, which is what `DeckEditor` does too:
+ * the count a `replace` would clear is read by the preview off the same `deck_get`, so a story
+ * cannot state a number the seeded data disagrees with — and the wrapper below stays memoised on
+ * identity alone.
  *
  * **One destination either way**, which is what both entry points hand it: the editor builds the
  * deck that is open, the gallery the deck a list is about to become. A shell given one draws no
- * destination radios — a choice between one thing is not a choice.
+ * destination radios — a choice between one thing is not a choice. The deck arm's header line
+ * comes from that destination; the gallery's is the host fallback below, because the deck it
+ * describes does not exist yet.
  */
 function Dialog({
   deckId,
@@ -40,8 +42,6 @@ function Dialog({
   onImported: (deckId: number, added: number) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const deck = useDeck(deckId, variant);
-  const cardsInVariant = deck.cards.reduce((n, card) => n + card.quantity, 0);
 
   const destination = useMemo<ImportDestination>(() => {
     const landed = (id: number, added: number) => onImported(id, added);
@@ -52,13 +52,8 @@ function Dialog({
             <NewDeckPreview {...props} onImported={(id, out) => landed(id, out.added)} />
           ),
         }
-      : deckDestination({
-          deckId,
-          variant,
-          cardsInVariant,
-          onImported: (id, out) => landed(id, out.added),
-        });
-  }, [deckId, variant, cardsInVariant, onImported]);
+      : deckDestination({ deckId, variant, onImported: (id, out) => landed(id, out.added) });
+  }, [deckId, variant, onImported]);
 
   return (
     <div className="grid min-h-[30rem] place-items-start">
@@ -76,13 +71,7 @@ function Dialog({
       </button>
       <ImportDialog
         destinations={[destination]}
-        subtitle={
-          deckId === null ? (
-            "Paste a list or choose a file, and it becomes a deck of its own."
-          ) : (
-            <DeckImportSubtitle deckId={deckId} variant={variant} />
-          )
-        }
+        subtitle="Paste a list or choose a file, and it becomes a deck of its own."
         open={open}
         onDismiss={() => {
           onDismiss();
