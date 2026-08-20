@@ -155,6 +155,37 @@ describe("the tooltip", () => {
     expect(onAnchorGone).toHaveBeenCalledTimes(1);
   });
 
+  it("closes when the anchor is removed from the DOM while it is already showing", async () => {
+    // The initial-mount race above ("closes instead of measuring...") covers an anchor that is
+    // *already* detached the moment `TooltipPanel` first measures it. This is the other case the
+    // review named: the panel opens and measures against a perfectly live anchor, and only later
+    // — with no click, no scroll, no keypress — does something else in the app remove that anchor
+    // (a filter chip a cleared filter drops, a deck tile a mutation deletes). No `pointerleave`
+    // ever arrives, because a delegated listener cannot fire for a node no longer in the tree, so
+    // nothing but the `MutationObserver` watcher can catch this.
+    //
+    // A normal React unmount, like the vanished-anchor test above — not a raw `.remove()`, which
+    // that test's own comment records throws on the next commit when pulled out from under a
+    // reconciler that still believes it owns the node. A `rerender` to `null` removes the button
+    // through React's own DOM commit, exactly as a real removal-by-state-change would.
+    const { rerender } = mount(<Trigger words="Newest first" />);
+    const button = screen.getByRole("button");
+    fireEvent.pointerEnter(button);
+    advance(TOOLTIP_OPEN_MS);
+    expect(tooltip()).not.toBeNull();
+
+    rerender(<TooltipProvider>{null}</TooltipProvider>);
+    expect(button.isConnected).toBe(false);
+
+    // The MutationObserver callback lands as a microtask, outside any timer — so this waits on
+    // real microtask flushes rather than advancing the fake clock, which drives none of them.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(tooltip()).toBeNull();
+  });
+
   it("closes when the pointer leaves", async () => {
     mount(<Trigger words="Newest first" />);
     const button = screen.getByRole("button");
