@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DeckWalkStop } from "@/features/decks/deckWalk";
+import type { CardWalkStop } from "@/features/decks/deckWalk";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
@@ -222,10 +222,13 @@ describe("the card a reader asked to see every printing of", () => {
     expect(useAppStore.getState().printingsRequest).toBeNull();
   });
 
-  it("records the request and the deck slot it was asked from", () => {
-    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: SLOT });
+  it("records the request, the printing it was asked from and the deck slot", () => {
+    useAppStore
+      .getState()
+      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: SLOT });
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "card-1",
       oracleId: "o1",
       name: "Sol Ring",
       deck: SLOT,
@@ -238,9 +241,24 @@ describe("the card a reader asked to see every printing of", () => {
    * rewriting a deck row nobody named.
    */
   it("keeps a null slot from a surface that is not a deck row", () => {
-    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore
+      .getState()
+      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     expect(useAppStore.getState().printingsRequest?.deck).toBeNull();
+  });
+
+  /**
+   * The printing the reader asked *from*, which every surface can answer where only a deck row
+   * can answer the slot beside it. It is the wall's "you are here" ring, and it is how the modal
+   * finds its place on a walk whose stops are not deck rows.
+   */
+  it("keeps the printing the question was asked from, deck or no deck", () => {
+    useAppStore
+      .getState()
+      .openAllPrintings({ cardId: "card-9", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    expect(useAppStore.getState().printingsRequest?.cardId).toBe("card-9");
   });
 
   /**
@@ -251,7 +269,9 @@ describe("the card a reader asked to see every printing of", () => {
   it("moves nothing else", () => {
     useAppStore.setState({ activeView: "decks", openDeckId: 4, selectedCardId: "card-1" });
 
-    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore
+      .getState()
+      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     const s = useAppStore.getState();
     expect(s.activeView).toBe("decks");
@@ -260,7 +280,9 @@ describe("the card a reader asked to see every printing of", () => {
   });
 
   it("closes to null", () => {
-    useAppStore.getState().openAllPrintings({ oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore
+      .getState()
+      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     useAppStore.getState().closeAllPrintings();
 
@@ -269,16 +291,18 @@ describe("the card a reader asked to see every printing of", () => {
 });
 
 /**
- * The order the printings modal's arrow keys walk, published by the deck editor.
+ * The list the reader is standing in, in the order it is drawn, published by whichever surface
+ * is drawing it — the deck editor's desk, the search results, the collection, the wishlist.
  *
  * The channel above carries **which** card is open; this carries **what is either side of it**,
  * and it is a second field for the same reason the first one is a field at all — the modal is a
- * sibling of the editor with nothing between them but this store. It is the whole list rather
- * than a cursor because where the reader is in it is *found*, by matching the request's own slot
- * against these, so the two cannot come to disagree about which card is showing.
+ * sibling of every one of those surfaces with nothing between them but this store. It is the
+ * whole list rather than a cursor because where the reader is in it is *found*, by matching the
+ * request against these, so the two cannot come to disagree about which card is showing.
  */
-describe("the deck's cards in the order the desk draws them", () => {
-  const stop = (name: string, categoryId: number, categoryName: string): DeckWalkStop => ({
+describe("the list the reader is standing in, in its drawn order", () => {
+  const stop = (name: string, categoryId: number, categoryName: string): CardWalkStop => ({
+    cardId: `c-${name}`,
     oracleId: `o-${name}`,
     name,
     deck: {
@@ -291,44 +315,64 @@ describe("the deck's cards in the order the desk draws them", () => {
     },
   });
 
-  const WALK = [stop("Sol Ring", 9, "Ramp"), stop("Pyroblast", 2, "Sideboard")];
+  const WALK = {
+    label: "the deck",
+    stops: [stop("Sol Ring", 9, "Ramp"), stop("Pyroblast", 2, "Sideboard")],
+  };
+  const NONE = { label: "", stops: [] };
 
-  /** No deck editor has been open, so there is nothing to walk — and `[]` rather than `null`,
-   *  because "no stops" is a walk of no length and every reader of this is a `.length` or a
-   *  `.findIndex`. */
-  it("has nothing to walk until an editor publishes one", () => {
-    expect(useAppStore.getState().deckWalk).toEqual([]);
+  /** Nothing with a list of cards on it has been open, so there is nothing to walk — and an
+   *  empty array rather than `null`, because "no stops" is a walk of no length and every reader
+   *  of this is a `.length` or a `.findIndex`. */
+  it("has nothing to walk until a surface publishes one", () => {
+    expect(useAppStore.getState().cardWalk.stops).toEqual([]);
   });
 
   it("takes the order it is handed", () => {
-    useAppStore.getState().setDeckWalk(WALK);
+    useAppStore.getState().setCardWalk(WALK);
 
-    expect(useAppStore.getState().deckWalk).toEqual(WALK);
+    expect(useAppStore.getState().cardWalk).toEqual(WALK);
   });
 
-  /** The editor clears it on unmount: a walk left behind would step a modal opened from the
-   *  Collection into the piles of a deck nobody has open. */
-  it("clears when the editor that published it goes", () => {
-    useAppStore.getState().setDeckWalk(WALK);
+  /** The chevrons read it into their own names — `Next card in your collection` — so a walk that
+   *  did not carry the list's noun would have the modal saying somebody else's. */
+  it("carries what to call the list", () => {
+    useAppStore.getState().setCardWalk({ ...WALK, label: "your collection" });
 
-    useAppStore.getState().setDeckWalk([]);
+    expect(useAppStore.getState().cardWalk.label).toBe("your collection");
+  });
 
-    expect(useAppStore.getState().deckWalk).toEqual([]);
+  /** The publishing surface clears it on unmount: a walk left behind would step a modal opened
+   *  from the Collection into the piles of a deck nobody has open. */
+  it("clears when the surface that published it goes", () => {
+    useAppStore.getState().setCardWalk(WALK);
+
+    useAppStore.getState().setCardWalk(NONE);
+
+    expect(useAppStore.getState().cardWalk.stops).toEqual([]);
   });
 
   /**
-   * **An empty walk is always the same empty array**, which is not pedantry about identity: this
+   * **An empty walk is always the same object**, which is not pedantry about identity: this
    * store notifies every subscriber on every write and each one compares its slice with
-   * `Object.is`, so a fresh `[]` per teardown re-renders whatever is reading the walk — the shut
+   * `Object.is`, so a fresh empty walk per teardown re-renders whatever is reading it — the shut
    * printings modal included — to tell it that nothing is still nothing.
    */
-  it("clears to the same empty array every time", () => {
-    const first = useAppStore.getState().deckWalk;
+  it("clears to the same empty walk every time", () => {
+    const first = useAppStore.getState().cardWalk;
 
-    useAppStore.getState().setDeckWalk(WALK);
-    useAppStore.getState().setDeckWalk([]);
+    useAppStore.getState().setCardWalk(WALK);
+    useAppStore.getState().setCardWalk(NONE);
 
-    expect(useAppStore.getState().deckWalk).toBe(first);
+    expect(useAppStore.getState().cardWalk).toBe(first);
+  });
+
+  /** And a label handed in with no stops goes with them: a walk with nothing on it has no list
+   *  to name, and keeping the noun would be a second identity for the same emptiness. */
+  it("drops a label handed in with no stops", () => {
+    useAppStore.getState().setCardWalk({ label: "your wishlist", stops: [] });
+
+    expect(useAppStore.getState().cardWalk.label).toBe("");
   });
 
   /** One field, like `openAllPrintings` beside it. Publishing the walk says nothing about which
@@ -336,7 +380,7 @@ describe("the deck's cards in the order the desk draws them", () => {
   it("moves nothing else", () => {
     useAppStore.setState({ activeView: "decks", openDeckId: 4, selectedCardId: "card-1" });
 
-    useAppStore.getState().setDeckWalk(WALK);
+    useAppStore.getState().setCardWalk(WALK);
 
     const s = useAppStore.getState();
     expect(s.activeView).toBe("decks");

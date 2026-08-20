@@ -5,6 +5,7 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
 import { FINISHES, isFinish } from "@/lib/finish";
@@ -308,6 +309,26 @@ export function CollectionPage() {
     }
     return out;
   }, [rows]);
+
+  /**
+   * The collection as a **walk**, so the printings modal's chevrons and arrow keys step along it.
+   *
+   * **Built from {@link tiles} rather than from `rows`, and that is the honest source of the
+   * two.** A walk's stops are printings — the modal answers a foil entry and a played nonfoil of
+   * one printing with the same wall and the same ring — which is exactly the merge the wall has
+   * already done, name fallback for an orphaned entry included. Feeding it `rows` would rely on
+   * `listWalkStops`' own de-duplication to arrive back at this list, which is two definitions of
+   * one thing and only one of them carries the fallback name.
+   *
+   * The table is walked by the same list, and that is right rather than a compromise: the two
+   * layouts are one collection in one order, and a press that meant something different
+   * depending on which was on screen would be two answers to one question.
+   */
+  const walk = useMemo(
+    () => listWalkStops(tiles, (tile) => ({ cardId: tile.id, oracleId: tile.oracleId, name: tile.name })),
+    [tiles],
+  );
+  usePublishCardWalk("your collection", walk);
 
   // Once per session, on the first load that has rows: everything the user owns gets its
   // art cached in the background, so the collection browses without a network. Keys already

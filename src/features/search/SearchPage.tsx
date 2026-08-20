@@ -9,6 +9,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
@@ -357,6 +358,25 @@ function Results({ search }: { search: CardSearch }) {
   // never has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+
+  /**
+   * These results as a **walk**, so the printings modal's chevrons and arrow keys step along them.
+   *
+   * Published from here rather than derived in the modal for `cardWalk.ts`'s reason: the order is
+   * the query's, narrowed by a filter bar and sorted by whichever header was last clicked, and
+   * `AllPrintingsDialog` is mounted at `App` level with no way to ask. **From `rows` rather than
+   * from either layout**, which is what keeps the two agreeing — the wall and the table draw the
+   * same list in the same order, and a walk built inside one of them would be a walk the other
+   * did not have.
+   *
+   * Memoised because the hook requires it: an array rebuilt on every render republishes an
+   * identical walk under a new identity, and a search page re-renders on every keystroke.
+   */
+  const walk = useMemo(
+    () => listWalkStops(rows, (card) => ({ cardId: card.id, oracleId: card.oracleId, name: card.name })),
+    [rows],
+  );
+  usePublishCardWalk("these results", walk);
 
   /**
    * The right-click menu, built here rather than in either layout: one object for the page, as

@@ -1773,8 +1773,10 @@ describe("the card menu", () => {
     await viewAllPrintings(user);
 
     // The card's oracle id and the card's name, which is what "every printing of this card" is
-    // asked by — and neither of which a `Printing` row carries.
+    // asked by — and neither of which a `Printing` row carries. The printing is the row that was
+    // right-clicked: the modal's "you are here" ring, which is a fact this row *does* carry.
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "p2",
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
       deck: null,
@@ -1812,6 +1814,7 @@ describe("the card menu", () => {
     await user.click(row);
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "p1",
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
       deck: null,
@@ -1839,6 +1842,7 @@ describe("the card menu", () => {
     await viewAllPrintings(user);
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "p1",
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
       deck: null,

@@ -944,3 +944,61 @@ describe("the wall", () => {
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
   });
 });
+
+/**
+ * The list the printings modal's own arrow keys walk, published to the store by this page.
+ *
+ * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, outside every
+ * view, and the order is this page's — a query narrowed by its filter bar. What the modal *does*
+ * with a walk belongs to `AllPrintingsDialog.test.tsx`; what this file owes is that a walk of the
+ * right shape is published at all, and taken back when the page goes.
+ */
+describe("the walk it publishes for the printings modal", () => {
+  const walk = () => useAppStore.getState().cardWalk;
+
+  /**
+   * **`artCardId`, not `cardId`** — the printing each tile is *drawn as*, which for a pinned wish
+   * is the one it names and for an any-printing wish is the newest printing of its oracle card.
+   * {@link ANY} is that second kind, and it is a stop rather than a hole: it is a tile the reader
+   * can see, the modal lists its oracle card's printings, and the card pane behind the scrim
+   * opens on the printing the wall was already showing. A walk built from `cardId` would drop it.
+   */
+  it("publishes the wishes in their drawn order, by the printing each is drawn as", async () => {
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+
+    await waitFor(() =>
+      expect(walk().stops).toEqual([
+        { cardId: "c1", oracleId: "o-bolt", name: "Lightning Bolt", deck: null },
+        { cardId: "c-recall", oracleId: "o-bolt", name: "Ancestral Recall", deck: null },
+      ]),
+    );
+  });
+
+  /** An orphan has no oracle card, so there are no printings to list and nothing to step onto —
+   *  the same rule the deck's own walk drops a row whose printing has left the corpus by. */
+  it("steps over a wish whose card has left the corpus", async () => {
+    wishlistList.mockResolvedValue(page([{ ...BOLT, oracleId: null }, ANY]));
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(walk().stops.map((stop) => stop.cardId)).toEqual(["c-recall"]));
+  });
+
+  /** The noun the modal's chevrons read into their own names — `Next card in your wishlist`. */
+  it("says which list it is", async () => {
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(walk().label).toBe("your wishlist"));
+  });
+
+  /** And it goes when the page does: a walk left behind would step a modal opened somewhere else
+   *  through a list nobody is looking at. */
+  it("clears the walk when the page goes", async () => {
+    const view = wrap(<WishlistPage />);
+    await waitFor(() => expect(walk().stops).toHaveLength(1));
+
+    view.unmount();
+
+    expect(walk().stops).toEqual([]);
+  });
+});
