@@ -2138,3 +2138,32 @@ the first commit of this section, for two different reasons, and both are correc
 `docs/superpowers/specs/2026-08-20-tooltip-component-design.md` §4/§7, which carried the same two
 bugs first. A count is a fact about a tree — and, this time, also a fact about the script that
 produced it; re-measure before repeating any of these four numbers.
+
+**`whenClipped` only works on an element with a real layout box.** It measures `scrollWidth`
+against `clientWidth` on `event.currentTarget` — the element `tip()` is spread onto — and a
+`display: inline` span reports both as `0`, so the comparison is always `0 > 0`, the hint never
+opens, and **nothing goes red**: not jsdom, which has no layout engine and could not have caught it
+either way; not CI; not a story. The five-way sweep found this latent in the search table's set
+column (`SearchPage.tsx`): `truncate` sat on the cell wrapper, which is a grid item and blockifies
+for free, while the span carrying `{...tip(card.setName, { whenClipped: true })}` was a bare
+inline element with nothing of its own to clip. The fix is `block` on the bound span itself, not on
+an ancestor — the measurement happens on the anchor, so the box has to belong to the anchor. A
+`<p>`, a flex item and a grid item all have a layout box already; a bare `<span>` inside a
+non-flex, non-grid parent does not, and every `whenClipped` call site is worth checking against
+that question rather than assumed safe because the surrounding markup "looks like" a block.
+
+**A tooltip bound `describes: false` — including every `whenClipped` one — carries no
+`role="tooltip"` and is `aria-hidden`.** `TooltipPanel.tsx` sets `role={open.describes ? "tooltip"
+: undefined}` and `aria-hidden` the other way, and `whenClipped` forces `describes: false` for the
+reason two paragraphs up — the text it repeats is already in the accessibility tree, so describing
+it too would be a screen reader saying the set name twice. A play or a test that reaches for
+`findByRole("tooltip")` on one of these sites does not fail fast: `findBy*` retries until its
+timeout, so the wrong query burns the full wait and then reports "unable to find", which reads like
+a hang rather than a wrong query — `SearchPage.stories.tsx`'s `GameChangerRow` reported a clean
+5000ms timeout for exactly this reason before it was traced back to `GameChangerMark.tsx`'s own
+`{...tip(GAME_CHANGER_HINT, { describes: false })}`. The correct query for a `describes: false` or
+`whenClipped` panel is by id — `TOOLTIP_PANEL_ID`, exported from `TooltipPanel.tsx` (the element is
+`#app-tooltip`) — the way `CardStack.test.tsx`'s `openTooltip` helper and `CountTag.stories.tsx`
+already do. `findByRole("tooltip")` stays correct, and is the faster failure, for a *describing*
+site (the default `describes: true`), because there the panel really does carry that role once
+open.
