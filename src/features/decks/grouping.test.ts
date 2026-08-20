@@ -4,11 +4,13 @@ import { card } from "./validation/fixtures";
 import {
   asGroupBy,
   buildGroups,
+  COMMAND_ZONE_KINDS,
   DEFAULT_EMPTY_GROUP_RULES,
   DEFAULT_GROUP_BY,
   drawsWhenEmpty,
   type EmptyGroupRules,
   GROUP_BY_OPTIONS,
+  isCommandZone,
   X_GROUP_KEY,
   X_GROUP_NAME,
 } from "./grouping";
@@ -933,6 +935,292 @@ describe("buildGroups by a derived key", () => {
   it("offers exactly the three groupings the toolbar shows", () => {
     expect(GROUP_BY_OPTIONS.map((o) => o.value)).toEqual(["category", "manaValue", "type"]);
     expect(GROUP_BY_OPTIONS.map((o) => o.label)).toEqual(["Categories", "Mana value", "Type"]);
+  });
+});
+
+/**
+ * **A commander is not a card in the curve; it is the card the curve was built around.**
+ *
+ * Two rules with one subject. Under `manaValue` and `type` a command zone's cards are in no
+ * bucket and the pile is appended as itself — the second half of the sentence that keeps an
+ * *inactive* pile out of the curve, and the same argument underneath it: a derived heading is a
+ * heading about the cards the deck is drawn from, and neither of these two is one. And under all
+ * three groupings, `category` included, the active command zones come **first**, commander then
+ * companion, whatever `sortOrder` the reader has left them in.
+ *
+ * **Switched off and empty stay the two separate questions this file has always kept apart, and
+ * nothing here answers either of them.** A switched-off command zone counts toward nothing, so it
+ * is not what the deck is read against and it is not in the head run — it is exactly where it was
+ * before the run existed. Whether an *empty* one is drawn at all is `drawsWhenEmpty`'s, swept
+ * above and untouched; the head run reorders the piles that are drawn and never decides which
+ * those are.
+ */
+describe("the command zones, which head every grouping", () => {
+  /**
+   * The two seeded zones as a reader who has dragged their piles about has left them: the
+   * Companion above the Commander, and both below `Ramp`.
+   *
+   * `schema::PREDEFINED_CATEGORIES` seeds them the other way round — Commander, Sideboard,
+   * Companion, Maybeboard — so **no fixture above this line can tell "commander first" from
+   * "sortOrder first"**: every assertion in this file that shows the Commander at the head shows
+   * it at `sortOrder` 0 as well. These two are what make the two answers different, and the piles
+   * are reorderable by a drag on the desk and by the Categories dialog, so this is a deck a
+   * reader can really have.
+   */
+  const LATE_COMMANDER = category({ id: 3, name: "Commander", kind: "commander", sortOrder: 8 });
+  const EARLY_COMPANION = category({ id: 4, name: "Companion", kind: "companion", sortOrder: 7 });
+
+  /** A Commander pile the reader dragged to the end of the desk and then switched off — the two
+   *  facts the head run must both leave alone, on one row. */
+  const OFF_COMMANDER = category({
+    id: 3,
+    name: "Commander",
+    kind: "commander",
+    isActive: false,
+    sortOrder: 8,
+  });
+
+  /**
+   * **The rule, in the one grouping a commander used to disappear into.** Before this, the
+   * commander was bucketed like any other card: `Mana value 4` counted it, and the reader
+   * reading that number to decide whether they had too many four-drops was reading one card of
+   * the ninety-nine that is never drawn.
+   *
+   * The pile is appended exactly as `categoryGroup` builds it — id, kind and switch — so it is
+   * still a drop target, still renameable and still the thing a right-click on the heading acts
+   * on. "Not bucketed" had to mean "drawn somewhere else", never "gone".
+   */
+  it("keeps a commander out of every derived bucket and heads the list with its pile", () => {
+    const cards = [
+      inCategory(COMMANDER, {
+        name: "Kenrith, the Returned King",
+        cmc: 4,
+        typeLine: "Legendary Creature — Human Noble",
+      }),
+      card({ name: "Sol Ring", cmc: 1, typeLine: "Artifact" }),
+      card({ name: "Grizzly Bears", cmc: 2, typeLine: "Creature — Bear" }),
+    ];
+
+    for (const groupBy of ["manaValue", "type"] as const) {
+      const groups = buildGroups(cards, [COMMANDER, MAIN], groupBy, "alphabetical");
+
+      // The pile in front, then the two spells' buckets and nothing else — `Main deck` is
+      // active, and a derived grouping's tail is the switched-off piles alone.
+      expect(names(groups)).toEqual(
+        groupBy === "manaValue"
+          ? ["Commander", "Mana value 1", "Mana value 2"]
+          : ["Commander", "Creature", "Artifact"],
+      );
+
+      expect(groups[0]).toMatchObject({ kind: "commander", categoryId: 3, isActive: true });
+      expect(names(groups[0].cards)).toEqual(["Kenrith, the Returned King"]);
+
+      // And the commander is in no bucket at all — not `Mana value 4`, and not `Creature`
+      // beside the bears.
+      const derived = groups.filter((g) => g.categoryId === null);
+      expect(derived.flatMap((g) => names(g.cards)).sort()).toEqual(["Grizzly Bears", "Sol Ring"]);
+    }
+  });
+
+  /**
+   * **The companion is the same rule and the second half of the order.** It is played from
+   * outside the deck too (CR 100.4a; EDH's companion is "effectively a 101st card"), so it is
+   * bucketed no more than the commander is — and it is read *after* the commander, which the
+   * reader asked for explicitly.
+   *
+   * The fixtures number Companion (7) before Commander (8), so `sortOrder` alone would answer
+   * the other way round. That is the whole assertion: the run is ordered by
+   * `COMMAND_ZONE_KINDS`, not by the reader's arrangement, and the reader's arrangement is what
+   * would otherwise be doing the work.
+   */
+  it("appends a companion the same way, and reads it after the commander whatever sortOrder says", () => {
+    const cards = [
+      inCategory(LATE_COMMANDER, {
+        name: "Kenrith, the Returned King",
+        cmc: 4,
+        typeLine: "Legendary Creature — Human Noble",
+      }),
+      inCategory(EARLY_COMPANION, {
+        name: "Lurrus of the Dream-Den",
+        cmc: 3,
+        typeLine: "Legendary Creature — Cat Nightmare",
+      }),
+      card({ name: "Sol Ring", cmc: 1, typeLine: "Artifact" }),
+    ];
+
+    for (const groupBy of ["manaValue", "type"] as const) {
+      const groups = buildGroups(
+        cards,
+        [MAIN, EARLY_COMPANION, LATE_COMMANDER],
+        groupBy,
+        "alphabetical",
+      );
+
+      expect(names(groups)).toEqual([
+        "Commander",
+        "Companion",
+        groupBy === "manaValue" ? "Mana value 1" : "Artifact",
+      ]);
+      expect(names(groups[0].cards)).toEqual(["Kenrith, the Returned King"]);
+      expect(names(groups[1].cards)).toEqual(["Lurrus of the Dream-Den"]);
+
+      // Neither of them reached a bucket: the deck's one other card is the whole of what did.
+      const derived = groups.filter((g) => g.categoryId === null);
+      expect(derived.flatMap((g) => names(g.cards))).toEqual(["Sol Ring"]);
+    }
+  });
+
+  /**
+   * **`category` is a grouping too, and the head rule is not a bucketing rule.** Under this mode
+   * nothing is derived at all — the piles *are* the headings — so lifting the two zones out of
+   * the reader's own order is the only thing that happens, and it is the case a rule written
+   * inside the derived arm would have missed entirely.
+   */
+  it("heads the category grouping too, ahead of the piles sortOrder puts first", () => {
+    const groups = buildGroups(
+      [
+        inCategory(LATE_COMMANDER, { name: "Kenrith, the Returned King" }),
+        inCategory(EARLY_COMPANION, { name: "Lurrus of the Dream-Den" }),
+        card({ categoryKind: "main" }),
+        inCategory(RAMP, { name: "Cultivate" }),
+      ],
+      [MAIN, RAMP, EARLY_COMPANION, LATE_COMMANDER],
+      "category",
+      "alphabetical",
+    );
+
+    // `sortOrder` is 1, 3, 7, 8, so left alone this reads Main deck, Ramp, Companion, Commander.
+    // The two zones come out of that order and go in front in the game's own; everything else
+    // keeps the arrangement the reader made, which is the half that must not move.
+    expect(names(groups)).toEqual(["Commander", "Companion", "Main deck", "Ramp"]);
+  });
+
+  /**
+   * **A switched-off command zone is unchanged, and that is a rule rather than an oversight.**
+   * `isActive` means the pile counts toward nothing — not size, not copies, not legality, not
+   * the allocator — so it is not what the rest of the deck is read *against* either, and there
+   * is nothing about it to put at the head.
+   *
+   * It stays in `sortOrder` under `category` and in the `!isActive` tail under a derived
+   * grouping: exactly the two places it was before the head run existed. The fixture is dragged
+   * to the end of the desk so that "left alone" and "moved to the front" are different answers.
+   */
+  it("leaves a switched-off command zone where it was, in both derived modes and under category", () => {
+    const cards = [
+      inCategory(OFF_COMMANDER, { name: "Kenrith, the Returned King", cmc: 4 }),
+      card({ name: "Sol Ring", cmc: 1, typeLine: "Artifact" }),
+      inCategory(MAYBE, { name: "Avacyn", cmc: 8, typeLine: "Creature — Angel" }),
+    ];
+    const categories = [MAIN, MAYBE, OFF_COMMANDER];
+
+    for (const groupBy of ["manaValue", "type"] as const) {
+      const groups = buildGroups(cards, categories, groupBy, "alphabetical");
+
+      // The one bucket the deck's one active, non-command card makes, then both switched-off
+      // piles as themselves in sortOrder — the Maybeboard (4) before the Commander (8).
+      expect(names(groups)).toEqual([
+        groupBy === "manaValue" ? "Mana value 1" : "Artifact",
+        "Maybeboard",
+        "Commander",
+      ]);
+      expect(groups[2].isActive).toBe(false);
+      expect(names(groups[2].cards)).toEqual(["Kenrith, the Returned King"]);
+    }
+
+    // And under `category`, where every pile is drawn, it is simply still last.
+    expect(names(buildGroups(cards, categories, "category", "alphabetical"))).toEqual([
+      "Main deck",
+      "Maybeboard",
+      "Commander",
+    ]);
+  });
+
+  /**
+   * **The curve is unchanged for everything that is not a commander**, which is the half of this
+   * change with no visible symptom and therefore the half most easily broken by a later tidy. A
+   * skip written a rung too high — over the whole `cards` loop rather than over the one card —
+   * would empty the buckets and every assertion about the head would still pass.
+   *
+   * Compared by name, copies and money rather than by identity: `card()` hands out a fresh row
+   * id per call, so two separately-built fixtures are never deep-equal.
+   */
+  it("buckets a deck of commander and spells exactly as the same deck without the commander", () => {
+    const spells = [
+      card({ name: "Sol Ring", cmc: 1, typeLine: "Artifact", quantity: 1, unitPrice: 1.5 }),
+      card({ name: "Lightning Bolt", cmc: 1, typeLine: "Instant", quantity: 4, unitPrice: 0.5 }),
+      card({ name: "Grizzly Bears", cmc: 2, typeLine: "Creature — Bear" }),
+    ];
+    const withCommander = [
+      inCategory(COMMANDER, {
+        name: "Kenrith, the Returned King",
+        cmc: 4,
+        typeLine: "Legendary Creature — Human Noble",
+        unitPrice: 9,
+      }),
+      ...spells,
+    ];
+
+    for (const groupBy of ["manaValue", "type"] as const) {
+      const bare = buildGroups(spells, [MAIN], groupBy, "alphabetical");
+      const headed = buildGroups(withCommander, [COMMANDER, MAIN], groupBy, "alphabetical");
+
+      // One group longer, and the extra one is the pile in front. Everything behind it — the
+      // headings, the cards under them, the copies and the money — is what the deck with no
+      // commander in it already answered.
+      expect(names(headed)).toEqual(["Commander", ...names(bare)]);
+      expect(headed.slice(1).map((g) => names(g.cards))).toEqual(bare.map((g) => names(g.cards)));
+      expect(headed.slice(1).map((g) => g.count)).toEqual(bare.map((g) => g.count));
+      expect(headed.slice(1).map((g) => g.totalPrice)).toEqual(bare.map((g) => g.totalPrice));
+    }
+  });
+
+  /**
+   * **Two rules in one order, and this is the seam between them.** `drawsWhenEmpty` decides
+   * whether an empty command zone is a heading at all — it is, and only where the format has
+   * such a zone, because an empty command zone in a Commander deck is itself a fact about the
+   * deck's validity — and the head run then puts whatever it kept in front.
+   *
+   * So an empty Commander heads a `manaValue` grouping, which is the one shape of this feature
+   * that looks like a defect and is not: a heading over no cards, above the curve. In a format
+   * with no command zone there was never a heading to move.
+   */
+  it("heads a derived grouping with an empty command zone only where the format has one", () => {
+    const cards = [card({ name: "Sol Ring", cmc: 1, typeLine: "Artifact" })];
+
+    expect(
+      names(buildGroups(cards, [MAIN, COMMANDER], "manaValue", "alphabetical", false, EDH)),
+    ).toEqual(["Commander", "Mana value 1"]);
+
+    expect(
+      names(
+        buildGroups(
+          cards,
+          [MAIN, COMMANDER],
+          "manaValue",
+          "alphabetical",
+          false,
+          DEFAULT_EMPTY_GROUP_RULES,
+        ),
+      ),
+    ).toEqual(["Mana value 1"]);
+  });
+
+  /**
+   * The order, checked as a *list* rather than through a deck — the one place it is.
+   *
+   * `COMMAND_ZONE_KINDS` is what `isCommandZone` and the head run's comparator both read, so its
+   * order **is** commander-before-companion and a reversal here is the whole feature reversed.
+   * Everything else in this block would report that as two piles the wrong way round in one
+   * assertion, which reads as a fixture problem; this says what it is.
+   */
+  it("names the two zones once, commander first, and calls nothing else one", () => {
+    expect(COMMAND_ZONE_KINDS).toEqual(["commander", "companion"]);
+    expect(COMMAND_ZONE_KINDS.every((kind) => isCommandZone(kind))).toBe(true);
+
+    // Every other kind is a pile like any other, and a derived group's `null` kind is not a zone
+    // anything is played from.
+    expect((["main", "side", "maybe"] as const).some((kind) => isCommandZone(kind))).toBe(false);
+    expect(isCommandZone(null)).toBe(false);
   });
 });
 

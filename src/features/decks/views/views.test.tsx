@@ -32,7 +32,13 @@ import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { RAIL_ATTR } from "./columns";
 import { GridView } from "./GridView";
-import { flowRowSpan, StackView, STACK_ATTR, stackColumnWidth } from "./StackView";
+import {
+  COMMAND_ATTR,
+  flowRowSpan,
+  StackView,
+  STACK_ATTR,
+  stackColumnWidth,
+} from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 
@@ -106,7 +112,34 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
 }
 
 const RAMP = category();
+/**
+ * The command zone, and since 2026-08-20 it is the pile every grouping mode puts **first**.
+ *
+ * `sortOrder: 0` is therefore no longer what puts it at the head of a `category` grouping —
+ * `buildGroups` lifts the active command zones out and pins them there — and it is kept at 0
+ * anyway, because a fixture whose seeded order already agrees with the rule is one where a
+ * broken pin still reads correctly and nothing here would notice. The case that can tell the
+ * two apart says so by handing the piles over in the *wrong* order; see the command-zone block.
+ *
+ * The **id** is load-bearing the way `SIDE`'s is: it is `fixtures.ts`'s own for a `commander`
+ * card, so `card({ categoryKind: "commander" })` lands in this category rather than arriving as
+ * a stray group.
+ */
 const COMMANDER = category({ id: 3, name: "Commander", kind: "commander", sortOrder: 0 });
+/**
+ * The other command zone, and the fixture this file had none of until the two were pinned
+ * together.
+ *
+ * Its `id` is `fixtures.ts`'s own for a `companion` card, for {@link COMMANDER}'s reason, and its
+ * `sortOrder` deliberately puts it **after** a pile of the reader's own: commander-then-companion
+ * is `COMMAND_ZONE_KINDS`' order and not a `sortOrder` that happens to agree, so a fixture where
+ * the seed already reads correctly could not tell a pin from an accident.
+ *
+ * **An empty one of these never draws** (`drawsWhenEmpty` answers `false` for `companion` in
+ * every format), so every fixture below hands it a card. A companion pile with nothing in it is
+ * not a weaker version of this case; it is no case at all.
+ */
+const COMPANION = category({ id: 4, name: "Companion", kind: "companion", sortOrder: 3 });
 /** A seeded zone, used as the deck that is one empty pile and nothing else. A fixed zone is the
  *  pile that reaches a view empty under *every* answer `drawsWhenEmpty` has given — the Sideboard
  *  draws empty whatever the format wants and whoever made it — so it is the fixture that keeps
@@ -237,6 +270,37 @@ const TWO_PILES: CardGroup[] = buildGroups(
   "category",
   "alphabetical",
 );
+
+/**
+ * A deck with **both** command zones in it, and every mana value and type in it chosen so that
+ * a bucketed commander would be visible.
+ *
+ * Serah Farron is a four-drop and Lurrus a three-drop, and **nothing else in the deck is
+ * either** — so under `Group by mana value` the honest answer is a desk holding exactly one
+ * bucket, `Mana value 1`, and a view that bucketed one of the two would grow a heading that
+ * cannot otherwise exist. Both are Legendary Creatures against one ordinary Creature and one
+ * Instant, so under `Group by type` the `Creature` pile is a real pile that the two must
+ * nonetheless not be in — the case a "no such heading" assertion could not make.
+ *
+ * The main-deck rows carry `fixtures.ts`' own `main` id, which is {@link RAMP}'s, so they file
+ * into the reader's own pile rather than arriving as a stray group.
+ */
+const COMMAND_DECK: DeckCard[] = [
+  card({
+    name: "Serah Farron",
+    categoryKind: "commander",
+    typeLine: "Legendary Creature — Human Noble",
+    cmc: 4,
+  }),
+  card({
+    name: "Lurrus of the Dream-Den",
+    categoryKind: "companion",
+    typeLine: "Legendary Creature — Cat Nightmare",
+    cmc: 3,
+  }),
+  card({ name: "Llanowar Elves", typeLine: "Creature — Elf Druid" }),
+  card({ name: "Sol Ring" }),
+];
 
 describe.each(VIEWS)("$name", ({ render: renderView }) => {
   const setup = (over: Partial<ViewProps> = {}) => {
@@ -655,10 +719,19 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
    * Nothing can be dropped into "Mana value 3": a derived group is a heading and not a place,
    * which is `grouping.ts`'s own rule rather than a special case in a view.
    *
-   * The one group that *is* a place under a derived grouping is the switched-off pile, which
-   * `buildGroups` appends as itself rather than bucketing — so exactly one target survives, and
-   * it is the Maybeboard. That is the assertion worth making: "none at all" would have passed
-   * against a view that dropped the inactive pile on the floor.
+   * The groups that *are* places under a derived grouping are the ones `buildGroups` appends as
+   * themselves rather than bucketing, and **there are two classes of those now** — which is what
+   * this case had to be corrected for on 2026-08-20 and why the correction is not a papering
+   * over. It is the switched-off pile, which is here in `CARDS` as the Maybeboard; and it is the
+   * **active command zone**, which is here as the Commander pile holding Serah Farron. A
+   * commander is not a card in the curve, so its pile is drawn whole in every grouping mode
+   * instead of its card being counted into `Mana value 1` — and a pile drawn whole is a pile a
+   * card can be dropped into. The point the case defends is untouched: `Mana value 1` is drawn,
+   * holds two cards, and is **not** in this list.
+   *
+   * Both surviving targets are named rather than counted, and in drawn order: "none at all"
+   * would have passed against a view that dropped either pile on the floor, and a bare length
+   * would not say which two.
    */
   it("makes no drop target of a derived group", () => {
     render(
@@ -669,11 +742,12 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       }),
     );
 
+    expect(screen.getByText("Mana value 1")).toBeInTheDocument();
     expect(
       [...document.querySelectorAll(`[${DECK_GROUP_ATTR}]`)].map((n) =>
         n.getAttribute(DECK_GROUP_ATTR),
       ),
-    ).toEqual([String(MAYBE.id)]);
+    ).toEqual([String(COMMANDER.id), String(MAYBE.id)]);
   });
 
   /** A view handed nothing draws exactly what it always drew — which is what lets a story or a
@@ -943,10 +1017,13 @@ describe("the views that are not the table", () => {
 
 describe("StackView flow", () => {
   const stacks = () => [...document.querySelectorAll(`[${STACK_ATTR}]`)];
-  /** The rail is **not** one of the boxes above — `STACK_ATTR` marks one pile drawn in the flow,
-   *  and the rail's piles are lifted out before the flow is drawn — so it is found by its own
-   *  attribute. */
+  /** Neither the rail nor the command zone is one of the boxes above — `STACK_ATTR` marks one
+   *  pile drawn as an item of the masonry, and both of those are lifted out of the flow before
+   *  it is drawn — so each is found by its own attribute. The command zone *is* a grid item, but
+   *  it is one item holding two piles rather than a pile, which is exactly the difference a sweep
+   *  counting the deck's own columns must keep. */
   const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
+  const commandBox = () => document.querySelector<HTMLElement>(`[${COMMAND_ATTR}]`);
   /** By the id each section is `aria-labelledby`, which is the heading's own handle rather
    *  than a guess at the header's shape. */
   const headingsIn = (box: Element) =>
@@ -968,6 +1045,13 @@ describe("StackView flow", () => {
    * did not fit and therefore opened the second column — the whole of what made that test a test.
    * It has no such job now, and that is the point: an empty pile is one box like any other, and a
    * layout that treated it as free would leave a hole in the line. See {@link DRAW}.
+   *
+   * **The Commander pile is in the fixture and is deliberately not one of these boxes** (changed
+   * 2026-08-20). It is drawn in the command zone's own item at the head of the grid, so the deck's
+   * own columns are Ramp and Draw — and where it went is asserted here rather than the count
+   * merely being lowered to fit, because a commander that had quietly gone back to being an
+   * ordinary masonry cell would draw the same three headings on the same desk in the same order.
+   * Only the box it is in tells the two apart, and nothing else in this block reads that box.
    *
    * The boxes are read out of the DOM rather than inferred from the cards being present: the first
    * draft of the test this replaces asserted only that both piles were drawn and twelve cards were
@@ -991,8 +1075,9 @@ describe("StackView flow", () => {
       />,
     );
 
-    expect(stacks()).toHaveLength(3);
-    expect(stacks().map((s) => headingsIn(s))).toEqual([["Commander"], ["Ramp"], ["Draw"]]);
+    expect(stacks()).toHaveLength(2);
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Ramp"], ["Draw"]]);
+    expect(headingsIn(commandBox()!)).toEqual(["Commander"]);
     // And never split: all three of Ramp's cards are in the one Ramp stack.
     expect(
       within(screen.getByRole("list", { name: "Ramp" })).getAllByRole("listitem"),
@@ -1197,7 +1282,9 @@ describe("StackView flow", () => {
       "category",
       "alphabetical",
     );
-    const order = [["Commander"], ["Ramp"], ["Draw"]];
+    // The deck's own columns. The Commander pile is in the command zone's item rather than in
+    // this list — see the case above, which is where that is the claim being made.
+    const order = [["Ramp"], ["Draw"]];
 
     render(<StackView groups={groups} marketplace={TCG} />);
     expect(stacks().map((s) => headingsIn(s))).toEqual(order);
@@ -1246,8 +1333,10 @@ describe("StackView flow", () => {
       />,
     );
 
-    // The flowing groups, still in the reader's own order and with the rail's two lifted out.
-    expect(stacks().map((s) => headingsIn(s))).toEqual([["Commander"], ["Ramp"], ["Draw"]]);
+    // The flowing groups, still in the reader's own order and with the rail's two lifted out —
+    // and the Commander pile lifted out at the other end, into the command zone's own item.
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Ramp"], ["Draw"]]);
+    expect(headingsIn(commandBox()!)).toEqual(["Commander"]);
     expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
   });
 
@@ -1406,6 +1495,240 @@ describe("StackView flow", () => {
 });
 
 /**
+ * **The two piles played from a zone of their own, in a box of their own** (added 2026-08-20).
+ *
+ * A commander is not a card in the curve; it is the card the curve was built *around*, on the
+ * table before the first draw, and a companion is that same claim made from outside the deck. So
+ * `buildGroups` stops bucketing either one under `Group by mana value` and `Group by type` and
+ * pins both to the head of all three groupings, `splitRail` answers them as a run of their own,
+ * and this view draws that run as **one item of the masonry holding two piles** rather than as two
+ * items.
+ *
+ * **The one-item half is the part with a layout failure behind it that nothing else here can
+ * see.** Left as two ordinary grid items, a commander and a companion are two very short piles
+ * at the head of a masonry, which deals them into columns 1 and 2 *side by side* — the companion
+ * beside the commander instead of under it, and the whole curve pushed a column to the right for
+ * as long as the deck has both. jsdom lays nothing out, so what is asserted is the structure CSS
+ * would apply that rule to: one box carrying {@link COMMAND_ATTR}, and **no `STACK_ATTR` inside
+ * it**, which is the assertion that catches the two drifting back into cells of their own.
+ *
+ * The block is `StackView`'s because the box is: `TextView` needs none — a greedy in-order pack
+ * already *is* a stack — and the two column views' shared claim is swept in `$name rail` below.
+ */
+describe("StackView command zone", () => {
+  const stacks = () => [...document.querySelectorAll(`[${STACK_ATTR}]`)];
+  const commandBox = () => document.querySelector<HTMLElement>(`[${COMMAND_ATTR}]`);
+  const rail = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`);
+  const headingsIn = (box: Element) =>
+    [...box.querySelectorAll('[id^="group-"]')].map((n) => n.textContent);
+  /** The card's own control, addressed the way the view stamps it — `deckCardSlot`, which is the
+   *  same spelling the drop and the arrows read back off a press. */
+  const control = (categoryId: number, name: string) =>
+    document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(categoryId, `c-${name}`, null)}"]`,
+    );
+
+  const draw = (
+    groupBy: "category" | "manaValue" | "type",
+    categories: DeckCategory[] = [COMMANDER, RAMP, COMPANION],
+    over: Partial<ViewProps> = {},
+  ) =>
+    render(
+      <StackView
+        groups={buildGroups(COMMAND_DECK, categories, groupBy, "alphabetical")}
+        marketplace={TCG}
+        {...over}
+      />,
+    );
+
+  /**
+   * **One home, in all three groupings — which is what the reader asked for and is not what any
+   * of the three did before.** Under `category` the two were piles in `sortOrder` like any other;
+   * under the two derived groupings they were not piles at all, their cards counted into whatever
+   * bucket their mana value or their type answered to.
+   *
+   * Swept over the modes rather than written three times because the rule is deliberately one
+   * rule: `splitCommandZones` is called on both of `buildGroups`' returns for exactly this reason,
+   * and a mode that stopped agreeing would be the mode nobody adjusted.
+   *
+   * The cards are asserted **inside the box**, not merely on screen: "the Commander heading is
+   * drawn" is equally true of a view drawing an empty heading over a card it left in a bucket.
+   */
+  it.each(["category", "manaValue", "type"] as const)(
+    "gives the commander and the companion one home under %s",
+    (groupBy) => {
+      draw(groupBy);
+
+      expect(headingsIn(commandBox()!)).toEqual(["Commander", "Companion"]);
+      expect(
+        within(commandBox()!).getByRole("button", { name: /^Serah Farron/ }),
+      ).toBeInTheDocument();
+      expect(
+        within(commandBox()!).getByRole("button", { name: /^Lurrus of the Dream-Den/ }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  /**
+   * **A commander is not a four-drop, and the curve is the number this exists for.** A reader
+   * counting their four-drops to decide whether they have too many was being handed a number with
+   * the one card in the deck that is never drawn folded into it.
+   *
+   * `Mana value 4` and `Mana value 3` are asserted **absent entirely** rather than asserted not to
+   * hold the two cards: {@link COMMAND_DECK} is built so that Serah and Lurrus are the only cards
+   * at those values, so a bucketed command zone cannot hide inside a heading that was going to be
+   * drawn anyway. The desk's own columns are then exactly `Mana value 1`.
+   */
+  it("keeps the command zones out of the curve, and out of a bucket of their own", () => {
+    draw("manaValue");
+
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Mana value 1"]]);
+    expect(screen.queryByText("Mana value 4")).toBeNull();
+    expect(screen.queryByText("Mana value 3")).toBeNull();
+    expect(control(COMMANDER.id, "Serah Farron")!.closest(`[${COMMAND_ATTR}]`)).not.toBeNull();
+    expect(control(COMMANDER.id, "Serah Farron")!.closest(`[${STACK_ATTR}]`)).toBeNull();
+    expect(control(COMPANION.id, "Lurrus of the Dream-Den")!.closest(`[${STACK_ATTR}]`)).toBeNull();
+  });
+
+  /**
+   * …and the same under `Group by type`, where the trap is the other way round: `Creature` is a
+   * heading this deck really has, so "no such pile" says nothing here. What is asserted is that
+   * the pile is drawn, holds the deck's own creature, and does **not** hold either legend played
+   * from a zone of its own — the shape a bucketed commander would take.
+   */
+  it("keeps the command zones out of the Creature pile they would otherwise head", () => {
+    draw("type");
+
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Creature"], ["Instant"]]);
+    const creatures = within(screen.getByRole("list", { name: "Creature" }));
+    expect(creatures.getByRole("button", { name: /^Llanowar Elves/ })).toBeInTheDocument();
+    expect(creatures.queryByRole("button", { name: /^Serah Farron/ })).toBeNull();
+    expect(creatures.queryByRole("button", { name: /^Lurrus of the Dream-Den/ })).toBeNull();
+  });
+
+  /**
+   * **Commander above companion, and the reader's own `sortOrder` does not get a vote.**
+   *
+   * Where a pile sits is otherwise the reader's arrangement, and this is the one place that is
+   * overruled — the order is the game's, stated once by `COMMAND_ZONE_KINDS`' own order. So the
+   * case is driven twice: once with the seed's order, where a pin and an accident agree, and once
+   * with the two categories handed over **companion first** and the Commander pile's `sortOrder`
+   * pushed past every other pile in the deck. Only the second can fail, and it is the whole test:
+   * the first is there so that a regression which merely stopped sorting is told apart from one
+   * that sorted the wrong way.
+   *
+   * `category` rather than a derived grouping, because `category` is the mode where `sortOrder` is
+   * otherwise the entire answer.
+   */
+  it("draws the commander above the companion, whatever order the reader put the piles in", () => {
+    draw("category");
+    expect(headingsIn(commandBox()!)).toEqual(["Commander", "Companion"]);
+    cleanup();
+
+    draw("category", [{ ...COMPANION, sortOrder: 0 }, RAMP, { ...COMMANDER, sortOrder: 9 }]);
+    expect(headingsIn(commandBox()!)).toEqual(["Commander", "Companion"]);
+    // …and lifting them out closed the gap up rather than leaving one: Ramp is still the deck's
+    // only flowing column, and it did not inherit a place at the head of the desk.
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Ramp"]]);
+  });
+
+  /**
+   * **One grid item, holding two piles** — the assertion the layout failure in this block's own
+   * header turns on, and the one that goes red if the two zones drift back into masonry cells of
+   * their own.
+   *
+   * Four things say it and each is a different way the drift arrives. The box is the grid's
+   * **first** item, so the zones head the desk rather than merely being adjacent. It carries the
+   * geometry a grid item carries — one column wide, and a row span, `flowRowSpan(0)` because jsdom
+   * measures every box as nothing. The piles inside carry **no** `STACK_ATTR`, which is the mark
+   * of a pile that *is* an item. And they carry no inline geometry of their own: a width or a
+   * `gridRow` on a pile inside a `flex-col` is either inert decoration or, for the width, a height
+   * — the rail's own trap, arriving here.
+   */
+  it("makes the two zones one item of the masonry rather than two cells in it", () => {
+    draw("category");
+    const box = commandBox()!;
+    const grid = box.parentElement!;
+
+    expect(grid.className.split(" ")).toContain("grid");
+    expect(grid.firstElementChild).toBe(box);
+    expect(box.style.width).toBe(`${stackColumnWidth(DEFAULT_ZOOM)}px`);
+    expect(box.style.gridRow).toBe(`span ${flowRowSpan(0)}`);
+
+    expect(box.querySelectorAll(`[${STACK_ATTR}]`)).toHaveLength(0);
+    const piles = [...box.querySelectorAll("section")];
+    expect(piles).toHaveLength(2);
+    expect(piles.map((p) => p.style.width)).toEqual(["", ""]);
+    expect(piles.map((p) => p.style.gridRow)).toEqual(["", ""]);
+  });
+
+  /**
+   * **A card can still be dropped into the commander pile**, which is the one affordance this box
+   * could not afford to cost. The piles inside are drawn exactly as the rail's are — no
+   * `flowWidth` — and that one absence turns four things off at once; a fifth would have been the
+   * drop, and it is not, because `useCategoryDrop` reads a `categoryId` and has never read
+   * `flowWidth`.
+   *
+   * Driven as the real gesture rather than by finding `DECK_GROUP_ATTR`, for the rail cases'
+   * reason: the attribute is the half that survives forgetting to call the hook, and only the drop
+   * tells the two apart. The attribute is asserted too, and asserted **inside the box**, because a
+   * drop that landed on a target drawn somewhere else would be a different bug with the same
+   * spy call.
+   */
+  it("still takes a card dropped into the commander pile", async () => {
+    const drop = vi.fn();
+    draw("category", [COMMANDER, RAMP, COMPANION], { actions: { setQuantity: vi.fn(), drop } });
+
+    const target = commandBox()!.querySelector<HTMLElement>(
+      `[${DECK_GROUP_ATTR}="${COMMANDER.id}"]`,
+    );
+    expect(target).not.toBeNull();
+    const marked = control(RAMP.id, "Sol Ring")!;
+
+    await dragOnto(marked.closest("li") ?? marked, target!);
+
+    expect(drop).toHaveBeenCalledWith({
+      write: "move",
+      finish: null,
+      cardId: "c-Sol Ring",
+      from: RAMP.id,
+      to: COMMANDER.id,
+    });
+  });
+
+  /**
+   * **A switched-off command zone is not a command zone**, and it rails like anything else the
+   * reader has turned off.
+   *
+   * The pin is an argument about a pile the rest of the deck is read *against*; a pile that counts
+   * toward nothing — not size, not copy limits, not legality, and no claim from the allocator — is
+   * not that. So the head of the desk is exactly the wrong place for it, and both halves are
+   * asserted: no box at all, and the pile in the rail with its heading intact. It is still that
+   * pile, still a drop target, still one switch away from coming back.
+   */
+  it("rails a commander pile the reader switched off rather than pinning it to the head", () => {
+    render(
+      <StackView
+        groups={buildGroups(
+          [
+            card({ name: "Serah Farron", categoryKind: "commander", categoryActive: false }),
+            card({ name: "Sol Ring" }),
+          ],
+          [{ ...COMMANDER, isActive: false }, RAMP],
+          "category",
+          "alphabetical",
+        )}
+        marketplace={TCG}
+      />,
+    );
+
+    expect(commandBox()).toBeNull();
+    expect(headingsIn(rail()!)).toEqual(["Commander"]);
+    expect(stacks().map((s) => headingsIn(s))).toEqual([["Ramp"]]);
+  });
+});
+
+/**
  * **The pile's own chrome, now that the line around it is gone.**
  *
  * A column of stacked card faces is already a shape — every card draws its own edge — and a
@@ -1505,6 +1828,16 @@ const COLUMN_VIEWS = [
     heading: "group-",
     width: `${stackColumnWidth(DEFAULT_ZOOM)}px`,
     zoomedWidth: `${stackColumnWidth(2)}px`,
+    /**
+     * How many boxes carrying {@link COMMAND_ATTR} this view draws for a deck with a command
+     * zone in it — **one here and none in `TextView`**, and the difference is the whole of what
+     * the two layouts disagree about. A masonry deals two short piles at the head of a grid into
+     * two columns side by side, so the pair needs one item of its own; a greedy in-order pack
+     * already *is* a stack, so the command run at the head of the packed list opens the first
+     * column and the companion is the next thing under it. A `TextView` that grew a box would be
+     * a third layout nobody asked for.
+     */
+    commandBoxes: 1,
   },
   {
     name: "TextView",
@@ -1517,6 +1850,7 @@ const COLUMN_VIEWS = [
      *  drawing card faces at. */
     width: "18.75rem",
     zoomedWidth: "18.75rem",
+    commandBoxes: 0,
   },
 ] as const;
 
@@ -1543,7 +1877,7 @@ describe.each(COLUMN_VIEWS)(
   // `$name rail`, not `$name's`: vitest quotes an interpolated string, so the possessive would
   // print as `'StackView''s`. Same shape as `$name editing` above.
   "$name rail",
-  ({ render: renderView, heading, width, zoomedWidth }) => {
+  ({ render: renderView, heading, width, zoomedWidth, commandBoxes }) => {
     /** The desk's zoom is remembered for the session and this store outlives a test — the
      *  reason `StackView flow` resets it, and the same reason here. */
     afterEach(resetZoom);
@@ -1591,6 +1925,39 @@ describe.each(COLUMN_VIEWS)(
 
       expect(headingsIn(flow())).toEqual(["Commander", "Ramp"]);
       expect(headingsIn(rail()!)).toEqual(["Sideboard", "Maybeboard"]);
+    });
+
+    /**
+     * **And at the other end of the same list: the command zones head the flowing half, in both
+     * views** (added 2026-08-20). That all three groupings agree is `StackView command zone`'s
+     * sweep; what is swept here is the pair of layouts.
+     *
+     * The deck is grouped by **mana value** here on purpose. Under `category` the commander
+     * already heads the list by its own `sortOrder`, so a view that had done nothing at all would
+     * answer this; under a derived grouping the two zones are not buckets and could only be at the
+     * head by being pinned there, and `Mana value 1` is the run they have to be in front of. The
+     * Maybeboard is in the fixture because {@link flow} is read as the rail's previous sibling —
+     * a deck with no rail has no handle to read the flowing half by.
+     *
+     * **The box count is the one thing the two views disagree about**, and it is asserted from the
+     * fixture rather than by naming a view — see {@link COLUMN_VIEWS}' own `commandBoxes`. What
+     * they agree about is the order, which is what a reader sees, and it is the same list either
+     * way: a masonry item holding two piles and a packed column opening with two piles read
+     * identically in the DOM.
+     */
+    it("heads the flowing half with the command zones, commander first", () => {
+      draw(
+        buildGroups(
+          COMMAND_DECK,
+          [COMMANDER, RAMP, COMPANION, MAYBE],
+          "manaValue",
+          "alphabetical",
+        ),
+      );
+
+      expect(headingsIn(flow())).toEqual(["Commander", "Companion", "Mana value 1"]);
+      expect(headingsIn(rail()!)).toEqual(["Maybeboard"]);
+      expect(document.querySelectorAll(`[${COMMAND_ATTR}]`)).toHaveLength(commandBoxes);
     });
 
     /**
@@ -1808,9 +2175,17 @@ describe.each(COLUMN_VIEWS)(
      * **Every category here is switched on, and that is now part of the fixture rather than an
      * accident of it** (2026-08-17). The switch is the split's second test, so a deck with a pile
      * turned off has a rail; "nothing played beside it" means every pile counts and none of the
-     * three kinds present is `side` or `maybe`. The two kinds it asserts *do not* rail are exactly
-     * the two `splitRail`'s doc gives a reason for leaving in the flow — a commander and a
-     * companion are one card each — and that exemption holds only while they are on.
+     * three kinds present is `side` or `maybe`.
+     *
+     * **The two command zones are the fixture's other half, and what they say changed on
+     * 2026-08-20 without changing this assertion.** `splitRail` used to leave them in the flow, on
+     * the argument that a commander and a companion are one card each and railing either would
+     * spend a whole column's width on a pile read at a glance; it now answers them as a run of
+     * their own, pinned to the head of the desk. Neither answer is the rail, which is why the
+     * case survived the change whole — and it is still worth their being here, because the *third*
+     * answer is the one this would catch: a split that pinned by kind and forgot the switch would
+     * put a switched-off command zone at the head of the desk, which `StackView command zone`
+     * asserts from the other side.
      */
     it("draws no rail when nothing in the deck is played beside it", () => {
       draw(
@@ -1820,11 +2195,7 @@ describe.each(COLUMN_VIEWS)(
             card({ name: "Serah Farron", categoryKind: "commander" }),
             card({ name: "Lurrus", categoryKind: "companion" }),
           ],
-          [
-            COMMANDER,
-            RAMP,
-            category({ id: 4, name: "Companion", kind: "companion", sortOrder: 3 }),
-          ],
+          [COMMANDER, RAMP, COMPANION],
           "category",
           "alphabetical",
         ),
@@ -2324,10 +2695,17 @@ describe("StackView reordering", () => {
   /**
    * `GROUPS`' deck with the rail's two piles and an empty one of the reader's own.
    *
-   * The flow comes out `Commander(3) · Ramp(1) · Draw(6)` and the rail `Sideboard(2) ·
-   * Maybeboard(5)`, which is the fixture this whole block turns on: the ids that flow are **not
-   * contiguous** in the deck's own list, so a view quietly doing index arithmetic of its own
-   * would answer every case below wrongly.
+   * The flow comes out `Ramp(1) · Draw(6)`, the command zone holds `Commander(3)` and the rail
+   * `Sideboard(2) · Maybeboard(5)`, which is the fixture this whole block turns on: the ids that
+   * flow are **not contiguous** in the deck's own list, so a view quietly doing index arithmetic
+   * of its own would answer every case below wrongly. The gap between them is wider than it was —
+   * three of the deck's five piles are drawn somewhere a grip cannot reach.
+   *
+   * **The Commander pile was in that flow until 2026-08-20 and is not any more**, which is why
+   * every position below reads `of 2` rather than `of 3`. It is pinned to the head of the desk in
+   * every grouping mode, so a grip on it would offer a move with nowhere to move to; `flowIds` is
+   * the flow's own and the grip's `n of N` counts what can actually be reordered. That it carries
+   * no grip is asserted rather than assumed, in the census below.
    */
   const piles = buildGroups(
     [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
@@ -2342,8 +2720,16 @@ describe("StackView reordering", () => {
     return moveCategory;
   };
 
-  const grip = (name: string, position: string) =>
-    screen.getByRole("button", { name: `Move ${name}, ${position}` });
+  /**
+   * One pile's grip, found by the pile it moves rather than by the whole of its name.
+   *
+   * **The position is deliberately not matched here, and it is asserted exactly once** — in the
+   * census below, which is the case whose subject it is. It used to be an argument every call
+   * site spelled out, so the day the flow stopped holding three piles was the day every case in
+   * this block went red over a number none of them was making a claim about. A grip is addressed
+   * by *which pile it moves*; how many piles there are is one fact and has one test.
+   */
+  const grip = (name: string) => screen.getByRole("button", { name: new RegExp(`^Move ${name},`) });
   /**
    * What is actually picked up: the **heading**, with the grip marking where the press has to
    * start.
@@ -2353,8 +2739,7 @@ describe("StackView reordering", () => {
    * two things, which is what `pressOn` is for, and a test that dragged the grip would be
    * addressing a registration that does not exist.
    */
-  const headingOf = (name: string, position: string) =>
-    grip(name, position).closest("[draggable]")!;
+  const headingOf = (name: string) => grip(name).closest("[draggable]")!;
   /**
    * Where a dragged pile is let go, and it is deliberately **not** the `<section>`.
    *
@@ -2365,17 +2750,33 @@ describe("StackView reordering", () => {
    * the section's own 6px rim.
    */
   const bodyOf = (group: CardGroup) => document.getElementById(`group-${group.key}`)!;
+  /** A pile by its heading, so an index into `piles` never has to be written down. The arrow-key
+   *  block's helper, borrowed for the reason it is worth borrowing here now: the deck's own list
+   *  and what a reorder can reach stopped being the same run when the command zone was pinned. */
+  const pile = (name: string) => piles.find((group) => group.name === name)!;
 
-  /** **Only the flow.** The Sideboard and the Maybeboard are held against the right edge, and
-   *  where they sit is not an order the reader arranged — so they carry no grip and the count in
-   *  every other grip's name is the flow's three rather than the deck's five. */
-  it("gives every flowing pile a grip and the railed ones none", () => {
+  /**
+   * **Only the flow**, and this is the one case in the block that names a position.
+   *
+   * Three of the deck's five piles are drawn somewhere a reorder cannot reach, for two different
+   * reasons that both come out as "no grip". The Sideboard and the Maybeboard are held against
+   * the right edge, and where they sit is not an order the reader arranged. **The Commander is
+   * pinned to the head of the desk** in all three groupings (added 2026-08-20), so a grip on it
+   * would offer a move with nowhere to move to — and it is the one that would break quietly,
+   * because it is drawn in the flowing half of the view rather than beside it and looks exactly
+   * like a pile that should have one.
+   *
+   * The count in every grip's name is therefore the flow's **two** rather than the deck's five,
+   * and the whole list is read out rather than counted: `toHaveLength(2)` alone is satisfied by
+   * two grips on the wrong piles.
+   */
+  it("gives every flowing pile a grip, and the railed and pinned ones none", () => {
     draw();
 
-    expect(screen.getAllByRole("button", { name: /^Move / })).toHaveLength(3);
-    expect(grip("Commander", "1 of 3")).toBeInTheDocument();
-    expect(grip("Ramp", "2 of 3")).toBeInTheDocument();
-    expect(grip("Draw", "3 of 3")).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /^Move / }).map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Move Ramp, 1 of 2", "Move Draw, 2 of 2"]);
+    expect(screen.queryByRole("button", { name: /^Move Commander/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Move Sideboard/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Move Maybeboard/ })).not.toBeInTheDocument();
   });
@@ -2390,40 +2791,50 @@ describe("StackView reordering", () => {
   /**
    * The keyboard's whole path, and the case the id-pair signature exists for: one step to the
    * right of Ramp is **Draw**, whose id is 6 — three past Ramp's own in the deck's list, with the
-   * Sideboard in between. An index would have said 2.
+   * Sideboard and the pinned Commander in between. An index would have said 2.
    *
    * All four arrows, because the flow is a masonry: a pile that wraps sits under the pile above
-   * it, so "down" is a fact about how much room the window had rather than about the order.
+   * it, so "down" is a fact about how much room the window had rather than about the order. The
+   * two backward presses are made from **Draw** rather than from Ramp: with the Commander pinned
+   * out of the flow, Ramp is the first pile that can be moved and has nothing to its left, so a
+   * press there would be asserting the clamp below instead of the step.
    */
   it("steps a pile one place along with the arrow keys, naming its neighbour", async () => {
     const moveCategory = draw();
     const user = userEvent.setup();
 
-    grip("Ramp", "2 of 3").focus();
+    grip("Ramp").focus();
     await user.keyboard("{ArrowRight}");
     expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
 
     moveCategory.mockClear();
-    grip("Ramp", "2 of 3").focus();
-    await user.keyboard("{ArrowUp}");
-    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, COMMANDER.id);
-
-    moveCategory.mockClear();
-    grip("Ramp", "2 of 3").focus();
+    grip("Ramp").focus();
     await user.keyboard("{ArrowDown}");
     expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
+
+    moveCategory.mockClear();
+    grip("Draw").focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(moveCategory).toHaveBeenCalledWith(DRAW.id, RAMP.id);
+
+    moveCategory.mockClear();
+    grip("Draw").focus();
+    await user.keyboard("{ArrowUp}");
+    expect(moveCategory).toHaveBeenCalledWith(DRAW.id, RAMP.id);
   });
 
   /** Stepping past either end sends nothing rather than a reorder that would land where it
    *  started: `movedTo` clamps, so the write would be legal, and a round trip and a re-read of
-   *  the whole deck to change nothing is still a round trip. */
+   *  the whole deck to change nothing is still a round trip. **Ramp is the flow's first pile
+   *  now** — the Commander is pinned in front of it and is not in the flow at all — so a left
+   *  press there is the head of the walk rather than a step into the command zone. */
   it("sends nothing when there is no neighbour that way", async () => {
     const moveCategory = draw();
     const user = userEvent.setup();
 
-    grip("Commander", "1 of 3").focus();
+    grip("Ramp").focus();
     await user.keyboard("{ArrowLeft}");
-    grip("Draw", "3 of 3").focus();
+    grip("Draw").focus();
     await user.keyboard("{ArrowRight}");
 
     expect(moveCategory).not.toHaveBeenCalled();
@@ -2441,45 +2852,62 @@ describe("StackView reordering", () => {
   it("moves a pile onto the pile it was dropped on, and only from the grip", async () => {
     const moveCategory = draw();
 
-    const refused = await startDrag(headingOf("Draw", "3 of 3"));
+    const refused = await startDrag(headingOf("Draw"));
     expect(refused.started).toBe(false);
     await refused.cancel();
 
-    const held = await startDrag(headingOf("Draw", "3 of 3"), {
-      pressOn: grip("Draw", "3 of 3"),
-    });
+    const held = await startDrag(headingOf("Draw"), { pressOn: grip("Draw") });
     try {
       expect(held.started).toBe(true);
-      await held.over(bodyOf(piles[0]));
+      // Ramp, the flow's first pile. It was the Commander until 2026-08-20, which is no longer a
+      // place a pile can be moved to — see the case below, where that refusal is the assertion.
+      await held.over(bodyOf(pile("Ramp")));
       await held.drop();
     } finally {
       await held.cancel();
     }
 
-    expect(moveCategory).toHaveBeenCalledWith(DRAW.id, COMMANDER.id);
+    expect(moveCategory).toHaveBeenCalledWith(DRAW.id, RAMP.id);
   });
 
-  /** A pile dropped on itself is not a move. The railed piles refuse for a different reason and
-   *  it is worth pinning beside this one: they register no target at all, so a pile dragged over
-   *  the Sideboard falls through to nothing. */
-  it("refuses a drop on itself and a drop on the rail", async () => {
+  /**
+   * A pile dropped on itself is not a move. The other two refusals are worth pinning beside it
+   * because each has a different cause and all three come out as silence.
+   *
+   * **The rail registers no target at all**, so a pile dragged over the Sideboard falls through
+   * to nothing. **The command zone registers none either** (added 2026-08-20), and it is the one
+   * that would break quietly: it is drawn in the flowing half of the view, at the head of the
+   * masonry, so it looks exactly like the pile a reader would expect to be able to drop onto —
+   * and it is pinned there, so landing a pile in front of it would be a move the next render
+   * silently undoes. Its piles are handed no `flowWidth`, which is the same one absence that
+   * takes their grips away.
+   */
+  it("refuses a drop on itself, on the rail and on the command zone", async () => {
     const moveCategory = draw();
 
-    const press = { pressOn: grip("Ramp", "2 of 3") };
-    const held = await startDrag(headingOf("Ramp", "2 of 3"), press);
+    const press = { pressOn: grip("Ramp") };
+    const held = await startDrag(headingOf("Ramp"), press);
     try {
-      await held.over(bodyOf(piles[1]));
+      await held.over(bodyOf(pile("Ramp")));
       await held.drop();
     } finally {
       await held.cancel();
     }
 
-    const onRail = await startDrag(headingOf("Ramp", "2 of 3"), press);
+    const onRail = await startDrag(headingOf("Ramp"), press);
     try {
       await onRail.over(bodyOf(piles.find((g) => g.categoryId === SIDE.id)!));
       await onRail.drop();
     } finally {
       await onRail.cancel();
+    }
+
+    const onCommand = await startDrag(headingOf("Ramp"), press);
+    try {
+      await onCommand.over(bodyOf(pile("Commander")));
+      await onCommand.drop();
+    } finally {
+      await onCommand.cancel();
     }
 
     expect(moveCategory).not.toHaveBeenCalled();
@@ -2551,17 +2979,24 @@ describe("StackView arrow keys", () => {
   });
 
   /**
-   * The reordering block's deck, and the shape is the whole of what this block turns on: the flow
-   * comes out `Commander(1 card) · Ramp(2) · Draw(0)` and the rail `Sideboard(1) · Maybeboard(1)`,
-   * so the walk is five piles holding `[1, 2, 0, 1, 1]` cards.
+   * The reordering block's deck, and the shape is the whole of what this block turns on: the desk
+   * comes out `Commander(1 card) · Ramp(2) · Draw(0)` with `Sideboard(1) · Maybeboard(1)` in the
+   * rail, so the walk is five piles holding `[1, 2, 0, 1, 1]` cards.
    *
-   * Three of those are here on purpose. **Ramp holds two cards**, which is the only way up and
+   * Four of those are here on purpose. **Ramp holds two cards**, which is the only way up and
    * down have anywhere to go and the only way the two clamps can be told from each other.
    * **Draw is empty and still drawn** — a pile the reader made is a *place*, so it keeps its
    * heading — which makes it the pile a sideways press has to step over rather than land on.
    * And **the rail is on the end of the walk**, which is what says the piles played beside the
    * deck are reachable at all: where a pile is drawn is a layout, and the caret does not read
    * layouts.
+   *
+   * **The Commander is on the other end of it, and for that same reason** (2026-08-20). It is no
+   * longer part of the flow at all — it is pinned to the head of the desk in a box of its own,
+   * with no grip and no reorder target — and the walk still opens on its one card, because
+   * `StackView` derives the order as `command`, then `flow`, then `rail`. A view that dropped the
+   * command zone out of the walk when it took it out of the flow would make the commander
+   * mouse-only, and `clamps at both ends of the walk` is where that shows.
    */
   const piles = buildGroups(
     [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
@@ -2844,7 +3279,9 @@ describe("StackView arrow keys", () => {
     const moveCategory = vi.fn();
     const onSelect = draw({ actions: { moveCategory } });
     const user = userEvent.setup();
-    const grip = screen.getByRole("button", { name: "Move Ramp, 2 of 3" });
+    // Addressed by the pile it moves, never by the whole of its name: how many piles the flow
+    // holds is the reordering block's claim and is stated there once.
+    const grip = screen.getByRole("button", { name: /^Move Ramp,/ });
 
     act(() => grip.focus());
     await user.keyboard("{ArrowRight}");
@@ -2864,7 +3301,7 @@ describe("StackView arrow keys", () => {
     const moveCategory = vi.fn();
     const onSelect = draw({ actions: { moveCategory } });
     const user = userEvent.setup();
-    const grip = screen.getByRole("button", { name: "Move Draw, 3 of 3" });
+    const grip = screen.getByRole("button", { name: /^Move Draw,/ });
 
     act(() => grip.focus());
     await user.keyboard("{ArrowRight}");

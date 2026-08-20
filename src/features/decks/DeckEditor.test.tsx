@@ -4675,9 +4675,12 @@ describe("DeckEditor reordering the deck's piles", () => {
 describe("DeckEditor — the walk it publishes", () => {
   /**
    * Three cards in three piles, chosen so the drawn order is **not** the order `buildGroups`
-   * hands the groups over in: the Sideboard's `sortOrder` is 1 and the Commander's is 2, so a
-   * walk that read `groups` straight through would put Pyroblast in the middle. `splitRail` pins
-   * the Sideboard to the rail, where the reader is looking at it.
+   * hands the groups over in and **not** `sortOrder` either: Main deck is 0, the Sideboard 1 and
+   * the Commander 2, so a walk that read `groups` straight through would put Kenrith in the
+   * middle and Pyroblast last-by-accident. Both ends of `splitRail` move a pile here — the
+   * command zone is pinned to the **head** of the desk and the Sideboard to the rail — which is
+   * what makes this the case that discriminates a walk derived from the split from one that is
+   * not, in both directions at once.
    */
   const SPREAD = [
     bolt(),
@@ -4687,14 +4690,14 @@ describe("DeckEditor — the walk it publishes", () => {
 
   const walk = () => useAppStore.getState().deckWalk;
 
-  it("publishes the deck in the order the desk draws it, the rail last", async () => {
+  it("publishes the deck in the order the desk draws it, the command zone first and the rail last", async () => {
     deckGet.mockResolvedValue(detail({}, SPREAD));
     await open();
 
     await waitFor(() =>
       expect(walk().map((stop) => stop.name)).toEqual([
-        "Lightning Bolt",
         "Kenrith, the Returned King",
+        "Lightning Bolt",
         "Pyroblast",
       ]),
     );

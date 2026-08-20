@@ -14,8 +14,11 @@
  * **The order is `splitRail`'s and is derived nowhere else here.** That is the same function
  * `StackView` and `TextView` lay their piles out with, so the walk agrees with the desk by
  * construction rather than by two copies of one rule happening to agree today — which matters
- * because that rule has moved twice in a month (the Maybeboard joining the rail, then every
- * switched-off pile joining it) and each move would otherwise have had to be made here as well.
+ * because that rule has moved three times in a month (the Maybeboard joining the rail, then every
+ * switched-off pile joining it, then the command zones leaving the flow for a pinned run of their
+ * own) and each move would otherwise have had to be made here as well. The third is the one that
+ * would have been missed: the first two moved a pile between two runs this file already
+ * concatenated, and that one added a run.
  *
  * **It is the two column views' order specifically**, and that is the honest claim rather than
  * "the drawn order" flat: `GridView` and `TableView` map `groups` straight through and never
@@ -42,9 +45,10 @@ export type { DeckWalkStop };
 /**
  * The deck's rows in the order the desk draws them.
  *
- * Three facts do all the work and none of them is decided here. `splitRail` says which piles
- * flow and which are pinned to the right, in the reader's own `sortOrder` inside each run;
- * `flow` is drawn before `rail`, so that is the order they are concatenated in; and each group's
+ * Three facts do all the work and none of them is decided here. `splitRail` says which piles are
+ * the command zone, which flow and which are pinned to the right, in the reader's own `sortOrder`
+ * inside each run; the desk draws `command`, then `flow`, then `rail`, so that is the order the
+ * three are concatenated in — the same order `StackView`'s own arrow keys walk; and each group's
  * `cards` is already in the order `sortBy` asked for, because `buildGroups` sorted it. So the
  * whole derivation is a concatenation and a `flatMap`, and every question about *why* a card is
  * where it is has an answer in one of those two files instead of a second answer in this one.
@@ -72,13 +76,13 @@ export type { DeckWalkStop };
  * them.
  */
 export function deckWalkStops(groups: readonly CardGroup[], deckId: number): DeckWalkStop[] {
-  const { flow, rail } = splitRail(groups);
+  const { command, flow, rail } = splitRail(groups);
   const stops: DeckWalkStop[] = [];
 
   // A plain loop rather than a `filter` and a `map`, for `splitRail`'s own reason one file over:
   // two passes are two places for the rule about which rows survive to be stated, and the second
   // one is the one that gets edited without the first.
-  for (const group of [...flow, ...rail]) {
+  for (const group of [...command, ...flow, ...rail]) {
     for (const card of group.cards) {
       // The orphan. `oracleId` is the field, and narrowing it here is also what makes the stop's
       // own `oracleId` a `string` with no assertion.

@@ -303,14 +303,42 @@ function focusStackCard(root: HTMLElement, card: DeckCard): void {
  * grid placement never walks backwards up the page — so reading order, tab order and what a screen
  * reader hears are what they were.
  *
- * **The rail is deliberately not one of these.** Its piles are taken out before the flow is drawn
- * and stacked down a box of their own, so a sweep counting the flow must not find them. That box
- * carries `RAIL_ATTR` (`columns.ts`) alone — one name, shared with `TextView`, which still packs.
+ * **Neither the rail nor the command zone is one of these**, and the two are absent for opposite
+ * reasons. The rail's piles are taken out before the flow is drawn and stacked down a box of their
+ * own, so a sweep counting the flow must not find them; that box carries `RAIL_ATTR`
+ * (`columns.ts`) alone — one name, shared with `TextView`, which still packs. The command zone
+ * *is* an item of this grid — the first one — but the piles inside it are not: it is one item
+ * holding two piles ({@link COMMAND_ATTR}), because a masonry deals two short piles into two
+ * columns and the reader asked for the companion to sit under the commander.
  *
- * The value is `data-deck-stack`, which pairs with the rail's `data-deck-rail`: the two boxes a
- * pile can be in, named the same way.
+ * The value is `data-deck-stack`, and it is now one of three: `data-deck-rail` is the piles played
+ * *beside* the deck, `data-deck-command` is the ones the deck was built *around*, and this is a
+ * pile of the deck itself. The three boxes a pile can be drawn in, named the same way.
  */
 export const STACK_ATTR = "data-deck-stack";
+
+/**
+ * How a test — or a live pass — finds the box the command zones are drawn in: the commander, and
+ * under it the companion, stacked inside a single item at the head of the flow.
+ *
+ * An attribute rather than a role, for the reason {@link STACK_ATTR} and `columns.ts`' `RAIL_ATTR`
+ * are attributes: **which box a pile was drawn in is a layout, and it says nothing at all to a
+ * reader who cannot see it.** So there is no role to give this box and no accessible name to
+ * search it by — it is a `<div>` with two `<section>`s in it, and each of those keeps the heading,
+ * the `aria-labelledby` and the drop target it would have had anywhere else. A reader hears
+ * "Commander" and "Companion"; that the two happen to share a grid cell is not a fact about the
+ * deck.
+ *
+ * **It is not also a `STACK_ATTR` box, and that is the rail's rule reaching a second box.**
+ * `STACK_ATTR` means "a pile drawn in the flow" — one pile, one box, one grid item — and these are
+ * piles drawn in a box of their own that *happens* to be a grid item. One element answering both
+ * names would make every sweep that counts the deck's own piles count this box as a pile, while
+ * the two real piles inside it went uncounted: they carry no `flowWidth`, exactly as in the rail,
+ * so they carry no `STACK_ATTR` either.
+ *
+ * The value is `data-deck-command`, the third of the three names above.
+ */
+export const COMMAND_ATTR = "data-deck-command";
 
 export function StackView({
   groups,
@@ -386,31 +414,41 @@ export function StackView({
   // own order and never re-orders anything, so a sideboard, a maybeboard or a pile the reader has
   // switched off, left in that stream, lands wherever the line it fell on happened to end. A rail
   // held against the right edge is not part of the flow at all, so those groups are taken out of
-  // the *input* rather than pulled back out of the answer. Which piles are railed, why the kind is
-  // tested before the switch, why the rail is not sorted here, and why there is no grouping-mode
-  // check beside either word: {@link splitRail}.
-  const { flow, rail } = splitRail(groups);
+  // the *input* rather than pulled back out of the answer. The command zones are the same act at
+  // the other end of the list: a commander is not a card in the curve, it is the card the curve
+  // was built around, so it heads the desk rather than flowing in it. Which piles are railed, why
+  // the kind is tested before the switch, why the rail is not sorted here, and why there is no
+  // grouping-mode check beside any of those words: {@link splitRail}.
+  const { command, flow, rail } = splitRail(groups);
   // **Every pile a reader may drag, in the order they are drawn** — the flow's own, so the rail
   // is out by construction rather than by a second test, and a derived heading ("Mana value 3")
   // is out because it has no id to move.
   //
+  // **The command zone is out for a third reason, and it is the point of the box rather than an
+  // omission**: its place is fixed. A commander and a companion are pinned to the head of the desk
+  // in all three grouping modes, so there is no position a reorder could move them to and nothing
+  // for `n of N` to count them among. The fence is not written here either — those piles are drawn
+  // without a `flowWidth`, which is `StackGroup`'s own off switch for the grip, the row span and
+  // the reorder drop all at once.
+  //
   // It is what the grip's `n of N` counts and what the arrows **on a grip** step through — not
-  // the ones that move the caret, which walk `walk` below and reach the rail — and it is
+  // the ones that move the caret, which walk `walk` below and reach both other boxes — and it is
   // deliberately the *drawn* order rather than the deck's: a reader pressing ArrowRight on a grip
   // is asking for the pile they can see to the right, and the piles the deck holds that this desk
   // is not drawing are the editor's to thread back in ({@link DeckCardActions.moveCategory}).
   const flowIds = flow.flatMap((group) => (group.categoryId === null ? [] : [group.categoryId]));
-  // **Every pile the arrows walk, in the order they are drawn** — the flow, then the rail, each
-  // pile's cards in the order it already holds them. It is the same `splitRail` answer the view
-  // is drawn from and deliberately not a second derivation of it: a walk that disagreed with the
-  // layout by one pile would send the caret somewhere the reader is not looking, and nothing on
-  // screen would say so. `deckWalk.ts` builds this order for the printings modal off the same
-  // function, and the two are meant to agree.
+  // **Every pile the arrows walk, in the order they are drawn** — the command zone, then the flow,
+  // then the rail, each pile's cards in the order it already holds them. It is the same
+  // `splitRail` answer the view is drawn from and deliberately not a second derivation of it: a
+  // walk that disagreed with the layout by one pile would send the caret somewhere the reader is
+  // not looking, and nothing on screen would say so. `deckWalk.ts` builds this order for the
+  // printings modal off the same function, and the two are meant to agree.
   //
-  // The rail is **in** it: those piles are drawn on the desk like any other and a reader arrowing
-  // right past the last flowing pile is asking for the Sideboard. Where a pile sits is a layout;
-  // what the caret can reach is not.
-  const walk = [...flow, ...rail];
+  // Both of the other boxes are **in** it: their piles are drawn on the desk like any other, so a
+  // reader arrowing left off the first flowing pile is asking for the commander and one arrowing
+  // right past the last is asking for the Sideboard. Where a pile sits is a layout; what the caret
+  // can reach is not.
+  const walk = [...command, ...flow, ...rail];
 
   /**
    * **Every selection this view makes, press and arrow alike — and the caret stays on the card.**
@@ -577,11 +615,13 @@ export function StackView({
         className,
       )}
     >
-      {/* The flowing half, and **every pile in it is an item of this one grid** — no columns, no
-          packing, nothing measuring this box. They run left to right in the reader's own order and
-          the one that will not fit drops to the next line, which is what fills the desk's width
-          before it spends any of its height. See {@link STACK_ATTR} for the two layouts this
-          replaced and the bug each of them left standing.
+      {/* The flowing half, and **every pile in it is an item of this one grid, except the two the
+          deck was built around, which share the first item** — no columns, no packing, nothing
+          measuring this box. They run left to right in the reader's own order and the one that
+          will not fit drops to the next line, which is what fills the desk's width before it
+          spends any of its height. See {@link STACK_ATTR} for the two layouts this replaced and
+          the bug each of them left standing, and {@link CommandZone} for why one item holds two
+          piles.
 
           **The masonry is `auto-fill` tracks over one-pixel rows, and nothing else.**
           `repeat(auto-fill, columnWidth)` is CSS counting how many piles fit on a line — the one
@@ -638,6 +678,30 @@ export function StackView({
         }}
         className="grid flex-1 items-start gap-x-4"
       >
+        {/* The command zone, first of the grid's items and the only one that is more than one
+            pile — see {@link CommandZone}, which carries the whole of why the commander and the
+            companion are one box rather than two neighbours.
+
+            **The `length > 0` is the only test here, and every decision behind it was made
+            upstream.** Whether an empty commander pile is a place worth drawing is
+            `drawsWhenEmpty`'s question — it draws where the deck's format has a command zone and
+            an empty Companion never does — and whether a switched-off one belongs here at all is
+            `splitRail`'s, which answers no and leaves it to the rail with every other pile the
+            reader turned off. A view that added a second test would be a third opinion about a
+            deck, in the file with the least standing to hold one. */}
+        {command.length > 0 && (
+          <CommandZone
+            groups={command}
+            marketplace={marketplace}
+            violations={violations}
+            onSelect={selectCard}
+            actions={actions}
+            selectedSlot={selectedSlot}
+            landed={landed}
+            zoom={cardZoom}
+            columnWidth={columnWidth}
+          />
+        )}
         {flow.map((group) => (
           <StackGroup
             key={group.key}
@@ -721,6 +785,126 @@ export function StackView({
 }
 
 /**
+ * The command zone: the commander and, under it, the companion — **two piles inside one item of
+ * the flowing grid**, at the head of the desk.
+ *
+ * A component of its own rather than markup inside the render above, for `StackGroup`'s reason
+ * exactly: this box is placed by a row span measured from its own height, {@link useFlowRowSpan}
+ * is a hook, and a hook cannot be called per item of a list.
+ *
+ * **Why one item and not two neighbours.** A commander is not a card in the curve — it is the card
+ * the curve was built *around*, played from a zone of its own — and the same is true of a
+ * companion, so `splitRail` pins both to the head of the desk in all three grouping modes. Left as
+ * two ordinary items they would then be two short piles in a row of a masonry, which deals them
+ * into columns 1 and 2 side by side: the companion beside the commander rather than under it, with
+ * the curve pushed a column to the right for as long as the deck has both. The reader asked for
+ * the rail's arrangement instead — one on top of the other, the way the Sideboard and the
+ * Maybeboard stack — and one grid cell holding a `flex-col` is the whole of how a grid is told
+ * that. The alternative is hand-assigning columns, which would move the piles in the **DOM** to
+ * draw them somewhere else and take the reading order, the tab order and the arrow walk with it;
+ * that is the same trade {@link STACK_ATTR} records the masonry being chosen over.
+ *
+ * **The span is the box's, not each pile's, and the arithmetic is untouched.**
+ * {@link useFlowRowSpan} measures whatever it is attached to, so this claims one run of one-pixel
+ * rows for the pair — which means exactly one {@link FLOW_GAP_Y} under the *whole* box rather than
+ * one under each pile in it, and the pile that flows beside it starts at the foot of the companion
+ * rather than the foot of the commander. `items-start` on the grid is what keeps the measurement
+ * safe here as it does for a pile: a start-aligned item is sized by its content, so this box's
+ * height cannot depend on the span it was given.
+ *
+ * **The gutter inside is a real `gap`, and that is not a contradiction of the rule above it.**
+ * {@link FLOW_GAP_Y} cannot be a `row-gap` on the *grid*, because a grid gap is drawn at every row
+ * boundary an item crosses and every row there is a pixel. This is a flex column, where a gap is
+ * drawn once between two items and means what it says — so `gap-5` is 20px, the same number the
+ * rail is spaced by and the same number the span above adds, written as the utility rather than
+ * derived from the constant because Tailwind scans source text and a class built from a number
+ * emits no rule at all.
+ *
+ * **The piles inside carry no `flowWidth`, exactly as the rail's do**, and that one absence is
+ * four answers: no width of their own (this box holds it for both), no {@link STACK_ATTR} (they
+ * are not piles drawn in the flow — this box is), no row span (a grid row means nothing inside a
+ * flex column), and no reorder drag. The last is the deliberate one: a grip on a pinned zone would
+ * offer a reader a move with nowhere to move to, since the head of the desk is where both of these
+ * are in every grouping mode. **The drop target is untouched** — `useCategoryDrop` reads a
+ * `categoryId` and has never read `flowWidth` — so a card dragged onto the commander still lands
+ * in it, which is the one affordance this box could not afford to cost.
+ */
+function CommandZone({
+  groups,
+  marketplace,
+  violations,
+  onSelect,
+  actions,
+  selectedSlot,
+  landed,
+  zoom,
+  columnWidth,
+}: {
+  /** The active command-zone piles, in `splitRail`'s order — commander, then companion. This box
+   *  draws them down the column in the order it is given and sorts nothing, for the rail's
+   *  reason: which pile is which is a fact about the deck, and this file does not know one. */
+  groups: readonly CardGroup[];
+  marketplace: Marketplace;
+  violations?: Map<string, ValidationIssue[]>;
+  onSelect?: (card: DeckCard) => void;
+  actions?: DeckCardActions;
+  /** Handed through to the piles — see {@link StackView}'s own props. */
+  selectedSlot?: string | null;
+  landed?: ReadonlyMap<number, number>;
+  /** The zoom the piles inside are drawn at, handed straight through so the box and its stacks
+   *  are one number rather than two reads of one store. */
+  zoom: number;
+  /** {@link stackColumnWidth} at that zoom — one column, the same width a flowing pile is given,
+   *  because this box occupies one track of the same grid. */
+  columnWidth: number;
+}) {
+  const { elementRef, span } = useFlowRowSpan(true);
+  // A callback rather than the ref object handed straight to `ref=`: the hook is shared with
+  // `StackGroup`, whose element is a `<section>`, so it holds an `HTMLElement` and a `<div>`'s
+  // `ref` will not take one. React 19 calls a returned cleanup **instead of** invoking the
+  // callback again with `null`, so releasing the node is this function's job — forget it and the
+  // `ResizeObserver` holds an unmounted box for the life of the view. `attachSection` below is the
+  // same shape for the same two reasons.
+  const attachBox = useCallback(
+    (node: HTMLDivElement | null) => {
+      elementRef.current = node;
+      return () => {
+        elementRef.current = null;
+      };
+    },
+    [elementRef],
+  );
+
+  return (
+    <div
+      ref={attachBox}
+      {...{ [COMMAND_ATTR]: "" }}
+      // The same inline pair a flowing pile carries, for the same two reasons: the width is the
+      // number this view's geometry is stated in and survives a change to how the tracks are
+      // declared, and a Tailwind class built from a number emits no CSS rule at all. The span is
+      // absent for exactly one frame — the render before the layout effect that measures it, which
+      // runs before paint.
+      style={{ width: columnWidth, gridRow: span === null ? undefined : `span ${span}` }}
+      className="flex flex-col gap-5"
+    >
+      {groups.map((group) => (
+        <StackGroup
+          key={group.key}
+          group={group}
+          marketplace={marketplace}
+          violations={violations}
+          onSelect={onSelect}
+          actions={actions}
+          selectedSlot={selectedSlot}
+          landed={landed}
+          zoom={zoom}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
  * One pile: its heading, its stack, and the place a dragged card can be let go.
  *
  * A component of its own rather than markup inside the `map` above, because a drop target is a
@@ -753,22 +937,27 @@ function StackGroup({
   /**
    * The width to draw at as an item of the flowing grid, and the mark that says it is one.
    *
-   * **Absent in the rail, and that is what tells the two boxes apart here.** The rail is a
-   * `flex-col` box that carries the width for every pile in it, so a pile there is a plain block —
-   * no width of its own, no `STACK_ATTR`, and no row span, a grid row meaning nothing in a flex
-   * column. One prop answers all four, which is what keeps a rail pile from being a second, quietly
-   * different kind of pile.
+   * **Absent in both of the other boxes, and that is what tells the three apart here.** The rail
+   * and the command zone are each a `flex-col` box carrying the width for every pile in it, so a
+   * pile in either is a plain block — no width of its own, no `STACK_ATTR`, no row span (a grid row
+   * means nothing in a flex column), and no reorder drag. One prop answers all five, which is what
+   * keeps a pile drawn somewhere other than the flow from being a second, quietly different kind
+   * of pile. The two absences are not the same argument: the rail's is a layout fact (the box holds
+   * the width), the command zone's is that too **and** a decision — a zone pinned to the head of
+   * every grouping has no position a reorder could move it to. See {@link CommandZone}.
    */
   flowWidth?: number;
   /** Every draggable pile of the flow, in the order they are drawn — see {@link StackView}. The
-   *  rail is handed none, which is the other half of what `flowWidth` says. */
+   *  rail and the command zone are handed none, which is the other half of what `flowWidth`
+   *  says. */
   flowIds?: readonly number[];
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
   const inFlow = flowWidth !== undefined;
   // **Only a pile in the flow may be moved**, and the fence is the same prop that says it is one
-  // — the reader's Sideboard and Maybeboard stay where the rail puts them. `undefined` here is
-  // `useCategoryReorderDrop`'s own off switch, so a railed pile registers nothing at all.
+  // — the reader's Sideboard and Maybeboard stay where the rail puts them, and the commander and
+  // the companion stay at the head of the desk. `undefined` here is `useCategoryReorderDrop`'s own
+  // off switch, so a pile in either of those boxes registers nothing at all.
   const moveCategory = inFlow ? actions?.moveCategory : undefined;
   // Destructured under names of its own rather than kept as one object, for `useCategoryDrop`'s
   // reason one line up: React's ref lint reads a hook result whose `attach` reaches a `ref=` as a
