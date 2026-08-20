@@ -611,12 +611,14 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // colour the picked motif has none of is still offered. Spread from the same object the
     // page's payload is built from, so the two cannot disagree about which tags are picked.
     //
-    // **The index does not narrow by them yet** — `index/facets.rs`'s `run_facets` builds its
-    // one optional bitset from FTS alone, so today these fields ride, key the answer, and are
-    // ignored. That leaves the counts **wider** than the wall, which is the direction this row
-    // is built to fail in: `facets.ts` greys only what would change nothing, so a count that is
-    // too high offers an option that turns out empty, where one that was too low would hide
-    // cards nobody would think to report missing.
+    // **The index narrows by them** since 2026-08-20 — `index/facets.rs`'s `run_facets` resolves
+    // each picked slug through its closure into a bitset, intersects those with the FTS one and
+    // hands `compute` the single narrowing set it takes, so these counts describe the tag-filtered
+    // wall rather than the corpus above it. Until then they rode, keyed the answer and were
+    // ignored, which left the counts **wider** than the wall — the direction this row is built to
+    // fail in, and still the direction any future gap here must fail in: `facets.ts` greys only
+    // what would change nothing, so a count that is too high offers an option that turns out
+    // empty, where one that was too low would hide cards nobody would think to report missing.
     ...tagTerms,
   };
   const facets = useCardFacets(facetReq);

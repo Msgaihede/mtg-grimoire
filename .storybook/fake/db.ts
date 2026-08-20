@@ -4075,12 +4075,15 @@ export function readHandlers(db: FakeDb) {
      * would hide the divergence instead of the app showing it. Nothing sends it today; the
      * search view's filter bar has no rarity control.
      *
-     * **The tag filters are in the same position and something does send them.** The index has
-     * no art or oracle tag dimension either, so a wall narrowed to a motif is faceted over the
-     * whole corpus and every count reads high — deliberately, and in the direction that only
-     * ever leaves a control live. Change this when the index grows one, and not before: a fake
-     * that narrowed here would make the workbench disagree with the window about which sets a
-     * tagged search can still reach.
+     * **The tag filters used to sit in that same position and no longer do.** The index still
+     * has no tag dimension — it cannot, since a tag is a fact about an illustration or an
+     * oracle card rather than about a printing — but `run_facets` resolves each picked slug
+     * through its closure into a bitset, intersects those with the FTS one and hands `compute`
+     * the single narrowing set it takes. So a wall narrowed to a motif is faceted over the
+     * motif, and this mirror narrows with it: {@link matchesCardFilters} already reads all
+     * three fields for `search_cards`, so the whole of the change was to stop stripping them
+     * out of the base below. A fake that had kept counting over the whole corpus would make
+     * the workbench disagree with the window about which sets a tagged search can still reach.
      */
     facet_cards: (args: { req: SearchRequest }): FacetResponse => {
       // A cold index is an answer and never an error, and **every map is empty on it** —
@@ -4117,21 +4120,19 @@ export function readHandlers(db: FakeDb) {
       const text = nonblank(req.text);
       /** The result set under every filter except `skip`'s. */
       const base = (skip: FacetSkip | null): FakeCard[] => {
-        // `rarity` and the three tag fields all leave for one reason: the in-memory index has no
-        // dimension for them, so `facets::base` cannot narrow by one and a request carrying one
-        // is faceted as though it did not — **every count reads high**. Mirrored rather than
-        // improved on, and the direction is what makes that safe: over-counting leaves a control
-        // live, where under-counting would grey out options that would have worked and hide
-        // cards nobody reports missing. A fake that counted better than the backend would hide
-        // the divergence instead of the app showing it.
-        const f: CardFilters = {
-          ...req,
-          text: undefined,
-          rarity: undefined,
-          artTags: undefined,
-          oracleTags: undefined,
-          artWeightFloor: undefined,
-        };
+        // `rarity` leaves because the in-memory index has no dimension for it, so `facets::base`
+        // cannot narrow by one and a request carrying it is faceted as though it did not —
+        // **every count reads high**. Mirrored rather than improved on, and the direction is what
+        // makes that safe: over-counting leaves a control live, where under-counting would grey
+        // out options that would have worked and hide cards nobody reports missing. A fake that
+        // counted better than the backend would hide the divergence instead of the app showing
+        // it.
+        //
+        // **The three tag fields stay**, since 2026-08-20: `run_facets` resolves each picked slug
+        // through its closure into a bitset and ANDs it into every base, so the counts describe
+        // the tag-narrowed wall. They are in **every** base including their own for the reason
+        // `text` is — none of them is a facet, and there is no tag control on this row to grey.
+        const f: CardFilters = { ...req, text: undefined, rarity: undefined };
         if (skip === "colors") f.colors = undefined;
         // Both halves of the chip row leave together, because they are one OR group and
         // therefore one dimension: a base that dropped the numbers and kept the X would count

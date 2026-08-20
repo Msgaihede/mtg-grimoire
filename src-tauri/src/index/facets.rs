@@ -100,7 +100,9 @@ struct Prepared {
 /// The result set under every filter except `skip`'s.
 ///
 /// **Three filters the request can carry are missing here, and two of them are deliberate and
-/// err in the direction that costs a press rather than hiding a card.**
+/// err in the direction that costs a press rather than hiding a card.** The tag terms used to
+/// be a fourth; they are in `narrow` now, resolved through their closures by [`run_facets`]
+/// the way the text is resolved through FTS.
 ///
 /// * `rarity` has no dimension in [`CardIndex`] to narrow by, so a rarity-filtered request
 ///   is faceted as though it were unfiltered — every count reads high. Closing it means a
@@ -123,7 +125,7 @@ struct Prepared {
 fn base(
     ix: &CardIndex,
     req: &SearchRequest,
-    text: Option<&BitSet>,
+    narrow: Option<&BitSet>,
     prep: &Prepared,
     skip: Skip,
 ) -> BitSet {
@@ -148,8 +150,8 @@ fn base(
     if req.playable_only.unwrap_or(false) {
         b = b.and(&ix.playable);
     }
-    if let Some(t) = text {
-        b = b.and(t);
+    if let Some(n) = narrow {
+        b = b.and(n);
     }
     if skip != Skip::Formats {
         if let Some(f) = crate::filters::nonblank(&req.format) {
@@ -312,8 +314,14 @@ fn union_sets(ix: &CardIndex, req: &SearchRequest) -> Option<BitSet> {
 
 /// Every dimension's counts for one search.
 ///
-/// `text` is the FTS result as a bitset — not a facet, and in **every** base including its
-/// own, because a facet describes the search the reader is looking at.
+/// `narrow` is the filters that have no dimension in [`CardIndex`], resolved against the
+/// database and handed in as one bitset — the FTS text and the tag closures, intersected by
+/// [`run_facets`]. None of them is a facet, and all of them are in **every** base including
+/// their own, because a facet describes the search the reader is looking at.
+///
+/// **`None` means no clause, never an empty set.** All-punctuation text and a cleared chip row
+/// both arrive here as `None`, and a caller that turned either into an empty bitset would grey
+/// every option over a page that is full.
 ///
 /// **0.5–2.6 ms, measured 2026-08-11** — best of five per case, release build, over the
 /// synthetic 116 694-doc corpus in `facet_timing` (107 337 paper, 1 047 sets): unfiltered
@@ -325,7 +333,7 @@ fn union_sets(ix: &CardIndex, req: &SearchRequest) -> Option<BitSet> {
 /// That is what says [`and_not`] can walk bit by bit rather than word by word: the colour
 /// case runs it up to 24 times over ~107 k docs and still lands two orders of magnitude
 /// inside spec §2's 100 ms budget, so [`BitSet`] needs no new operation for this.
-pub fn compute(ix: &CardIndex, req: &SearchRequest, text: Option<&BitSet>) -> FacetResponse {
+pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> FacetResponse {
     // **An index over an empty corpus is not meaningfully ready**, and it answers exactly as
     // a cold one does — `ready: false`, every map empty, so the UI leaves every control live.
     //
@@ -348,7 +356,7 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, text: Option<&BitSet>) -> Fa
         sets: union_sets(ix, req),
         mana: union_mana(ix, req.mana_values.as_deref(), req.mana_x.unwrap_or(false)),
     };
-    let base = |skip| base(ix, req, text, &prep, skip);
+    let base = |skip| base(ix, req, narrow, &prep, skip);
 
     let full = base(Skip::Nothing);
     let mut out = FacetResponse {
@@ -434,6 +442,208 @@ fn toggle_colors(picked: &str, letter: char) -> String {
         .collect()
 }
 
+/// One of the two pre-flattened tag closures, named by the columns a lookup needs.
+///
+/// A pair of `&'static str` and not a free-text argument, because **these two names are the
+/// only things interpolated into the SQL below** — every value is bound. Two consts and no
+/// other constructor is what makes that a property of the type rather than a habit.
+#[derive(Clone, Copy)]
+struct TagClosure {
+    table: &'static str,
+    /// The column both `cards` and the closure key the subject by.
+    subject: &'static str,
+}
+
+/// What the picture shows. Keyed by `illustration_id`, which is **NULLABLE on `cards`** — so a
+/// printing without one joins no row here, answers no art tag, and survives every art exclude.
+const ART_CLOSURE: TagClosure = TagClosure {
+    table: "art_tag_illustrations",
+    subject: "illustration_id",
+};
+
+/// What the card does. Keyed by `oracle_id`, and **with no `weight` column at all** — a floor
+/// copied onto this one is a `no such column` error rather than a wrong answer.
+const ORACLE_CLOSURE: TagClosure = TagClosure {
+    table: "oracle_tag_cards",
+    subject: "oracle_id",
+};
+
+/// One closure lookup a request asks for.
+struct TagProbe {
+    closure: TagClosure,
+    slug: String,
+    /// Whether the closure's `weight <> 'weak'` rides this lookup. The art **include** arm
+    /// only — see [`tag_probes`].
+    floor: bool,
+    /// Whether the term subtracts from the narrowing rather than intersecting into it.
+    exclude: bool,
+}
+
+/// Every closure lookup one request asks for, in the order they will be run.
+///
+/// **The slugs come from [`crate::filters::picked_tags`] and are not re-derived here.** That
+/// function is the search's own normaliser — trim, drop blanks, sort, dedupe — and it was
+/// extracted from `push_card_filters` for exactly this call site: a facet counted over a slug
+/// list the search trimmed differently reports options as live that the search cannot reach.
+///
+/// Empty means no tag filter, never "match nothing", which is that function's rule and every
+/// other filter's.
+fn tag_probes(req: &SearchRequest) -> Vec<TagProbe> {
+    // `<> 'weak'`, on the **art include arm alone**, mirroring `push_card_filters` clause for
+    // clause. Two halves of that are load-bearing and neither is symmetry:
+    //
+    // * the **exclude** arm ignores it, because "not a dog" means not a dog at all, including
+    //   weakly — a floor there would let weak dogs back into a result the reader asked to have
+    //   none in;
+    // * the **oracle** arm ignores it because its closure has no `weight` column, and because
+    //   it would have nothing to say either way: oracle taggings are 99.7 % `median`.
+    let floor = crate::filters::nonblank(&req.art_weight_floor)
+        == Some(crate::filters::ART_WEIGHT_FLOOR_STRONG);
+    let mut probes = Vec::new();
+    for (terms, closure, floor) in [
+        (&req.art_tags, ART_CLOSURE, floor),
+        (&req.oracle_tags, ORACLE_CLOSURE, false),
+    ] {
+        let Some(terms) = terms else { continue };
+        for slug in crate::filters::picked_tags(&terms.include) {
+            probes.push(TagProbe {
+                closure,
+                slug,
+                floor,
+                exclude: false,
+            });
+        }
+        for slug in crate::filters::picked_tags(&terms.exclude) {
+            probes.push(TagProbe {
+                closure,
+                slug,
+                floor: false,
+                exclude: true,
+            });
+        }
+    }
+    probes
+}
+
+/// The statement one probe runs, as a `String` so the plan test can `EXPLAIN` **this** text
+/// rather than a copy of it that has since drifted.
+///
+/// **Only the two `&'static str` names off [`TagClosure`] are interpolated; the slug is
+/// bound.** The shape is a join driven from the closure and not the `EXISTS` the search
+/// pushes, because the two answer different questions: the search asks "does this card have
+/// the tag" once per surviving row, and this asks "which cards have the tag" once. Both land
+/// on the same two indexes — `idx_{table}_slug` then `cards`' own key index — and
+/// `tests::the_facet_closure_lookup_probes_both_indexes_and_scans_neither` is what keeps it
+/// there. Losing either is not a slowdown for the *search*: Task 4 measured the correlated form
+/// at 49 ms with the slug index and **531 seconds** without it. **This set form degrades
+/// gracefully where that one hangs** — its plan without the slug index is one `SCAN t` rather
+/// than a scan per card, 57.1 ms against 12.7 ms for `removal` — so the plan test here is a
+/// guard against a 4.5× regression, not against the hang. Both are worth having; they are not
+/// the same claim.
+///
+/// **Measured 2026-08-20 through `node:sqlite`** against a copy of the dev database (116 712
+/// printings, `oracle_tag_cards` at 423 080 rows, 0 NULL `oracle_id`), with v20's
+/// `idx_oracle_tag_cards_slug` created on the copy because that database is at `user_version`
+/// 19 and predates it. Best of five, and a **ceiling** rather than the Rust cost: the harness
+/// marshals every rowid into a JS object where [`probe_docs`] sets a bit.
+///
+/// | slug | printings | best of 5 |
+/// | --- | --- | --- |
+/// | `triggered-ability` | 47 599 | 25.0 ms |
+/// | `activated-ability` | 39 502 | 19.2 ms |
+/// | `removal` | 20 763 | 12.7 ms |
+/// | `ramp` | 9 522 | 7.3 ms |
+///
+/// The widest tag in the corpus lands on the same 25 ms the FTS text bitset costs at 100 129
+/// matches, which [`run_facets`] already calls the floor for any design. **One statement per
+/// picked slug**, so a request naming three tags pays three of these; the frequency is what
+/// makes that affordable, and it is a fact about the *frontend* rather than about this file —
+/// the Tags page is the only surface that sends tag terms, its text box searches **tags** and
+/// not cards, so the facet key changes on a chip press and never on a keystroke. Nothing here
+/// is cached for that reason; a caller that ever puts a card-text box beside the chips is the
+/// one that has to revisit it.
+///
+/// **The art weight floor costs the covering index, and that is the one number worth watching.**
+/// `weight` is not in `idx_art_tag_illustrations_slug`, so each closure row takes a second seek
+/// into the `WITHOUT ROWID` table. Same harness, same day, over a **synthetic** art closure —
+/// 588 744 rows over the corpus's *real* `illustration_id` column (111 735 non-NULL, 50 536
+/// distinct), because no art taxonomy has been ingested anywhere yet, so the join cardinality is
+/// the live one and the tag breadth is not: the widest slug ran **25.6 ms** unfloored against
+/// **91.3 ms** floored (78.5 ms on a re-run), the plan dropping from `SEARCH t USING COVERING
+/// INDEX` to `SEARCH t USING INDEX`. **The fix is measured and deliberately not taken here**:
+/// widening that index to `(slug, weight)` restores the covering plan and the floored query to
+/// **24.0 ms**, leaving the unfloored one unmoved at 23.2 ms, for a 0.7 s one-time build — but
+/// it is a schema change, `TAG_INDEXES_SQL` runs unconditionally with `IF NOT EXISTS` so
+/// widening it needs a ladder rung to `DROP` the narrow one first, and no real art tag has been
+/// shown to be anywhere near that wide (`dog` reaches 439 illustrations). Take the live
+/// measurement first; it is Task 13's to take.
+fn closure_sql(closure: TagClosure, floor: bool) -> String {
+    let TagClosure { table, subject } = closure;
+    // The bare `'weak'` literal is coupled to `crate::tags::WEIGHTS[0]` by convention only,
+    // exactly as `push_card_filters`' copy is, and for the same reason written there.
+    let floor = if floor { " AND t.weight <> 'weak'" } else { "" };
+    format!(
+        "SELECT c.rowid FROM {table} t
+           JOIN cards c ON c.{subject} = t.{subject}
+          WHERE t.slug = ?{floor}"
+    )
+}
+
+/// The docs one probe reaches, as a bitset.
+fn probe_docs(
+    conn: &rusqlite::Connection,
+    capacity: usize,
+    probe: &TagProbe,
+) -> Result<BitSet, String> {
+    let sql = closure_sql(probe.closure, probe.floor);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut rows = stmt
+        .query([probe.slug.as_str()])
+        .map_err(|e| e.to_string())?;
+    // **`ix.capacity`, never the row count** — the text bitset's rule, for its reason, and
+    // more reachable here: a tag reaches a few hundred illustrations against a corpus of
+    // 116 712 printings, so a set sized from the answer would be a handful of words long and
+    // `BitSet::and` would truncate every base it narrowed down to that. Counts too low grey
+    // out options that would have worked.
+    let mut b = BitSet::new(capacity);
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let doc: i64 = row.get(0).map_err(|e| e.to_string())?;
+        b.set(doc as u32);
+    }
+    Ok(b)
+}
+
+/// Every tag term as one bitset, or `None` when the request presses nothing in either
+/// taxonomy.
+///
+/// Includes intersect and excludes subtract, which is what `push_card_filters` pushes: one
+/// `EXISTS` per include and one `NOT EXISTS` per exclude, all ANDed. The two orders commute,
+/// so the probes are run in the order [`tag_probes`] listed them.
+///
+/// **An exclude with no include subtracts from `ix.all`**, and `all` rather than a filled
+/// bitset for `base`'s reason: rowid 0 is never issued and the word-rounded padding above the
+/// last row is not a card, so a filled set would hand back up to 64 phantom docs on the one
+/// request that also turns `paperOnly` off.
+fn tag_narrowing(
+    ix: &CardIndex,
+    probes: &[TagProbe],
+    conn: &rusqlite::Connection,
+) -> Result<Option<BitSet>, String> {
+    let mut narrowed: Option<BitSet> = None;
+    for probe in probes {
+        let hit = probe_docs(conn, ix.capacity, probe)?;
+        narrowed = Some(if probe.exclude {
+            and_not(&narrowed.unwrap_or_else(|| ix.all.clone()), &hit)
+        } else {
+            match narrowed {
+                Some(acc) => acc.and(&hit),
+                None => hit,
+            }
+        });
+    }
+    Ok(narrowed)
+}
+
 /// Facet counts for one search, over the published index. Pure over the state so it is
 /// testable without a Tauri app; [`facet_cards`] is the only caller in production.
 ///
@@ -454,19 +664,31 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
         });
     };
 
-    // **The one thing that still needs the database**: FTS has no precomputed bitset, so a
-    // text search is resolved to rowids and turned into one. 25 ms at 100 129 matches, which
-    // is the floor for any design (measured 2026-08-11).
-    //
     // `nonblank` then `fts_query`, exactly as `search::run_search` does it — including the
     // arm that reads as a bug and is not: **all-punctuation input leaves nothing to match on,
     // and the answer is no text clause at all**, which is what an empty search box does
     // anyway. An empty bitset there would turn a search for `"!!!"` into zero results instead
-    // of everything, and grey every option over a page that is full.
-    let text = match crate::filters::nonblank(&req.text).and_then(crate::filters::fts_query) {
+    // of everything, and grey every option over a page that is full. It stays `None` all the
+    // way into [`compute`], and a tag term beside it does not fill the hole.
+    let query = crate::filters::nonblank(&req.text).and_then(crate::filters::fts_query);
+    let probes = tag_probes(req);
+
+    // Neither narrowing is asked for, so the database is not touched at all — this is the
+    // path the unfiltered browse takes, and it is the commonest request there is. Both halves
+    // are decided *before* the lock rather than inside it, so nothing here can hold `db_read`
+    // for the length of a request that had nothing to ask it.
+    if query.is_none() && probes.is_empty() {
+        return Ok(compute(&ix, req, None));
+    }
+
+    let conn = lock_db_read(state);
+
+    // **The one thing that still needs the database**: neither FTS nor the tag closures has a
+    // precomputed bitset, so each is resolved to rowids and turned into one. Text is 25 ms at
+    // 100 129 matches, which is the floor for any design (measured 2026-08-11).
+    let text = match query {
         None => None,
         Some(query) => {
-            let conn = lock_db_read(state);
             let mut stmt = conn
                 .prepare("SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?")
                 .map_err(|e| e.to_string())?;
@@ -485,7 +707,21 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
         }
     };
 
-    Ok(compute(&ix, req, text.as_ref()))
+    let tags = tag_narrowing(&ix, &probes, &conn)?;
+    drop(conn);
+
+    // **[`compute`] takes ONE narrowing set, so two of them are intersected here.** Written
+    // out rather than folded through an `Option::map`, because the `None` arms are the whole
+    // point: `None` means *no clause*, never *an empty set*, and a fold that started from an
+    // empty bitset would empty every search that carried only the other half.
+    let narrow = match (text, tags) {
+        (Some(text), Some(tags)) => Some(text.and(&tags)),
+        (Some(text), None) => Some(text),
+        (None, Some(tags)) => Some(tags),
+        (None, None) => None,
+    };
+
+    Ok(compute(&ix, req, narrow.as_ref()))
 }
 
 /// Facet counts for one search.
@@ -1017,6 +1253,452 @@ mod tests {
             "the three paper printings, as with no text at all"
         );
         assert_eq!(f.sets.get("lea").copied(), Some(2));
+    }
+
+    /// [`state`]'s four printings plus a fifth at a **far rowid**, with both tag closures
+    /// seeded over them.
+    ///
+    /// **The far rowid is why this fixture is not four rows.** A tag bitset sized from the
+    /// number of rows its closure query returned rather than from `ix.capacity` is one word
+    /// long here, and `BitSet::and` takes the *shorter* operand — so every count would
+    /// silently drop doc 5 000 and read **low**, which greys options that would have worked
+    /// and hides cards nobody thinks to report. Four consecutive rowids all live in word 0
+    /// and cannot catch it.
+    ///
+    /// The taggings mirror the shapes `filters::tests::corpus_with_art_tags` pins, in the
+    /// terms this file can assert on:
+    ///
+    /// * `illus-helix` is a **weak** dog, so the weight floor moves the counts;
+    /// * Sol Ring has **no `illustration_id`** — 4 977 of 116 712 live printings are in that
+    ///   state (measured 2026-08-20) — so it answers no art tag and survives every art
+    ///   exclude. Its absence from an art result is the join, not a missing row;
+    /// * the digital printing is a dog too, so `paperOnly` still has work to do under a tag
+    ///   filter;
+    /// * the oracle closure **crosses** the art one rather than agreeing with it, so a
+    ///   request naming both narrows further than either.
+    fn tagged_state(name: &str) -> std::sync::Arc<crate::sync::AppState> {
+        let state = state(name);
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            let subjects = [
+                ("1", Some("illus-bolt"), "oracle-bolt"),
+                ("2", Some("illus-helix"), "oracle-helix"),
+                ("3", None, "oracle-ring"),
+                ("4", Some("illus-digital"), "oracle-digital"),
+            ];
+            for (id, illustration, oracle) in subjects {
+                conn.execute(
+                    "UPDATE cards SET illustration_id = ?2, oracle_id = ?3 WHERE id = ?1",
+                    rusqlite::params![id, illustration, oracle],
+                )
+                .unwrap();
+            }
+            let modern = crate::legalities::bit("modern").unwrap() as i64;
+            conn.execute(
+                "INSERT INTO cards (rowid,id,name,set_code,collector_number,lang,layout,cmc,
+                    color_identity,is_paper,legal_mask,illustration_id,oracle_id,raw)
+                 VALUES (5000,'5','Far Rowid Hound','dom','1','en','normal',3.0,'G',1,?1,
+                    'illus-far','oracle-far','{}')",
+                [modern],
+            )
+            .unwrap();
+            let art = [
+                ("illus-bolt", "dog", "strong"),
+                ("illus-helix", "dog", "weak"),
+                ("illus-far", "dog", "median"),
+                ("illus-digital", "dog", "strong"),
+                ("illus-bolt", "snow", "median"),
+            ];
+            for (illustration, slug, weight) in art {
+                conn.execute(
+                    "INSERT INTO art_tag_illustrations (illustration_id,slug,weight)
+                     VALUES (?1,?2,?3)",
+                    rusqlite::params![illustration, slug, weight],
+                )
+                .unwrap();
+            }
+            let oracle = [
+                ("oracle-bolt", "removal"),
+                ("oracle-helix", "removal"),
+                ("oracle-ring", "ramp"),
+                ("oracle-far", "ramp"),
+            ];
+            for (oracle_id, slug) in oracle {
+                conn.execute(
+                    "INSERT INTO oracle_tag_cards (oracle_id,slug) VALUES (?1,?2)",
+                    rusqlite::params![oracle_id, slug],
+                )
+                .unwrap();
+            }
+            // The fifth printing arrived after [`state`] built the index, and `cards_fts` is
+            // external-content with no triggers — without this the text assertions below
+            // would pass by counting zero.
+            conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+                .unwrap();
+        }
+        crate::index::lifecycle::build_now(&state).unwrap();
+        state
+    }
+
+    fn terms(include: &[&str], exclude: &[&str]) -> crate::filters::TagTerms {
+        crate::filters::TagTerms {
+            include: include.iter().map(|s| (*s).to_owned()).collect(),
+            exclude: exclude.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    /// A facet count taken under a tag term must be over the tag-narrowed corpus. Without
+    /// this the picker offers a set with 2 printings on a search that returns 1 — a number
+    /// wrong in the direction that looks plausible, which is the direction a reader believes.
+    #[test]
+    fn facet_counts_narrow_to_the_art_tag_terms() {
+        let state = tagged_state("art-tag-facets");
+
+        let open = run_facets(&state, &req(|_| {})).unwrap();
+        assert_eq!(open.total, 4, "four paper printings before any tag term");
+        assert_eq!(open.sets.get("lea").copied(), Some(2));
+
+        let f = run_facets(&state, &req(|r| r.art_tags = Some(terms(&["dog"], &[])))).unwrap();
+        assert!(f.ready);
+        assert_eq!(
+            f.total, 3,
+            "Bolt, Helix and the hound; Sol Ring is untagged"
+        );
+        assert_eq!(f.sets.get("lea").copied(), Some(1), "Bolt, not Sol Ring");
+        assert_eq!(f.sets.get("rav").copied(), Some(1), "Helix");
+        assert_eq!(
+            f.sets.get("alc").copied(),
+            Some(0),
+            "the digital dog stays behind paperOnly"
+        );
+        // The far-rowid printing is the capacity assertion: a bitset sized from the row count
+        // is one word long and drops doc 5 000 without a word.
+        assert_eq!(
+            f.sets.get("dom").copied(),
+            Some(1),
+            "doc 5 000 survives the AND — the set was sized from ix.capacity"
+        );
+        assert_eq!(
+            f.mana_values.get("1").copied(),
+            Some(1),
+            "Bolt alone: Sol Ring costs 1 too and is not a dog"
+        );
+    }
+
+    /// The weight floor rides the art **include** arm and nothing else, exactly as
+    /// [`crate::filters::push_card_filters`] pushes it — `ati.weight <> 'weak'`, read off the
+    /// closure's folded weight. A facet that ignored it would offer Helix's set on a search
+    /// that has dropped Helix.
+    #[test]
+    fn the_weight_floor_narrows_the_counts_on_the_include_arm_alone() {
+        let state = tagged_state("art-floor-facets");
+
+        let floored = run_facets(
+            &state,
+            &req(|r| {
+                r.art_tags = Some(terms(&["dog"], &[]));
+                r.art_weight_floor = Some("strong".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(floored.total, 2, "the weak dog is gone");
+        assert_eq!(
+            floored.sets.get("rav").copied(),
+            Some(0),
+            "Helix is weak under dog"
+        );
+        assert_eq!(floored.sets.get("lea").copied(), Some(1), "Bolt is strong");
+        assert_eq!(
+            floored.sets.get("dom").copied(),
+            Some(1),
+            "median clears it"
+        );
+
+        // **"not a dog" means not a dog at all, including weakly.** A floor on this arm would
+        // let the weak dog back into a result the reader asked to have none in — so the
+        // exclude answers the same 1 with the floor on as with it off.
+        for floor in [None, Some("strong".to_owned())] {
+            let f = run_facets(
+                &state,
+                &req(|r| {
+                    r.art_tags = Some(terms(&[], &["dog"]));
+                    r.art_weight_floor = floor.clone();
+                }),
+            )
+            .unwrap();
+            assert_eq!(f.total, 1, "Sol Ring alone, floor {floor:?}");
+            assert_eq!(f.sets.get("lea").copied(), Some(1));
+        }
+    }
+
+    /// An exclude subtracts from the whole corpus when it is the only term, and a printing
+    /// with **no `illustration_id`** survives it — `NULL = NULL` is not true, so it matches no
+    /// art tag and is kept by every art exclude. That is the join answering, not a missing
+    /// row, and it is the half a bitset built the wrong way round would get backwards.
+    #[test]
+    fn an_exclude_only_request_subtracts_from_the_whole_corpus() {
+        let state = tagged_state("art-exclude-facets");
+        let f = run_facets(&state, &req(|r| r.art_tags = Some(terms(&[], &["snow"])))).unwrap();
+        assert_eq!(f.total, 3, "everything but Bolt");
+        assert_eq!(
+            f.sets.get("lea").copied(),
+            Some(1),
+            "Sol Ring has no illustration and cannot be snow"
+        );
+        assert_eq!(f.sets.get("dom").copied(), Some(1));
+    }
+
+    /// The oracle twin, on `oracle_tag_cards`/`oracle_id` and with **no** weight clause — that
+    /// closure has no `weight` column, so a floor copied onto it is a `no such column` error
+    /// rather than a wrong answer. The two taxonomies then AND with each other, which is what
+    /// makes "a hound that ramps" one request.
+    #[test]
+    fn oracle_tag_terms_narrow_too_and_intersect_with_the_art_ones() {
+        let state = tagged_state("oracle-tag-facets");
+
+        let ramp = run_facets(
+            &state,
+            &req(|r| r.oracle_tags = Some(terms(&["ramp"], &[]))),
+        )
+        .unwrap();
+        assert_eq!(ramp.total, 2, "Sol Ring and the hound");
+        assert_eq!(ramp.sets.get("rav").copied(), Some(0));
+
+        let both = run_facets(
+            &state,
+            &req(|r| {
+                r.art_tags = Some(terms(&["dog"], &[]));
+                r.oracle_tags = Some(terms(&["ramp"], &[]));
+                // The floor reaches the art half only; the oracle arm must not see it.
+                r.art_weight_floor = Some("strong".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(both.total, 1, "only the hound is both");
+        assert_eq!(both.sets.get("dom").copied(), Some(1));
+
+        let not_removal = run_facets(
+            &state,
+            &req(|r| r.oracle_tags = Some(terms(&[], &["removal"]))),
+        )
+        .unwrap();
+        assert_eq!(not_removal.total, 2, "Sol Ring and the hound again");
+    }
+
+    /// Text and tags are two narrowings and [`compute`] takes one, so they are **intersected**
+    /// before it sees them. Passing either alone would leave the other's counts high.
+    #[test]
+    fn a_text_search_and_a_tag_term_intersect_rather_than_replace_each_other() {
+        let state = tagged_state("text-and-tag-facets");
+
+        let text_only = run_facets(&state, &req(|r| r.text = Some("lightning".into()))).unwrap();
+        assert_eq!(text_only.total, 2, "Bolt and Helix");
+
+        let both = run_facets(
+            &state,
+            &req(|r| {
+                r.text = Some("lightning".into());
+                r.art_tags = Some(terms(&["snow"], &[]));
+            }),
+        )
+        .unwrap();
+        assert_eq!(both.total, 1, "Bolt is the only snowy Lightning");
+        assert_eq!(both.sets.get("rav").copied(), Some(0), "offered, and empty");
+
+        let disjoint = run_facets(
+            &state,
+            &req(|r| {
+                r.text = Some("sol".into());
+                r.art_tags = Some(terms(&["dog"], &[]));
+            }),
+        )
+        .unwrap();
+        assert_eq!(disjoint.total, 0, "Sol Ring is not a dog");
+    }
+
+    /// **`text: None` is meaningful and must stay meaningful under a tag term.**
+    /// All-punctuation input leaves nothing to match on and `fts_query` answers `None`, which
+    /// means *no text clause* rather than an empty match set. A tag narrowing that filled that
+    /// slot with an empty bitset — or that let the punctuation empty it — would turn a search
+    /// for `"!!!"` into zero results over a page that is full.
+    #[test]
+    fn punctuation_text_beside_a_tag_term_counts_the_tag_and_not_nothing() {
+        let state = tagged_state("punctuation-and-tag-facets");
+        let f = run_facets(
+            &state,
+            &req(|r| {
+                r.text = Some("!!!".into());
+                r.art_tags = Some(terms(&["dog"], &[]));
+            }),
+        )
+        .unwrap();
+        assert_eq!(f.total, 3, "the dogs, as with no text at all");
+        assert_eq!(f.sets.get("dom").copied(), Some(1));
+    }
+
+    /// Absent means no filter, and a cleared chip row sends `[]` or `[""]`. The normalisation
+    /// is [`crate::filters::picked_tags`] and it is **the search's own**, called rather than
+    /// re-derived: a facet counted over a slug list the search trimmed differently reports
+    /// options as live that the search cannot reach.
+    #[test]
+    fn blank_tag_terms_narrow_nothing() {
+        let state = tagged_state("blank-tag-facets");
+        let open = run_facets(&state, &req(|_| {})).unwrap();
+        assert_eq!(open.total, 4);
+
+        for f in [
+            run_facets(&state, &req(|r| r.art_tags = Some(terms(&[], &[])))).unwrap(),
+            run_facets(
+                &state,
+                &req(|r| r.art_tags = Some(terms(&["", "  "], &[""]))),
+            )
+            .unwrap(),
+            run_facets(&state, &req(|r| r.oracle_tags = Some(terms(&["  "], &[])))).unwrap(),
+            run_facets(&state, &req(|r| r.art_weight_floor = Some("strong".into()))).unwrap(),
+        ] {
+            assert_eq!(f.total, 4);
+            assert_eq!(f.sets.get("lea").copied(), Some(2));
+        }
+
+        // A slug is trimmed rather than dropped, so a chip that arrived with whitespace still
+        // narrows — the other half of what `picked_tags` promises.
+        let padded =
+            run_facets(&state, &req(|r| r.art_tags = Some(terms(&[" dog "], &[])))).unwrap();
+        assert_eq!(padded.total, 3);
+    }
+
+    /// A tag the corpus has never heard of narrows to nothing, which is what the search's
+    /// `EXISTS` does too. It is **not** the same as naming no tag at all: dropping the unknown
+    /// slug would leave the base unfiltered and report the whole corpus under a filter that
+    /// returns none of it.
+    #[test]
+    fn a_tag_the_corpus_has_never_seen_counts_nothing_rather_than_everything() {
+        let state = tagged_state("unknown-tag-facets");
+        let f = run_facets(
+            &state,
+            &req(|r| r.art_tags = Some(terms(&["nonesuch"], &[]))),
+        )
+        .unwrap();
+        assert_eq!(f.total, 0);
+        assert_eq!(f.sets.get("lea").copied(), Some(0));
+        assert!(f.ready, "an empty result is still a counted one");
+    }
+
+    /// Each closure lookup is an **indexed probe of the slug** feeding an **indexed probe of
+    /// `cards`**, and neither table is ever scanned.
+    ///
+    /// This is the assertion no test about counts can make, and the one that matters most.
+    /// `search.rs`'s twin pins the correlated form the search uses; this pins the *set* form
+    /// the facets use, which is a different statement with the same two indexes under it.
+    /// Task 4 measured the correlated shape at 49 ms with `idx_art_tag_illustrations_slug` and
+    /// **531 seconds** without it — a hang, not a slowdown — so a plan that fell back to a
+    /// scan here would not read as a regression, it would read as the app being broken.
+    #[test]
+    fn the_facet_closure_lookup_probes_both_indexes_and_scans_neither() {
+        let state = tagged_state("tag-facet-plan");
+        let conn = crate::db::lock_blocking(&state.db);
+        for closure in [ART_CLOSURE, ORACLE_CLOSURE] {
+            for floor in [false, true] {
+                // The floor reads a column the oracle closure has not got; the art arm is the
+                // only one that is ever asked for it.
+                if floor && closure.table != ART_CLOSURE.table {
+                    continue;
+                }
+                let sql = closure_sql(closure, floor);
+                let plan: Vec<String> = conn
+                    .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                    .unwrap()
+                    .query_map(["dog"], |r| r.get::<_, String>(3))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect();
+                let probe = plan
+                    .iter()
+                    .find(|step| step.starts_with("SEARCH t "))
+                    .unwrap_or_else(|| panic!("no indexed probe of the closure: {plan:#?}\n{sql}"));
+                assert!(probe.contains("slug=?"), "{probe}");
+                assert!(
+                    plan.iter().any(|step| step.starts_with("SEARCH c ")
+                        && step.contains(&format!("{}=?", closure.subject))),
+                    "cards must be probed on {}, never walked: {plan:#?}\n{sql}",
+                    closure.subject
+                );
+                assert!(
+                    !plan.iter().any(|step| step.starts_with("SCAN")),
+                    "nothing here may be scanned: {plan:#?}\n{sql}"
+                );
+            }
+        }
+    }
+
+    /// **The claim this whole file exists to make, stated against the other half.** A count and
+    /// the wall it describes are two entirely different implementations of one question —
+    /// `push_card_filters`' correlated `EXISTS` per surviving row against a bitset built from
+    /// the same closures — and the defect is not that either is wrong on its own, it is that
+    /// they disagree: the picker offering a set with 2 printings over a search that returns 1.
+    ///
+    /// Uncollapsed on purpose. `FacetResponse::total` is **printings, always**, while
+    /// `SearchResponse::total` counts *cards* when the search is collapsed and stops at 5 000 —
+    /// so the two are the same number only over the shape this drives.
+    #[test]
+    fn a_facet_total_equals_what_the_search_returns_for_the_same_tag_terms() {
+        let state = tagged_state("tag-facet-agrees-with-search");
+        let conn = crate::db::lock_blocking(&state.db);
+        let cases: [(&str, SearchRequest); 7] = [
+            ("no tags at all", req(|_| {})),
+            (
+                "an art include",
+                req(|r| r.art_tags = Some(terms(&["dog"], &[]))),
+            ),
+            (
+                "an art include under the floor",
+                req(|r| {
+                    r.art_tags = Some(terms(&["dog"], &[]));
+                    r.art_weight_floor = Some("strong".into());
+                }),
+            ),
+            (
+                "an art exclude with the floor on",
+                req(|r| {
+                    r.art_tags = Some(terms(&[], &["dog"]));
+                    r.art_weight_floor = Some("strong".into());
+                }),
+            ),
+            (
+                "an oracle include",
+                req(|r| r.oracle_tags = Some(terms(&["ramp"], &[]))),
+            ),
+            (
+                "both taxonomies",
+                req(|r| {
+                    r.art_tags = Some(terms(&["dog"], &[]));
+                    r.oracle_tags = Some(terms(&["ramp"], &[]));
+                }),
+            ),
+            (
+                "text beside a tag",
+                req(|r| {
+                    r.text = Some("lightning".into());
+                    r.art_tags = Some(terms(&["dog"], &[]));
+                }),
+            ),
+        ];
+        for (name, r) in cases {
+            // Two different connections and therefore two different mutexes — `run_search` is
+            // driven over the write handle held here and `run_facets` takes `db_read` for
+            // itself, so holding this one across the call is a read beside a read rather than
+            // a deadlock waiting to be discovered by a loaded CI runner.
+            let wall = crate::search::run_search(&conn, &r).unwrap();
+            let facets = run_facets(&state, &r).unwrap();
+            assert!(
+                !wall.total_is_capped,
+                "{name}: a capped wall would make this assertion vacuous"
+            );
+            assert_eq!(
+                facets.total, wall.total,
+                "{name}: the count and the wall describe one corpus or neither is worth drawing"
+            );
+        }
     }
 
     /// Not a unit test — a stopwatch, over a synthetic corpus the size and shape of the live

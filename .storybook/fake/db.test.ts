@@ -3932,19 +3932,54 @@ describe("the art tag taxonomy", () => {
   });
 
   /**
-   * **The facets do not narrow by a tag, and that is the mirror rather than a gap.** The
-   * in-memory index has no tag dimension, so `facets::base` cannot apply one and a tagged search
-   * is faceted over the whole corpus — every count reads high. Over-counting only ever leaves a
-   * control live; a fake that counted better than the backend would hide the divergence instead
-   * of the app showing it.
+   * **The facets narrow by a tag**, since 2026-08-20. `run_facets` resolves each picked slug
+   * through its closure into a bitset over `cards.rowid`, intersects those with the FTS one and
+   * hands `compute` the single narrowing set it takes — so the counts describe the tag-filtered
+   * wall rather than the corpus above it, and this mirror stopped stripping the three tag fields
+   * out of its base on the same day.
+   *
+   * Read against `search_cards`' own answer rather than a written-down number, because the two
+   * agreeing is the whole claim: a count that disagreed with the wall beside it would grey a set
+   * the search returns rows for. Uncollapsed on purpose — `facet_cards.total` is **printings**,
+   * always, while a collapsed search counts cards.
    */
-  it("facets a tag-filtered request as though it were untagged", () => {
+  it("facets a tag-filtered request over the tag-filtered corpus", () => {
     const db = tagged();
     const plain = readHandlers(db).facet_cards({ req: { limit: 50, offset: 0 } });
-    const tagFiltered = readHandlers(db).facet_cards({
-      req: { artTags: { include: ["cat"] }, limit: 50, offset: 0 },
-    });
-    expect(tagFiltered.total).toBe(plain.total);
+    const req = { artTags: { include: ["animal"] }, limit: 200, offset: 0 };
+    const tagFiltered = readHandlers(db).facet_cards({ req });
+    const wall = readHandlers(db).search_cards({ req });
+
+    expect(wall.total).toBeGreaterThan(0);
+    expect(tagFiltered.total).toBe(wall.total);
+    expect(tagFiltered.total).toBeLessThan(plain.total);
+
+    // Every other dimension narrows with it — and a set the motif cannot reach arrives as an
+    // explicit **0** rather than as an absent key, which is what lets the picker grey a row
+    // instead of dropping it.
+    const reachable = new Set(wall.items.map((i) => i.setCode));
+    expect(reachable.size).toBeGreaterThan(0);
+    expect(Object.keys(tagFiltered.sets).length).toBeGreaterThan(reachable.size);
+    for (const [code, count] of Object.entries(tagFiltered.sets)) {
+      if (!reachable.has(code)) expect(count).toBe(0);
+    }
+  });
+
+  /**
+   * The weight floor rides the art **include** arm and nothing else, so it moves the counts the
+   * same way the wall moves — `landscape` is the seed's floored motif, weak on Llanowar Elves.
+   */
+  it("narrows the facet counts by the art weight floor", () => {
+    const db = tagged();
+    const req = { artTags: { include: ["landscape"] }, limit: 200, offset: 0 };
+    const open = readHandlers(db).facet_cards({ req });
+    const floored = readHandlers(db).facet_cards({ req: { ...req, artWeightFloor: "strong" } });
+
+    expect(open.total).toBe(3);
+    expect(floored.total).toBe(2);
+    expect(floored.total).toBe(
+      readHandlers(db).search_cards({ req: { ...req, artWeightFloor: "strong" } }).total,
+    );
   });
 
   /** The status is the oracle one's twin and cannot fail either: a store that has never
