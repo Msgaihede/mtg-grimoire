@@ -72,21 +72,28 @@ describe("trapTab", () => {
     expect(document.activeElement).toBe(before);
   });
 
-  it("leaves an unnamed radio-typed input as its own stop", () => {
+  it("does not group two radios that share no name", () => {
     // `name=""` cannot form a group — every `<input type="radio">` with no name is its own
     // island, exactly like any other control, so the grouping logic must not fold two of them
-    // into one stop by accident.
+    // into one stop by accident. A single unnamed radio cannot tell that apart from a bug that
+    // *does* fold empty names together, since removing the `el.name !== ""` guard would still
+    // leave one radio as its own stop when there is only one — two are needed to cover it.
     const panel = document.createElement("div");
-    const alone = document.createElement("input");
-    alone.type = "radio";
-    const after = document.createElement("button");
-    panel.append(alone, after);
+    const before = document.createElement("button");
+    const a = document.createElement("input");
+    a.type = "radio";
+    const b = document.createElement("input");
+    b.type = "radio";
+    panel.append(before, a, b);
     document.body.append(panel);
 
-    after.focus();
+    // `a` and `b` are both real stops here, so `b` — not `a` — is the panel's true last one.
+    // Forward Tab from `a` is a step *within* the list, not the boundary the wrap has to catch,
+    // and `trapTab` must leave it alone. Removing the guard would fold both into one stop keyed
+    // on `""`, drop `b`, and make `a` read as `last` — wrapping here by mistake.
+    a.focus();
     const preventDefault = press(panel);
-    // `after` is the last stop and there is nothing past it — forward Tab wraps to the first.
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(document.activeElement).toBe(alone);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(a);
   });
 });

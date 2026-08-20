@@ -64,6 +64,7 @@ import {
 import type { ImportDestination } from "@/features/transfer/import/destination";
 import { deckDestination } from "@/features/transfer/import/destinations/deckInto";
 import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
+import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { NewTagDialog } from "./NewTagDialog";
@@ -1150,6 +1151,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const importInto = useMemo<ImportDestination>(
     () => deckDestination({ deckId, variant, forcedCategoryName }),
     [deckId, variant, forcedCategoryName],
+  );
+
+  /**
+   * Choosing "a new deck" from inside an editor that is already open on a different one leaves
+   * that new deck invisible: nothing on screen names it, and this editor stays put showing the
+   * deck the reader started on. `onImported` is `DecksPage`'s own answer to the identical
+   * question — open the deck the list became — reused rather than reinvented; `setOpenDeckId`
+   * is what makes this editor a different `deckId` prop on the next render.
+   */
+  const onNewDeckImported = useCallback(
+    (newDeckId: number) => setOpenDeckId(newDeckId),
+    [setOpenDeckId],
+  );
+  /** **Memoised for `importInto`'s reason**: `Preview` is a component identity, and a fresh one
+   *  each render would remount the new-deck step and take the reader's typed name with it. */
+  const importIntoNewDeck = useMemo<ImportDestination>(
+    () => ({
+      ...newDeckDestination,
+      Preview: (props) => <NewDeckPreview {...props} onImported={onNewDeckImported} />,
+    }),
+    [onNewDeckImported],
   );
 
   /** The pile the delete confirmation is about, read from the **live** list — a rename made
@@ -3285,10 +3307,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       />
       {/* Two destinations since Task 14 — the deck that is open, and a fresh one made out of
           the same paste — so the shell now draws the radio group it has always been able to.
-          `importInto` is built where the deck's own facts are; `newDeckDestination` is the bare
-          value, unwrapped, because this editor has no remembered format and nowhere of its own
-          to send the reader afterwards — both of `NewDeckInto`'s extra props are optional for
-          exactly a host like this one.
+          `importInto` is built where the deck's own facts are; `importIntoNewDeck` wraps
+          `newDeckDestination` the way `DecksPage`'s own does, closing over `onNewDeckImported`
+          so choosing "a new deck" from here does not leave it invisible — this editor has no
+          remembered format to seed the new deck's select with, which is the one thing
+          `DecksPage`'s wrapper passes that this one does not.
 
           `forcedCategoryName` is set only when the dialog was opened from a category heading's
           right-click, and it is the whole of the difference between "import into this deck" and
@@ -3299,13 +3322,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           to aim at.
 
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
-          away in the toolbar, and a deck it wrote into — this one or a new one — is reachable
-          from the gallery either way, because every write in `useImport` takes the `["decks"]`
-          root with it. No `subtitle` prop: the chosen destination says its own header line
-          (`importInto`'s names this deck; the new deck's leaves the fallback in place, since
-          there is no deck yet to name). */}
+          away in the toolbar, and importing into *this* deck needs no navigation — the editor
+          re-reads it, because every write in `useImport` takes the `["decks"]` root with it.
+          Importing as a *new* deck is `onNewDeckImported`'s job, which fires alongside `dismiss`
+          rather than instead of it. No `subtitle` prop: the chosen destination says its own
+          header line (`importInto`'s names this deck; the new deck's leaves the fallback in
+          place, since there is no deck yet to name). */}
       <ImportDialog
-        destinations={[importInto, newDeckDestination]}
+        destinations={[importInto, importIntoNewDeck]}
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}

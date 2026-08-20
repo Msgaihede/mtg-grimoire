@@ -105,16 +105,25 @@ export function CommitBar({
  * The write every bulk-import destination makes, once its own plan and mode are ready — the
  * collection's and the wishlist's own version of `useImport`'s `commit`.
  *
- * A `useMutation` around whichever `ipc.*ImportCommit` the caller names, invalidating the `key`
- * it is handed **on both success and failure** — `useImport`'s rule for `["decks"]`, carried to
- * the two lists it does not reach: `["collection"]` or `["wishlist"]`. A refused write can still
- * have been a database another surface has changed. **A `useMutation` with no query key of its
- * own**, exactly like `useImport`'s `commit`: two previews calling this hook — the collection's
- * and the wishlist's, each with its own `key` argument — are two independent mutations, which is
- * what lets one preview's refusal die with it instead of leaking into the other's.
+ * A `useMutation` around whichever `ipc.*ImportCommit` the caller names, invalidating every key
+ * in `keys` **on both success and failure** — `useImport`'s rule for `["decks"]`, carried to the
+ * two surfaces it does not reach. **The set is not just the destination's own root.**
+ * `CollectionPage`'s and `WishlistPage`'s own row-level writes (`settle`/`settleFailure`) each
+ * invalidate several keys for a *single* stepper press, because a change to what is owned moves
+ * more than one screen: the collection's own list and summary, the wishlist's owned-progress,
+ * the search wall's owned badges, and every open deck's allocator claims. A bulk import moves
+ * ownership at least as much as one stepper press — usually far more of it — so each caller
+ * passes the same set its row-level neighbours do rather than a narrower one of its own; see the
+ * two call sites for which keys that is. A refused write can still have been a database another
+ * surface has changed, which is why both branches invalidate the same way. **A `useMutation`
+ * with no query key of its own**, exactly like `useImport`'s `commit`: two previews calling this
+ * hook are two independent mutations, which is what lets one preview's refusal die with it
+ * instead of leaking into the other's.
  */
-export function useImportCommit<T>(key: QueryKey, mutationFn: () => Promise<T>) {
+export function useImportCommit<T>(keys: readonly QueryKey[], mutationFn: () => Promise<T>) {
   const queryClient = useQueryClient();
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: key });
+  const invalidate = () => {
+    for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
+  };
   return useMutation({ mutationFn, onSuccess: invalidate, onError: invalidate });
 }

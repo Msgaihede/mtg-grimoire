@@ -17,10 +17,27 @@ export interface CollectionOptions {
   finish: DeckFinish;
 }
 
+/**
+ * A line whose `extra.condition` this app does not recognise — the design spec's third per-row
+ * warning (spec §7: "unknown conditions"), beside the unmatched-card and fuzzy-set-match rows
+ * the deck's own planner already draws. `normalizeCondition`'s own doc says why this cannot be
+ * silent: *"`matched: false` is not an error — it is what an import preview shows as a warning
+ * row"* — dropping the flag here would be the one destination that reads conditions at all
+ * quietly filing every unreadable grade as if the reader had chosen the app's own NM default.
+ */
+export interface UnknownCondition {
+  lineNumber: number;
+  name: string;
+  /** What the file actually said, verbatim — trimmed, never empty (an empty or absent cell is
+   *  silence, not an unknown grade, and never reaches this list). */
+  said: string;
+}
+
 export interface CollectionPlan {
   items: CollectionImportItem[];
   unmatched: UnmatchedLine[];
   hintMisses: HintMiss[];
+  unknownConditions: UnknownCondition[];
   parseIssues: ParsedList["issues"];
   /** Copies that will actually land — not `ParsedList.totalCards`, which counts lines
    *  nothing resolved. */
@@ -35,6 +52,7 @@ export function planCollectionImport(
   const byIndex = new Map(resolved.map((row) => [row.index, row]));
   const unmatched: UnmatchedLine[] = [];
   const hintMisses: HintMiss[] = [];
+  const unknownConditions: UnknownCondition[] = [];
   // Keyed on the part of the collection's grain an import can produce. A file naming the same
   // grain twice is one intention said twice: under `add` it would double-count, and under
   // `set` the second line would silently win.
@@ -58,7 +76,20 @@ export function planCollectionImport(
     // is the one seam between the two.
     const said = line.extra.condition;
     const normalized = said === undefined ? null : normalizeCondition(said);
-    const condition = normalized?.condition ?? options.condition;
+    // `matched: false` is a grade this app does not recognise — flagged for the reader rather
+    // than silently taking `normalizeCondition`'s own NM fallback, which is the *best* grade on
+    // the scale and the one answer least likely to be what the file meant. An unreadable grade
+    // is treated the same as silence and falls back to the reader's own chosen default: "the
+    // condition when the file doesn't say" is exactly what an unreadable one amounts to.
+    if (normalized !== null && !normalized.matched) {
+      unknownConditions.push({
+        lineNumber: line.lineNumber,
+        name: line.name,
+        said: normalized.original ?? "",
+      });
+    }
+    const condition =
+      normalized !== null && normalized.matched ? normalized.condition : options.condition;
     const finish = line.finish ?? options.finish;
     const key = `${matched.cardId} ${finish ?? ""} ${condition}`;
     const seen = folded.get(key);
@@ -86,14 +117,27 @@ export function planCollectionImport(
     items,
     unmatched,
     hintMisses,
+    unknownConditions,
     parseIssues: list.issues,
     totalCards: items.reduce((n, i) => n + i.quantity, 0),
   };
 }
 
+/**
+ * A price cell, read the way a spreadsheet actually writes one — a currency symbol in front, a
+ * thousands separator inside — rather than the bare number `Number.parseFloat` alone can read.
+ *
+ * `Number.parseFloat("$4.50")` is `NaN`: it stops at the first character that cannot start a
+ * number, and `$` cannot. Both TCGplayer's and Deckbox's own CSV exports write a symbol prefix,
+ * so a purchase price coming back from either was dropped on every row rather than a rare one.
+ * Only `$`, `€`, `£` and a comma are stripped — the currencies this app's own `formatPrice`
+ * knows — so a cell this cannot make sense of still falls through to `NaN` rather than being
+ * guessed at.
+ */
 function numberOrUndefined(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
-  const n = Number.parseFloat(raw);
+  const cleaned = raw.trim().replace(/[$€£,]/g, "");
+  const n = Number.parseFloat(cleaned);
   return Number.isFinite(n) ? n : undefined;
 }
 

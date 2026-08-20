@@ -72,4 +72,29 @@ describe("planCollectionImport", () => {
     expect(plan.unmatched).toHaveLength(1);
     expect(plan.totalCards).toBe(0);
   });
+
+  it("falls back to the reader's chosen default for a grade this app does not recognise, and flags it", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: { condition: "Mediocre" } })),
+      [hit(0, "c1")],
+      { condition: "LP", finish: null },
+    );
+    // The reader's own default — never `normalizeCondition`'s internal NM fallback, which is
+    // the best grade on the scale and the least likely answer for an unreadable one.
+    expect(plan.items[0].condition).toBe("LP");
+    expect(plan.items[0].conditionOriginal).toBe("Mediocre");
+    expect(plan.unknownConditions).toEqual([{ lineNumber: 1, name: "Sol Ring", said: "Mediocre" }]);
+  });
+
+  it("reads a currency-prefixed, thousand-separated purchase price", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: { purchasePrice: "$1,234.50" } })), [hit(0, "c1")], OPTIONS);
+    expect(plan.items[0].purchasePrice).toBe(1234.5);
+  });
+
+  it("leaves a purchase price it cannot make sense of unset", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: { purchasePrice: "ask seller" } })), [hit(0, "c1")], OPTIONS);
+    expect(plan.items[0].purchasePrice).toBeUndefined();
+  });
 });

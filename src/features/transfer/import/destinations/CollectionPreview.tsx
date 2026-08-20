@@ -12,6 +12,7 @@
  */
 import { useMemo, useState, type JSX } from "react";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
+import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -21,6 +22,7 @@ import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
 import { planCollectionImport } from "./collection";
+import { ProblemList } from "./DeckPreview";
 
 /**
  * No `replace`: the deck's version clears one variant of one deck, and the same word over a
@@ -49,8 +51,15 @@ export function CollectionPreview({
     [list, resolved, defaults],
   );
 
-  const commit = useImportCommit(["collection"], () =>
-    ipc.collectionImportCommit(plan.items, mode as TransferImportMode),
+  // The same four keys `CollectionPage`'s own writes invalidate on a stepper press
+  // (`settle`/`settleFailure`) — `["collection"]` covers both the list and the summary a bulk
+  // import moves the same as a single row does, and the other three are what else reads "what
+  // is owned": the wishlist's owned-progress, the search wall's owned badges, and every open
+  // deck's allocator claims. A 300-row import moves ownership at least as much as one stepper
+  // press, so it earns the same invalidation set rather than a narrower one of its own.
+  const commit = useImportCommit(
+    [["collection"], ["wishlist"], ["cards", "search"], ["decks"]],
+    () => ipc.collectionImportCommit(plan.items, mode as TransferImportMode),
   );
 
   const runImport = () => {
@@ -119,6 +128,19 @@ export function CollectionPreview({
           onChange={setMode}
           label="How to apply this file"
         />
+
+        {/* The collection's own third warning, beside the two `ImportProblems` already draws —
+            a grade the file named that this app cannot read fell back to the default above
+            rather than being silently accepted as Near Mint. Only the collection reads
+            conditions, so this has no wishlist equivalent. */}
+        {plan.unknownConditions.length > 0 && (
+          <ProblemList
+            caption={`${plural(plan.unknownConditions.length, "line")} named a condition this app does not recognise, and used the default instead`}
+            lines={plan.unknownConditions.map(
+              (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+            )}
+          />
+        )}
 
         <ImportProblems
           unmatched={plan.unmatched}

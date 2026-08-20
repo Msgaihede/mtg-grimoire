@@ -19,9 +19,9 @@ const listOf = (...lines: ParsedLine[]): ParsedList => ({
   suggestedName: null,
 });
 
-const hit = (index: number, cardId: string): ImportResolveRow =>
+const hit = (index: number, cardId: string, oracleId: string | null = "o1"): ImportResolveRow =>
   ({ index, hintMissed: false,
-     matched: { cardId, oracleId: "o1", name: "Sol Ring", setCode: "LTC",
+     matched: { cardId, oracleId, name: "Sol Ring", setCode: "LTC",
        collectorNumber: "285" } } as unknown as ImportResolveRow);
 
 describe("planWishlistImport", () => {
@@ -57,5 +57,24 @@ describe("planWishlistImport", () => {
     );
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0].quantity).toBe(3);
+  });
+
+  it("pins the printing when the match's oracle id is null, even though the line named none", () => {
+    // `wishlist::commit_import` refuses a row with neither `oracle_id` nor `card_id` — a
+    // `reversible_card` printing carries no top-level `oracle_id` at all, so a line naming one
+    // by name alone would otherwise plan an item the backend cannot write.
+    const plan = planWishlistImport(listOf(line()), [hit(0, "c1", null)], OPTIONS);
+    expect(plan.items[0].cardId).toBe("c1");
+    expect(plan.items[0].oracleId).toBeNull();
+  });
+
+  it("keeps two null-oracle lines as two wishes when they are different printings", () => {
+    const plan = planWishlistImport(
+      listOf(line(), line({ lineNumber: 2, name: "Reversible Thing" })),
+      [hit(0, "c1", null), hit(1, "c2", null)],
+      OPTIONS,
+    );
+    expect(plan.items).toHaveLength(2);
+    expect(plan.items.map((i) => i.cardId).sort()).toEqual(["c1", "c2"]);
   });
 });

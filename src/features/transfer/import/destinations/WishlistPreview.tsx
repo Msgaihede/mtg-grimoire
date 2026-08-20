@@ -39,8 +39,12 @@ export function WishlistPreview({
     [list, resolved, defaults.finish],
   );
 
-  const commit = useImportCommit(["wishlist"], () =>
-    ipc.wishlistImportCommit(toWishlistImportItems(plan.items), mode as TransferImportMode),
+  // `["wishlist"]` and `["cards", "search"]` — the same pair `WishlistPage`'s own `settle()`
+  // invalidates after a single wish write, since a wish write moves no copies and touches
+  // neither the collection nor a deck's claims. See `useImportCommit`'s own doc.
+  const commit = useImportCommit(
+    [["wishlist"], ["cards", "search"]],
+    () => ipc.wishlistImportCommit(toWishlistImportItems(plan.items), mode as TransferImportMode),
   );
 
   const runImport = () => {
@@ -90,12 +94,6 @@ export function WishlistPreview({
           onChange={setMode}
           label="How to apply this file"
         />
-        {/* The wishlist's own asymmetry with the collection's `set` — `wishlist_set_quantity(id,
-            0)` deletes rather than leaving a zero-quantity row — said before the reader commits
-            rather than discovered afterwards in a shorter list than the one they pasted. */}
-        {mode === "set" && (
-          <p className="text-sm text-dim">A line asking for 0 copies removes that wish.</p>
-        )}
 
         <ImportProblems
           unmatched={plan.unmatched}

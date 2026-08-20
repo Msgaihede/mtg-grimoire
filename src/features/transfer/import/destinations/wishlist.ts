@@ -1,10 +1,17 @@
 /**
  * The wishlist's planner.
  *
- * **Pins a printing only when the file named one.** `1 Sol Ring` is a wish for the card;
- * `1 Sol Ring (LTC) 285` is a wish for that printing. Reading the file's own specificity is the
- * only honest answer available, it costs no control, and `WISHLIST_GRAIN` already models the
- * two as different rows rather than one being a looser version of the other.
+ * **Pins a printing only when the file named one — or when there is no oracle card to wish for
+ * instead.** `1 Sol Ring` is a wish for the card; `1 Sol Ring (LTC) 285` is a wish for that
+ * printing. Reading the file's own specificity is the only honest answer available, it costs no
+ * control, and `WISHLIST_GRAIN` already models the two as different rows rather than one being a
+ * looser version of the other. But `ImportMatch.oracleId` is itself `string | null` — every
+ * `reversible_card` printing has no top-level `oracle_id`, and a plain promo can carry a null one
+ * too — and `wishlist::commit_import` refuses a row with **neither** id, inside one transaction
+ * for the whole file: one such line rolls the entire import back. So a line whose match has no
+ * oracle id pins the printing whether or not it named one, which is also what keeps two such
+ * lines from folding into a single unwritable item carrying no ids at all — the fold key already
+ * includes `cardId`, so pinning it is what tells two different null-oracle printings apart.
  */
 import type { DeckFinish, ImportResolveRow, WishlistImportItem } from "@/lib/ipc";
 import type { ParsedList } from "../parse";
@@ -67,7 +74,9 @@ export function planWishlistImport(
     }
 
     const named = line.setCode !== null || line.collectorNumber !== null;
-    const cardId = named ? matched.cardId : null;
+    // A null `oracleId` leaves nothing else to wish with — `WishInput`'s doc requires one
+    // identifier or the other — so the printing is pinned even though the line named none.
+    const cardId = named || matched.oracleId === null ? matched.cardId : null;
     const finish = line.finish ?? options.finish;
     const key = `${matched.oracleId ?? ""} ${cardId ?? ""} ${finish ?? ""}`;
     const seen = folded.get(key);
