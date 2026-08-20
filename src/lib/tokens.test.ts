@@ -215,4 +215,26 @@ describe("the tooltip provider is mounted where it has to be", () => {
   it("wraps every story too", () => {
     expect(previewSource).toContain("<TooltipProvider>");
   });
+
+  it("mounts the tooltip provider outside the context menu's, in the app", () => {
+    // Not a style rule. `ContextMenuProvider` renders its menu panel as a *sibling* of its
+    // children, so a tooltip context nested inside it would wrap every view and none of the
+    // menu's own rows — and a row that binds a tooltip would get the no-op API, silently.
+    //
+    // `toBeGreaterThan(-1)` matters on its own: without it, a *deleted* provider's `indexOf`
+    // of -1 is "less than" everything, and this assertion would pass on the exact failure —
+    // a dropped `TooltipProvider` — it exists to catch. The presence test above already
+    // covers that failure; this one is only for the ordering.
+    expect(appSource.indexOf("<TooltipProvider>")).toBeGreaterThan(-1);
+    expect(appSource.indexOf("<TooltipProvider>")).toBeLessThan(
+      appSource.indexOf("<ContextMenuProvider>"),
+    );
+  });
+
+  it("mounts the tooltip provider outside the context menu's, in the workbench too", () => {
+    expect(previewSource.indexOf("<TooltipProvider>")).toBeGreaterThan(-1);
+    expect(previewSource.indexOf("<TooltipProvider>")).toBeLessThan(
+      previewSource.indexOf("<ContextMenuProvider>"),
+    );
+  });
 });
