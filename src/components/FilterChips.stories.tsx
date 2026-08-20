@@ -1,6 +1,7 @@
 import { useState, type ComponentProps } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -166,15 +167,20 @@ export const TogglePressed: Story = { args: { label: "Foil", pressed: true } };
  * The hint is lower-cased by the caller, not by the component: `CollectionFilterBar` passes
  * `CONDITION_LABEL[c].toLowerCase()`, so `Damaged` reaches the chip as `damaged`.
  *
- * What the `play` reads is an `aria-label` and a `title`, and a screenshot shows neither: one
- * is only ever spoken, the other only ever hovered.
+ * What the `play` reads is an `aria-label` and a tooltip, and a screenshot shows neither: one
+ * is only ever spoken, the other only ever hovered. The tooltip binds `describes: false` — its
+ * words are already inside the aria-label above, so the panel carries no `role="tooltip"` and
+ * is found by its stable id instead.
  */
 export const WithHint: Story = {
   args: { label: "DMG", pressed: false, hint: "damaged" },
   play: async ({ canvasElement }) => {
     const chip = within(canvasElement).getByRole("button", { name: "DMG, damaged" });
     await expect(chip).toHaveTextContent("DMG");
-    await expect(chip).toHaveAttribute("title", "damaged");
+    await userEvent.hover(chip);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
+    await expect(panel).toHaveTextContent("damaged");
   },
 };
 

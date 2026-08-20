@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect } from "storybook/test";
+import { expect, userEvent } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { OwnedBadge } from "./OwnedBadge";
 
 const meta = {
@@ -15,7 +16,7 @@ const meta = {
           "no “owned” pill. The heart is the sidebar's own wishlist icon, filled, so the " +
           "mark on a search result and the entry in the nav are visibly the same thing.\n\n" +
           "**Hover it and it says in words what it says in glyphs** — the same two sentences " +
-          "its `sr-only` spans carry, joined into one `title`. `×3` beside a filled heart is " +
+          "its `sr-only` spans carry, joined into one tooltip. `×3` beside a filled heart is " +
           "shorthand a sighted reader has to be told once, and two tooltips 4px apart over " +
           "one badge would flicker between them.",
       },
@@ -54,10 +55,13 @@ export const Wishlisted: Story = { args: { owned: 0, wishlisted: true } };
 export const Both: Story = {
   args: { owned: 2, wishlisted: true },
   play: async ({ canvasElement }) => {
-    await expect(canvasElement.querySelector("[title]")).toHaveAttribute(
-      "title",
-      "2 in your collection · On your wishlist",
-    );
+    // `describes: false`: the same two sentences are already `sr-only` text inside the badge,
+    // so the panel carries no `role="tooltip"` — found by its stable id instead.
+    const badge = canvasElement.firstElementChild as HTMLElement;
+    await userEvent.hover(badge);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
+    await expect(panel).toHaveTextContent("2 in your collection · On your wishlist");
   },
 };
 

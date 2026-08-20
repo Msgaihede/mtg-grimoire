@@ -95,10 +95,17 @@ Every one of these has its measurement and its story in
 - **A hint is `useTooltip()`'s spread, never a `title` attribute or an SVG `<title>`.** One
   `fixed` panel mounts at the app root (`LAYER.tooltip`) because a virtualised row is both
   `position: absolute` and transformed, which caps a nested `z-index` *and* makes the row the
-  containing block for a `fixed` descendant — root-mounting is what escapes both at once. The
-  sweep off `title` is in progress rather than finished, so both still appear in the app today;
-  new and changed hints bind through `useTooltip()`. Full rule, the three ways a site is
-  classified, and the `pointer-events`/Escape/no-op-provider traps carried into the new API:
+  containing block for a `fixed` descendant — root-mounting is what escapes both at once. **The
+  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **One native
+  `title` survives on purpose** — `AppShell.tsx`'s drag-inert sidebar entry, because Chromium
+  freezes `:hover` at a drag's origin for the whole drag, so the attribute's sentence is never
+  seen mid-drag and is read instead through the accname spec's description fallback. Everything
+  else `title=` still finds in the tree is a component **prop** — drawn as a heading
+  (`DeckDialog`, `Notice`, `SettingsSection`) or turned into a `useTooltip()` binding internally
+  by the component it names (`Figure`, `CountTag`, `ToggleChip`, `Marker`, `SortableHeader`) —
+  never a native attribute a call site wrote itself. Grep `title=` to see the shape rather than
+  trusting a count written here. Full rule, the three ways a site is classified, and the
+  `pointer-events`/Escape/no-op-provider traps carried into the new API:
   [frontend-design.md](../docs/reference/frontend-design.md).
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
   credited** (Scryfall's image policy). A `grid`/`thumb`/`display` image carries the printed

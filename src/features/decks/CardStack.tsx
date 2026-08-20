@@ -5,6 +5,7 @@ import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardScaleVars, DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { playedFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
@@ -786,6 +787,7 @@ function StackedCard({
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
+  const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
   // The whole card (`grid`, 488×680), not the `art` crop. Fed `null` for an orphan, whose
   // printing has left the card database — nothing tries to draw a picture of a card that is not
@@ -1126,9 +1128,16 @@ function StackedCard({
         <RarityGem rarity={card.rarity} className="ml-[calc(0.375rem*var(--mark-scale,1))]" />
         {/* The code is what fits; the set's name is one hover away, because `PF26` is not a
             word anybody knows. `setName` comes from `cards` and is `null` for an orphan — then
-            the code stands on its own rather than being annotated with a guess. */}
+            the code stands on its own rather than being annotated with a guess.
+
+            No `whenClipped`: the span shows the set *code*, the tip says the set *name* — a
+            different string — so gating the panel on the code's own clip would gate it on
+            something the tip is not about (`CardDetailPane.tsx`'s printings row states the
+            rule this reverses). */}
         <span
-          title={card.setName === null ? undefined : `${card.setName} · #${card.collectorNumber}`}
+          {...tip(
+            card.setName === null ? null : `${card.setName} · #${card.collectorNumber}`,
+          )}
           className="min-w-0 flex-1 truncate"
         >
           {card.setCode.toUpperCase()} · {card.collectorNumber}
@@ -1148,7 +1157,11 @@ function StackedCard({
         {short && (
           <span
             aria-hidden="true"
-            title={`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`}
+            // Redundant with `deckCardName`'s own "you own N of M" clause — the button beside
+            // this figure already says the shortage in words.
+            {...tip(`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`, {
+              describes: false,
+            })}
             className="shrink-0 tabular-nums text-destructive"
           >
             {card.ownedQuantity}/{card.quantity}

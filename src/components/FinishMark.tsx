@@ -1,4 +1,6 @@
+import type { SVGProps } from "react";
 import { Gem, Sparkles } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { cn } from "@/lib/utils";
 
@@ -20,11 +22,11 @@ const GLYPH = { foil: Sparkles, etched: Gem } as const;
  * Nonfoil draws nothing at all — it is the finish a price is assumed to be, which is the rule
  * the letter table stated before this component replaced it.
  *
- * **The `<title>` below is only shown where the caller is a hit target.** It was written for a
- * pointer and, over card art, no pointer could reach it for months: `FoilOverlay`'s chip
- * inherited the overlay's `pointer-events: none`, and a tooltip is shown by the element the
- * pointer *hits*. A mark placed inside anything `pointer-events-none` is a mark with no
- * tooltip, silently.
+ * **The tooltip below is only shown where the caller is a hit target.** `pointer-events`
+ * inherits, so a mark placed inside anything `pointer-events-none` binds a tooltip nobody can
+ * ever open — `FoilOverlay`'s chip carries `pointer-events-auto` against its wrapper's `none`
+ * precisely so this glyph is hoverable there. `describes: false` because {@link FINISH_LABEL}
+ * is already this glyph's `aria-label`; the tooltip is the same word for a pointer.
  *
  * **12px is its size on a card at 100% zoom, not its size.** The glyph is drawn over a card face
  * on four surfaces that the reader can zoom, and a chip that held still while the card doubled was
@@ -33,20 +35,22 @@ const GLYPH = { foil: Sparkles, etched: Gem } as const;
  * other still surface gets, so those are untouched by construction.
  */
 export function FinishMark({ finish, className }: { finish: Finish; className?: string }) {
+  const tip = useTooltip();
   if (finish === "nonfoil") return null;
   const Glyph = GLYPH[finish];
   return (
     <Glyph
       // The word, not the shape: a screen reader saying "sparkles" beside a price would be
-      // describing the icon rather than the card. `<title>` follows the label for a pointer.
+      // describing the icon rather than the card. The tooltip follows the label for a pointer.
       role="img"
       aria-label={FINISH_LABEL[finish]}
+      // See the identical cast in `GameChangerMark`: `TooltipBinding`'s handlers are typed
+      // against `HTMLElement`, and this anchor is the lucide `<svg>` glyph itself.
+      {...(tip(FINISH_LABEL[finish], { describes: false }) as SVGProps<SVGSVGElement>)}
       className={cn(
         "inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-accent",
         className,
       )}
-    >
-      <title>{FINISH_LABEL[finish]}</title>
-    </Glyph>
+    />
   );
 }

@@ -4,6 +4,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { PopupPanel } from "@/components/PopupListbox";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
@@ -579,13 +580,14 @@ function Option({
   onToggle: (code: string) => void;
 }) {
   const glyph = setGlyphClass(set.code);
+  const tip = useTooltip();
   return (
     <li
       id={id}
       role="option"
       aria-selected={picked}
       aria-disabled={disabled || undefined}
-      title={title}
+      {...tip(title)}
       // Keeps the caret — and therefore the arrow keys — in the search box while the
       // reader picks several sets with the mouse.
       onMouseDown={(e) => e.preventDefault()}

@@ -113,11 +113,15 @@ function columnsFor(
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
       // — the same rule as the grid caption and the pane.
+      //
+      // No `whenClipped`: the span shows the set *code* and the tip says its *name*, so gating
+      // the panel on the code's own clip gates it on a different string than the one it says —
+      // the rule is stated once at `CardDetailPane.tsx`'s printings row.
       cellClassName: "flex items-center gap-1.5 font-mono text-xs text-dim",
       cell: (row) => (
         <>
           <RarityGem rarity={row.rarity} />
-          <span className="truncate" {...tip(row.setName, { whenClipped: true })}>
+          <span className="truncate" {...tip(row.setName)}>
             {row.setCode.toUpperCase()} · {row.collectorNumber}
           </span>
         </>
@@ -135,11 +139,20 @@ function columnsFor(
       cell: (row) => (
         <>
           {finishLabel(row.finish)} ·{" "}
-          {/* The grade as it is printed on the listing the card came from, with the words one
-            hover — or one screen reader — away. */}
-          <abbr title={conditionLabel(row.condition)} className="no-underline">
+          {/* Not like this table's other tooltips (spec §4, "the one site that is not a
+            tooltip"): on `<abbr>`, `title` is the standard HTML expansion mechanism rather
+            than decoration, and `aria-label` on this roleless element is not reliably
+            announced. So the expansion also rides as `sr-only` text right beside the
+            abbreviation — text is the one route to assistive tech that always works — and the
+            hover/focus panel is bound separately, with `describes: false` so it does not also
+            wire `aria-describedby` onto a sentence the accessibility tree already has. */}
+          <abbr
+            className="no-underline"
+            {...tip(conditionLabel(row.condition), { describes: false })}
+          >
             {row.condition}
           </abbr>
+          <span className="sr-only"> ({conditionLabel(row.condition)})</span>
         </>
       ),
     },

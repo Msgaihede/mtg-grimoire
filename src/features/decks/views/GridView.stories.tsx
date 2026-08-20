@@ -7,7 +7,7 @@ import {
   deckTheoryMatches,
   deckViolations,
 } from "../../../../.storybook/fake/fixtures";
-import { THEORY_MATCH_LABEL } from "../CardMarks";
+import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { GridView } from "./GridView";
 
 const meta = {
@@ -90,10 +90,10 @@ export const TheoryMatches: Story = {
   args: { theoryMatches: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Four ticked cards, and the label is the one string `THEORY_MATCH_LABEL` defines — a
-    // `title`, so `getByTitle` is what a pointer would find. The marks are `aria-hidden`, which
-    // is why the words below are read off the button instead.
-    expect(canvas.getAllByTitle(THEORY_MATCH_LABEL)).toHaveLength(4);
+    // Four ticked cards. The mark is `aria-hidden` and carries no `title` any more — it is
+    // bound `describes: false`, so `THEORY_MATCH_ATTR` is CardMarks.tsx's own handle for
+    // finding it after the fact. The words below are read off the button instead.
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
 
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.

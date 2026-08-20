@@ -2001,16 +2001,18 @@ Checked against the spec, 2026-08-20:
 - §5 (behaviour, every dismissal, Escape, the bridge, focus-visible) → Task 3, with the two claims
   jsdom cannot make routed to Task 8's live pass.
 - §6 (look) → Task 3 Step 5.
-- §7 (inventory) → Tasks 9–13's file lists. **Corrected 2026-08-20, after the final review of
-  PR 1**: the buckets as first written listed 50 files and claimed their site counts summed to
-  110, which the final review found arithmetically false against this tree — a fresh count comes
-  to **108 sites across 53 files**. The gap was three whole files the sweep never listed:
-  `TitleBar.tsx` and `TagColorPicker.tsx` (real sites, now folded into Tasks 9 and 11) and, held
-  apart from that count because they carry no convertible site at all, `NewTagDialog.tsx`,
-  `CachePanel.tsx`, `ConfirmDialog.tsx` and `DangerZonePanel.tsx` (`title` **props** passed
-  through to `DeckDialog`/`SettingsSection`/`ConfirmDialog`, noted at Tasks 11 and 13 so nobody
-  re-derives that). There was no coincidence in the "110 either way" arithmetic the previous
-  version of this note offered — it did not survive a re-count.
+- §7 (inventory) → Tasks 9–13's file lists. **A running site/file count stopped being carried in
+  this note after the final review of PR 1**, on the same controller ruling `docs/reference/
+  frontend-design.md` and the spec's §7 record: a total for this inventory was measured wrong four
+  separate times across the three documents that tried to keep one, each version reading as
+  correct until the next re-count found it was not (the gap one round was three whole files the
+  sweep had never listed — `TitleBar.tsx` and `TagColorPicker.tsx`, real sites, and
+  `NewTagDialog.tsx`/`CachePanel.tsx`/`ConfirmDialog.tsx`/`DangerZonePanel.tsx`, which carry a
+  `title` **prop** passed through to `DeckDialog`/`SettingsSection`/`ConfirmDialog` and no
+  convertible site at all). The sweep is complete now, which is the more useful fact than any
+  count of it: one native `title` remains on purpose (`AppShell.tsx`'s drag-inert sidebar entry),
+  and every other `title=` in the tree is a component prop rather than a native attribute. Grep
+  `title=` for today's number instead of trusting one fixed in prose.
 - §8 (verification) → Tasks 1, 2, 3, 5 for the suites; Task 8 for the window.
 - §9 (delivery) → PR 1 = Tasks 1–8, PR 2 = Tasks 9–14.
 - §10 (what it does not do) → nothing in the plan adds an arrow, a portal, a `popover`, a

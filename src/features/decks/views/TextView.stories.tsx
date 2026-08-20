@@ -7,7 +7,7 @@ import {
   deckViolations,
   printing,
 } from "../../../../.storybook/fake/fixtures";
-import { THEORY_MATCH_LABEL } from "../CardMarks";
+import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { RAIL_ATTR } from "./columns";
 import { TextView } from "./TextView";
 
@@ -255,7 +255,10 @@ export const TheoryMatches: Story = {
   args: { theoryMatches: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    expect(canvas.getAllByTitle(THEORY_MATCH_LABEL)).toHaveLength(4);
+    // Four ticked cards. The mark is `aria-hidden` and carries no `title` any more — it is
+    // bound `describes: false`, so `THEORY_MATCH_ATTR` is CardMarks.tsx's own handle for
+    // finding it after the fact. The words below are read off the button instead.
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
 
     // The card that is both in the plan and breaking a rule, in one sentence.
     const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });

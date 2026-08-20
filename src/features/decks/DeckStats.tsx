@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
@@ -631,6 +632,9 @@ export function DeckStats({
             behaves as a reader expects.) The sideboard and the companion are real cards and are
             counted by the price, the shortfall and every chart; they are just not what "a
             60-card deck" means, and the chip beside this says so in a sentence. */}
+        {/* `Figure` (`components/Figure.tsx`) owns turning its `title` prop into a
+            `useTooltip()` binding internally — that file is outside this bucket, but the
+            prop's name and shape are unchanged, so neither call below needed an edit. */}
         <Figure
           label="Cards"
           value={count(stats.sized)}
@@ -698,11 +702,12 @@ export function DeckStats({
  * again every time. A colour the deck has none of is dimmed rather than dropped.
  */
 function Pips({ pips }: { pips: Record<PipKey, number> }) {
+  const tip = useTooltip();
   return (
     <div
       role="group"
       aria-label="Color pips"
-      title="Copies of each colour. A two-colour card counts in both."
+      {...tip("Copies of each colour. A two-colour card counts in both.")}
       className="flex items-center gap-3"
     >
       {MANA_LINE_KEYS.map((key) => (
@@ -754,6 +759,7 @@ function Missing({
   added: number | null;
   failure: string | null;
 }) {
+  const tip = useTooltip();
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {stats.missing > 0 ? (
@@ -764,6 +770,21 @@ function Missing({
           <p className="font-mono tabular-nums text-destructive">
             {count(stats.missing)} of {count(stats.copies)} missing
           </p>
+          {/* **No `<span>` wrapper — bound on the button itself.** A wrapper earns its keep only
+              for a control that is genuinely `disabled` for as long as the hint would need to be
+              read, because a real `disabled` attribute fires no pointer events and drops the tab
+              stop. **This button is not that**: `spent` — the state the hint's words are
+              about — is `aria-disabled`, deliberately never the attribute (see the comment on it
+              below), so it stays exactly as focusable and exactly as hoverable as an ordinary
+              button while the hint is true. A wrapper here bought nothing for that state and
+              cost the keyboard path: `useTooltip.ts`'s `focus()` tests `:focus-visible` on the
+              element `tip()` was spread onto, and a bare `<span>` is never focused, so Tab onto
+              this button used to open nothing at all. The one case a wrapper genuinely helps —
+              the ~500ms `disabled={pending}` window right after the press, when `spent` and
+              `pending` are briefly both true — is not a real loss to leave uncovered: the pointer
+              was already resting on the button before that click fired (nothing opens on a
+              content change alone, only on a fresh `pointerenter`), and a keyboard reader loses
+              nothing a `disabled` button was ever going to offer it either. */}
           <button
             ref={sendRef}
             type="button"
@@ -776,10 +797,10 @@ function Missing({
             // docked search panel says no the same way, for the same reason.
             disabled={pending}
             aria-disabled={spent || undefined}
-            title={spent ? "This shortfall is already on your wishlist." : undefined}
             onClick={() => {
               if (!spent) onSend();
             }}
+            {...tip(spent ? "This shortfall is already on your wishlist." : null)}
             className={cn(
               "rounded-md border border-border px-2 py-1 text-dim",
               "transition-colors duration-150 hover:text-text disabled:opacity-50",

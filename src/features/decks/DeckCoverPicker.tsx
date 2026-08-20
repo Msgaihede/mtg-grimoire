@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type JSX } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { CardImage } from "@/components/CardImage";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { count } from "@/lib/counts";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
@@ -136,6 +137,7 @@ export function DeckCoverPicker({
   uploading,
   idPrefix,
 }: DeckCoverPickerProps): JSX.Element {
+  const tip = useTooltip();
   const [text, setText] = useState("");
   const [debounced, setDebounced] = useState("");
 
@@ -213,7 +215,10 @@ export function DeckCoverPicker({
             cover is the reader's own picture and has no Scryfall artist to credit, which is why
             `coverArtist` is `null` for one while the frame quite properly draws it. */}
         {pendingFileName === null && coverArtist !== null && coverKind === "card_art" && (
-          <p className="mt-1.5 truncate text-[0.6875rem] text-dim" title={coverArtist}>
+          <p
+            className="mt-1.5 truncate text-[0.6875rem] text-dim"
+            {...tip(coverArtist, { whenClipped: true })}
+          >
             Art by {coverArtist}
           </p>
         )}
@@ -497,6 +502,7 @@ function ChoiceTile({
   onPick: () => void;
 }) {
   const image = useImageRetry(cardImageUrl(cardId, 0, "art"));
+  const tip = useTooltip();
 
   return (
     <button
@@ -506,7 +512,7 @@ function ChoiceTile({
       // The name is the whole accessible name: the picture is `alt=""` because it is the very
       // thing being chosen and "Shivan Dragon" twice is not more information.
       aria-label={name}
-      title={name}
+      {...tip(name, { describes: false })}
       className={cn(
         "block w-full overflow-hidden rounded-md border bg-surface",
         "transition-colors duration-150 motion-reduce:transition-none",

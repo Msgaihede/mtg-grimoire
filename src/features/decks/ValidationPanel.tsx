@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "
 import { ChevronRight, CircleCheck, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -177,6 +178,7 @@ export function ValidationPanel({
   onSelectCard,
 }: ValidationPanelProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const tip = useTooltip();
 
   // Recomputed on every edit, and deliberately not debounced: the engine is pure, a deck is a
   // few hundred rows, and one pass over them is cheaper than the render it rides along with. A
@@ -253,7 +255,7 @@ export function ValidationPanel({
         // nothing to a pointer either, and two hand-written copies of a sentence are two
         // sentences waiting to disagree. Same arrangement as the undo/redo buttons'.
         aria-label={label}
-        title={label}
+        {...tip(label, { describes: false })}
         onClick={() => (open ? onDismiss() : onOpen())}
         className={cn(
           FILTER_CONTROL,
