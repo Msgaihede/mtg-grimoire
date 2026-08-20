@@ -150,7 +150,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DeckEditor, exportFileName, exportSubject, layerMatches } from "./DeckEditor";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type CardWalkStop } from "@/lib/store";
 
 /** The change the Undo button would reverse — a history row like any other, because that is
  *  what the state command answers and what `auditText` words the button's name from. */
@@ -527,7 +527,7 @@ beforeEach(() => {
     printingsRequest: null,
     // The order the printings modal steps through, published by this editor. Reset with the rest
     // so a test reading it is reading its own editor's answer and not the previous one's.
-    deckWalk: [],
+    cardWalk: { label: "", stops: [] },
   });
   deckGet
     .mockReset()
@@ -4023,6 +4023,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "c-Lightning Bolt",
       oracleId: "o-Lightning Bolt",
       name: "Lightning Bolt",
       deck: {
@@ -4058,6 +4059,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "s-Goblin Guide",
       oracleId: "o-Goblin Guide",
       name: "Goblin Guide",
       deck: null,
@@ -4705,14 +4707,14 @@ describe("DeckEditor — the walk it publishes", () => {
     card({ name: "Pyroblast", categoryKind: "side" }),
   ];
 
-  const walk = () => useAppStore.getState().deckWalk;
+  const walk = () => useAppStore.getState().cardWalk.stops;
 
   it("publishes the deck in the order the desk draws it, the command zone first and the rail last", async () => {
     deckGet.mockResolvedValue(detail({}, SPREAD));
     await open();
 
     await waitFor(() =>
-      expect(walk().map((stop) => stop.name)).toEqual([
+      expect(walk().map((stop: CardWalkStop) => stop.name)).toEqual([
         "Kenrith, the Returned King",
         "Lightning Bolt",
         "Pyroblast",
@@ -4737,6 +4739,7 @@ describe("DeckEditor — the walk it publishes", () => {
     await waitFor(() =>
       expect(walk()).toEqual([
         {
+          cardId: "c-Lightning Bolt",
           oracleId: "o-Lightning Bolt",
           name: "Lightning Bolt",
           deck: {
@@ -4766,7 +4769,22 @@ describe("DeckEditor — the walk it publishes", () => {
     screen.getByLabelText("Filter this deck").focus();
     await userEvent.keyboard("bolt");
 
-    await waitFor(() => expect(walk().map((stop) => stop.name)).toEqual(["Lightning Bolt"]));
+    await waitFor(() =>
+      expect(walk().map((stop: CardWalkStop) => stop.name)).toEqual(["Lightning Bolt"]),
+    );
+  });
+
+  /**
+   * **And it says it is the deck.** The store carries one walk, published by whichever surface is
+   * drawing a list of cards — the desk, the search results, the collection, the wishlist — and the
+   * modal reads the label straight into its chevrons' names. A walk that did not carry a noun of
+   * its own would have this editor's chevrons saying somebody else's.
+   */
+  it("names the list its chevrons are stepping along", async () => {
+    deckGet.mockResolvedValue(detail({}, SPREAD));
+    await open();
+
+    await waitFor(() => expect(useAppStore.getState().cardWalk.label).toBe("the deck"));
   });
 
   /** And it goes when the editor does. A walk left behind would step a modal opened from the

@@ -12,6 +12,7 @@ import {
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -688,9 +689,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const paneDeckContext = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
-  /** The write, and deliberately not a read: this component publishes the walk and never reads
-   *  one back, so selecting `deckWalk` here would re-render the editor on its own writes. */
-  const setDeckWalk = useAppStore((s) => s.setDeckWalk);
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
@@ -2326,7 +2324,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * keystroke over the same rows and does strictly more — a sort per pile and a price sum per
    * heading. The part worth being careful about is not the arithmetic but the **write**: a
    * zustand `set` re-runs every subscriber's selector, and the modal is the only thing in the
-   * app that selects `deckWalk`. It is shut nearly always, and shut it draws nothing, so an
+   * app that selects `cardWalk`. It is shut nearly always, and shut it draws nothing, so an
    * ordinary keystroke here costs one selector call and one `Object.is`. That stays true only
    * for as long as this field has one reader — a component that selected the walk to decide
    * something *else* would turn typing in a deck's filter into a re-render of a surface that has
@@ -2338,16 +2336,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const deckWalk = useMemo(() => deckWalkStops(groups, deckId), [groups, deckId]);
 
-  useEffect(() => {
-    setDeckWalk(deckWalk);
-  }, [deckWalk, setDeckWalk]);
-
-  // The clear is a **separate, mount-only** effect and not the one above's cleanup. A cleanup
-  // there would run on every change of `deckWalk`, so each keystroke would write an empty walk
-  // and then the real one — two writes, and a frame in which a modal that is open over this deck
-  // has nowhere to step to. Here the walk is cleared exactly once, when the editor goes: a walk
-  // left behind would step a modal opened from the Collection into a deck nobody has open.
-  useEffect(() => () => setDeckWalk([]), [setDeckWalk]);
+  // Published through the same hook the three card lists use, which is also where the two-effect
+  // shape this needs — publish on change, clear once on unmount — is written down and argued.
+  // `the deck` is what the modal's chevrons say they are stepping along.
+  usePublishCardWalk("the deck", deckWalk);
 
   /**
    * Every finding, filed under each card it names, so a view can mark a card.

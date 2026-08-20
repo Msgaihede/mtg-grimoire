@@ -1518,6 +1518,56 @@ describe("nextOffset", () => {
   });
 });
 
+/**
+ * The list the printings modal's own arrow keys walk, published to the store by this page.
+ *
+ * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, outside every
+ * view, and the order is this page's — a query narrowed by its filter bar and sorted by whichever
+ * header was last clicked. What the modal *does* with a walk belongs to
+ * `AllPrintingsDialog.test.tsx`; what this file owes is that a walk of the right shape is
+ * published at all, and taken back when the page goes.
+ */
+describe("the walk it publishes for the printings modal", () => {
+  const walk = () => useAppStore.getState().cardWalk;
+
+  /**
+   * **Built from the rows rather than from either layout**, which is what keeps the wall and the
+   * table agreeing: they draw the same list in the same order, and a walk built inside one of
+   * them would be a walk the other did not have. `SPARSE` is the orphan — no oracle id, so no
+   * printings to list and no stop to land on — and it is in the middle so this reads as a skip
+   * rather than as a filter.
+   */
+  it("publishes the results in their drawn order, minus the rows with no oracle card", async () => {
+    searchCards.mockResolvedValue(page([BOLT, SPARSE, { ...BOLT, id: "3", name: "Counterspell" }]));
+    wrap(<SearchPage />);
+
+    await waitFor(() =>
+      expect(walk().stops).toEqual([
+        { cardId: "1", oracleId: "o-bolt", name: "Lightning Bolt", deck: null },
+        { cardId: "3", oracleId: "o-bolt", name: "Counterspell", deck: null },
+      ]),
+    );
+  });
+
+  /** The noun the modal's chevrons read into their own names — `Next card in these results`. */
+  it("says which list it is", async () => {
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(walk().label).toBe("these results"));
+  });
+
+  /** And it goes when the page does: a walk left behind would step a modal opened somewhere else
+   *  through a list nobody is looking at. */
+  it("clears the walk when the page goes", async () => {
+    const view = wrap(<SearchPage />);
+    await waitFor(() => expect(walk().stops.length).toBeGreaterThan(0));
+
+    view.unmount();
+
+    expect(walk().stops).toEqual([]);
+  });
+});
+
 describe("needsNextPage", () => {
   it("triggers once four fifths of the loaded rows are behind the viewport", () => {
     expect(needsNextPage(38, 50)).toBe(false);

@@ -159,8 +159,11 @@ describe("buildCardMenu", () => {
     const items = buildCardMenu(BOLT, deps({ openAllPrintings }));
     (find(items, "View all printings") as MenuAction).onSelect();
     // The card's oracle id, never the printing's: "every printing of this card" is asked by the
-    // one field a `Printing` does not carry. `deck: null` is "there is no slot to write to".
+    // one field a `Printing` does not carry. The printing rides along beside it — it is the wall's
+    // "you are here" ring and how the modal finds its place on a page's walk — and `deck: null` is
+    // "there is no slot to write to".
     expect(openAllPrintings).toHaveBeenCalledWith({
+      cardId: "bolt-lea",
       oracleId: "o-bolt",
       name: "Lightning Bolt",
       deck: null,
@@ -173,6 +176,7 @@ describe("buildCardMenu", () => {
     (find(items, "View all printings") as MenuAction).onSelect();
     // Whole, and not a card id: it is what makes a press in the modal a swap rather than a look.
     expect(openAllPrintings).toHaveBeenCalledWith({
+      cardId: "bolt-lea",
       oracleId: "o-bolt",
       name: "Lightning Bolt",
       deck: SLOT,

@@ -5,6 +5,7 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { Figure, FigureRow } from "@/components/Figure";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { count } from "@/lib/counts";
 import { isFinish } from "@/lib/finish";
@@ -216,6 +217,31 @@ export function WishlistPage() {
     }
     return { total, unpriced };
   }, [rows]);
+
+  /**
+   * The wishlist as a **walk**, so the printings modal's chevrons and arrow keys step along it.
+   *
+   * **`artCardId`, not `cardId`, and the difference is this list's own.** A stop is the printing
+   * the modal rings and the card pane opens, which on this wall is what the tile is *drawn as* —
+   * a pinned wish's own printing, and for an any-printing wish the newest printing of its oracle
+   * card. `cardId` is what the wish is *for* and is `null` on half of them, so a walk built from
+   * it would skip every unpinned wish and leave holes in a list the reader can see. The two agree
+   * wherever a walk can be *started* from here anyway: the card menu is offered only on a pinned
+   * wish, and a pinned wish is drawn as the printing it names.
+   *
+   * Memoised because the hook requires it — a fresh array republishes an identical walk under a
+   * new identity and re-renders the modal for nothing.
+   */
+  const walk = useMemo(
+    () =>
+      listWalkStops(rows, (row) => ({
+        cardId: row.artCardId,
+        oracleId: row.oracleId,
+        name: row.name,
+      })),
+    [rows],
+  );
+  usePublishCardWalk("your wishlist", walk);
 
   /**
    * The right-click menu, as one object for the whole page — `CardMenuDeps` is built per
