@@ -498,7 +498,13 @@ fn friendly(e: rusqlite::Error) -> String {
 /// Only on success. A refusal — [`crate::db::BUSY`], [`GONE`], a rejected quantity — changed
 /// nothing, and re-reading after one would be a copy of the whole index to arrive at the same
 /// answer.
-fn with_write_owned<T>(
+///
+/// `pub(crate)` for one caller outside this file: [`crate::reset::collection_clear`], which is
+/// the largest change to `owned` the app can make and would otherwise have to copy these six
+/// lines. It lives over there for the reason `reset`'s own module note gives — a command that
+/// empties the collection does not belong beside the one documented as the only way a
+/// collection row is ever deleted.
+pub(crate) fn with_write_owned<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
