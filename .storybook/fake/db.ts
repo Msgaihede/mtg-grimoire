@@ -2646,9 +2646,16 @@ function toDeckCard(
 /**
  * `search::SEARCH_SORTS`.
  *
- * **There is no `released` key**, and that is not an omission this fake made: the search
- * table has no Released column to press and the frontend has never sent one, so the order
- * `search.rs` used to carry is gone rather than renamed.
+ * **Two of the seven have no column to press.** `manaValue` and `released` are reached from
+ * the filter bar's sort picker instead — the trade the collection's `added` already made,
+ * because the search table has no room for a seventh header (`SearchSortKey` in
+ * `src/lib/ipc.ts` is where that room went). This used to say there was no `released` key at
+ * all, and that was true of the order `search.rs` had lost: SQL nothing could reach. The one
+ * added on 2026-08-20 has a control, so a story can order by it and this file has to answer.
+ *
+ * A `Record` over the whole union rather than the `Partial` {@link orderBy} accepts, so a key
+ * added to `SearchSortKey` and forgotten here is a compile error rather than a picker row
+ * that quietly answers in browse order.
  */
 function searchSorts(
   db: FakeDb,
@@ -2672,6 +2679,19 @@ function searchSorts(
     // the same number: this is what the `currency` sort parameter used to guard, now made
     // structural.
     price: nullsLast((c) => priceColumnAt(db, c, mp), numeric),
+    // `c.cmc`, which is REAL and **nullable**: a card with no printed cost has no mana value,
+    // and `nullsLast` keeps those holes at the bottom in *both* directions rather than letting
+    // a reversal float them to the top. Sorting the printings and grouping afterwards is exact
+    // here rather than a simplification — mana value is a fact about the oracle card, so every
+    // printing in a collapsed group carries the same one, which is the same argument that lets
+    // `search.rs` answer this key with `min(c.cmc)` in its group step.
+    manaValue: nullsLast((c) => c.cmc, numeric),
+    // `c.released_at`, which is ISO `YYYY-MM-DD` — so byte order *is* date order and {@link cmp}
+    // is the whole comparison, exactly as {@link SEARCH_BROWSE_ORDER} below already reads it.
+    // `nullsLast` although {@link FakeCard.releasedAt} is never null: `cards.released_at` is,
+    // `search.rs` spells NULLS LAST in both directions for that reason, and a `reversible` here
+    // would agree with it only for as long as this fixture stayed lucky.
+    released: nullsLast((c) => c.releasedAt, cmp),
   };
 }
 
