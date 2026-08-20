@@ -15,6 +15,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the DDL rather than trusting either copy. CASCADE is also right at the app's one **non-user**
   delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
   _before_ the DELETE, so that cascade fires over nothing.
+- **`reset::decks_clear` is the one delete-site that clears `deck_folders` too, and it needs a
+  second statement to do it** (added 2026-08-20 with the Settings page's danger zone).
+  `DELETE FROM decks` takes `deck_cards`, `deck_categories`, `deck_tags`, `deck_audit`,
+  `deck_undo` and `deck_allocations` by cascade — but `decks.folder_id` is SET NULL for the
+  reason above, so a wipe that stopped there hands the reader an empty folder tree to delete by
+  hand. The covers are a third step and are swept **whole** rather than removed one id at a
+  time, which `deck::delete_deck` must not do: after this command there are no decks left, so
+  every `<id>.webp` in `data/covers/` is an orphan by construction — including one left by the
+  seam `set_cover_image` documents, a commit that failed after the bytes landed. The sweep runs
+  **after the commit**, because the other order costs a deck whose cover vanished for a
+  transaction that rolled back.
+- **`reset::collection_clear` is the largest cascade in the app**, and the number it reports is
+  counted *before* the DELETE for the reason that sounds obvious and is easy to get wrong: after
+  it, `deck_allocations` is empty whether it held ten rows or none, so counting afterwards would
+  report 0 in exactly the case the reader cares about. It goes through
+  `collection::with_write_owned` — the only caller of that helper outside `collection.rs` —
+  because the facet index's `owned` bitset is built from `collection_entries`.
 - **Schema v8 replaced the zone with a category the user owns.** `deck_cards.category_id`
   points at a `deck_categories` row they name, reorder, switch off and delete; the fixed word
   survives only as that row's **`kind`** — `main | side | commander | companion | maybe`,
