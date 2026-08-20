@@ -534,12 +534,22 @@ fn tag_probes(req: &SearchRequest) -> Vec<TagProbe> {
 /// the tag" once per surviving row, and this asks "which cards have the tag" once. Both land
 /// on the same two indexes — `idx_{table}_slug` then `cards`' own key index — and
 /// `tests::the_facet_closure_lookup_probes_both_indexes_and_scans_neither` is what keeps it
-/// there. Losing either is not a slowdown for the *search*: Task 4 measured the correlated form
-/// at 49 ms with the slug index and **531 seconds** without it. **This set form degrades
-/// gracefully where that one hangs** — its plan without the slug index is one `SCAN t` rather
-/// than a scan per card, 57.1 ms against 12.7 ms for `removal` — so the plan test here is a
-/// guard against a 4.5× regression, not against the hang. Both are worth having; they are not
-/// the same claim.
+/// there.
+///
+/// **Three statements read these closures, all three have a different sensitivity to the slug
+/// index, and one figure must never be quoted for another.**
+///
+/// * `tags::query`'s correlated `count(*)` — the tag search box's reach-per-tag — is the
+///   **hang**: 49 ms with the index against **531 seconds** without, because a wide needle is
+///   11 531 candidate tags × a 951 499-row scan each. That number is `TAG_INDEXES_SQL`'s and it
+///   belongs to the type-ahead; nothing on this page can produce it.
+/// * `push_card_filters`' correlated `EXISTS`, pushed once per surviving card, is **unmeasured**
+///   without the index. `search.rs`'s own plan test is careful about exactly this — it claims "a
+///   walk of 400 k-plus closure rows per card" and attaches no figure — and so is this line.
+/// * **This set form is measured on both sides and degrades gracefully**: its plan without the
+///   slug index is one `SCAN t` for the whole statement rather than a scan per anything, 57.1 ms
+///   against 12.7 ms for `removal`. So the plan test here guards a 4.5× regression. Worth
+///   having, and not the first bullet's claim.
 ///
 /// **Measured 2026-08-20 through `node:sqlite`** against a copy of the dev database (116 712
 /// printings, `oracle_tag_cards` at 423 080 rows, 0 NULL `oracle_id`), with v20's
@@ -1587,12 +1597,17 @@ mod tests {
     /// Each closure lookup is an **indexed probe of the slug** feeding an **indexed probe of
     /// `cards`**, and neither table is ever scanned.
     ///
-    /// This is the assertion no test about counts can make, and the one that matters most.
-    /// `search.rs`'s twin pins the correlated form the search uses; this pins the *set* form
-    /// the facets use, which is a different statement with the same two indexes under it.
-    /// Task 4 measured the correlated shape at 49 ms with `idx_art_tag_illustrations_slug` and
-    /// **531 seconds** without it — a hang, not a slowdown — so a plan that fell back to a
-    /// scan here would not read as a regression, it would read as the app being broken.
+    /// This is the assertion no test about counts can make. `search.rs`'s twin pins the
+    /// correlated `EXISTS` the search pushes; this pins the *set* form the facets use, which is
+    /// a different statement over the same two indexes.
+    ///
+    /// **What going red here means, stated so it is not confused with the neighbouring
+    /// claim.** Losing the slug index turns this statement into one `SCAN t` and costs
+    /// **57.1 ms against 12.7 ms** for `removal` (measured 2026-08-20, see [`closure_sql`]) —
+    /// a 4.5× regression, which is worth a test and is worth reading as one. It is **not** the
+    /// 531-second hang: that figure is `tags::query`'s correlated `count(*)` over 11 531
+    /// candidate tags, it belongs to the tag search box, and no plan this test can pin will
+    /// ever produce it.
     #[test]
     fn the_facet_closure_lookup_probes_both_indexes_and_scans_neither() {
         let state = tagged_state("tag-facet-plan");

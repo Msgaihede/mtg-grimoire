@@ -144,11 +144,21 @@ using it.
   which is a fact about the frontend — the Tags page is the only surface that sends tag terms and
   its text box searches **tags**, not cards, so the facet key changes on a chip press and never on
   a keystroke. Nothing is cached for that reason.
-- **Without its slug index this shape degrades rather than hangs, and that is not the search's
-  claim.** `TAG_INDEXES_SQL` records **531 seconds** for the *correlated* `EXISTS` the search
-  pushes — a scan of the closure per surviving card. The facet's set form plans as one `SCAN t`
-  instead: `removal` measured **57.1 ms** against 12.7 ms, same run, same day. A 4.5× regression
-  worth a plan test, and not the hang. Do not quote one figure for the other.
+- **Three statements read the tag closures, all three have a different sensitivity to the slug
+  index, and one figure must never be quoted for another.** They are easy to conflate because
+  they are all "a tag lookup", and the numbers differ by four orders of magnitude:
+  - `tags::query`'s correlated `count(*)` — the tag search box's reach-per-tag — is the **hang**:
+    **49 ms** with the index against **531 seconds** without, because a wide needle is 11 531
+    candidate tags × a 951 499-row scan each. That figure is `TAG_INDEXES_SQL`'s, and it belongs
+    to the type-ahead rather than to anything on the filter row.
+  - `push_card_filters`' correlated `EXISTS`, pushed once per surviving card, is **unmeasured**
+    without the index. `search.rs`'s plan test is deliberately careful here — it claims "a walk of
+    400 k-plus closure rows per card" and attaches no number — and nothing should attach one until
+    somebody measures it.
+  - **The facet's set form is measured on both sides and degrades rather than hangs**: without the
+    slug index it plans as one `SCAN t` for the whole statement rather than a scan per anything,
+    and `removal` measured **57.1 ms** against 12.7 ms, same run, same day. A 4.5× regression,
+    which is what `the_facet_closure_lookup_probes_both_indexes_and_scans_neither` guards.
 - **The art weight floor costs the covering index — the one number here worth watching.**
   `weight` is not in `idx_art_tag_illustrations_slug`, so a floored lookup takes a second seek per
   closure row into the `WITHOUT ROWID` table. Measured the same day, same harness, over a
