@@ -3807,38 +3807,51 @@ describe("DeckEditor — a card's menu", () => {
    * A `useMutation`'s callbacks belong to its observer, so a chain started inside the panel would
    * lose its second half to any dismissal landing during the round trip — the label created and
    * silently never attached. The mutation is mounted in `DeckEditor`, which is still on screen
-   * when the answer arrives, so the menu can close on the press and the chain still completes.
-   * That is what the second half of this case asserts: the panel is **already gone** before
-   * either command has answered.
+   * when the answer arrives, so the row can close the menu on the press and the chain still
+   * completes. That is what the second half of this case asserts: the panel is **already gone**
+   * before either command has answered.
+   *
+   * **The field this drove became a dialog on 2026-08-20**, and the colour is why: it was a text
+   * box inside the panel that created in `DEFAULT_TAG_COLOR` because a menu has no room for a
+   * picker, so every label made this way was gold. Two presses instead of one, and the label
+   * arrives in the colour the reader chose — everything about the *chain* is unchanged, which is
+   * what the three cases here are actually about.
    */
-  it("makes a label from the menu's own field and puts it on the card", async () => {
+  it("makes a label from the menu's New tag… dialog and puts it on the card", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt()]));
     await open();
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
-
-    // The press closes the menu; it does not wait for a network to answer first.
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    // The menu is gone the moment the row is pressed; the dialog is what is left.
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    // The default colour, silently — recolouring is what the Tags dialog is for.
-    await waitFor(() => expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "gold"));
-    // …and the chain's second half runs with the panel long gone.
+    await screen.findByRole("dialog", { name: "New tag" });
+
+    await userEvent.type(screen.getByLabelText("New tag name"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Slate" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
+
+    // The colour the reader picked, where the field this replaced sent gold and never asked.
+    await waitFor(() =>
+      expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "#c8c4bf"),
+    );
+    // …and the chain's second half runs with the dialog long gone.
     await waitFor(() =>
       expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
     );
   });
 
   /**
-   * **The create outlives the menu, driven the hard way**: the reader presses Escape while the
-   * label is still being written.
+   * **The create outlives the surface it was asked for from, driven the hard way**: the reader
+   * presses Escape while the label is still being written.
    *
-   * This is the case the `mutate`-scoped chain could not survive and the reason the write moved
-   * to the editor. The create is held open until after the dismissal, so the observer would be
-   * long gone by the time it answered if it belonged to the panel.
+   * This is the case the `mutate`-scoped chain could not survive and the reason the write lives
+   * in the editor. The create is held open until after the dismissal, so the observer would be
+   * long gone by the time it answered if it belonged to the panel — or, now, to the dialog, which
+   * is a second surface with the same lifetime problem and the same answer.
    */
-  it("attaches a label whose create was still in flight when the menu was dismissed", async () => {
+  it("attaches a label whose create was still in flight when the dialog was dismissed", async () => {
     let landed: (tag: DeckTag) => void = () => {};
     deckTagCreate.mockImplementation(
       () =>
@@ -3851,13 +3864,16 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    await userEvent.type(await screen.findByLabelText("New tag name"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
     await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New tag" })).not.toBeInTheDocument(),
+    );
     expect(deckCardSetTag).not.toHaveBeenCalled();
 
-    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "#d9b95c", cardCount: 0 });
 
     await waitFor(() =>
       expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
@@ -3868,9 +3884,9 @@ describe("DeckEditor — a card's menu", () => {
    * …and a refused *create* is spoken for by the deck's own banner, which is why the mutation is
    * in the editor's refused-write family rather than merely mounted in it.
    *
-   * A label the reader typed and pressed Add on, that never appears and never says why, is the
-   * silent failure this family exists to prevent — and the menu it was typed in is gone by the
-   * time the answer arrives, so there is nowhere else it could be said.
+   * A label the reader typed and pressed Add tag on, that never appears and never says why, is
+   * the silent failure this family exists to prevent — and the dialog it was typed in closes on
+   * the press, so there is nowhere else it could be said.
    */
   it("says so when the menu's tag create is refused", async () => {
     deckTagCreate.mockRejectedValue("The database is busy");
@@ -3879,8 +3895,9 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    await userEvent.type(await screen.findByLabelText("New tag name"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
 
     expect(
       await screen.findByText(/Could not change this deck — The database is busy/),

@@ -187,14 +187,12 @@ export function RenameField({
   label,
   initial,
   pending,
-  extra,
   onSave,
   onCancel,
 }: {
   label: string;
   initial: string;
   pending: boolean;
-  extra?: ReactNode;
   onSave: (name: string) => void;
   onCancel: () => void;
 }) {
@@ -233,7 +231,6 @@ export function RenameField({
         aria-label={label}
         className={META_FIELD}
       />
-      {extra}
       <button type="submit" disabled={pending || trimmed === ""} className={META_SUBMIT}>
         Save
       </button>

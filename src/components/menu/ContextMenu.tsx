@@ -86,11 +86,14 @@ interface RowsContext {
    * Hand focus back and close, with no thing to do — a lazy panel's `onDone`, for a body that
    * finishes *without* a row being chosen.
    *
-   * **It hands the caret back, and until 2026-08-14 it did not.** The reader who presses `Add`
-   * in "Tag card → New tag…" has acted as deliberately as the reader who picks an existing tag
-   * two rows above it, and that row goes through {@link run} — so a panel whose halves disagreed
-   * about the caret dropped it on `<body>` for one of them. This is {@link run} minus the action,
-   * and that is the whole of the difference between them.
+   * **It hands the caret back, and until 2026-08-14 it did not.** The reader who pressed `Add` in
+   * the deck editor's "Tag card → New tag…" field had acted as deliberately as the reader who
+   * picks an existing tag two rows above it, and that row goes through {@link run} — so a panel
+   * whose halves disagreed about the caret dropped it on `<body>` for one of them. This is
+   * {@link run} minus the action, and that is the whole of the difference between them. **That
+   * field is gone since 2026-08-20** — the row opens a dialog now, so no shipped panel has one —
+   * and the contract is unchanged: a `lazy` body that finishes without a row is still a thing
+   * this primitive supports, and `ContextMenu.test.tsx` drives it with a fixture of its own.
    *
    * Not to be confused with an **outside press**, which closes and deliberately hands the caret
    * to nobody: that path calls `onClose` directly and is untouched by this. A reader who clicks
@@ -614,7 +617,11 @@ export function ContextMenu({
     // **A text field inside a panel is a mode, and while the caret is in one every key below
     // belongs to it.** A panel that owns the arrows, Home and End is right for a list of rows and
     // wrong for a caret in a field: typing works and *editing* does not, which is how this arrived
-    // — the deck editor's "Tag card ▸ New tag…" drew the first input any panel has ever held.
+    // — the deck editor's "Tag card ▸ New tag…" drew the first input any panel has ever held, and
+    // on 2026-08-20 it became a row that opens a dialog, so it drew the last one too. The rule
+    // stays because the *kind* does: `lazy` exists for a body a `MenuItem[]` cannot express, and
+    // a field is the reason such a body would be written. Driven by a fixture in the suite now
+    // rather than by a shipped menu, which is worth knowing before trusting a green run here.
     //
     // All of them yield, including `ArrowUp`/`ArrowDown`, which have no caret meaning in a
     // single-line input and could defensibly have stayed the menu's. They do not, and the reason

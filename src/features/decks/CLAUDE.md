@@ -1905,6 +1905,54 @@ price | type`). An **inactive category stays its own group in all three grouping
   filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
   is still nothing mounted, which is what keeps the search off a deck nobody searched from.
   The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
+- **A tag's colour is the reader's own, stored as `#rrggbb`, and `tagColors.ts` is the only file
+  that knows it** (2026-08-20). It was one of **six token words** — `gold`, `ember`, … — and the
+  argument for that was real and is written down where it was made: a stored hex outlives the
+  theme that chose it, so a tag picked against last year's palette comes back as a colour this app
+  no longer uses. What overruled it is that a label is the one thing on a deck screen whose meaning
+  is the reader's rather than the game's, and six words cannot say what a reader means. Four
+  consequences, none of them optional. **The six are still the quick row of the picker** and are
+  still `--color-pie-*`, so the common answer is unchanged and no new colour entered the palette;
+  they are **literal hexes** in `TAG_COLORS` now rather than `var()`s, because these strings are
+  written to a column and a `var()` in a column is a colour with no value outside this build —
+  `tagColors.test.ts` compares them against `index.css` and is the only thing that would catch a
+  palette edit leaving the picker behind. **Rows written before the change still read**, through
+  `LEGACY_TOKENS`, which is a read path that does not expire: a database is not migrated by a build
+  being newer than it, and `CardStack.test.tsx` holds a legacy row on purpose. **`tagFgCss` is
+  computed rather than tabulated** — the quantity tag prints a count *on* the colour, and once the
+  reader picks it no table can hold the answer in advance; the formula is the sRGB luma the retired
+  table's own six answers were built from, and those six are pinned so a "more correct" curve
+  cannot flip one silently. And **nothing in Rust changed**: `deck_tags.color` never had a CHECK,
+  because picking what a colour *is* is the webview's job.
+- **The Tags dialog opens on the act of making one, and the swatch is the recolour** (2026-08-20).
+  Three moves, each with a reason that outlives the redesign that made it. The **add field went to
+  the top**: a reader with no tags is who this screen is hardest for, and the control that fixes
+  that sat below the list *and* below a four-line paragraph. That **paragraph became a subtitle and
+  two section headings** — "a card carries at most one" and "deleting a tag keeps its cards" are
+  true of the whole dialog and are the header's line; "the suggestions come from every deck" was
+  never a paragraph's job, it is what the section is *called*. And the **colour left the rename**,
+  which had made a reader who wanted a different red open the control for changing the word. Both
+  halves still send the other back, because `deck_tag_update` renames **and** recolours in one
+  command with no patch shape — the rename sends `tag.color`, the picker sends `tag.name`, and
+  `TagsDialog.test.tsx` has a case for each. **The picker holds a draft and Done is the write**:
+  `input[type=color]` fires all the way down a drag through the OS dialog, so a row writing on
+  every change would be a `deck_tag_update` per pixel of travel.
+- **"Tag card ▸ New tag…" is a row that opens `NewTagDialog`, and the submenu is `submenu` again**
+  (2026-08-20). It was a text field inside the panel, which is the whole reason that row was
+  `lazy` — a `MenuItem[]` cannot carry an input. The field created in `DEFAULT_TAG_COLOR` because
+  a context menu has no room for a picker, and that was the right trade while a colour was one of
+  six; it stopped being one when the colour became the reader's, since every label born from a
+  menu would then be gold and have to be visited again to be told apart. So the fast path is the
+  radio rows — the deck's existing labels, one press each, unchanged — and making a *new* one is
+  a dialog with the two things a new label needs. **The chain is untouched and must stay
+  untouched**: `createTagFor` is the editor's, `mutateAsync` rather than a `mutate`-scoped
+  `onSuccess`, because those callbacks belong to an *observer* and TanStack drops them when it
+  unmounts — a create started in the dialog and chained there loses its attach to an Escape
+  landing during the round trip, leaving the label made and silently never worn. The dialog closes
+  on the press exactly as the menu did; `DeckEditor.test.tsx` drives that with the create held
+  open across the dismissal. The `newTag` layer carries the **slot** (`cardId`, `categoryId`,
+  `finish`) and the card's name, frozen — `quickCategory`'s exception rather than `export`'s rule,
+  because a right-click names a press that is over rather than a row the deck is re-read into.
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
   `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
   `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded
