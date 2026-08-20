@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { MutedTag } from "@/lib/ipc";
 import { HiddenTagsPanel } from "./HiddenTagsPanel";
-import type { HiddenTags } from "./useHiddenTags";
+import { mutedKey, type HiddenTags } from "./useHiddenTags";
 
 const muted = (slug: string, namespace: MutedTag["namespace"], tagId = `${namespace}-${slug}`) =>
   ({ namespace, tagId, slug, mutedAt: 1_787_252_107 }) satisfies MutedTag;
@@ -86,7 +86,7 @@ export const OneSlugInBothTaxonomies: Story = {
  */
 export const GivingOneBack: Story = {
   args: {
-    hidden: hidden({ tags: [muted("cloud", "art"), muted("sky", "art")], pending: "art-cloud" }),
+    hidden: hidden({ tags: [muted("cloud", "art"), muted("sky", "art")], pending: mutedKey(muted("cloud", "art")) }),
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

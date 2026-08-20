@@ -18,6 +18,9 @@ import type {
 import { startDrag } from "@/test-drag";
 
 const searchCards = vi.hoisted(() => vi.fn());
+/** Hoisted so a test can read what the *facet* request carried — see
+ *  `sends the card text box and the tag chips to the facet index together`. */
+const facetCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the filter row and asks for the set list on the way up, so the
 // mock has to answer it — a missing `listSets` is a rejected query, not a compile error.
 const listSets = vi.hoisted(() => vi.fn());
@@ -62,16 +65,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // Answered **cold** — `ready: false`, every map empty — which leaves every filter control
     // live and every accessible name plain, so this file's queries say what they always said.
     // The greying itself is `FilterBar.test.tsx`'s and `facets.test.ts`'s subject.
-    facetCards: vi.fn().mockResolvedValue({
-      colors: {},
-      manaValues: {},
-      manaX: 0,
-      formats: {},
-      sets: {},
-      owned: { owned: 0, missing: 0 },
-      total: 0,
-      ready: false,
-    }),
+    facetCards,
     listSets,
     prefetchImages,
     collectionAdd,
@@ -297,6 +291,11 @@ const railRow = (label: string) =>
 const lastRequest = () =>
   searchCards.mock.calls[searchCards.mock.calls.length - 1][0] as SearchRequest;
 
+/** The newest **facet** request — a different statement from the page's, and the one whose cost
+ *  `index/facets.rs` documents. */
+const lastFacetRequest = () =>
+  facetCards.mock.calls[facetCards.mock.calls.length - 1][0] as SearchRequest;
+
 /** How tall the scroll container pretends to be. */
 let viewportHeight = 600;
 const scrollTo = vi.fn();
@@ -320,6 +319,19 @@ beforeEach(() => {
   viewportHeight = 600;
   scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
+  // Answered **cold** — `ready: false`, every map empty — which leaves every filter control live
+  // and every accessible name plain, so this file's queries say what they always said. The
+  // greying itself is `FilterBar.test.tsx`'s and `facets.test.ts`'s subject.
+  facetCards.mockReset().mockResolvedValue({
+    colors: {},
+    manaValues: {},
+    manaX: 0,
+    formats: {},
+    sets: {},
+    owned: { owned: 0, missing: 0 },
+    total: 0,
+    ready: false,
+  });
   listSets.mockReset().mockResolvedValue([ALPHA]);
   prefetchImages.mockReset().mockResolvedValue(undefined);
   collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
@@ -489,6 +501,35 @@ describe("picking a tag", () => {
     expect(floor).toHaveAttribute("aria-pressed", "false");
     expect(lastRequest().artWeightFloor).toBeUndefined();
   });
+});
+
+/**
+ * **The card text box and the tag chips reach the facet index in one request**, which two
+ * documents used to say could not happen.
+ *
+ * `index/facets.rs` and `search-faceting.md` both argued that one closure probe per picked slug
+ * was affordable because the Tags page's only text box searches *tags*, so the facet key moves
+ * on a chip press and never on a keystroke. It moves on both: this page also renders
+ * `FilterBar`, whose `#card-search-text` is unconditional and feeds `debouncedText` into
+ * `facetReq.text`. Driven in the shipped window on 2026-08-20 with `plane` picked (38,144
+ * illustrations), one debounced keystroke cost 47 ms, and 142-152 ms with the weight floor on.
+ *
+ * Asserted here because nobody greps for `card-search-text` under `features/tags/`, and a claim
+ * about which requests are reachable is exactly the kind that rots in a `///` where no CI job
+ * can see it.
+ */
+it("sends the card text box and the tag chips to the facet index together", async () => {
+  const user = userEvent.setup();
+  wrap(<TagsPage />);
+  await user.click(await railRow("Landscape"));
+  await waitFor(() => expect(lastFacetRequest().artTags?.include).toEqual(["landscape"]));
+
+  await user.type(screen.getByPlaceholderText("Search cards\u2026"), "bolt");
+
+  await waitFor(() => expect(lastFacetRequest().text).toBe("bolt"));
+  // Both halves in the *same* request. Two requests each carrying one would be a different
+  // design and a cheaper one; this is the one that is shipped.
+  expect(lastFacetRequest().artTags?.include).toEqual(["landscape"]);
 });
 
 describe("hiding a tag", () => {

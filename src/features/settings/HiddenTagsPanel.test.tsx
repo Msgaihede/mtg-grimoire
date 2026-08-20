@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { MutedTag } from "@/lib/ipc";
 import { HiddenTagsPanel } from "./HiddenTagsPanel";
-import type { HiddenTags } from "./useHiddenTags";
+import { mutedKey, type HiddenTags } from "./useHiddenTags";
 
 const muted = (slug: string, namespace: MutedTag["namespace"], tagId = `${namespace}-${slug}`) =>
   ({ namespace, tagId, slug, mutedAt: 1_787_252_107 }) satisfies MutedTag;
@@ -93,7 +93,7 @@ describe("HiddenTagsPanel", () => {
   it("holds every button while one is being given back", () => {
     render(
       <HiddenTagsPanel
-        hidden={state({ tags: [muted("cloud", "art"), muted("sky", "art")], pending: "art-cloud" })}
+        hidden={state({ tags: [muted("cloud", "art"), muted("sky", "art")], pending: mutedKey(muted("cloud", "art")) })}
       />,
     );
 

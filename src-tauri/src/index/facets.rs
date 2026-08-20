@@ -566,12 +566,36 @@ fn tag_probes(req: &SearchRequest) -> Vec<TagProbe> {
 ///
 /// The widest tag in the corpus lands on the same 25 ms the FTS text bitset costs at 100 129
 /// matches, which [`run_facets`] already calls the floor for any design. **One statement per
-/// picked slug**, so a request naming three tags pays three of these; the frequency is what
-/// makes that affordable, and it is a fact about the *frontend* rather than about this file —
-/// the Tags page is the only surface that sends tag terms, its text box searches **tags** and
-/// not cards, so the facet key changes on a chip press and never on a keystroke. Nothing here
-/// is cached for that reason; a caller that ever puts a card-text box beside the chips is the
-/// one that has to revisit it.
+/// picked slug**, so a request naming three tags pays three of these, and nothing here is cached.
+///
+/// **This paragraph used to say a keystroke could not reach these statements. It was wrong about
+/// the page as shipped, and the correction is measured.** The claim was that the Tags page's only
+/// text box searches *tags*, so the facet key moves on a chip press and never on a keystroke —
+/// true of the rail's type-ahead, and it overlooked that the same page also renders `FilterBar`,
+/// whose `#card-search-text` input is unconditional and feeds `debouncedText` straight into
+/// `facetReq.text`. So a debounced keystroke **does** re-run one closure probe per picked slug
+/// beside the FTS bitset. Driven in the shipped window on 2026-08-20 with the real 952 729-row
+/// closure and `plane` (38 144 illustrations) picked: typing into the card box produced exactly
+/// one `facet_cards` carrying both `text` and `artTags`, at **47 ms**. Debounced, so it is one
+/// call per pause and not one per character.
+///
+/// Measured over the same taxonomy, through the app, best of three (debug build, so a release
+/// build is the faster half of these):
+///
+/// | request | ms |
+/// | --- | --- |
+/// | no text, no tag | 30 |
+/// | text only | 6 |
+/// | `plane` | 63 |
+/// | `plane` + text | 46–56 |
+/// | `plane` + text + floor | 142–152 |
+/// | `plane` + `humanoid` + text | 65–82 |
+/// | `dog` (439 illustrations) | 5 |
+///
+/// Two things worth reading off that table rather than the prose. **Text does not add to a tag**
+/// — `plane` + text is no dearer than `plane` alone, because the FTS bitset narrows what
+/// [`compute`] then walks. And **the cost is per picked slug and scales with the slug's breadth**,
+/// which is why a second wide tag adds ~20 ms and `dog` costs nothing at all.
 ///
 /// **The art weight floor costs the covering index, and that is the one number worth watching.**
 /// `weight` is not in `idx_art_tag_illustrations_slug`, so each closure row takes a second seek

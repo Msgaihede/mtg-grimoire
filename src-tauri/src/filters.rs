@@ -570,6 +570,17 @@ pub fn picked_sets(sets: &[String]) -> Vec<String> {
 /// results rather than from a reader's keyboard; `tags::query` is where typed text is matched,
 /// against `slug_norm` and never against `slug`. Case-folding here would quietly make `slug` a
 /// case-insensitive column in one place and an exact one everywhere else.
+///
+/// **And no cap, where [`picked_sets`] has [`MAX_SET_FILTER`] — deliberately, and said here
+/// because a reader who has just read that one will come looking for this one.** The two lists
+/// reach the SQL by different routes: sets become one `IN (…)` whose length *is* the bound
+/// parameter count, so a pathological list is a statement SQLite has to be protected from,
+/// while tags become **one subquery each** and a pathological list is a slow query rather than
+/// an oversized statement. It is also a list nothing can grow by accident: a chip arrives one
+/// press at a time from a rail, each is visible and removable, and includes intersect — so the
+/// twentieth chip answers fewer cards than the nineteenth and a reader stops long before the
+/// cost matters. If a future caller ever builds this list from something other than presses,
+/// that is the assumption that has changed and this is the paragraph to revisit.
 pub fn picked_tags(slugs: &[String]) -> Vec<String> {
     let mut picked: Vec<String> = slugs
         .iter()

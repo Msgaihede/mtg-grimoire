@@ -18,6 +18,16 @@ export const HIDDEN_TAGS_KEY = ["tags-muted"];
  */
 const RAIL_ROOTS = [["tag-children"], ["tag-search"]];
 
+/**
+ * A muted tag's identity, in one string — `muted_tags`' own primary key.
+ *
+ * `tagFilters`' `chipKey` is the same idea for a `TagHit` and is deliberately not reused: that one
+ * keys on `(namespace, slug)`, which is right for a chip (a slug is what a filter sends) and wrong
+ * here (a mute survives a rename precisely because it is keyed on the uuid).
+ */
+export const mutedKey = (tag: Pick<MutedTag, "namespace" | "tagId">): string =>
+  `${tag.namespace}:${tag.tagId}`;
+
 /** What {@link HiddenTagsPanel} draws. */
 export interface HiddenTags {
   /** `null` until the read lands. Distinct from `[]`, which is "nothing is hidden" — a real
@@ -27,8 +37,15 @@ export interface HiddenTags {
   tags: readonly MutedTag[] | null;
   /** Give one back. Keyed on `(namespace, tagId)`, which is what `muted_tags` is keyed on. */
   show: (tag: MutedTag) => void;
-  /** The `tagId` currently being given back, or `null`. One at a time is all a list of buttons
-   *  can start, and naming *which* is what lets the pressed row alone go quiet. */
+  /** The tag currently being given back as a {@link mutedKey}, or `null`. One at a time is all a
+   *  list of buttons can start, and naming *which* is what lets the pressed row alone go quiet.
+   *
+   *  **A `(namespace, tagId)` key and not a bare `tagId`**, which is the rule everywhere else a
+   *  tag is identified in this app: the two taxonomies are separate id spaces, so a uuid they
+   *  happened to share would put `aria-busy` on both rows. Cosmetic today — the whole list is
+   *  disabled while a write is in flight, so neither row is pressable either way — and spelled
+   *  correctly anyway, because this is the one place on the page that would otherwise key a tag
+   *  on half its identity. */
   pending: string | null;
   /** A refused unmute **or** a failed read, as a sentence.
    *
@@ -75,7 +92,7 @@ export function useHiddenTags(): HiddenTags {
   return {
     tags: list.data ?? null,
     show: (tag) => unmute.mutate({ namespace: tag.namespace, tagId: tag.tagId }),
-    pending: unmute.isPending ? unmute.variables.tagId : null,
+    pending: unmute.isPending ? mutedKey(unmute.variables) : null,
     // The write's refusal first, then the read's. A read that failed answered no rows, so there
     // is nothing to press and no write to be newer than it; once one *has* been pressed the read
     // must have landed. So this is a precedence rather than a race, and it is the same

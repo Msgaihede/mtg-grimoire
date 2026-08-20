@@ -140,10 +140,25 @@ using it.
   `SEARCH t USING COVERING INDEX idx_oracle_tag_cards_slug (slug=?)` feeding
   `SEARCH c USING COVERING INDEX idx_cards_oracle (oracle_id=?)`, pinned by
   `the_facet_closure_lookup_probes_both_indexes_and_scans_neither`. **It is one statement per
-  picked slug**, so three tags cost three of them; that is affordable because of *when* they run,
-  which is a fact about the frontend — the Tags page is the only surface that sends tag terms and
-  its text box searches **tags**, not cards, so the facet key changes on a chip press and never on
-  a keystroke. Nothing is cached for that reason.
+  picked slug**, so three tags cost three of them, and nothing is cached.
+- **A keystroke DOES reach those statements, and this file used to say it could not.** The claim
+  was that the Tags page's only text box searches *tags*, so the facet key moves on a chip press
+  and never on a keystroke. That is true of the rail's type-ahead and false of the page: it also
+  renders `FilterBar`, whose `#card-search-text` is unconditional and feeds `debouncedText` into
+  `facetReq.text`. Driven in the shipped window **2026-08-20** with the real 952,729-row art
+  closure and `plane` (38,144 illustrations) picked, typing into the card box produced exactly one
+  `facet_cards` carrying both `text` and `artTags`, at **47 ms** — debounced, so one call per
+  pause rather than one per character. Measured over the same taxonomy, through the app, best of
+  three, **debug build**: nothing picked 30 ms · text only 6 ms · `plane` 63 ms · `plane`+text
+  46–56 ms · `plane`+text+floor 142–152 ms · `plane`+`humanoid`+text 65–82 ms · `dog` 5 ms. **Text
+  does not add to a tag** (the FTS bitset narrows what `compute` then walks) and **the cost is per
+  picked slug and scales with that slug's breadth**, which is why `dog` costs nothing and a second
+  wide tag adds ~20 ms.
+- **The floored facet probe, at real breadth**: `plane` 63 ms unfloored against **153–174 ms**
+  floored — **2.4×**, the same shape as the synthetic 25.6 → 91.3 ms below and about the same
+  ratio, so that estimate held up. Same run, same day, debug build. It is not a reason to widen
+  `idx_art_tag_illustrations_slug`: see `index/facets.rs`, where `(slug, weight)` is measured at
+  ten times *worse* than the status quo against the real closure.
 - **Three statements read the tag closures, all three have a different sensitivity to the slug
   index, and one figure must never be quoted for another.** They are easy to conflate because
   they are all "a tag lookup", and the numbers differ by four orders of magnitude:
@@ -151,10 +166,14 @@ using it.
     **49 ms** with the index against **531 seconds** without, because a wide needle is 11 531
     candidate tags × a 951 499-row scan each. That figure is `TAG_INDEXES_SQL`'s, and it belongs
     to the type-ahead rather than to anything on the filter row.
-  - `push_card_filters`' correlated `EXISTS`, pushed once per surviving card, is **unmeasured**
-    without the index. `search.rs`'s plan test is deliberately careful here — it claims "a walk of
-    400 k-plus closure rows per card" and attaches no number — and nothing should attach one until
-    somebody measures it.
+  - `push_card_filters`' card filter **is no longer a correlated `EXISTS` on its include arm**,
+    which is what this bullet used to describe. Since 2026-08-20 an include is
+    `subject_id IN (SELECT … WHERE slug = ?)` — the closure is read once for the slug and `cards`
+    is driven through `idx_cards_illustration` — and the collapsed count it feeds measured
+    **315 ms → 8 ms** on `dog` and **725 ms → 614 ms** on `plane`, with the weight floor going
+    from 1.7–3.6× to free. The *exclude* arm is still a correlated `NOT EXISTS`, deliberately, and
+    `filters.rs` says why in the one place a reader would try to "simplify" it. Its cost without
+    the slug index is still unmeasured and nothing should attach a number to it.
   - **The facet's set form is measured on both sides and degrades rather than hangs**: without the
     slug index it plans as one `SCAN t` for the whole statement rather than a scan per anything,
     and `removal` measured **57.1 ms** against 12.7 ms, same run, same day. A 4.5× regression,

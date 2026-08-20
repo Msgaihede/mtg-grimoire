@@ -427,9 +427,15 @@ struct Graph {
 /// * **That a parent exists.** Ids the file never defines are already gone by the time this
 ///   runs (see [`Tag::parents`]), so there is nothing here to index out of bounds.
 ///
-/// A `Vec<Vec<u32>>` rather than a memo table: 4 521 tags at depth ≤ 5 is a walk measured in
-/// microseconds, and the simple version is the one whose termination argument fits in the
-/// paragraph above.
+/// A `Vec<Vec<u32>>` rather than a memo table, and it has to be affordable for **both** datasets
+/// now that this engine is shared. The oracle side is 4 521 tags at depth ≤ 5, which is a walk
+/// measured in microseconds; the art side is the bigger claim at **11 531 tags, max depth 10, and
+/// 43 % of them with more than one parent** (`art.rs`'s module table). Still fine — depth bounds
+/// the walk and every branch stops at the `seen` set — and it is no longer a guess: the whole art
+/// ingest, of which this is one step, measured **58.3 s** end to end for 952 729 closure rows in a
+/// debug build, and that time is dominated by the inserts rather than by this. The simple version
+/// is the one whose termination argument fits in the paragraph above; if a third dataset ever
+/// arrives deeper or wider than the art one, this is the line to re-read.
 fn ancestor_closures(tags: &[Tag]) -> Vec<Vec<u32>> {
     let mut out = Vec::with_capacity(tags.len());
     for start in 0..tags.len() as u32 {

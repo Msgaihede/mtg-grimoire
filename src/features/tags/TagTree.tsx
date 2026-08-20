@@ -30,8 +30,10 @@ import { chipKey } from "./tagFilters";
  *
  * ## Three things it has to get right, each with a fact behind it
  *
- * **It is lazy.** `tag_children` with no slug answers the *roots* and there are 3 219 art roots
- * alone; the two taxonomies hold ~16 000 tags between them. A level is fetched by the component
+ * **It is lazy.** `tag_children` with no slug answers the *roots*, and there are thousands of art
+ * roots alone — the two taxonomies hold ~16 000 tags between them, and
+ * `docs/superpowers/research/2026-08-20-scryfall-art-tags.md` is the dated count, since Scryfall
+ * regenerates that file daily. A level is fetched by the component
  * that draws it, which mounts when its disclosure is opened and never before — the same promise
  * `MenuLazy` makes, for the same reason.
  *

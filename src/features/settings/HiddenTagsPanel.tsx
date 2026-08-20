@@ -4,7 +4,7 @@ import { TAG_NAMESPACE_LABEL } from "@/features/tags/namespaces";
 import { cn } from "@/lib/utils";
 import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
-import type { HiddenTags } from "./useHiddenTags";
+import { mutedKey, type HiddenTags } from "./useHiddenTags";
 
 /**
  * The tags the reader has switched off, and the only way back.
@@ -56,8 +56,9 @@ export function HiddenTagsPanel({ hidden }: { hidden: HiddenTags }): JSX.Element
           {tags.map((tag) => (
             <li
               // The two taxonomies are separate id spaces that share plenty of slugs, so one
-              // uuid appearing in both is two rows and neither half alone is a key.
-              key={`${tag.namespace}:${tag.tagId}`}
+              // uuid appearing in both is two rows and neither half alone is a key — which is
+              // what `mutedKey` spells, here and on the busy flag below.
+              key={mutedKey(tag)}
               className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-2 first:border-t-0 first:pt-0"
             >
               <p className="flex min-w-0 items-baseline gap-2 text-sm">
@@ -74,7 +75,7 @@ export function HiddenTagsPanel({ hidden }: { hidden: HiddenTags }): JSX.Element
                 type="button"
                 onClick={() => show(tag)}
                 disabled={pending !== null}
-                aria-busy={pending === tag.tagId || undefined}
+                aria-busy={pending === mutedKey(tag) || undefined}
                 // Named for the tag rather than for the action: a column of buttons all called
                 // "Show again" is a column a screen reader cannot tell apart, and the visible
                 // word still leads the name (WCAG 2.5.3).

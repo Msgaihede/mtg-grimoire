@@ -242,8 +242,10 @@ All of it, and each of these was driven rather than reasoned about:
   is Task 11's work, live.
 - **An exclude chip**: the label flips to "not dog, art tag, excluded. Press to include." and the
   count goes to the complement.
-- **"Hide background details"** changes the count: 701 → 692 cards, **1,193 ms** press-to-caption
-  cold, 567 ms warm (debug build). See gate 2 for what that cost was made of.
+- **"Hide background details"** changes the count: 701 → 692 cards, at **68 ms** press-to-caption
+  as shipped. It cost 1,193 ms cold (567 ms warm) when the pass first walked this list, and gate 2
+  is the story of the seventeenfold difference — **quote the 68 ms**, which is what the branch
+  ships; the older figure is only there because it is what the fix was measured against.
 - **A multi-parent tag appears under both parents**: `cloudy sky` under `cloud` and under `sky`.
 - **Muting** took `cloud` off the rail (4,142 → 4,141 roots) and raised the status line.
 - **The console stayed clean** for the whole pass and `error_log` was empty at the end.
@@ -312,9 +314,19 @@ Recorded because two of them are things the pass itself got wrong, and one is a 
 5. **A text-plus-tag search is unmeasured** under the new plan — see above.
 6. **The rail's scroll was measured with `scrollTop` writes, not a wheel.** Frame-rate evidence for
    the layout and paint, not for the wheel-event path or WebView2's own scrolling.
-7. **`3,219 art roots` is written in nine places and the live count was 3,215** (and 4,142 on
-   `Both`), both on 2026-08-20. The three lines this branch was already editing now say
-   "thousands" and point at the dated research doc; the other six were left alone, because the
-   file regenerates daily and each of those sites carries its own date. The deltas make the point
-   better than the prose does: 11,531 → 11,530 tags and 951,499 → 952,729 closure rows between two
-   readings of the same week.
+7. **`3,219 art roots` is written down in several places and the live count was 3,215** (4,142 on
+   `Both`), both on 2026-08-20. Don't take a count from this line — this file said "nine places"
+   and was wrong, in a document whose whole subject is figures that rot. Ask instead:
+
+   ```powershell
+   Select-String -Path (Get-ChildItem -Recurse -Include *.ts,*.tsx,*.rs,*.md) -Pattern '3,?219|3 219'
+   ```
+
+   **`grep`/ripgrep will under-count it**, which is how the earlier census went wrong: ripgrep
+   calls `.storybook/fake/db.ts` binary and silently skips it, and that file carries one of them.
+
+   The lines this branch was already editing now say "thousands" and point at
+   `docs/superpowers/research/2026-08-20-scryfall-art-tags.md`, which is where a dated count
+   belongs; the rest were left, because Scryfall regenerates that file daily and each site carries
+   its own date. The deltas make the case better than the prose: 11,531 → 11,530 tags and
+   951,499 → 952,729 closure rows between two readings in the same week.

@@ -74,9 +74,10 @@ const meta = {
           "One level of the tag graph at a time, or the type-ahead's answer when the box has " +
           "text in it.\n\n" +
           "**It is lazy, and the fetch *is* the mount.** `tag_children` with no slug answers " +
-          "the roots, and there are 3,219 art roots in the real taxonomy against ~16,000 tags " +
-          "across the two files (measured 2026-08-20 — " +
-          "`docs/superpowers/research/2026-08-20-scryfall-art-tags.md`). A level is fetched by " +
+          "the roots, and there are thousands of art roots in the real taxonomy against " +
+          "~16,000 tags across the two files — " +
+          "`docs/superpowers/research/2026-08-20-scryfall-art-tags.md` holds the dated count, " +
+          "which is where one belongs. A level is fetched by " +
           "the component that draws it, which mounts when its disclosure is opened and never " +
           "before, so a closed branch has asked the backend nothing.\n\n" +
           "**A tag renders under EACH of its parents.** 43% of art tags have more than one " +

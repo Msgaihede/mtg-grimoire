@@ -105,6 +105,13 @@ export function FilterBar({
    * cannot be passed half — and so the store read stays inside {@link ViewToggle}, where a
    * component that re-renders on a preference nothing above it reads costs the filter row
    * nothing.
+   *
+   * **A closed union widened by hand, where `ZoomSection` and `ViewId` are derived** — so a
+   * third page with a wall of its own has to add its name here as well as to the store. That is
+   * the intended cost rather than an oversight: the two are not the same list (a zoom section
+   * exists for the printings modal, which draws no filter row) and deriving one from the other
+   * would tie a page's *layout* preference to whether it happens to be zoomable. Two entries is
+   * too few to be worth a mechanism; at four, derive it.
    */
   layoutFor?: "search" | "tags";
 }) {
