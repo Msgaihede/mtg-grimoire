@@ -6,7 +6,6 @@ import {
   chipKey,
   EMPTY_SELECTION,
   removeChip,
-  selectionKey,
   termsFor,
   toggleChipMode,
 } from "./tagFilters";
@@ -132,8 +131,8 @@ describe("termsFor", () => {
     });
   });
 
-  /** Sorted before they leave, which is what lets {@link selectionKey} ignore the order the
-   *  reader picked them in. `filters::picked_tags` sorts and dedups on the Rust side anyway,
+  /** Sorted before they leave, which is what lets a key derived from this payload ignore the
+   *  order the reader picked them in. `filters::picked_tags` sorts and dedups on the Rust side anyway,
    *  so this changes no answer — only how many times the answer is asked for. */
   it("sorts each list so two orders make one payload", () => {
     const a = addChip(addChip(EMPTY_SELECTION, artHit("water")), artHit("forest"));
@@ -169,47 +168,20 @@ describe("termsFor", () => {
     const s = addChip(EMPTY_SELECTION, artHit("landscape"));
     expect(termsFor(s).artWeightFloor).toBeUndefined();
   });
-});
-
-describe("selectionKey", () => {
-  /**
-   * The query key is what stops a re-render from refetching. Chip ORDER must not change it:
-   * the same two tags picked in either order is one search.
-   */
-  it("derives a key that ignores the order chips were added in", () => {
-    const a = addChip(addChip(EMPTY_SELECTION, artHit("forest")), artHit("water"));
-    const b = addChip(addChip(EMPTY_SELECTION, artHit("water")), artHit("forest"));
-    expect(selectionKey(a)).toBe(selectionKey(b));
-  });
-
-  it("tells the two namespaces' same slug apart", () => {
-    expect(selectionKey(addChip(EMPTY_SELECTION, artHit("dragon")))).not.toBe(
-      selectionKey(addChip(EMPTY_SELECTION, oracleHit("dragon"))),
-    );
-  });
-
-  it("tells an include from an exclude", () => {
-    const s = addChip(EMPTY_SELECTION, artHit("forest"));
-    expect(selectionKey(s)).not.toBe(selectionKey(toggleChipMode(s, "forest", "art")));
-  });
-
-  it("changes when the floor starts narrowing something", () => {
-    const s = addChip(EMPTY_SELECTION, artHit("landscape"));
-    expect(selectionKey(s)).not.toBe(selectionKey({ ...s, floor: "strong" }));
-  });
 
   /**
-   * The selection's `namespace` is the *search box's* — which taxonomy the tree and the
-   * type-ahead draw. It filters no card, so it must not reach the card query's key or flipping
-   * the tree's toggle would refetch the wall it does not describe.
+   * The selection's `namespace` is the **search box's** — which taxonomy the tree and the
+   * type-ahead draw. It filters no card, so it must not reach the payload, or the query key
+   * derived from that payload would refetch the whole wall when a reader flipped a toggle that
+   * describes the rail.
+   *
+   * Kept from the deleted `selectionKey` block, because it is the one claim there that was about
+   * *this* function: everything else it asserted — order, the two namespaces' shared slugs, the
+   * floor — is asserted above over the payload the key is now derived from.
    */
-  it("ignores which taxonomy the search box is showing", () => {
+  it("says nothing about which taxonomy the search box is showing", () => {
     const s = addChip(EMPTY_SELECTION, artHit("forest"));
-    expect(selectionKey(s)).toBe(selectionKey({ ...s, namespace: "oracle" }));
-  });
-
-  it("is empty-ish for an empty selection, matching its empty payload", () => {
-    expect(selectionKey(EMPTY_SELECTION)).toBe(selectionKey({ ...EMPTY_SELECTION, chips: [] }));
+    expect(termsFor(s)).toEqual(termsFor({ ...s, namespace: "oracle" }));
   });
 });
 

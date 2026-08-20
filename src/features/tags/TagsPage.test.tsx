@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -12,6 +12,7 @@ import type {
   SearchResponse,
   SetSummary,
   TagHit,
+  TagProgressEvent,
   TagStatus,
 } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
@@ -30,6 +31,15 @@ const tagChildren = vi.hoisted(() => vi.fn());
 const tagMute = vi.hoisted(() => vi.fn());
 const artTagsStatus = vi.hoisted(() => vi.fn());
 const oracleTagsStatus = vi.hoisted(() => vi.fn());
+/**
+ * The art taxonomy's progress channel, captured rather than stubbed.
+ *
+ * The page subscribes to it so a finished ingest takes the notice down without a reload, and the
+ * only way to drive that is to hold the callback the page handed over. A bare
+ * `mockResolvedValue(() => {})` would leave the subscription unregistered from the test's point
+ * of view and the heal untestable.
+ */
+const onArtTagProgress = vi.hoisted(() => vi.fn());
 /**
  * The shell's own reads, for the two tests that mount this page **inside `AppShell`**.
  *
@@ -71,6 +81,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     tagMute,
     artTagsStatus,
     oracleTagsStatus,
+    onArtTagProgress,
     syncStatus,
     syncRun: vi.fn(),
     onSyncProgress: vi.fn().mockResolvedValue(() => {}),
@@ -269,6 +280,9 @@ function wrapInShell(ui: ReactElement) {
   );
 }
 
+/** The page's `art-tags:progress` handler, once it has subscribed. */
+let artProgress: ((e: TagProgressEvent) => void) | null = null;
+
 /** One rail row, by the accessible name `TagTree` composes: label, taxonomy, reach. */
 const railRow = (label: string) =>
   screen.findByRole("button", { name: new RegExp(`^${label}, (art|oracle) tag`) });
@@ -327,6 +341,16 @@ beforeEach(() => {
   });
   deckAddCard.mockReset();
   deckGet.mockReset();
+  artProgress = null;
+  onArtTagProgress.mockReset().mockImplementation((cb: (e: TagProgressEvent) => void) => {
+    artProgress = cb;
+    return Promise.resolve(() => {});
+  });
+  // **The shell-mounted tests share the app's module-level client**, whose `staleTime` is 30 s —
+  // so without this the second of them reads the first's cached search page instead of calling
+  // `searchCards`, and passes only because both fixtures happen to be the same card.
+  // `AppShell.test.tsx` clears it in its own `beforeEach` for exactly this reason.
+  queryClient.clear();
   useAppStore.setState({
     activeView: "tags",
     tagsView: "grid",
@@ -545,9 +569,15 @@ describe("the results wall", () => {
    *
    * `collapse` folds every printing of a card into one row drawn by the newest, which for an art
    * theme is precisely wrong: the tagged thing is *this illustration*, so a collapsed row would
-   * show a reader a picture that has nothing to do with what they searched for. Two assertions,
-   * because either alone can pass while the feature is broken — the payload, and the two tiles
-   * the reader actually sees.
+   * show a reader a picture that has nothing to do with what they searched for.
+   *
+   * **The payload assertion is the whole of the proof, and the two tiles are not.** The mock
+   * answers `[BOLT, BOLT_2ED]` whatever it is asked, so `toHaveLength(2)` says the wall draws two
+   * rows when handed two rows — true of a collapsing page as well. It is kept because it is what
+   * a reader sees and it fences the wall against dropping a row for some unrelated reason; the
+   * claim about *collapse* rests on `collapse` being absent from the request. A test that made
+   * the two independent would need the mock to fold its own rows, which is the backend's job and
+   * `search.rs`' subject.
    */
   it("does not collapse printings, so each tagged illustration is its own row", async () => {
     searchCards.mockResolvedValue(page([BOLT, BOLT_2ED]));
@@ -867,6 +897,12 @@ describe("dragging a tile", () => {
     await screen.findByRole("button", { name: "Lightning Bolt" });
     const tile = container.querySelector('[draggable="true"]') as HTMLElement;
 
+    // **The guard for the `queryClient.clear()` above, and it is not ceremony.** These two
+    // tests share the app'''s module-level client at a 30 s `staleTime`, so without that clear
+    // this one reads the previous test'''s cached page and never calls the backend at all —
+    // measured, not assumed. It passes either way while both fixtures are the same card, which
+    // is exactly the kind of test that stops meaning anything without anyone noticing.
+    expect(searchCards).toHaveBeenCalled();
     const held = await startDrag(tile);
     await held.over(screen.getByRole("button", { name: "Decks" }));
     await held.drop();
@@ -990,6 +1026,51 @@ describe("a taxonomy this machine has never downloaded", () => {
     expect(await screen.findByText(/oracle tags have not been downloaded/i)).toBeInTheDocument();
     // Direction rather than mood: there is no button for this anywhere in the app.
     expect(screen.getByText(/fetches them in the background/i)).toBeInTheDocument();
+  });
+
+  /**
+   * **The half that shipped broken and is the reason for the art hook.**
+   *
+   * `AppShell` mounts `useOracleTagProgress`, so the *oracle* sentence takes itself down when
+   * that taxonomy lands. Nothing mounted an art twin, so on the exact cold first run this notice
+   * exists for, the sentence about the page's **primary** taxonomy sat there until a window
+   * refocus — healed by a 30 s `staleTime` rather than by the thing that finished.
+   */
+  it("takes the art sentence down by itself when the ingest finishes", async () => {
+    artTagsStatus.mockResolvedValue(NEVER);
+    tagChildren.mockResolvedValue([REMOVAL]);
+    wrap(<TagsPage />);
+    await screen.findByText(/art tags have not been downloaded/i);
+
+    // The ingest lands. The page hears it on `art-tags:progress` — the channel `lib.rs`'s
+    // startup refresh emits on — and re-reads a taxonomy that is now there.
+    artTagsStatus.mockResolvedValue(INGESTED);
+    tagChildren.mockResolvedValue([LANDSCAPE, REMOVAL]);
+    act(() => artProgress?.({ phase: "done", done: 1, total: 1 }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/art tags have not been downloaded/i)).not.toBeInTheDocument(),
+    );
+    // And the rail with it: healing the sentence while leaving the rail empty for the client's
+    // whole 30 s `staleTime` would be the more visible half left undone.
+    expect(await railRow("Landscape")).toBeInTheDocument();
+  });
+
+  /** A failed refresh leaves the taxonomy exactly where it was, so there is nothing new to read
+   *  — but `refreshing` is still true on the status this window last saw, and only a refetch
+   *  takes it down. Both terminal phases, not just `done`. */
+  it("re-reads on a failed refresh too, which is what clears a stuck `refreshing`", async () => {
+    artTagsStatus.mockResolvedValue(NEVER);
+    tagChildren.mockResolvedValue([REMOVAL]);
+    wrap(<TagsPage />);
+    await screen.findByText(/art tags have not been downloaded/i);
+    const readsBefore = artTagsStatus.mock.calls.length;
+
+    act(() => artProgress?.({ phase: "error", done: 0, total: 0 }));
+
+    await waitFor(() => expect(artTagsStatus.mock.calls.length).toBeGreaterThan(readsBefore));
+    // The taxonomy really is still absent, so the sentence stays. It is the *read* that was owed.
+    expect(screen.getByText(/art tags have not been downloaded/i)).toBeInTheDocument();
   });
 
   it("says nothing at all when both taxonomies are in", async () => {

@@ -18,12 +18,24 @@
  * is the list's controls, and this is a card the reader filed somewhere from a menu that has
  * already closed.
  *
+ * **One caller is not about a card at all**, and it belongs here anyway: the Tags page's rail
+ * draws this for a refused `tag_mute`. The name is its first caller's; the *mechanism* in the
+ * paragraph above is exactly that case — the menu closes before the answer arrives, so the
+ * surface has to carry the sentence — and one more hand-copy of this markup is what the
+ * consolidation below was fought to avoid.
+ *
  * **The deck editor drew its own copy of this until 2026-08-16** — the same `AnimatePresence`,
  * the same `motion.div {...statusLine}`, the same `role="alert"` and a byte-identical `<p>` class
  * string, differing only in a `shrink-0` on the wrapper. There was no stated opt-out at that
  * site: the comment there explained what the banner was *for* and never why it was not this
  * component. `className` is what closed the one real difference, and the rule above holds
- * unbroken for all five surfaces now.
+ * unbroken for every surface now.
+ *
+ * **A count of the surfaces is deliberately not written down here.** This paragraph said "all
+ * five" while there were eight, having gone stale twice — a count is a fact about a *tree*, and
+ * a prose-only edit routes to neither CI job, so nothing goes red when one rots.
+ * `grep -rn CardMenuRefusal src/` is the census. What is worth stating is the *rule*: every
+ * surface that offers a card menu draws this component rather than its own copy of it.
  */
 import { AnimatePresence, motion } from "motion/react";
 import { statusLine } from "@/lib/motion";
@@ -37,11 +49,11 @@ export function CardMenuRefusal({
   /**
    * What the *host's* layout needs of this box, merged after `overflow-hidden`.
    *
-   * Four of the five surfaces need nothing and pass nothing; the deck editor's column is a flex
-   * one and passes `shrink-0`. Deliberately **not** hoisted into the string below: whether a
-   * banner may be squeezed is a fact about the box it is drawn in, and hoisting it would be a
-   * layout hypothesis about four other pages that nobody has measured — this repo's standard
-   * being a figure off the shipped window rather than an inference from a class string.
+   * Most surfaces need nothing and pass nothing; the ones that do are flex columns and pass
+   * `shrink-0`. Deliberately **not** hoisted into the string below: whether a banner may be
+   * squeezed is a fact about the box it is drawn in, and hoisting it would be a layout
+   * hypothesis about every other page that nobody has measured — this repo's standard being a
+   * figure off the shipped window rather than an inference from a class string.
    */
   className?: string;
 }) {

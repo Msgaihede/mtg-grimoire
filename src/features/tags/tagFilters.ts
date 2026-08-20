@@ -20,8 +20,9 @@ export interface TagChip {
  * showing, and the art weight floor.
  *
  * **`namespace` is the *box's*, not a filter.** It decides which taxonomy the type-ahead and
- * the tree draw; a chip carries its own namespace and is unaffected by it. {@link selectionKey}
- * deliberately leaves it out for that reason.
+ * the tree draw; a chip carries its own namespace and is unaffected by it. {@link termsFor}
+ * deliberately leaves it out for that reason, which is what keeps a key derived from that
+ * payload from refetching the wall when the rail changes taxonomy.
  */
 export interface TagSelection {
   /** `readonly` because {@link EMPTY_SELECTION} is shared by every caller: a `push` onto it
@@ -134,7 +135,11 @@ function slugsOf(chips: readonly TagChip[], ns: TagNamespace, mode: TagChip["mod
  * a refetch of the whole wall for a switch that did nothing.
  *
  * Each list is sorted, which changes no answer (`filters::picked_tags` sorts and dedups anyway)
- * and is what lets {@link selectionKey} ignore the order the reader picked them in.
+ * and is what lets a **key derived from this payload** ignore the order the reader picked them
+ * in. That key is `useCardSearch`'s and is derived there rather than offered here: this module
+ * once exported a `selectionKey` beside this function, and two derivations over one object are
+ * two things that can disagree — invisibly, since the symptom is one search answered out of
+ * another's cached pages.
  */
 export function termsFor(s: TagSelection): {
   artTags?: TagTerms;
@@ -158,23 +163,4 @@ export function termsFor(s: TagSelection): {
   if (s.floor === "strong" && artInclude.length > 0) out.artWeightFloor = "strong";
 
   return out;
-}
-
-/**
- * One string that changes exactly when the request does — the segment a card query keys on.
- *
- * Derived from {@link termsFor} rather than from the chips, so "same payload, same key" holds
- * by construction: the sorting is already done there, chip order is already gone, and anything
- * the payload leaves out (the search box's `namespace`, a floor with nothing to narrow) cannot
- * mint a key that refetches for nothing.
- */
-export function selectionKey(s: TagSelection): string {
-  const t = termsFor(s);
-  return JSON.stringify([
-    t.artTags?.include ?? [],
-    t.artTags?.exclude ?? [],
-    t.oracleTags?.include ?? [],
-    t.oracleTags?.exclude ?? [],
-    t.artWeightFloor ?? "",
-  ]);
 }

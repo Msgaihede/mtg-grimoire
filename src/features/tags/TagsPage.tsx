@@ -1,9 +1,17 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { FilterBar } from "@/features/search/FilterBar";
 import { useCardSearch } from "@/features/search/useCardSearch";
-import { ipc, ipcError, type ArtWeightFloor, type TagHit, type TagNamespace } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type ArtTagStatus,
+  type ArtWeightFloor,
+  type TagHit,
+  type TagNamespace,
+} from "@/lib/ipc";
 import { ORACLE_TAGS_STATUS_KEY } from "@/lib/useOracleTagProgress";
 import { TAG_NAMESPACE_LABEL } from "./namespaces";
 import { TagChips } from "./TagChips";
@@ -22,14 +30,95 @@ import {
 import { useTagSearch } from "./useTagSearch";
 
 /**
- * Everything the art taxonomy is cached under — the mirror of `ORACLE_TAGS_STATUS_KEY`, spelled
- * here because no hook owns the art side yet.
+ * Everything the art taxonomy is cached under — `ORACLE_TAGS_KEY`'s twin, spelled here because
+ * no hook in `lib/` owns the art side yet.
  *
- * The oracle key is **imported** rather than mirrored, which is what makes this page's read free:
- * `AppShell` mounts `useOracleTagProgress` for the life of the window, so that status is already
- * in the cache under exactly this key and a second observer of it costs no second `invoke`.
+ * A **prefix**, and that is what it is for: an ingest that lands has replaced the taxonomy under
+ * every rail level and every type-ahead answer already drawn, and no key moved — the tags are
+ * still tags. {@link useArtTagStatus} invalidates this subtree when a refresh finishes, so the
+ * status read below regroups for free.
  */
-const ART_TAGS_STATUS_KEY = ["artTags", "status"];
+const ART_TAGS_KEY = ["artTags"];
+
+/** The art taxonomy's freshness — one small table, no network, safe before the first ingest.
+ *
+ *  The oracle twin is **imported** rather than mirrored, which is what makes this page's other
+ *  read free: `AppShell` mounts `useOracleTagProgress` for the life of the window, so that status
+ *  is already in the cache under exactly that key and a second observer costs no second `invoke`.
+ *  Nothing mounts an art equivalent, which is why the hook below exists at all. */
+const ART_TAGS_STATUS_KEY = [...ART_TAGS_KEY, "status"];
+
+/** How often to re-read a status that says a refresh is running — `useOracleTagProgress`'s
+ *  number, for its reason: a local SQLite read of one row, and only while the flag is up, so an
+ *  idle window polls nothing at all. */
+const TAG_REFRESH_POLL_MS = 1500;
+
+/**
+ * The art taxonomy's state, and **the thing that makes a cold first run heal itself**.
+ *
+ * `useOracleTagProgress` mirrored one dataset over, and it has to be mirrored rather than shared:
+ * the two taxonomies are two files on two schedules, either may be refreshing while the other is,
+ * and they emit on two channels. Without this the page's oracle sentence would disappear by
+ * itself — `AppShell` mounts the oracle hook, which invalidates its prefix on the terminal event
+ * — while the **art** sentence, the one this page is primarily about, sat there until a window
+ * refocus. On the exact first launch the notice exists for, the primary half was the broken half.
+ *
+ * **Both halves of the oracle shape are here and both are load-bearing.** The event is what
+ * carries "it has finished"; the poll is what covers the ordinary case in which nobody heard it,
+ * because `lib.rs` spawns `tags::art::refresh_if_due` at startup and Tauri drops an event emitted
+ * before the webview registered a listener. The poll is a function of the answer, so the first
+ * status with `refreshing: false` turns it off.
+ *
+ * **Call this once.** Every extra call is another `listen` registration on the same channel for
+ * as long as the page is up; {@link TaxonomyGaps} is the one caller.
+ *
+ * The invalidation reaches past the status to the two lists a reader is actually looking at. A
+ * finished ingest means the rail has art tags in it now, and its levels are cached under
+ * `["tag-children", …]` with the type-ahead's answers under `["tag-search", …]` — healing the
+ * sentence while leaving the rail empty for the client's whole 30 s `staleTime` would be half a
+ * fix, and the more visible half left undone.
+ */
+function useArtTagStatus(): ArtTagStatus | null {
+  const queryClient = useQueryClient();
+  const status =
+    useQuery({
+      queryKey: ART_TAGS_STATUS_KEY,
+      queryFn: () => ipc.artTagsStatus(),
+      refetchInterval: (query) =>
+        query.state.data?.refreshing === true ? TAG_REFRESH_POLL_MS : false,
+    }).data ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    let stop: UnlistenFn | undefined;
+    ipc
+      .onArtTagProgress((event) => {
+        // Both terminal phases, not just `done`. A failed refresh leaves the previous taxonomy
+        // exactly where it was — so there is nothing new to read — but `refreshing` is still
+        // true on the status this window last read, and only a refetch takes it down.
+        if (event.phase !== "done" && event.phase !== "error") return;
+        void queryClient.invalidateQueries({ queryKey: ART_TAGS_KEY });
+        void queryClient.invalidateQueries({ queryKey: ["tag-children"] });
+        void queryClient.invalidateQueries({ queryKey: ["tag-search"] });
+      })
+      .then((unlisten) => {
+        // `listen` resolves a tick later than the unmount can happen, so the handle has to be
+        // dropped here too — otherwise it outlives the page for the app's lifetime.
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      // Registering a listener fails outside a Tauri window (a plain `vite dev`, a story).
+      // Losing the fast path is not worth taking the page down for: the status read still
+      // answers, and the poll above still covers a refresh that is in flight.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [queryClient]);
+
+  return status;
+}
 
 /**
  * Keep the weight floor honest after a chip changes — **every** write to the selection goes
@@ -267,23 +356,30 @@ export function TagsPage() {
  * that has only oracle tags would blame their spelling.
  *
  * `ingestedAt` is the test and `stale` is not: the latter is true of a taxonomy that is merely due
- * a refresh, which is a page with every tag in it. One read each, no polling — a status that
- * changes under a reader is one the app's 30 s `staleTime` and its refetch-on-focus will pick up,
- * and a poll that never ends is the wrong price for a sentence that is right nearly always.
+ * a refresh, which is a page with every tag in it.
+ *
+ * **Both halves take themselves back down when the file arrives**, and by two different routes
+ * that come to the same thing: the oracle status is `AppShell`'s, which invalidates its prefix on
+ * the terminal event for the whole window's life, and the art status is
+ * {@link useArtTagStatus}'s, which does the same one channel over. Neither is polled once it has
+ * said a refresh is not running.
  */
 function TaxonomyGaps() {
-  const art = useQuery({ queryKey: ART_TAGS_STATUS_KEY, queryFn: () => ipc.artTagsStatus() });
+  const art = useArtTagStatus();
+  // The oracle side needs no hook of its own: `AppShell` mounts `useOracleTagProgress`, so this
+  // is a second observer of a key that is already in the cache, already invalidated when a
+  // refresh lands, and already polled while one is running.
   const oracle = useQuery({
     queryKey: ORACLE_TAGS_STATUS_KEY,
     queryFn: () => ipc.oracleTagsStatus(),
-  });
+  }).data;
 
   const missing: TagNamespace[] = [];
-  // `data` is `undefined` until the read lands, and neither command refuses — a database with no
+  // `null`/`undefined` until the read lands, and neither command refuses — a database with no
   // meta row answers every field null. So an unanswered read says nothing rather than claiming a
   // taxonomy is absent, which would flash this notice onto a page that has every tag.
-  if (art.data && art.data.ingestedAt === null) missing.push("art");
-  if (oracle.data && oracle.data.ingestedAt === null) missing.push("oracle");
+  if (art && art.ingestedAt === null) missing.push("art");
+  if (oracle && oracle.ingestedAt === null) missing.push("oracle");
   if (missing.length === 0) return null;
 
   return (
