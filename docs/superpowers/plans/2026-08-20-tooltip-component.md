@@ -1810,14 +1810,56 @@ read on its own.
 8. **Report** back: every file touched, the classification you gave each site, and any site you
    could not classify confidently.
 
-## Task 9: Sweep `src/components/` — 12 files, 23 sites
+**Added 2026-08-20, from the final review of PR 1:**
+
+9. **A `disabled` control needs a look before it gets the mechanical swap.** `{...tip()}` binds
+   `onPointerEnter`/`onPointerLeave`/`onFocus`/`onBlur`, and a `disabled` button fires none of
+   those — so swapping its `title` for the spread makes the tooltip vanish with **nothing going
+   red**: no test in this app can click through a `disabled` button to hover it, and the sweep's
+   own recipe reads as satisfied either way. It is a real regression and not a no-op, because
+   Chromium draws its native tooltip on a `disabled` button whether or not it is reachable by
+   pointer events — the reader loses a hint they had. `FolderTree.tsx:552`
+   (`<button disabled={...} title={submitLabel}>`) and `AllPrintingsDialog.tsx:270` are this
+   shape and need reading, not just converting; the app's `aria-disabled` pattern
+   (`DeckEditor.tsx:2808`, greyed rather than removed from the tab order) is unaffected, since
+   `aria-disabled` alone still fires every event `tip()` binds to. Where a site is genuinely
+   `disabled`, decide deliberately whether the hint is worth losing or the control is worth
+   switching to `aria-disabled` — do not convert it silently.
+10. **`{...tip()}` overwrites a handler written before it and loses to one written after, and
+    that is a written rule now, not a bug to fix.** React last-write-wins on a duplicate prop key,
+    so `{...tip(words)} onPointerEnter={somethingElse}` silently drops the tooltip's handler and
+    `onPointerEnter={somethingElse} {...tip(words)}` silently drops the other one — whichever
+    loses fails with no error and no red test. The reviewer checked all 108 sites in this sweep
+    against every existing `onPointerEnter`/`onPointerLeave`/`onFocus`/`onBlur` in the same files
+    and found **zero collisions today**, so nothing here needs an ordering fix — but the next
+    hundred sites will include one eventually, and the fix when it happens is to compose the two
+    handlers explicitly rather than to spread twice.
+11. **Where the JSX is built by a plain function rather than a component, thread the binder as a
+    parameter.** A hook cannot be called from a non-component helper, so a `title=` inside a
+    `(row) => TableColumn` builder or similar cannot call `useTooltip()` itself. `CollectionTable.tsx`'s
+    `columnsFor(onSetQuantity, onRemove, marketplace, tip)` is the pattern already in this
+    codebase: the component calls `useTooltip()` once and passes the binder down, the helper
+    spreads `tip(...)` at each cell it draws. Do not reach for a second hook call or a module-level
+    workaround.
+
+## Task 9: Sweep `src/components/` — 13 files, 24 sites
 
 **Files (yours alone):** `AppShell.tsx`, `CardArt.tsx`, `CountTag.tsx`, `Figure.tsx`,
 `FilterChips.tsx`, `FinishMark.tsx`, `GameChangerMark.tsx`, `OwnedBadge.tsx`, `RarityGem.tsx`,
-`Ribbon.tsx`, `table/SortableHeader.tsx`, `table/VirtualTable.tsx` — plus their own `.test.tsx`
-and `.stories.tsx`.
+`Ribbon.tsx`, `TitleBar.tsx`, `table/SortableHeader.tsx`, `table/VirtualTable.tsx` — plus their
+own `.test.tsx` and `.stories.tsx`.
 
 `SortableHeader.tsx` was converted in PR 1; check it and leave it.
+
+**`TitleBar.tsx:56` was missing from every bucket until the final review of PR 1 caught it, and
+it is worth more than one more site.** `CaptionButton`'s `title={label}` is ordinary and
+redundant (the button already carries `aria-label={label}`, so `describes: false`), but its
+anchors sit inside the 34px caption bar at the very top of the window — the only controls in this
+app close enough to the top edge to force `placeTooltip`'s downward flip. PR 1's live pass could
+check the flip's *sibling* claims (the clamp, the modal, the virtualised row) but had no anchor
+near enough to the top to prove the flip itself; converting this site gives PR 2 one. Add it to
+Task 14's live pass: hover a caption button and confirm the panel opens **downward** rather than
+being clamped against — or clipped by — the window's top edge.
 
 Note the two hard ones: **the two real SVG `<title>` elements are in your files** —
 `FinishMark.tsx:49` and `GameChangerMark.tsx:62`, one each, not the "five" (or "eight" app-wide)
@@ -1843,17 +1885,26 @@ rows of the classification table.
 
 Then: apply the recipe above, run `npx vitest run src/features/decks`, commit.
 
-## Task 11: Sweep `src/features/decks/` dialogs and views — 13 files, ~28 sites
+## Task 11: Sweep `src/features/decks/` dialogs and views — 14 files, ~30 sites
 
 **Files (yours alone):** `CategoriesDialog.tsx`, `CreateDeckDialog.tsx`, `DeckDialog.tsx`,
-`DeckHistoryDialog.tsx`, `DeckSettingsDialog.tsx`, `TagsDialog.tsx`, `TheoryDiffDialog.tsx`,
-`export/ExportDialog.tsx`, `import/ImportDeckDialog.tsx`, `views/GroupHeader.tsx`,
-`views/StackView.tsx`, `views/TableView.tsx`, `views/TextView.tsx` — plus their own tests and
-stories.
+`DeckHistoryDialog.tsx`, `DeckSettingsDialog.tsx`, `TagColorPicker.tsx`, `TagsDialog.tsx`,
+`TheoryDiffDialog.tsx`, `export/ExportDialog.tsx`, `import/ImportDeckDialog.tsx`,
+`views/GroupHeader.tsx`, `views/StackView.tsx`, `views/TableView.tsx`, `views/TextView.tsx` —
+plus their own tests and stories.
 
 Most of the `title=` in the dialogs are the **`DeckDialog` shell's `title` prop**, which the shell
 draws as a heading — not tooltips, left alone. `CategoriesDialog`'s drag handle was converted in
 PR 1; check it and leave it. `DeckHistoryDialog`'s `Notice title=` is likewise a prop.
+
+**`TagColorPicker.tsx:79,210` was missing from every bucket until the final review of PR 1 caught
+it, and both are real.** `TagColorButton`'s `title="Choose tag colour"` (line 79) and each swatch
+button's `title={c.label}` (line 210) are both **redundant** — each already carries the matching
+`aria-label`, so both bind `describes: false`. **`NewTagDialog.tsx:68`'s `title="New tag"` is not
+one more site to add here** — it is a prop passed straight through to `DeckDialog`'s own `title`,
+drawn as a heading, and needs no edit. It was missing from every bucket too, but unlike
+`TagColorPicker.tsx` there was nothing to miss; this note exists only so nobody spends time
+rediscovering that.
 
 Then: apply the recipe above, run `npx vitest run src/features/decks`, commit.
 
@@ -1888,6 +1939,15 @@ carries `` aria-label={`Remove ${wishLabel(row)} from your wishlist`} `` beside
 before PR 1 converted it. It is the **redundant** row: bind
 `{...tip("Remove from your wishlist", { describes: false })}` and leave the `aria-label` alone.
 
+**Three more `settings/` files hold `title=` and none of it is yours to convert, so grepping the
+directory will turn up sites that belong to no task.** `CachePanel.tsx:31` and
+`DangerZonePanel.tsx:114` are `SettingsSection`'s own `title` prop, drawn as a heading.
+`CachePanel.tsx:56` and `DangerZonePanel.tsx:162` are `ConfirmDialog`'s `title` prop, also a
+heading (via `DeckDialog`). `ConfirmDialog.tsx:90` is that same prop drawn inside the component
+itself. All five were missing from every task's file list, same as `TitleBar.tsx` and
+`TagColorPicker.tsx` above — but unlike those two, there is nothing real underneath any of them.
+This note is only so nobody re-derives that.
+
 Then: apply the recipe above, run `npx vitest run src/features/collection src/features/wishlist src/features/settings`, commit.
 
 ## Task 14: Fan in, verify, drive the window, ship PR 2
@@ -1916,6 +1976,13 @@ Confirm hints appear where they used to and that no surface shows the OS tooltip
 tile's corner marks are the place to check `pointer-events` — those were `<title>` elements inside
 a chip that only works because it carries `pointer-events-auto`.
 
+**Added 2026-08-20, from the final review of PR 1: the flip, at the one anchor that can prove
+it.** Hover a caption button in the title bar (`TitleBar.tsx:56`, Task 9) and confirm the panel
+opens **downward** — every other anchor in this app sits far enough from the top edge that
+`placeTooltip` never has to flip a `"top"`-preferred tooltip, so PR 1's own live pass could not
+prove this half of the placement arithmetic in the running window. This is the one check PR 1
+left for PR 2.
+
 - [ ] **Step 4: Ship it**
 
 Follow the `auto-pr` skill.
@@ -1934,9 +2001,16 @@ Checked against the spec, 2026-08-20:
 - §5 (behaviour, every dismissal, Escape, the bridge, focus-visible) → Task 3, with the two claims
   jsdom cannot make routed to Task 8's live pass.
 - §6 (look) → Task 3 Step 5.
-- §7 (inventory) → Tasks 9–13's file lists, which sum to 110 sites (108 attributes + 2 SVG,
-  corrected — see Task 7's own step and Task 9's note; the total happens to still be 110, since
-  the attribute count rose by exactly as much as the SVG count fell between the two measurements).
+- §7 (inventory) → Tasks 9–13's file lists. **Corrected 2026-08-20, after the final review of
+  PR 1**: the buckets as first written listed 50 files and claimed their site counts summed to
+  110, which the final review found arithmetically false against this tree — a fresh count comes
+  to **108 sites across 53 files**. The gap was three whole files the sweep never listed:
+  `TitleBar.tsx` and `TagColorPicker.tsx` (real sites, now folded into Tasks 9 and 11) and, held
+  apart from that count because they carry no convertible site at all, `NewTagDialog.tsx`,
+  `CachePanel.tsx`, `ConfirmDialog.tsx` and `DangerZonePanel.tsx` (`title` **props** passed
+  through to `DeckDialog`/`SettingsSection`/`ConfirmDialog`, noted at Tasks 11 and 13 so nobody
+  re-derives that). There was no coincidence in the "110 either way" arithmetic the previous
+  version of this note offered — it did not survive a re-count.
 - §8 (verification) → Tasks 1, 2, 3, 5 for the suites; Task 8 for the window.
 - §9 (delivery) → PR 1 = Tasks 1–8, PR 2 = Tasks 9–14.
 - §10 (what it does not do) → nothing in the plan adds an arrow, a portal, a `popover`, a

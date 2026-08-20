@@ -156,7 +156,7 @@ export const SecondOfTwoKeys: Story = {
  * The collection's Value column, verbatim — the one header in the app that carries a sentence
  * of its own.
  *
- * Every prop here is copied from `CollectionTable.tsx:163-165`. Spec §5 says a price is never
+ * Every prop here is copied from `CollectionTable.tsx`'s Value column. Spec §5 says a price is never
  * shown without saying how old it is, and a 36px header row has nowhere to write it, so
  * `PRICES_AS_OF` rides in two places: the `title` prop, whose words the sort hint is
  * **appended** to (as a tooltip now, not a native `title`) rather than replacing, and

@@ -334,8 +334,11 @@ Two pull requests, both through `auto-pr`.
 
 **PR 1 — the primitive.** `lib/tooltip.ts`, `components/tooltip/*`, the `LAYER` rung, `App.tsx`,
 stories, tests, the docs (a `frontend-design.md` section and a rule in `src/CLAUDE.md`), and about
-five proof call sites chosen to cover the shapes: a truncated table cell, an icon-only button, an
-SVG glyph, an interactive one, and one shown over a dialog.
+five proof call sites chosen to cover the shapes: a truncated table cell, a multi-line hint on a
+named button, an interactive one, one already named elsewhere so the words only describe, and one
+shown over a dialog. **Corrected 2026-08-20, after the final review**: this used to list "an SVG
+glyph" as one of the five; none of PR 1's sites converted one — `FinishMark.tsx` and
+`GameChangerMark.tsx` still carry their `<title>` elements, both left for PR 2's sweep.
 
 **PR 2 — the sweep.** The remaining sites and the 17 test queries, fanned out to parallel
 subagents split by directory — `components/`, `features/decks/`, `features/card/` +
