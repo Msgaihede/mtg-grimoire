@@ -660,6 +660,41 @@ describe("WishlistPage", () => {
     expect(again.started).toBe(true);
     await again.cancel();
   });
+
+  /**
+   * **Task 11's first export entry point outside the deck editor, the wishlist's own.** This
+   * list pages at 100 too, so what is loaded in memory is a scroll position rather than a
+   * decision — the sweep asks for the whole filtered set at 500 a page instead, which is what
+   * the `limit: 500` assertion pins.
+   *
+   * Wishlist opens on the **plain** format (the store's default), which writes one line per
+   * card and no header — unlike the collection's CSV, so this is 150 lines for 150 rows with
+   * no header to add. No correction needed here; the brief's own correction is the collection
+   * page's CSV case.
+   */
+  it("exports every wish the filter matches, not the page that happens to be loaded", async () => {
+    // 150 wishes, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
+    const wishes150 = Array.from({ length: 150 }, (_, i) => ({
+      ...BOLT,
+      id: i + 1,
+      cardId: `c${i + 1}`,
+      artCardId: `c${i + 1}`,
+      name: `Wish ${i + 1}`,
+    }));
+    wishlistList.mockImplementation(async ({ limit, offset }: WishlistQuery) =>
+      page(wishes150.slice(offset, offset + limit), wishes150.length),
+    );
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Wish 1");
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(wishlistList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
+    expect(await screen.findByText(/150 lines/)).toBeInTheDocument();
+  });
 });
 
 /**

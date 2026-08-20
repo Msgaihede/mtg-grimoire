@@ -836,6 +836,38 @@ describe("CollectionPage", () => {
     // of unowned tiles is not a wall of empty chips. (`CardGrid`'s own test pins the rule.)
     expect(container.querySelector('[class*="bg-bg/85"]')).toBeEmptyDOMElement();
   });
+
+  /**
+   * **Task 11's first export entry point outside the deck editor.** The list here is a
+   * `useInfiniteQuery` at 100 rows a page, so what is in memory is a scroll position rather
+   * than a decision — exporting it would silently truncate a filtered collection to whatever
+   * page the reader happened to have loaded. The sweep asks for the whole filtered set at 500
+   * a page instead, which is what the `limit: 500` assertion below is pinning.
+   */
+  it("exports every row the filter matches, not the page that happens to be loaded", async () => {
+    // 250 rows, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
+    const rows250 = Array.from({ length: 250 }, (_, i) => ({
+      ...BOLT,
+      id: i + 1,
+      cardId: `c${i + 1}`,
+      name: `Card ${i + 1}`,
+    }));
+    collectionList.mockImplementation(async ({ limit, offset }: CollectionQuery) =>
+      page(rows250.slice(offset, offset + limit), rows250.length),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Card 1");
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
+    // **251, not 250.** A collection opens on CSV (see the store's defaults) and CSV writes a
+    // header row. Asserting the row count here is how a correct implementation reads as red.
+    expect(await screen.findByText(/251 lines/)).toBeInTheDocument();
+  });
 });
 
 /**

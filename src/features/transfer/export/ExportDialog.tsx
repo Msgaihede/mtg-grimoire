@@ -126,6 +126,24 @@ export interface ExportDialogProps {
   onDismiss: () => void;
   /** A press on the scrim: close without moving focus. The reader is already somewhere else. */
   onClose: () => void;
+  /**
+   * What the dialog is about to write, when that is a *filtered* set rather than a thing the
+   * reader pointed at. Absent on a deck export: a deck is what was clicked.
+   *
+   * The collection and the wishlist pages are the two callers — see `scope.ts`'s
+   * `useExportScope`, whose paged sweep is what fills `cards` while this is `loading`.
+   */
+  scope?: {
+    /** "1,204 cards matching your filters" — already pluralised by the caller
+     *  (`scope.ts`'s `scopeLabel`). */
+    label: string;
+    /** Still sweeping. The buttons are disabled while this is true, the same guard `saving`
+     *  already uses — a reader must not save or copy a file the sweep has not finished
+     *  filling in. */
+    loading: boolean;
+    everything: boolean;
+    onEverything: (everything: boolean) => void;
+  };
 }
 
 export function ExportDialog({
@@ -136,6 +154,7 @@ export function ExportDialog({
   suggestedFileName,
   onDismiss,
   onClose,
+  scope,
 }: ExportDialogProps): JSX.Element {
   return (
     <Dialog
@@ -146,7 +165,7 @@ export function ExportDialog({
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <Body surface={surface} cards={cards} suggestedFileName={suggestedFileName} />
+      <Body surface={surface} cards={cards} suggestedFileName={suggestedFileName} scope={scope} />
     </Dialog>
   );
 }
@@ -157,10 +176,12 @@ function Body({
   surface,
   cards,
   suggestedFileName,
+  scope,
 }: {
   surface: TransferSurface;
   cards: readonly TransferCard[];
   suggestedFileName: string;
+  scope: ExportDialogProps["scope"];
 }) {
   /**
    * The preview's disclosure, **shut on every open**.
@@ -267,6 +288,24 @@ function Body({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+      {/* Only on a scope export (the collection and the wishlist): a deck's `cards` prop is
+          already the whole pile a reader pointed at, so there is no "everything" to widen it
+          to and nothing to say a count about that the dialog's title has not already said. */}
+      {scope !== undefined && (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-dim">{scope.label}</span>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={scope.everything}
+              onChange={(e) => scope.onEverything(e.target.checked)}
+              className={cn("size-4 accent-accent", FOCUS)}
+            />
+            Export everything, ignoring the filters
+          </label>
+        </div>
+      )}
+
       {/* A radio group over every format `EXPORT_FORMATS` names, and the map is what keeps this
           row from being a list to remember to grow. In that array's own order and
           **not** through `sortOptions`: plain first is the one most readers want, the same kind
@@ -374,18 +413,24 @@ function Body({
       )}
 
       <div className="flex flex-wrap items-center gap-3">
+        {/* `scope?.loading`, the same guard `saving` already is: a still-sweeping dialog has a
+            `text` built from whatever the sweep has landed *so far*, and a reader who copies or
+            saves it before it finishes gets a decklist that looks complete and is not. */}
         <button
           type="button"
-          onClick={handleCopy}
+          aria-disabled={scope?.loading ? true : undefined}
+          onClick={() => {
+            if (!scope?.loading) handleCopy();
+          }}
           className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
         >
           Copy
         </button>
         <button
           type="button"
-          aria-disabled={saving ? true : undefined}
+          aria-disabled={saving || scope?.loading ? true : undefined}
           onClick={() => {
-            if (!saving) void handleSaveAs();
+            if (!saving && !scope?.loading) void handleSaveAs();
           }}
           aria-busy={saving || undefined}
           className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
