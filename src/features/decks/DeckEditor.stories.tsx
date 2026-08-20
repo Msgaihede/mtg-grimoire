@@ -77,10 +77,10 @@ const meta = {
   render: (args) => <Editor key={`${args.deckId}:${args.pane}:${args.formatKey}`} {...args} />,
   decorators: [
     // The editor is `h-full`, so it needs a parent with a height or its views have none.
-    // 1032px is exactly the content column at the 1280×800 window `tauri.conf.json` opens: 1280
-    // less the sidebar's `w-52` (208px) and less `main`'s `p-5` on both sides (40px). 720px of
-    // height is chosen rather than derived — the ribbon above it is not a fixed number of
-    // pixels.
+    // 1032px is exactly the content column at the app's narrow rung — the 1280-wide window
+    // `src-tauri/src/window.rs` opens on a 1080p desk: 1280 less the sidebar's `w-52` (208px)
+    // and less `main`'s `p-5` on both sides (40px). 720px of height is chosen rather than
+    // derived — the ribbon above it is not a fixed number of pixels.
     (Story) => (
       <div className="h-[720px] w-[1032px]">
         <Story />
