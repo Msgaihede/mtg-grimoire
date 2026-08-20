@@ -3048,10 +3048,16 @@ describe("the busy fault", () => {
     // which is the `syncing` fault rather than this one — and it still belongs in this loop,
     // because a reader who is merely mid-*write* gets BUSY here exactly like everything else.
     //
+    // The bulk-import commands then took it 45 → 47: `collection_import_commit` and
+    // `wishlist_import_commit` are one transaction for a whole imported file rather than one
+    // `collection_add`/`wishlist_add` per line, and each holds the same write lock its per-line
+    // sibling does, so a reader mid-write gets BUSY on an import exactly as they do on a
+    // quick-add.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(45);
+    expect(names).toHaveLength(47);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

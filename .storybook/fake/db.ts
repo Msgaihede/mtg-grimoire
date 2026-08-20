@@ -123,6 +123,7 @@ import type {
   CategoryKind,
   CategoryOrigin,
   CollectionCleared,
+  CollectionImportItem,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
@@ -148,6 +149,7 @@ import type {
   EntryPatch,
   FacetResponse,
   FinishPrices,
+  ImportCommitOutcome,
   ImportItem,
   ImportMatch,
   ImportMode,
@@ -169,10 +171,12 @@ import type {
   SyncStatus,
   TagSuggestion,
   TheoryDiffRow,
+  TransferImportMode,
   UpdateAsset,
   UpdateStatus,
   WishInput,
   WishRow,
+  WishlistImportItem,
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
@@ -4955,6 +4959,139 @@ function cardGone(category: string): string {
 }
 
 /**
+ * `collection::add_entry`, as a function rather than only a handler — the quick-add, folding
+ * into the row that already holds this grain. `collection_add` and `collection_import_commit`'s
+ * `add` mode both write through here, so the grain's fold rule lives in one place.
+ */
+function addEntry(db: FakeDb, input: EntryInput): EntryChange {
+  const finish = validFinish(input.finish);
+  const condition = validCondition(input.condition);
+  // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
+  // conjure a row out of a card the user never said they had. Zero is a state a row is
+  // moved to, never one it is created in.
+  if (input.quantity <= 0) throw refuse(ZERO_ADD);
+  const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+  const grading = canonicalGrading(input.grading);
+  const card = requireCard(db, input.cardId);
+
+  const row: FakeEntry = {
+    id: 0,
+    cardId: input.cardId,
+    finish,
+    condition,
+    quantity: input.quantity,
+    // A tradelist bigger than the pile it is drawn from is not a promise anyone can
+    // keep, and the importer is the caller that will send one.
+    tradelistQuantity: Math.min(tradelist, input.quantity),
+    // Read from `cards` at write time and never from the caller: letting a caller supply
+    // these would let a caller disagree with the card it named.
+    lang: card.lang,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    purchasePrice: input.purchasePrice ?? null,
+    purchaseCurrency: input.purchaseCurrency ?? null,
+    acquiredAt: input.acquiredAt ?? null,
+    acquisitionSource: input.acquisitionSource ?? null,
+    serialNumber: input.serialNumber ?? null,
+    altered: input.altered ?? false,
+    signed: input.signed ?? false,
+    proxy: input.proxy ?? false,
+    misprint: input.misprint ?? false,
+    grading,
+    conditionOriginal: input.conditionOriginal ?? null,
+    // The column's own `DEFAULT '[]'`: a tags string is never null.
+    tags: input.tags ?? "[]",
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+
+  const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
+  if (existing) {
+    // The quantities add; everything else is first-writer-wins. A second add of a card
+    // you already own is "one more of these", not "and here is what I paid this time".
+    // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
+    // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
+    // provenance of the condition already there, which a later add cannot retroactively
+    // change. The entry editor is where both change.
+    existing.quantity += row.quantity;
+    existing.tradelistQuantity = Math.min(
+      existing.tradelistQuantity + tradelist,
+      existing.quantity,
+    );
+    existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+    existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+    existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+    existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.collectionEntries);
+  db.collectionEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
+ * `collection::set_entry` — `addEntry` with one clause changed: the grain's quantity is
+ * **written**, not accumulated, which is what a `set` import means. Every other column keeps
+ * `addEntry`'s first-writer-wins rule, and `tradelistQuantity` follows `collection_set_quantity`'s
+ * own clamp (`min(existing, new quantity)`) rather than the additive cap, because a written
+ * total is not a delta.
+ */
+function setEntry(db: FakeDb, input: EntryInput): EntryChange {
+  const finish = validFinish(input.finish);
+  const condition = validCondition(input.condition);
+  validQuantity(input.quantity, "collection quantity");
+  const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+  const grading = canonicalGrading(input.grading);
+  const card = requireCard(db, input.cardId);
+
+  const row: FakeEntry = {
+    id: 0,
+    cardId: input.cardId,
+    finish,
+    condition,
+    quantity: input.quantity,
+    tradelistQuantity: Math.min(tradelist, input.quantity),
+    lang: card.lang,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    purchasePrice: input.purchasePrice ?? null,
+    purchaseCurrency: input.purchaseCurrency ?? null,
+    acquiredAt: input.acquiredAt ?? null,
+    acquisitionSource: input.acquisitionSource ?? null,
+    serialNumber: input.serialNumber ?? null,
+    altered: input.altered ?? false,
+    signed: input.signed ?? false,
+    proxy: input.proxy ?? false,
+    misprint: input.misprint ?? false,
+    grading,
+    conditionOriginal: input.conditionOriginal ?? null,
+    tags: input.tags ?? "[]",
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+
+  const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
+  if (existing) {
+    existing.quantity = row.quantity;
+    existing.tradelistQuantity = Math.min(existing.tradelistQuantity, row.quantity);
+    existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+    existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+    existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+    existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.collectionEntries);
+  db.collectionEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
  * `wishlist::add_wish`, as a function rather than only a handler.
  *
  * `deck::missing_to_wishlist` writes **through** this for the reason the Rust does: the
@@ -5055,75 +5192,7 @@ export function writeHandlers(db: FakeDb) {
      *  grain. */
     collection_add: (args: { entry: EntryInput }): EntryChange => {
       refuseIfBusy(db);
-      const input = args.entry;
-      const finish = validFinish(input.finish);
-      const condition = validCondition(input.condition);
-      // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
-      // conjure a row out of a card the user never said they had. Zero is a state a row is
-      // moved to, never one it is created in.
-      if (input.quantity <= 0) throw refuse(ZERO_ADD);
-      const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
-      const grading = canonicalGrading(input.grading);
-      const card = requireCard(db, input.cardId);
-
-      const row: FakeEntry = {
-        id: 0,
-        cardId: input.cardId,
-        finish,
-        condition,
-        quantity: input.quantity,
-        // A tradelist bigger than the pile it is drawn from is not a promise anyone can
-        // keep, and the importer is the caller that will send one.
-        tradelistQuantity: Math.min(tradelist, input.quantity),
-        // Read from `cards` at write time and never from the caller: letting a caller supply
-        // these would let a caller disagree with the card it named.
-        lang: card.lang,
-        setCode: card.setCode,
-        collectorNumber: card.collectorNumber,
-        purchasePrice: input.purchasePrice ?? null,
-        purchaseCurrency: input.purchaseCurrency ?? null,
-        acquiredAt: input.acquiredAt ?? null,
-        acquisitionSource: input.acquisitionSource ?? null,
-        serialNumber: input.serialNumber ?? null,
-        altered: input.altered ?? false,
-        signed: input.signed ?? false,
-        proxy: input.proxy ?? false,
-        misprint: input.misprint ?? false,
-        grading,
-        conditionOriginal: input.conditionOriginal ?? null,
-        // The column's own `DEFAULT '[]'`: a tags string is never null.
-        tags: input.tags ?? "[]",
-        notes: input.notes ?? null,
-        needsReview: null,
-        updatedAt: stamp(db),
-      };
-
-      const existing = db.collectionEntries.find(
-        (e) => collectionGrain(e) === collectionGrain(row),
-      );
-      if (existing) {
-        // The quantities add; everything else is first-writer-wins. A second add of a card
-        // you already own is "one more of these", not "and here is what I paid this time".
-        // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
-        // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
-        // provenance of the condition already there, which a later add cannot retroactively
-        // change. The entry editor is where both change.
-        existing.quantity += row.quantity;
-        existing.tradelistQuantity = Math.min(
-          existing.tradelistQuantity + tradelist,
-          existing.quantity,
-        );
-        existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
-        existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
-        existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
-        existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
-        existing.notes = existing.notes ?? row.notes;
-        existing.updatedAt = row.updatedAt;
-        return { id: existing.id, quantity: existing.quantity, removed: false };
-      }
-      row.id = nextId(db.collectionEntries);
-      db.collectionEntries.push(row);
-      return { id: row.id, quantity: row.quantity, removed: false };
+      return addEntry(db, args.entry);
     },
 
     /** `collection::set_quantity` — the stepper. **Zero keeps the row**, with its condition,
@@ -5202,6 +5271,55 @@ export function writeHandlers(db: FakeDb) {
       return { id: args.id, quantity: 0, removed: true };
     },
 
+    /**
+     * `collection::commit_import` — one transaction for a whole imported file, mirrored here as
+     * one loop over the same `addEntry`/`setEntry` operations `collection_add` performs one
+     * line at a time. A refused item must roll the whole file back, and there is no real
+     * transaction in an in-memory array to do that for us — so the array is snapshotted first
+     * and restored if anything throws, which is this fake's stand-in for it.
+     *
+     * `added`/`updated` are counted by row-count before and after, exactly as the backend
+     * does: a hand-written lookup on the ten-column grain here would be a second copy of
+     * `collectionGrain`'s own definition.
+     */
+    collection_import_commit: (args: {
+      items: CollectionImportItem[];
+      mode: TransferImportMode;
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.mode !== "add" && args.mode !== "set") {
+        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+      }
+      const before = db.collectionEntries.length;
+      const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+      try {
+        for (const item of args.items) {
+          const entry: EntryInput = {
+            cardId: item.cardId,
+            finish: item.finish,
+            quantity: item.quantity,
+            condition: item.condition,
+            conditionOriginal: item.conditionOriginal,
+            purchasePrice: item.purchasePrice,
+            purchaseCurrency: item.purchaseCurrency,
+            acquiredAt: item.acquiredAt,
+            acquisitionSource: item.acquisitionSource,
+            notes: item.notes,
+          };
+          if (args.mode === "add") {
+            addEntry(db, entry);
+          } else {
+            setEntry(db, entry);
+          }
+        }
+      } catch (e) {
+        db.collectionEntries = snapshot;
+        throw e;
+      }
+      const added = db.collectionEntries.length - before;
+      return { added, updated: args.items.length - added, removed: 0 };
+    },
+
     /** `wishlist::add_wish`. */
     wishlist_add: (args: { wish: WishInput }): EntryChange => {
       refuseIfBusy(db);
@@ -5226,6 +5344,62 @@ export function writeHandlers(db: FakeDb) {
     wishlist_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
       return removeWish(db, args.id);
+    },
+
+    /**
+     * `wishlist::commit_import` — one transaction for a whole imported file,
+     * `collection_import_commit`'s rule and the same snapshot/restore stand-in for it.
+     *
+     * The `set` arm reaches its row through `addWish` first, exactly as the backend does — it
+     * is the only code that knows the wishlist grain — and then corrects the quantity: `0`
+     * **deletes** the wish rather than leaving an empty one, `wishlist_set_quantity`'s own
+     * asymmetry with the collection's zero. `removed` is counted in the loop rather than
+     * derived from a row count, because a delete and an insert in one file would cancel out in
+     * a before/after count and report neither.
+     */
+    wishlist_import_commit: (args: {
+      items: WishlistImportItem[];
+      mode: TransferImportMode;
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.mode !== "add" && args.mode !== "set") {
+        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+      }
+      const before = db.wishlistEntries.length;
+      const snapshot = db.wishlistEntries.map((w) => ({ ...w }));
+      let removed = 0;
+      try {
+        for (const item of args.items) {
+          const wish: WishInput = {
+            oracleId: item.oracleId,
+            cardId: item.cardId,
+            quantity: item.quantity,
+            preferredFinish: item.preferredFinish,
+            notes: item.notes,
+          };
+          if (args.mode === "add") {
+            addWish(db, wish);
+            continue;
+          }
+          const change = addWish(db, wish);
+          validQuantity(item.quantity, "wishlist quantity");
+          if (item.quantity === 0) {
+            removeWish(db, change.id);
+            removed += 1;
+            continue;
+          }
+          const row = db.wishlistEntries.find((w) => w.id === change.id);
+          if (row) {
+            row.quantity = item.quantity;
+            row.updatedAt = stamp(db);
+          }
+        }
+      } catch (e) {
+        db.wishlistEntries = snapshot;
+        throw e;
+      }
+      const added = db.wishlistEntries.length - before + removed;
+      return { added, updated: args.items.length - added - removed, removed };
     },
 
     /**
