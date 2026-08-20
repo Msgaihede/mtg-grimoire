@@ -4723,21 +4723,8 @@ function theoryCopies(db: FakeDb, deckId: number): number {
 }
 
 /**
- * `deck_theory::group_key` — what makes two deck rows the same *card* for a difference.
- *
- * Oracle id when there is one, the printing's id when there is not, told apart by a prefix so
- * a card id can never be mistaken for an oracle id: both are UUIDs out of the same generator,
- * and a bare string key would be one collision away from comparing a printing with an
- * unrelated card. Two orphans of the same card therefore look like two cards, which is as far
- * as the data honestly goes.
- */
-function groupKey(oracleId: string | null, cardId: string): string {
-  return oracleId === null ? `c:${cardId}` : `o:${oracleId}`;
-}
-
-/**
- * `deck_theory::OWNED_SPARE_SQL` — copies of one oracle card the collection holds that **no
- * built deck has claimed**.
+ * `deck_theory::OWNED_SPARE_SQL` — copies of one **printing in one finish** the collection
+ * holds that **no built deck has claimed**.
  *
  * Built is the whole of the test, and it is the allocator's rule read from the other end: a
  * deck on a table has its cards, a deck being planned shares copies with every other draft, so
@@ -4745,17 +4732,16 @@ function groupKey(oracleId: string | null, cardId: string): string {
  * collection stepped down under a stored claim can make the subtraction negative, and "you own
  * −1 of these" is not a thing to tell anyone.
  *
- * The orphan arm is `?1 IS NULL AND card_id = ?2`: a row whose printing left `cards` is matched
- * by **exact printing** instead, because that is the only identity it has left.
+ * **On the whole of {@link theoryDiff}'s key** (2026-08-20), and the two halves of one row may
+ * not disagree about what a card is. `coalesce(?2, 'nonfoil')` is the translation between the
+ * two spellings of the regular copy: `deckCards.finish` is `null` for it and
+ * `collectionEntries.finish` says `nonfoil`. It needs no orphan arm — a collection entry's
+ * `cardId` is the printing whether or not `cards` still carries it.
  */
-function ownedSpare(db: FakeDb, oracleId: string | null, cardId: string): number {
-  const mine = (entryCardId: string) => {
-    if (oracleId === null) return entryCardId === cardId;
-    return cardById(db, entryCardId)?.oracleId === oracleId;
-  };
-  const held = db.collectionEntries
-    .filter((e) => mine(e.cardId))
-    .reduce((n, e) => n + e.quantity, 0);
+function ownedSpare(db: FakeDb, cardId: string, finish: DeckFinish): number {
+  const want = finish ?? "nonfoil";
+  const mine = (e: FakeEntry) => e.cardId === cardId && e.finish === want;
+  const held = db.collectionEntries.filter(mine).reduce((n, e) => n + e.quantity, 0);
   const claimed = db.decks
     .filter((d) => d.isBuilt)
     .reduce((n, d) => {
@@ -4763,7 +4749,7 @@ function ownedSpare(db: FakeDb, oracleId: string | null, cardId: string): number
       let taken = 0;
       for (const [entryId, quantity] of claims) {
         const entry = db.collectionEntries.find((e) => e.id === entryId);
-        if (entry && mine(entry.cardId)) taken += Math.min(quantity, entry.quantity);
+        if (entry && mine(entry)) taken += Math.min(quantity, entry.quantity);
       }
       return n + taken;
     }, 0);
@@ -4787,10 +4773,12 @@ interface GroupedDiff {
  * purpose — filtering one side and not the other is how a scratchpad would come to fill a
  * shopping list.
  *
- * Compared by **oracle card**, not by printing: needing a second Sol Ring is not answered by
- * the live list holding a different printing of one. The same card filed in two theory
- * categories is **one line**, for the sum, named by the category the editor lists first — and
- * ordered by where that representative row falls in the editor's own reading order, so the
+ * Compared on the **exact card — `(cardId, finish)`** (changed 2026-08-20, from the oracle
+ * card): a plan naming the foil retro-frame Sol Ring is answered by neither a different printing
+ * of it nor the regular copy. **Which pile a card sits in is not compared at all** — the same
+ * card filed in two theory categories is **one line**, for the sum, named by the category the
+ * editor lists first, and re-filing a card in one list and not the other is no difference.
+ * Ordered by where that representative row falls in the editor's own reading order, so the
  * shopping list runs down the deck the way the deck is drawn.
  */
 function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[] {
@@ -4805,7 +4793,9 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
   const order: [string, GroupedDiff][] = [];
   for (const dc of rows) {
     const card = cardById(db, dc.cardId);
-    const key = groupKey(card?.oracleId ?? null, dc.cardId);
+    // `deck_theory::group_key` — the exact card, in the exact object played. Not the category:
+    // where a card sits is placement, not possession.
+    const key = `${dc.cardId}|${dc.finish ?? ""}`;
     if (dc.variant !== "theory") {
       held.set(key, (held.get(key) ?? 0) + dc.quantity);
       continue;
@@ -4826,6 +4816,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           unitPrice: deckPriceAt(db, card, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
+          finish: dc.finish,
           ownedSpare: 0,
         },
       },
@@ -4836,7 +4827,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     const short = (wanted.get(key) ?? 0) - (held.get(key) ?? 0);
     if (short <= 0) continue;
     grouped.row.quantity = short;
-    grouped.row.ownedSpare = ownedSpare(db, grouped.oracleId, grouped.row.cardId);
+    grouped.row.ownedSpare = ownedSpare(db, grouped.row.cardId, grouped.row.finish);
     diff.push(grouped);
   }
   return diff;
