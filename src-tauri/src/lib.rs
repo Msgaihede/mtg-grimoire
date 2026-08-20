@@ -342,6 +342,7 @@ pub fn run() {
             deck_undo::deck_undo_apply,
             deck_undo::deck_redo_apply,
             deck_theory::deck_theory_diff,
+            deck_theory::deck_theory_slots,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
             marketplace::get_marketplace,

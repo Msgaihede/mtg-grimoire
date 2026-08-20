@@ -16,7 +16,7 @@ import { stackCard } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { GameChangerBanner, QuantityTag, RuleBreakMark } from "./CardMarks";
+import { GameChangerBanner, QuantityTag, RuleBreakMark, TheoryMatchMark } from "./CardMarks";
 import {
   DECK_CARD_VARIANT,
   deckCardBodyProps,
@@ -32,6 +32,7 @@ import {
   type DeckCardActions,
 } from "./cardControl";
 import { deckCardSlot } from "./dnd";
+import { matchesTheory } from "./theoryMatch";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -537,6 +538,12 @@ export interface CardStackProps {
    */
   violations?: Map<string, ValidationIssue[]>;
   /**
+   * Which rows the deck's plan also asks for, as `theoryMatch.ts`'s set of slots — handed in
+   * whole for `violations`' reason, and `undefined` for a deck that keeps no plan or a reader
+   * looking at the plan itself.
+   */
+  theoryMatches?: ReadonlySet<string>;
+  /**
    * Open this card. The whole row is passed rather than an id, because the pane needs the
    * slot: the same printing sits in two categories often enough that "which one was pressed"
    * is not derivable from the card.
@@ -634,6 +641,7 @@ export function CardStack({
   label,
   currency,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   zoom = DEFAULT_ZOOM,
@@ -689,6 +697,7 @@ export function CardStack({
           onRelease={release}
           transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+          inTheory={matchesTheory(theoryMatches, card)}
           onSelect={onSelect}
           actions={actions}
         />
@@ -743,6 +752,7 @@ function StackedCard({
   onRelease,
   transition,
   ruleBreakText,
+  inTheory,
   onSelect,
   actions,
 }: {
@@ -770,6 +780,9 @@ function StackedCard({
   transition: Transition;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
+  /** The deck's plan asks for this row too — `theoryMatch.ts`, resolved by the stack so this card
+   *  is handed a boolean rather than a set to look itself up in. */
+  inTheory: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
@@ -881,7 +894,7 @@ function StackedCard({
         type="button"
         // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
         // reader gets — including the red shortage figure, which nothing else would say.
-        aria-label={deckCardName(card, ruleBreakText)}
+        aria-label={deckCardName(card, ruleBreakText, inTheory)}
         // How the card pane hands the caret back after a printing swap replaces this card.
         {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
@@ -1003,17 +1016,50 @@ function StackedCard({
           <span className={cn(CARD_MARKS_STRIP, "bg-gradient-to-b from-bg/70 to-transparent")}>
             <QuantityTag quantity={card.quantity} name={card.tagName} color={card.tagColor} />
             {/* Gold, spelled out, tucked under the tag's tail. The `RULE BREAK` mark is red,
-                boxed and in the opposite corner — see `CardMarks.tsx` for why the pair is drawn
-                once and what keeps the two from being confusable. */}
+                boxed and in the card's opposite corner — see `CardMarks.tsx` for why the pair is
+                drawn once and what keeps the two from being confusable. */}
             {card.gameChanger === true && <GameChangerBanner />}
+            {/* The plan's tick, at the far end of the same strip the quantity tag opens.
+                **In the strip rather than absolutely positioned beside it**, which is what makes
+                it free: this band is already a scrim over the card's printed title bar, already
+                27px tall at 100% zoom and already the full width of the face, so a mark pushed to
+                its right end needs no offsets of its own and is legible over art of any brightness
+                for the reason the tag beside it is.
+
+                `ml-auto` and not `justify-between`: the banner between them is a variable-width
+                optional sibling, and a `justify-between` strip holding two marks would centre
+                nothing and holding three would space them evenly — the tag has to stay flush left
+                whatever else is in the row.
+
+                Top-right is `FoilOverlay`'s chip on every other card face in this app, and the
+                stack is the one surface where that is not a collision: it draws the overlay with
+                `mark={false}` and says the finish in its foot instead, which is why this corner
+                was free for the `RULE BREAK` mark to have held until now. */}
+            {inTheory && <TheoryMatchMark className="ml-auto" />}
           </span>
 
+          {/* **Bottom-left, moved out of the top-right corner on 2026-08-20**, and the move is
+              the condition of {@link TheoryMatchMark} existing rather than a tidy-up. That mark
+              is a *tick*, this one is the only mark on a card that says something is wrong, and
+              `CardMarks.tsx`'s founding rule is that the two must never be confusable — four
+              separations, of which **place** is the one a reader takes in before they have read
+              either. Adjacent in one corner they would have been a tick and a box arguing; in
+              opposite corners they are two unrelated facts about one card.
+
+              The offset is **the only sum on this card with a scaled term and a fixed one**, and
+              both are needed: `0.25rem × --mark-scale` is the inset `GridView` puts the same mark
+              at, and `+ 4px` is {@link STACK_DATA_RISE}, the distance the foot rides **up** over
+              the face to hide its square corners. The rise does not scale — it is derived from a
+              Tailwind corner radius that does not — so a wholly scaled offset would clear the bar
+              at 1× and put the mark behind it at 0.5×, which is exactly the zoom a reader picks
+              when they want to see more cards and fewer details. */}
           {ruleBreakText !== null && (
             <RuleBreakMark
               text={ruleBreakText}
               className={cn(
                 "absolute",
-                "top-[calc(0.25rem*var(--mark-scale,1))] right-[calc(5px*var(--mark-scale,1))]",
+                "bottom-[calc(0.25rem*var(--mark-scale,1)+4px)]",
+                "left-[calc(5px*var(--mark-scale,1))]",
               )}
             />
           )}

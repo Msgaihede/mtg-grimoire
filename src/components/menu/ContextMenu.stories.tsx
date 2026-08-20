@@ -256,7 +256,7 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     setTag: (card, tagId) => act(`tag:${card.cardId}:${tagId ?? "none"}`),
     setFinish: (card, to) => act(`finish:${card.cardId}:${to ?? "regular"}`),
     tags: TAGS,
-    createTag: (card, name) => act(`new-tag:${card.cardId}:${name}`),
+    newTag: (card) => act(`new-tag:${card.cardId}`),
     // The stepper's zero by another road — there is no `remove` mutation in this app, because
     // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
     // card is one add to put back.
@@ -648,17 +648,17 @@ export const MoveToPile: Story = {
 };
 
 /**
- * **Tag card**, expanded — the deck's labels as a radio group, and a field for a new one.
+ * **Tag card**, expanded — the deck's labels as a radio group, and the row that makes a new one.
  *
  * **Radios, and None first, because a deck card wears at most one tag**: `setTag` takes
  * `tagId: number | null` and `deck_cards.tag_id` is a single column, so a checkbox list would be a
  * control promising something the model cannot store. The rows are `menuitemradio`, which is what
  * makes the exclusivity announced rather than merely drawn.
  *
- * It is `lazy` rather than `submenu` for the **field**: the rows themselves are free — the editor
- * already holds `deck.tags` from `deck_get` — but a `MenuItem[]` cannot carry a text input, and
- * "New tag…" is inline by design. A panel holding a field is also the one place the cascade's
- * arrows, Home and End are yielded, so typing works and editing does.
+ * It is a plain `submenu`: the rows are free — the editor already holds `deck.tags` from
+ * `deck_get` — and since 2026-08-20 there is nothing in the panel that is not a row. It was
+ * `lazy` for a **field**, "New tag…" having been a text box a `MenuItem[]` cannot carry; that row
+ * opens `NewTagDialog` now, so the menu mounts nothing and the last row is a row.
  */
 export const TagRadios: Story = {
   args: { build: (act) => buildDeckCardMenu(DECK_CARD, deckCardDeps(act)) },
@@ -677,8 +677,8 @@ export const TagRadios: Story = {
     await expect(wincon).toHaveAttribute("aria-checked", "false");
     await expect(canvas.getByRole("menuitemradio", { name: "Cut candidate" })).toBeInTheDocument();
 
-    // The field the whole `lazy` kind is here for.
-    await expect(canvas.getByRole("textbox", { name: "New tag" })).toBeInTheDocument();
+    // The row that replaced the field: a press closes the menu and the editor opens a dialog.
+    await expect(canvas.getByRole("menuitem", { name: "New tag…" })).toBeInTheDocument();
 
     await userEvent.click(wincon);
     await expect(args.act).toHaveBeenCalledWith(`tag:${DECK_CARD.cardId}:1`);

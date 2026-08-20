@@ -52,10 +52,21 @@ Every one of these has its measurement and its story in
   views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
   never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
   the whole chip off, crown included, for a frame that names these somewhere else.
-  **Top-right is that chip's and no other mark's**, on every surface that draws a card as a face.
-  The deck's Grid view put its copy count there too, in a full-width strip, and the two overlapped
-  on any foil card in a deck — invisible to jsdom, invisible to a fixture set with no foil in it.
-  A surface's own marks go in the corners the chip leaves: top-left, bottom-left.
+  **Top-right is that chip's**, on every surface that draws a card as a face, and a surface's own
+  marks go in the corners it leaves: top-left, bottom-left. The deck's Grid view put its copy count
+  there too, in a full-width strip, and the two overlapped on any foil card in a deck — invisible
+  to jsdom, invisible to a fixture set with no foil in it.
+  **One mark shares that corner rather than avoiding it, and the exception is worth the rule it
+  bends** (2026-08-20): `TheoryMatchMark`, the tick a deck card wears when the deck's *plan* also
+  asks for it (`features/decks/theoryMatch.ts`). It has to be one corner across both card-face
+  views, and on the stack that corner is free — `CardStack` draws `FoilOverlay mark={false}` and
+  says the finish in its foot — so honouring the rule on the Grid tile would have put one fact in
+  two different corners of one deck. The chip still wins the corner: on Grid the tick **stacks
+  under it**, offset by the chip's own measured box (`1.5rem × --mark-scale`) on the cards that
+  draw one. A *third* mark wanting this corner is a sign the corner is full, not a precedent.
+  What moved to make room is the `RULE BREAK` mark, which held the stack's top-right until then
+  and is now bottom-left on both views — a tick and a red box adjacent in one corner is exactly
+  the confusion `CardMarks.tsx`'s four separations exist to prevent.
 - **A bare number laid _on_ a card is `components/CountTag`, and it draws that number with no
   `×`** — filled and cut off at a slant, since a square chip on art reads as something to press;
   **grey unless something colours it**, so gold stays a thing a deck _tag_ means. It is
