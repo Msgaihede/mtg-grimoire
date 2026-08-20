@@ -31,9 +31,13 @@ export function foldForFields(
       continue;
     }
     seen.quantity += card.quantity;
-    if (seen.tradelistQuantity !== null && card.tradelistQuantity !== null) {
-      seen.tradelistQuantity += card.tradelistQuantity;
-    }
+    // `null` is absence, not poison: it contributes nothing to the sum but must never suppress
+    // one. A group where every row is `null` stays `null` — the surface never had the fact — but
+    // one known value anywhere in the group has to survive, whichever row it arrived on.
+    seen.tradelistQuantity =
+      seen.tradelistQuantity === null && card.tradelistQuantity === null
+        ? null
+        : (seen.tradelistQuantity ?? 0) + (card.tradelistQuantity ?? 0);
   }
   return [...out.values()];
 }

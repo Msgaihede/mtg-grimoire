@@ -41,6 +41,36 @@ describe("foldForFields", () => {
     expect(folded[0].tradelistQuantity).toBe(4);
   });
 
+  it("recovers a later known tradelist quantity when the first row in the group has none", () => {
+    const rows = [
+      card({ quantity: 2, tradelistQuantity: null }),
+      card({ quantity: 1, tradelistQuantity: 3 }),
+    ];
+    const folded = foldForFields(rows, ["quantity", "name"]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0].tradelistQuantity).toBe(3);
+  });
+
+  it("keeps an already-known tradelist quantity when a later row in the group has none", () => {
+    const rows = [
+      card({ quantity: 2, tradelistQuantity: 2 }),
+      card({ quantity: 1, tradelistQuantity: null }),
+    ];
+    const folded = foldForFields(rows, ["quantity", "name"]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0].tradelistQuantity).toBe(2);
+  });
+
+  it("stays null when every row in the group has no tradelist quantity", () => {
+    const rows = [
+      card({ quantity: 2, tradelistQuantity: null }),
+      card({ quantity: 1, tradelistQuantity: null }),
+    ];
+    const folded = foldForFields(rows, ["quantity", "name"]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0].tradelistQuantity).toBeNull();
+  });
+
   it("is a no-op on an empty list", () => {
     expect(foldForFields([], ["quantity", "name"])).toEqual([]);
   });
