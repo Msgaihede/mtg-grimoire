@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 
-/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+/** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
  *  and why the number is seconds; each file keeps its own copy because CSF would index an
  *  exported one as a story. */
@@ -13,7 +13,7 @@ const FRAME_WAIT = 5_000;
  *
  * **The fields themselves are `DeckSettingsForm`'s**, which `CreateDeckDialog` draws too — see
  * `Decks/Settings form` for the questions on their own, with no deck behind them, and
- * `Decks/Cover picker` for the picture column. **The frame is `DeckDialog`'s**, shared with every
+ * `Decks/Cover picker` for the picture column. **The frame is `Dialog`'s**, shared with every
  * other modal the deck builder opens — see `Decks/Dialog shell` for the scrim, the trap, the
  * Escape rung and the ✕ with nothing inside them. What is storied *here* is the half that only
  * exists because the deck does: the read, the writes, and the states they leave the panel in.
@@ -83,7 +83,7 @@ export const Default: Story = {
     // else was awaiting on the way in; the oracle-tag reads a deck now makes were enough to
     // move it a frame, and jest-dom prints the failing element with `maxDepth: 0`, so it
     // reported an empty `<p>` and looked for all the world like missing data. The dialog now
-    // sits inside `DeckDialog`'s scrim as well, which is one more animated element again — so
+    // sits inside `Dialog`'s scrim as well, which is one more animated element again — so
     // the wait is given {@link FRAME_WAIT} rather than the default, for the reason that
     // constant records: under suite load a frame is not the only thing being waited on.
     const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
@@ -265,7 +265,7 @@ export const DeckIsGone: Story = {
  * Closed is **nothing mounted**, not a hidden panel — so a dialog nobody opened asks the
  * backend for no deck, no folder tree and no format table either.
  *
- * That is `DeckDialog`'s guarantee rather than this file's, and it survives the extraction for a
+ * That is `Dialog`'s guarantee rather than this file's, and it survives the extraction for a
  * structural reason: the body is handed to the shell as an *element*, and an element React never
  * puts in the tree is a component that never ran.
  */

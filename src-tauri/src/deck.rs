@@ -180,7 +180,7 @@ pub fn normalise_finish(raw: Option<&str>) -> Result<Option<String>, String> {
 /// Every deck-level field the settings dialog can edit is here, because the alternative is
 /// create-then-patch-then-file: three transactions, a deck that exists in a state the user did
 /// not ask for between each pair of them, and a half-configured row to unwind by hand when the
-/// second one fails. That is the trap [`crate::deck_import::commit_import`] exists to avoid on
+/// second one fails. That is the trap [`crate::import::commit_import`] exists to avoid on
 /// the card side, and it is why this struct is wide rather than the three fields it was.
 ///
 /// Two things it deliberately cannot say:
@@ -191,7 +191,7 @@ pub fn normalise_finish(raw: Option<&str>) -> Result<Option<String>, String> {
 ///   making — so a custom picture is [`set_cover_image`], a follow-up call, and the create
 ///   dialog has to treat a failure there as a deck that exists without its picture.
 /// * **Anything about cards.** A deck is born empty and with its four predefined categories;
-///   [`add_card`] and [`crate::deck_import::commit_import`] are what fill it.
+///   [`add_card`] and [`crate::import::commit_import`] are what fill it.
 ///
 /// A create leaves **one** history row however many of these fields it carries — see
 /// [`create_deck`].
@@ -539,7 +539,7 @@ pub(crate) type Printing = (String, String, String, String);
 /// collection row is a thing the user can hold, but a deck list is *read*, and a line that
 /// can only say `e7f8…` once the id stops resolving is not a deck list.
 ///
-/// `pub(crate)`, not private, for [`touch_deck`]'s reason: [`crate::deck_import::commit_import`]
+/// `pub(crate)`, not private, for [`touch_deck`]'s reason: [`crate::import::commit_import`]
 /// denormalizes exactly these four columns onto exactly the same table, and a second copy of
 /// this query would be a second place for an imported row and an added row to disagree about
 /// what a deck card remembers.
@@ -2175,7 +2175,7 @@ pub fn set_card_quantity(
 /// The frontend already holds every row of the pile, so stepping each to zero would work — and
 /// would be a transaction, an allocator run and a `["decks"]` invalidation **per card**, which
 /// on a forty-card pile is forty of each. That is the same arithmetic that made
-/// [`crate::deck_import::commit_import`] a command rather than a loop over `add_card`, and the
+/// [`crate::import::commit_import`] a command rather than a loop over `add_card`, and the
 /// answer is the same: one statement, one allocator run, one history row.
 ///
 /// ## Scope: this variant, and deliberately not both
@@ -2627,7 +2627,7 @@ pub fn swap_printing(
 /// object of the same card — so it answers the same [`SwapResult`], folds the same way, and
 /// records the same `swap` audit kind rather than a tenth word. `AUDIT_KINDS` is
 /// CHECK-constrained and SQLite has no `ALTER … CHECK`, so a new word would mean rebuilding
-/// every reader's whole deck history for a spelling; `deck_import::commit_import` met this
+/// every reader's whole deck history for a spelling; `import::commit_import` met this
 /// first and reused `add`/`remove` for the same reason.
 ///
 /// **The fold is the half worth reading.** Setting the foil row of a pile that already holds a

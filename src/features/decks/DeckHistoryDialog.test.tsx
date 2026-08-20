@@ -111,7 +111,7 @@ describe("DeckHistoryDialog", () => {
   /**
    * The count is the **whole** history and the date is its oldest row, so the line says how far
    * back the dialog can see. It rides beside the filter chips rather than beside the title,
-   * because `DeckDialog`'s header takes a title and nothing else — and it is a caption for the
+   * because `Dialog`'s header takes a title and nothing else — and it is a caption for the
    * filter anyway. Both figures are read off the rows rather than told to the dialog, because a
    * count the backend sent separately is a count that can disagree with the list under it.
    */
@@ -270,7 +270,7 @@ describe("DeckHistoryDialog", () => {
 
     /**
      * **The filter is the reader's and outlives a close**, which is why it is held above
-     * {@link DeckDialog} rather than in the body: `children` render only while the dialog is
+     * {@link Dialog} rather than in the body: `children` render only while the dialog is
      * open, so a chip switched off inside it would come back on every time the reader opened
      * the history again. The query is the opposite case and is deliberately inside.
      */
@@ -329,7 +329,7 @@ describe("DeckHistoryDialog", () => {
   });
 
   /**
-   * The chrome is {@link DeckDialog}'s now — the scrim's outside click, the Tab trap, the
+   * The chrome is {@link Dialog}'s now — the scrim's outside click, the Tab trap, the
    * self-focus and the capture-phase `preventDefault()` are tested once, where they live. What
    * is left to check here is the **wiring**: that this component is on the ladder at all, and
    * that the two callbacks it is handed reach the two controls that mean them.

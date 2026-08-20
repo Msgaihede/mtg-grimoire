@@ -78,7 +78,7 @@ deliberately**: no screenshots are stored.
   the app wrote about the reader's disk. It takes **no store**: they mirror no table and no crate
   module, and `db.test.ts`'s busy sweep walks `writeHandlers` asserting everything there can be
   refused by a running sync, which none of these can. **`save` answering a path is not the same
-  decision as `deck_import_read_file` throwing**: the picker there would invent the *decklist*,
+  decision as `import_read_file` throwing**: the picker there would invent the *decklist*,
   which is the screen's whole subject, while this one invents only a file name over text the
   reader is already looking at.
 - **Undo is a wrapper over `writeHandlers`, not a line in each of them.** `journalled()` snapshots

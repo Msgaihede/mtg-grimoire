@@ -366,6 +366,13 @@ export function useCollection() {
      * two queries this is part of the key of.
      */
     marketplace,
+    /**
+     * Every filter as one object, without the paging — what a request for "the whole filtered
+     * list" needs and a request for "the page on screen" does not. `useExportScope`'s sweep is
+     * the one other reader: exporting "matching your filters" means this object plus a page size
+     * of its own (`SWEEP_PAGE`), never the 100-row page this view happens to have loaded.
+     */
+    filters,
     query,
     summary,
     rows,

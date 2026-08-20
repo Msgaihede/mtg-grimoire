@@ -3,7 +3,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { TagsDialog } from "./TagsDialog";
 
-/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+/** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
  *  and why the number is seconds; each file keeps its own copy because CSF would index an
  *  exported one as a story. */

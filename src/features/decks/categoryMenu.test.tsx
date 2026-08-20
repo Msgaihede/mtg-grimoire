@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
+import { fromDeckCard } from "@/features/transfer/TransferCard";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 import { buildCategoryMenu, type CategoryMenuDeps } from "./categoryMenu";
 import { card } from "./validation/fixtures";
@@ -169,7 +170,7 @@ describe("buildCategoryMenu", () => {
     ).onSelect();
 
     expect(openExport).toHaveBeenCalledWith(
-      expect.objectContaining({ subject: "Removal", cards: REMOVAL_CARDS }),
+      expect.objectContaining({ subject: "Removal", cards: REMOVAL_CARDS.map(fromDeckCard) }),
     );
   });
 
@@ -185,7 +186,7 @@ describe("buildCategoryMenu", () => {
     expect(openExport).toHaveBeenCalledWith({
       categoryId: REMOVAL.id,
       subject: "Removal",
-      cards: REMOVAL_CARDS,
+      cards: REMOVAL_CARDS.map(fromDeckCard),
     });
   });
 

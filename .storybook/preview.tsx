@@ -118,7 +118,7 @@ function FakeWorld({
  * then `storybook-static/index.json`.
  *
  * **The other files carrying the same parameter do so for reasons of their own**, and the reasons
- * are what is worth writing down: `DeckSettingsDialog`, `CreateDeckDialog`, `ImportDeckDialog` and
+ * are what is worth writing down: `DeckSettingsDialog`, `CreateDeckDialog`, `ImportDialog` and
  * `ExportDialog` each draw a `fixed inset-0` scrim that rendered inline would cover the whole docs
  * page rather than its own block; `ContextMenu` draws a `fixed` panel at `LAYER.popup` for the
  * same reason, and needs the frame twice over, since a per-story iframe is also a fake world per

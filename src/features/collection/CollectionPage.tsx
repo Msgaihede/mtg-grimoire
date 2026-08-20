@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -8,6 +8,10 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
+import { ExportDialog } from "@/features/transfer/export/ExportDialog";
+import { scopeLabel, useExportScope } from "@/features/transfer/export/scope";
+import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { FINISHES, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionPage as Page, type CollectionRow } from "@/lib/ipc";
@@ -137,6 +141,23 @@ export function CollectionPage() {
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const queryClient = useQueryClient();
+
+  /**
+   * The export dialog, and the sweep that fills it — see `scope.ts`'s doc for why the sweep
+   * exists at all rather than exporting the page already in memory.
+   *
+   * `useExportScope` runs on every render, `enabled` or not: `ExportDialog` is mounted
+   * unconditionally below (the same shape `DeckEditor`'s is), so that closing it fades the
+   * shell out instead of yanking it out of the tree — and that means this hook has to be
+   * called every render too, `enabled: exporting` is what stops it from sweeping the whole
+   * collection on every filter keystroke nobody asked to export.
+   */
+  const [exporting, setExporting] = useState(false);
+  const exportScope = useExportScope("collection", collection.filters, exporting);
+
+  /** The import dialog. One destination, so no radio group is drawn — a choice between one
+   *  thing is not a choice. */
+  const [importing, setImporting] = useState(false);
 
   /**
    * Rewrite one entry wherever the collection is cached.
@@ -428,7 +449,36 @@ export function CollectionPage() {
         )}
       </div>
 
-      <CollectionFilterBar collection={collection} />
+      <div className="flex flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <CollectionFilterBar collection={collection} />
+        </div>
+        {/* The first export entry point outside the deck editor (Task 11); Import beside it
+            since Task 14, over `collectionDestination` — the collection's own bulk-import
+            planner and preview. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setImporting(true)}
+            className={cn(
+              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            Import
+          </button>
+          <button
+            type="button"
+            onClick={() => setExporting(true)}
+            className={cn(
+              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            Export
+          </button>
+        </div>
+      </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
         {/* One live region, mounted for the life of the view: a region that appears together
@@ -528,6 +578,37 @@ export function CollectionPage() {
             </>
           ))}
       </div>
+
+      {/* Mounted unconditionally, the same shape every other dialog in this app is — `Dialog`
+          itself renders nothing while closed, and staying in the tree is what lets its scrim
+          fade out instead of the whole thing vanishing the instant `exporting` flips back. */}
+      <ExportDialog
+        open={exporting}
+        subject="your collection"
+        surface="collection"
+        cards={exportScope.cards}
+        suggestedFileName="collection"
+        onDismiss={() => setExporting(false)}
+        onClose={() => setExporting(false)}
+        scope={{
+          label: scopeLabel(exportScope.total, exportScope.everything),
+          loading: exportScope.loading,
+          everything: exportScope.everything,
+          onEverything: exportScope.setEverything,
+        }}
+      />
+
+      {/* One destination — the collection itself — so no destination radios are drawn: a
+          choice between one thing is not a choice. `onDone`'s message is discarded, the same
+          precedent `DeckEditor` and `DecksPage` set for their own import dialogs: the numbers
+          are already on screen, in the preview the reader just committed. */}
+      <ImportDialog
+        destinations={[collectionDestination]}
+        open={importing}
+        onDismiss={() => setImporting(false)}
+        onClose={() => setImporting(false)}
+        onDone={() => setImporting(false)}
+      />
     </section>
   );
 }

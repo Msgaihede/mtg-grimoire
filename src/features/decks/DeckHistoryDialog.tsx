@@ -7,7 +7,7 @@ import type { DeckAuditEntry } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { auditSentence, type AuditDay } from "./auditText";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { useDeckAudit } from "./useDeckAudit";
 
 /**
@@ -149,7 +149,7 @@ export interface DeckHistoryDialogProps {
   /** Escape, and the dialog's own ✕: hand focus back to whatever opened it, then close. Both,
    *  because the ✕ is *inside* the layer that is about to unmount — a press that did not hand
    *  the caret back would drop it on `<body>` and restart the next Tab from the top of the app.
-   *  Stable, please: {@link DeckDialog} passes it to `useDismissOnEscape` as a dependency. */
+   *  Stable, please: {@link Dialog} passes it to `useDismissOnEscape` as a dependency. */
   onDismiss: () => void;
   /** Outside click: close without moving focus. The reader is already somewhere else. */
   onClose: () => void;
@@ -158,7 +158,7 @@ export interface DeckHistoryDialogProps {
 /**
  * The deck history dialog.
  *
- * **The chrome is {@link DeckDialog}'s and none of it is written here.** The scrim, the centred
+ * **The chrome is {@link Dialog}'s and none of it is written here.** The scrim, the centred
  * panel, `aria-modal`, the Tab trap, the titled header with its ✕, and the `"inner"` Escape rung
  * registered on the *flag* rather than on the panel's mount — all of that is the shell's, once,
  * for every dialog the deck builder opens. What is left in this file is a history: the query, the
@@ -187,7 +187,7 @@ export function DeckHistoryDialog({ deckId, open, onDismiss, onClose }: DeckHist
   const showEverything = useCallback(() => setHidden([]), []);
 
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="History"
       closeLabel="Close history"
@@ -201,7 +201,7 @@ export function DeckHistoryDialog({ deckId, open, onDismiss, onClose }: DeckHist
         onToggle={toggle}
         onShowEverything={showEverything}
       />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
@@ -262,7 +262,7 @@ function History({
 
           The reach of the history rides here too, and it used to sit beside the title: the
           shell's header takes a title and nothing else, on purpose — four dialogs with four
-          differently furnished headers is the resemblance `DeckDialog` was made to end. This is
+          differently furnished headers is the resemblance `Dialog` was made to end. This is
           the honest home for it anyway. The count is the **whole** history and the date is its
           oldest row, so the line says how far back this dialog can see, which is a caption for
           the filter beside it rather than for the deck's name. Both are read off the rows rather

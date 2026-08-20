@@ -33,6 +33,49 @@ const FOCUSABLE = [
 ].join(", ");
 
 /**
+ * The panel's real Tab stops — `FOCUSABLE`'s matches, minus the disabled and `aria-hidden` ones,
+ * and **one per named radio-button group rather than one per `<input>`**.
+ *
+ * A native `<input type="radio">` group is a single Tab stop: the browser lands on whichever
+ * member is `checked` (the first, if none is), and Tab never visits the others at all — they
+ * move by the arrow keys instead. `querySelectorAll` cannot know that, so a naive list counts
+ * every radio in a destination-choice or a mode fieldset as its own stop. That is silently wrong
+ * exactly when the *unreachable* member ends up as `first`/`last`: forward Tab from the group's
+ * real (checked) stop never lands there, so `at === last` never fires and the wrap this file
+ * exists for never runs — a Tab press then walks the caret straight out of a layer claiming
+ * `aria-modal="true"`. Found by `DeckEditor.test.tsx`'s "keeps Tab inside Import cards" the day
+ * the import dialog's destination radios landed beside a disabled Preview button, which is the
+ * shape that exposes it: nothing else the panel could focus follows the group.
+ */
+function tabStops(panel: HTMLElement): HTMLElement[] {
+  const all = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
+  );
+  // One representative per radio group: whichever member is checked, or — if none is — the
+  // first one this panel carries. Built as its own pass because the answer for an unchecked
+  // group depends on which member turns up *first* in document order, not on the one being
+  // looked at right now.
+  const radioStop = new Map<string, HTMLInputElement>();
+  for (const el of all) {
+    // `el.name !== ""` here is *not* load-bearing — the filter below already sends an unnamed
+    // radio through its own `el.name === ""` branch before it would ever consult this map, so
+    // this guard only stops an unnamed radio from occupying key `""` in a map nothing reads it
+    // back from by that key. Removable, unlike its twin below.
+    if (el instanceof HTMLInputElement && el.type === "radio" && el.name !== "") {
+      if (radioStop.get(el.name) === undefined || el.checked) radioStop.set(el.name, el);
+    }
+  }
+  return all.filter((el) => {
+    // `el.name === ""` here **is** load-bearing. Drop it and an unnamed radio falls through to
+    // `radioStop.get("") === el` — which is always `false`, since the loop above never adds a
+    // `""` key to the map — silently removing every unnamed radio from the tab order instead of
+    // keeping it as its own stop.
+    if (!(el instanceof HTMLInputElement) || el.type !== "radio" || el.name === "") return true;
+    return radioStop.get(el.name) === el;
+  });
+}
+
+/**
  * Cycle Tab and Shift+Tab within `e.currentTarget`.
  *
  * Register it on the panel itself (`onKeyDown={trapTab}`) — the panel is read off
@@ -47,9 +90,7 @@ const FOCUSABLE = [
 export function trapTab(e: React.KeyboardEvent<HTMLElement>): void {
   if (e.key !== "Tab") return;
   const panel = e.currentTarget;
-  const stops = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
-  );
+  const stops = tabStops(panel);
   // Nothing to cycle between — a deck that is loading or gone, an empty diff where the ✕ may be
   // the only control and may itself be disabled. The press is still ours, or it would carry the
   // caret out of a layer that claims to be modal.

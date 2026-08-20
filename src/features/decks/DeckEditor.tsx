@@ -45,7 +45,7 @@ import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
 import { deckWalkStops } from "./deckWalk";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
@@ -53,7 +53,8 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
-import { ExportDialog } from "./export/ExportDialog";
+import { ExportDialog } from "@/features/transfer/export/ExportDialog";
+import { fromDeckCard, type TransferCard } from "@/features/transfer/TransferCard";
 import {
   asGroupBy,
   buildGroups,
@@ -61,7 +62,11 @@ import {
   GROUP_BY_OPTIONS,
   type GroupBy,
 } from "./grouping";
-import { ImportDeckDialog } from "./import/ImportDeckDialog";
+import type { ImportDestination } from "@/features/transfer/import/destination";
+import { deckDestination } from "@/features/transfer/import/destinations/deckInto";
+import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
+import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { NewTagDialog } from "./NewTagDialog";
 import { PriceStrip } from "./PriceStrip";
@@ -244,7 +249,7 @@ const NO_TAGS: readonly number[] = [];
 
 /** The same trick for the closed export dialog, which is mounted at every render and asked for
  *  a card list whether or not it is drawing one. */
-const NO_EXPORT_CARDS: readonly DeckCard[] = [];
+const NO_EXPORT_CARDS: readonly TransferCard[] = [];
 
 /**
  * What the export dialog is titled when the pile it was opened on has gone.
@@ -327,6 +332,13 @@ export type ExportScope = { kind: "deck" } | { kind: "category"; categoryId: num
  * subject is `""` there because nothing draws it, and that is the one case that must **not** read
  * {@link DELETED_CATEGORY}: a closed dialog is not a statement about a deleted pile.
  *
+ * **The cards are `TransferCard`s, built through `fromDeckCard`** — the row shape `ExportDialog`
+ * and `formatExport` speak now, so this function is one of the two places (`categoryMenu.tsx`'s
+ * export row is the other) that adapts a deck's own `DeckCard`s on the way out. That trades away
+ * the old identity guarantee for the deck scope — the returned array is a fresh one, mapped
+ * rather than passed through — but the claim it stood for is untouched: every row of the variant
+ * on screen still arrives, switched-off piles included, with nothing filtered out here.
+ *
  * Pure, and exported for that reason: see {@link exportFileName}.
  */
 export function exportSubject(
@@ -334,14 +346,14 @@ export function exportSubject(
   categories: readonly DeckCategory[],
   cards: readonly DeckCard[],
   deckName: string,
-): { subject: string; cards: readonly DeckCard[]; fileName: string } {
+): { subject: string; cards: readonly TransferCard[]; fileName: string } {
   if (scope === null) {
     return { subject: "", cards: NO_EXPORT_CARDS, fileName: exportFileName(deckName, "") };
   }
   if (scope.kind === "deck") {
     return {
       subject: deckName === "" ? UNNAMED_DECK : deckName,
-      cards,
+      cards: cards.map(fromDeckCard),
       // The deck's own name and no second half, which `exportFileName` already answers for an
       // empty one: a whole-deck export is the deck, so there is no pile to name after it.
       fileName: exportFileName(deckName, ""),
@@ -350,7 +362,7 @@ export function exportSubject(
   const name = categories.find((c) => c.id === scope.categoryId)?.name ?? null;
   return {
     subject: name ?? DELETED_CATEGORY,
-    cards: cards.filter((c) => c.categoryId === scope.categoryId),
+    cards: cards.filter((c) => c.categoryId === scope.categoryId).map(fromDeckCard),
     // The **name**, never the subject: a file called `Burn - a deleted category` is a sentence
     // where a name belongs, and the deck's own name is the honest suggestion for a pile that is
     // not there any more.
@@ -473,9 +485,9 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * it when the header grew `Export deck` — and it is a **behavioural** sweep for a reason worth
  * reading before the next modality edit.
  *
- * **Every overlay here is a `DeckDialog`** — where the scrim, the centring, `aria-modal`, the
+ * **Every overlay here is a `Dialog`** — where the scrim, the centring, `aria-modal`, the
  * trap, the ✕ and the `"inner"` rung are written once, and since 2026-08-16 that shell is the
- * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDeckDialog` were the
+ * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDialog` were the
  * last two here carrying their own copy of that chrome, with `CreateDeckDialog` a third copy
  * outside this editor; all three moved onto the shell on that date.
  *
@@ -485,7 +497,7 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * until 2026-08-16, and each of those files was free to answer a shared question its own way:
  * one editor drew two scrim darknesses, the ✕ at two geometries and two speeds, and the panel
  * at three `max-h` values, none of it decided by anybody. A new modal here is built *on*
- * `DeckDialog.tsx` rather than beside it.
+ * `Dialog.tsx` rather than beside it.
  */
 type Layer =
   | { kind: "check" }
@@ -803,7 +815,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * element, and that is the whole point of it.**
    *
    * A toolbar button hands back to itself. A **menu row has no control to return to**, and
-   * `null` there is not "no hand-back needed": `DeckDialog` focuses its own panel on mount and
+   * `null` there is not "no hand-back needed": `Dialog` focuses its own panel on mount and
    * restores nothing, so a `null` opener leaves the caret on a panel that is unmounting and
    * drops it on `<body>` — the next Tab then restarts from the top of the app. That is the
    * failure `DecksPage.test.tsx` already documents in those words, and it is the third time on
@@ -886,7 +898,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * before each of its dialogs, for exactly this reason.
    *
    * This observer is the **editor's**, so it outlives every open of the `deleteCategory` layer —
-   * unlike the meta dialogs', which live in a body `DeckDialog` unmounts and start clean by
+   * unlike the meta dialogs', which live in a body `Dialog` unmounts and start clean by
    * construction. Without this a refused delete left the mutation in `isError`, and the next
    * `Delete…` drew its `role="alert"` on mount: a sentence *announced on insertion*, about a
    * press the reader had not made, naming a pile it was never about.
@@ -1124,12 +1136,44 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [reorderCategories],
   );
 
-  /** Copies in the list on screen — **copies, not rows**, because that is what a reader counts
-   *  and what an import's `replace` would clear. Every category, the inactive ones included:
-   *  a `replace` clears the variant, and a pile being switched off does not save it. */
-  const cardsInVariant = useMemo(
-    () => deck.cards.reduce((copies, card) => copies + card.quantity, 0),
-    [deck.cards],
+  /** The pile a right-click aimed the importer at, or nothing for the toolbar's own press. */
+  const forcedCategoryName = layer?.kind === "import" ? layer.forcedCategoryName : undefined;
+
+  /**
+   * The one destination this surface offers: the deck that is open.
+   *
+   * **Memoised on identity alone, because what comes back is a component identity** — a new one
+   * each render would remount the preview step and take the reader's commander choice with it,
+   * and a *presentational* value in this dependency list (the copy count used to be one) would
+   * do the same on any refetch. The three facts here are all "which deck, which list": an import
+   * lands in one variant and a `replace` clears at most one, so a paste made while Theory is up
+   * must never touch what is sleeved. Everything the preview has to draw — the deck's name, the
+   * count a `replace` would clear — it reads from the same `deck_get` this screen is reading.
+   */
+  const importInto = useMemo<ImportDestination>(
+    () => deckDestination({ deckId, variant, forcedCategoryName }),
+    [deckId, variant, forcedCategoryName],
+  );
+
+  /**
+   * Choosing "a new deck" from inside an editor that is already open on a different one leaves
+   * that new deck invisible: nothing on screen names it, and this editor stays put showing the
+   * deck the reader started on. `onImported` is `DecksPage`'s own answer to the identical
+   * question — open the deck the list became — reused rather than reinvented; `setOpenDeckId`
+   * is what makes this editor a different `deckId` prop on the next render.
+   */
+  const onNewDeckImported = useCallback(
+    (newDeckId: number) => setOpenDeckId(newDeckId),
+    [setOpenDeckId],
+  );
+  /** **Memoised for `importInto`'s reason**: `Preview` is a component identity, and a fresh one
+   *  each render would remount the new-deck step and take the reader's typed name with it. */
+  const importIntoNewDeck = useMemo<ImportDestination>(
+    () => ({
+      ...newDeckDestination,
+      Preview: (props) => <NewDeckPreview {...props} onImported={onNewDeckImported} />,
+    }),
+    [onNewDeckImported],
   );
 
   /** The pile the delete confirmation is about, read from the **live** list — a rename made
@@ -3209,7 +3253,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           Each is closed by `open`, and each unmounts everything behind that flag — so a closed
           one costs no query, no window listener and no state. That is what makes it safe to
           mount every one of them unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than a boolean apiece. For all but two `DeckDialog` guarantees it:
+          `Layer` union rather than a boolean apiece. For all but two `Dialog` guarantees it:
           `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
           The theory diff and the import dialog are not on that shell (see the `Layer` union's
           doc) and each guarantees the same thing with an `AnimatePresence` of its own — which
@@ -3266,27 +3310,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The one whose target has to be **the list on screen**: an import lands in one variant
-          and a `replace` clears at most one, so a paste made while Theory is up must never touch
-          what is sleeved. `cardsInVariant` is what a `replace` would clear, said in words before
-          it is chosen.
+      {/* Two destinations since Task 14 — the deck that is open, and a fresh one made out of
+          the same paste — so the shell now draws the radio group it has always been able to.
+          `importInto` is built where the deck's own facts are; `importIntoNewDeck` wraps
+          `newDeckDestination` the way `DecksPage`'s own does, closing over `onNewDeckImported`
+          so choosing "a new deck" from here does not leave it invisible — this editor has no
+          remembered format to seed the new deck's select with, which is the one thing
+          `DecksPage`'s wrapper passes that this one does not.
 
           `forcedCategoryName` is set only when the dialog was opened from a category heading's
           right-click, and it is the whole of the difference between "import into this deck" and
-          "import into this pile" — applied in `buildImportPlan`, not here, because `plan.ts`
-          makes every deck decision. The toolbar's own press carries none and is unchanged.
+          "import into this pile" — applied in `buildImportPlan`, not here, because
+          `destinations/deck.ts` makes every deck decision. The toolbar's own press carries none
+          and is unchanged. **It has no equivalent on the new-deck arm**: a right-click names a
+          pile of *this* deck, and a list sent to a deck that does not exist yet has no such pile
+          to aim at.
 
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
-          away in the toolbar and the deck it wrote into is already on screen — the editor
-          re-reads it, because every write in `useDeckImport` takes the `["decks"]` root with
-          it. */}
-      <ImportDeckDialog
-        target={{ kind: "deck", deckId, variant, cardsInVariant }}
-        forcedCategoryName={layer?.kind === "import" ? layer.forcedCategoryName : undefined}
+          away in the toolbar, and importing into *this* deck needs no navigation — the editor
+          re-reads it, because every write in `useImport` takes the `["decks"]` root with it.
+          Importing as a *new* deck is `onNewDeckImported`'s job, which fires alongside `dismiss`
+          rather than instead of it. No `subtitle` prop: the chosen destination says its own
+          header line (`importInto`'s names this deck; the new deck's leaves the fallback in
+          place, since there is no deck yet to name). */}
+      <ImportDialog
+        destinations={[importInto, importIntoNewDeck]}
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}
-        onImported={dismiss}
+        onDone={dismiss}
       />
       {/* The confirmation a `Delete…` owes, and it is **`CategoriesDialog`'s own component**
           rather than a second one written here. That dialog asks a careful question — the cards
@@ -3297,7 +3349,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
           `others` is every category **but** this one, in the reader's own `sortOrder`: the list
           the move picker offers, which must not include the pile being deleted. */}
-      <DeckDialog
+      <Dialog
         open={layer?.kind === "deleteCategory"}
         title={deletedCategory === null ? "Delete category" : `Delete “${deletedCategory.name}”`}
         // Named for what it closes, like every other dialog here — two controls called "Close"
@@ -3336,19 +3388,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           </div>
         )}
-      </DeckDialog>
+      </Dialog>
 
       {/* The confirmation a `Clear stack…` owes, beside the delete's and deliberately **not**
           folded into it. That dialog asks which of two things should happen to the cards; this
           one has a single outcome and a different scope — one list, not both — so sharing a
           component would mean a picker with nothing to pick and a sentence with a branch for
-          each caller. What they do share is the chrome, which is `DeckDialog`'s.
+          each caller. What they do share is the chrome, which is `Dialog`'s.
 
           A refused clear is said **inside** this dialog for the delete's reason, in full there:
           the editor's own banner draws behind this dialog's `LAYER.overlay` scrim, and a
           refusal leaves the question open with its button still live — so without this the
           reader sees a press that did nothing. */}
-      <DeckDialog
+      <Dialog
         open={layer?.kind === "clearCategory"}
         title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
         closeLabel="Close clear stack"
@@ -3375,7 +3427,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           </div>
         )}
-      </DeckDialog>
+      </Dialog>
 
       {/* **The one overlay two controls open**, and the only one whose scope decides which. The
           header's `Export deck` opens it over the deck; a category heading's right-click opens
@@ -3391,6 +3443,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <ExportDialog
         open={layer?.kind === "export"}
         subject={exported.subject}
+        surface="deck"
         cards={exported.cards}
         suggestedFileName={exported.fileName}
         onDismiss={dismiss}

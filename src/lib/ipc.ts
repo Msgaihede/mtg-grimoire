@@ -602,6 +602,48 @@ export interface EntryChange {
   removed: boolean;
 }
 
+/**
+ * What a bulk import writes into the collection or the wishlist. `add` folds onto the grain like
+ * a quick-add repeated per line; `set` writes each line's number as the truth rather than adding
+ * to what is already there. There is deliberately no `replace`: the deck's `replace` clears one
+ * variant of one deck, and the same word over a collection would empty a 3,000-card record from
+ * a 40-line paste with the file that caused it looking completely ordinary. An unknown mode is
+ * refused by the backend rather than defaulted.
+ */
+export type TransferImportMode = "add" | "set";
+
+/**
+ * One line of a bulk import, after this side has decided everything a *collection* decision is.
+ *
+ * `condition` is `undefined` rather than defaulted here: an absent one means the file said
+ * nothing, and the **dialog** is where the reader chose what that becomes. Defaulting it in two
+ * places is how the preview and the write come to disagree.
+ */
+export interface CollectionImportItem {
+  cardId: string;
+  quantity: number;
+  finish: Finish;
+  condition?: Condition;
+  conditionOriginal?: string;
+  purchasePrice?: number;
+  purchaseCurrency?: string;
+  acquiredAt?: string;
+  acquisitionSource?: string;
+  notes?: string;
+}
+
+/**
+ * What a bulk import did. `removed` is the wishlist's alone — a `set` of 0 deletes a wish and
+ * leaves a zero-quantity collection row — and it is `0` here rather than absent, so one shape
+ * covers both commands.
+ */
+export interface ImportCommitOutcome {
+  added: number;
+  updated: number;
+  /** The wishlist's alone: a `set` of 0 deletes a wish. Always 0 from the collection. */
+  removed: number;
+}
+
 /** A collection list, as the UI asks for it. */
 export interface CollectionQuery extends CardFilters {
   /**
@@ -733,6 +775,18 @@ export interface WishInput {
   quantity: number;
   /** A wish *for the foil* is a different wish from one for the nonfoil, and is not filled
    *  by it. Absent means no preference. */
+  preferredFinish?: Finish;
+  notes?: string;
+}
+
+/** One line of a bulk import, after this side has decided everything a *wishlist* decision is. */
+export interface WishlistImportItem {
+  oracleId?: string;
+  /** Absent is a wish for **any printing** — what a wishlist usually means, and what the
+   *  planner writes for a line that named no set. Not a looser version of a pinned wish: the
+   *  storage grain already treats the two as different rows. */
+  cardId?: string;
+  quantity: number;
   preferredFinish?: Finish;
   notes?: string;
 }
@@ -1854,7 +1908,7 @@ export interface SwapResult {
 /**
  * One line of a parsed decklist, on its way to be turned into a printing.
  *
- * **The quantity is deliberately not here.** {@link ipc.deckImportResolve} answers *which
+ * **The quantity is deliberately not here.** {@link ipc.importResolve} answers *which
  * printing a name means* — the one question this side cannot answer, because it is a question
  * about 116 k rows of card data — and how many copies the line asked for is this side's
  * arithmetic all the way to {@link ImportItem}. Both hints are optional because most decklist
@@ -2023,7 +2077,7 @@ export type ImportMode = "merge" | "replace";
  * One line of a decklist after this side has decided everything a *deck* decision is.
  *
  * The first three fields are the three answers the backend cannot compute for itself: which
- * printing (resolved by {@link ipc.deckImportResolve}, and perhaps overridden in the preview),
+ * printing (resolved by {@link ipc.importResolve}, and perhaps overridden in the preview),
  * how many, and which pile.
  */
 export interface ImportItem {
@@ -2425,7 +2479,7 @@ export interface CardTags {
  * The same answer keyed by a **printing** id (`cards.id`), for the callers that hold one.
  *
  * Almost every categorising call site does: a drag payload, `useDeck.addCard` and
- * `deck_import_resolve`'s rows all name a printing. A separate DTO rather than reusing
+ * `import_resolve`'s rows all name a printing. A separate DTO rather than reusing
  * {@link CardTags} because a printing id in a field called `oracleId` would be a lie, and this
  * mirror is the one place that lie would never be caught.
  */
@@ -2607,6 +2661,13 @@ export const ipc = {
   /** The aggregate header, over the same filters as the list it captions. */
   collectionSummary: (query: CollectionQuery) =>
     invoke<CollectionSummary>("collection_summary", { query }),
+  /**
+   * One transaction for a whole imported file, rather than one `collectionAdd` per line — a
+   * 500-row CSV would otherwise be 500 transactions, and a failure halfway through would leave
+   * a collection nobody can reason about. A refusal rolls the whole file back.
+   */
+  collectionImportCommit: (items: CollectionImportItem[], mode: TransferImportMode) =>
+    invoke<ImportCommitOutcome>("collection_import_commit", { items, mode }),
   wishlistAdd: (wish: WishInput) => invoke<EntryChange>("wishlist_add", { wish }),
   /** An absolute quantity — and here `0` *removes* the row, because a wish holds nothing
    *  worth keeping once it is emptied. The opposite of the collection's, on purpose. */
@@ -2614,6 +2675,13 @@ export const ipc = {
     invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
+  /**
+   * One transaction for a whole imported file — {@link ipc.collectionImportCommit}'s rule. The
+   * `set` arm reaches its row through `add_wish` first and corrects the quantity after, so a
+   * `set` of 0 **deletes** the wish rather than leaving an empty one.
+   */
+  wishlistImportCommit: (items: WishlistImportItem[], mode: TransferImportMode) =>
+    invoke<ImportCommitOutcome>("wishlist_import_commit", { items, mode }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
   /**
@@ -3128,8 +3196,8 @@ export const ipc = {
    * The rows come back in the order the lines went out and carry
    * {@link ImportResolveRow.index} besides.
    */
-  deckImportResolve: (lines: ImportResolveLine[]) =>
-    invoke<ImportResolveRow[]>("deck_import_resolve", { lines }),
+  importResolve: (lines: ImportResolveLine[]) =>
+    invoke<ImportResolveRow[]>("import_resolve", { lines }),
   /**
    * A whole decklist into one deck: one transaction, one allocation, one or two history rows.
    *
@@ -3162,7 +3230,7 @@ export const ipc = {
    * the preview — rather than failing the other hundred. What comes back is a string and nothing
    * more; parsing it is this side's, exactly as it is for a paste.
    */
-  deckImportReadFile: (path: string) => invoke<string>("deck_import_read_file", { path }),
+  importReadFile: (path: string) => invoke<string>("import_read_file", { path }),
   /** The format rules as data, in picker order. Seeded by the migration, so this changes at
    *  most once per app version — cached for the session by `useFormatSpecs`. */
   formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),

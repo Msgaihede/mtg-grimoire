@@ -40,7 +40,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { type DeckTag, type DeckVariant, type TagColor } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/focus";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import {
   CONFIRM_CANCEL,
   CONFIRM_DESTRUCTIVE,
@@ -72,9 +72,9 @@ export interface TagsDialogProps {
 export const TAGS_SUBTITLE = "A card carries at most one. Deleting a tag keeps its cards.";
 
 /**
- * The chrome is {@link DeckDialog}'s and the body below is this file's.
+ * The chrome is {@link Dialog}'s and the body below is this file's.
  *
- * **The body is a separate component and that is not tidiness**: a closed {@link DeckDialog}
+ * **The body is a separate component and that is not tidiness**: a closed {@link Dialog}
  * mounts no children at all, so the queries belong one floor down where they only exist while
  * the dialog is up. A closed dialog therefore costs nothing — no `deck_tag_list`, no
  * `deck_tag_suggestions` — which is what makes it safe for the editor to mount this
@@ -93,7 +93,7 @@ export function TagsDialog({
   onClose,
 }: TagsDialogProps): JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="Tags"
       subtitle={TAGS_SUBTITLE}
@@ -103,7 +103,7 @@ export function TagsDialog({
       onClose={onClose}
     >
       <TagsBody deckId={deckId} variant={variant} />
-    </DeckDialog>
+    </Dialog>
   );
 }
 

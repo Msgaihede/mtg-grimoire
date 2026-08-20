@@ -25,6 +25,7 @@ import { CARDS, type FakeCard } from "./cards";
 import type {
   CardSummary,
   CategoryKind,
+  CollectionImportItem,
   CollectionPage,
   CollectionSortKey,
   DeckDetail,
@@ -34,9 +35,12 @@ import type {
   ImportResolveLine,
   SearchRequest,
   SearchSortKey,
+  TransferImportMode,
+  WishlistImportItem,
   WishlistPage,
   WishlistSortKey,
 } from "@/lib/ipc";
+import type { Finish } from "@/lib/finish";
 import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 import type { MarketplaceId } from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
@@ -2172,6 +2176,117 @@ describe("the wishlist write", () => {
   });
 });
 
+describe("collection_import_commit", () => {
+  it("accumulates a repeated grain and counts added versus updated", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2 },
+      // Two lines, one grain: the file named the same printing twice and the copies add up.
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 3 },
+    ];
+    const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
+    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(db.collectionEntries).toHaveLength(1);
+    expect(db.collectionEntries[0].quantity).toBe(5);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the collection as it was", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      // A finish no CHECK will take. A half-imported collection is worse than a refused one.
+      { cardId: BOLT.id, finish: "glitter" as Finish, quantity: 1 },
+    ];
+    expect(() => writeHandlers(db).collection_import_commit({ items, mode: "add" })).toThrow(
+      /not a finish/,
+    );
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  it("refuses an unknown mode rather than defaulting it, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).collection_import_commit({
+        items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 1 }],
+        mode: "replace" as TransferImportMode,
+      }),
+    ).toThrow(/not an import mode/);
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+});
+
+describe("wishlist_import_commit", () => {
+  it("accumulates a repeated grain and counts added versus updated", () => {
+    const db = makeDb();
+    const items: WishlistImportItem[] = [
+      { oracleId: BOLT.oracleId!, quantity: 2 },
+      { oracleId: BOLT.oracleId!, quantity: 1 },
+    ];
+    const out = writeHandlers(db).wishlist_import_commit({ items, mode: "add" });
+    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0].quantity).toBe(3);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the wishlist as it was", () => {
+    const db = makeDb();
+    const items: WishlistImportItem[] = [
+      { oracleId: BOLT.oracleId!, quantity: 1 },
+      { oracleId: BOLT.oracleId!, quantity: 1, preferredFinish: "glitter" as Finish },
+    ];
+    expect(() => writeHandlers(db).wishlist_import_commit({ items, mode: "add" })).toThrow(
+      /not a finish/,
+    );
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  it("refuses an unknown mode rather than defaulting it, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).wishlist_import_commit({
+        items: [{ oracleId: BOLT.oracleId!, quantity: 1 }],
+        mode: "replace" as TransferImportMode,
+      }),
+    ).toThrow(/not an import mode/);
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  /**
+   * The trap `removed` being counted explicitly (rather than derived from a row-count delta)
+   * exists for: one line creates a row and another zeroes an existing one, in the same `set`
+   * call. A before/after row count alone would cancel these two events out and report neither.
+   *
+   * Expected by hand: before the import, 1 wish exists (the any-printing one seeded via
+   * `wishlist_add`). The first item names that exact grain (`oracleId`, no `cardId`) at
+   * quantity `0` — `add_wish`'s own fold (which never subtracts) leaves the row momentarily
+   * higher, and the immediate `set` to `0` deletes it: `removed` becomes `1`, row count drops by
+   * one. The second item names a different grain (pinned to `BOLT.id`) that does not exist yet,
+   * so it is created and then `set` to `5` — a real net-new row, row count rises by one. Net row
+   * count is therefore unchanged (1 → 1), which is exactly the case that would read as "nothing
+   * happened" without the explicit counter: `added = (after - before) + removed = (1 - 1) + 1 =
+   * 1`, `removed = 1`, `updated = items.length - added - removed = 2 - 1 - 1 = 0`.
+   */
+  it("counts a mixed set import: one new row, one deleted, none merely updated", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 2 } });
+    const out = w.wishlist_import_commit({
+      items: [
+        // Same grain as the seeded wish (any printing): zeroed by this line.
+        { oracleId: BOLT.oracleId!, quantity: 0 },
+        // A different grain (pinned to a printing): a genuinely new row.
+        { oracleId: BOLT.oracleId!, cardId: BOLT.id, quantity: 5 },
+      ],
+      mode: "set",
+    });
+    expect(out).toEqual({ added: 1, updated: 0, removed: 1 });
+    // The any-printing wish is gone and only the pinned one remains — not an id check, because
+    // `nextId` derives from the array's current contents and reuses the id the delete freed.
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0]).toMatchObject({ cardId: BOLT.id, quantity: 5 });
+  });
+});
+
 describe("the deck grain (deck, variant, category, card)", () => {
   /** The four card commands all address a row this way, which is the grain and nothing else. */
   const MAIN = { categoryId: categoryId(1, "main"), variant: "live" } as const;
@@ -2731,7 +2846,7 @@ describe("the decklist import", () => {
 
   /** The three fields of a resolve line, so a case can name only the ones it is about. */
   function resolve(db: FakeDb, lines: Partial<ImportResolveLine>[]) {
-    return readHandlers(db).deck_import_resolve({
+    return readHandlers(db).import_resolve({
       lines: lines.map((l) => ({ name: "", setCode: null, collectorNumber: null, ...l })),
     });
   }
@@ -2925,7 +3040,7 @@ describe("the decklist import", () => {
   });
 
   it("has no file to read, and says so rather than inventing a decklist", () => {
-    expect(() => readHandlers(makeDb()).deck_import_read_file()).toThrow(/no file picker/i);
+    expect(() => readHandlers(makeDb()).import_read_file()).toThrow(/no file picker/i);
   });
 });
 
@@ -3015,7 +3130,7 @@ describe("the busy fault", () => {
     //
     // All three follow the same split as `error_log_clear` before them: the write half takes
     // `AppState.db` through `lock_for` and is therefore refusable, while its read half
-    // (`deck_import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
+    // (`import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
     // `db_read` and answers through every second of a sync.
     //
     // The card pane's grouping selector then added `set_printing_group_by`, on the same split
@@ -3048,10 +3163,16 @@ describe("the busy fault", () => {
     // which is the `syncing` fault rather than this one — and it still belongs in this loop,
     // because a reader who is merely mid-*write* gets BUSY here exactly like everything else.
     //
+    // The bulk-import commands then took it 45 → 47: `collection_import_commit` and
+    // `wishlist_import_commit` are one transaction for a whole imported file rather than one
+    // `collection_add`/`wishlist_add` per line, and each holds the same write lock its per-line
+    // sibling does, so a reader mid-write gets BUSY on an import exactly as they do on a
+    // quick-add.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(45);
+    expect(names).toHaveLength(47);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

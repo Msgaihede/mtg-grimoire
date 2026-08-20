@@ -38,7 +38,7 @@
 //!
 //! [`crate::schema::AUDIT_KINDS`] stays at nine. `deck_audit.kind`'s CHECK cannot be altered —
 //! SQLite has no `ALTER … CHECK` — so a tenth word means rebuilding every reader's whole deck
-//! history for a spelling. [`crate::deck_import::commit_import`] met this first and reused
+//! history for a spelling. [`crate::import::commit_import`] met this first and reused
 //! `add`/`remove` with a keyed payload; this reuses `deck` with
 //! `{"field":"undo"|"redo","of":<audit_id>}`. `auditText.ts`'s `deckLine` already answers an
 //! unrecognised field with "Changed the deck", so an older build degrades to a true sentence
@@ -654,7 +654,7 @@ fn sql_value(value: rusqlite::types::ValueRef<'_>) -> Value {
 /// Apply a list of ops, inside the caller's transaction.
 ///
 /// The caller runs [`crate::deck::allocate_deck`] afterwards, once, for the whole step — the
-/// same argument `deck_import::commit_import` makes for a decklist: a rebuild per op would be N
+/// same argument `import::commit_import` makes for a decklist: a rebuild per op would be N
 /// rebuilds of one deck's claims for one press.
 pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
     let mut remap = Remap::default();
@@ -1693,7 +1693,7 @@ mod tests {
                 crate::deck_theory::copy_from_live(c, id).unwrap();
             }),
             ("deck_import_commit (merge)", nothing, |c, id| {
-                crate::deck_import::commit_import(
+                crate::import::commit_import(
                     c,
                     id,
                     "live",
@@ -1708,7 +1708,7 @@ mod tests {
                 "deck_import_commit (replace)",
                 nothing,
                 |c, id| {
-                    crate::deck_import::commit_import(
+                    crate::import::commit_import(
                         c,
                         id,
                         "live",
@@ -1722,7 +1722,7 @@ mod tests {
                 "deck_import_commit (inventing categories)",
                 nothing,
                 |c, id| {
-                    crate::deck_import::commit_import(
+                    crate::import::commit_import(
                         c,
                         id,
                         "live",
@@ -1873,8 +1873,8 @@ mod tests {
     }
 
     /// One line of an imported decklist.
-    fn imported(card_id: &str, quantity: i64, category: &str) -> crate::deck_import::ImportItem {
-        crate::deck_import::ImportItem {
+    fn imported(card_id: &str, quantity: i64, category: &str) -> crate::import::ImportItem {
+        crate::import::ImportItem {
             card_id: card_id.to_owned(),
             quantity,
             category_name: category.to_owned(),

@@ -701,22 +701,22 @@ describe("ipc argument names match the Rust command signatures", () => {
   /**
    * The three import commands, and the one in the whole file that takes **no managed state**.
    *
-   * `deck_import_read_file(path)` touches no database, so `path` is its only parameter — and it
+   * `import_read_file(path)` touches no database, so `path` is its only parameter — and it
    * is a *path* rather than bytes, which is the contract that keeps `dialog:allow-open` the only
    * capability this feature needs. A mirror that sent the file's contents under `path` would
    * type-check perfectly and import a filename.
    *
-   * The other two break the module's own patterns in opposite directions: `deck_import_resolve`
+   * The other two break the module's own patterns in opposite directions: `import_resolve`
    * takes a bare `lines` array where every other list-shaped read in this file wraps its payload
    * in `query` or `req`, and `deck_import_commit` takes `deckId` where the card writes beside it
    * take `deckId` too but spell their payload out field by field rather than as `items`.
    */
   it("sends every import command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
-    await ipc.deckImportResolve([{ name: "Sol Ring", setCode: null, collectorNumber: null }]);
+    await ipc.importResolve([{ name: "Sol Ring", setCode: null, collectorNumber: null }]);
     // `lines`, not `query` or `req` — and both hints travel as explicit `null`s, because Tauri
     // fills parameters by name and the preview must be able to say a hint was *given*.
-    expect(invoke).toHaveBeenCalledWith("deck_import_resolve", {
+    expect(invoke).toHaveBeenCalledWith("import_resolve", {
       lines: [{ name: "Sol Ring", setCode: null, collectorNumber: null }],
     });
 
@@ -735,8 +735,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(outcome).toEqual({ added: 100, removed: 0, categoriesCreated: 2 });
 
     invoke.mockResolvedValue("1 Sol Ring\n");
-    const text = await ipc.deckImportReadFile("C:\\lists\\edh.txt");
-    expect(invoke).toHaveBeenCalledWith("deck_import_read_file", { path: "C:\\lists\\edh.txt" });
+    const text = await ipc.importReadFile("C:\\lists\\edh.txt");
+    expect(invoke).toHaveBeenCalledWith("import_read_file", { path: "C:\\lists\\edh.txt" });
     expect(text).toBe("1 Sol Ring\n");
   });
 

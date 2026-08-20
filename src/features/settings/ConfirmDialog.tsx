@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type JSX, type ReactNode } from "react";
-import { DeckDialog } from "@/features/decks/DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { BUTTON } from "./controls";
@@ -16,7 +16,7 @@ export const CONFIRM_WORD = "Confirm";
 
 export interface ConfirmDialogProps {
   open: boolean;
-  /** The heading, and — through {@link DeckDialog} — the dialog's accessible name. */
+  /** The heading, and — through {@link Dialog} — the dialog's accessible name. */
   title: string;
   /** What pressing the button will do, in the reader's terms. The whole of the warning. */
   children: ReactNode;
@@ -46,7 +46,7 @@ export interface ConfirmDialogProps {
 /**
  * The question asked before anything on the Settings page is thrown away.
  *
- * ## Why it is built on `DeckDialog`
+ * ## Why it is built on `Dialog`
  *
  * That shell is the app's, not the deck builder's — `features/card`'s `AllPrintingsDialog`
  * already reaches across for it — and what it carries is a list of lessons a settings-local
@@ -60,7 +60,7 @@ export interface ConfirmDialogProps {
  *
  * ## The one thing it overrides
  *
- * `DeckDialog` deliberately focuses the *panel* rather than a field, because its dialogs are
+ * `Dialog` deliberately focuses the *panel* rather than a field, because its dialogs are
  * "panels of settled values rather than questions, and dropping the caret into the first text
  * box would make the reader's first keystroke an edit". This one is the other thing: it is a
  * single question, the field is the answer, and there is nothing to edit. The shell's own effect
@@ -85,7 +85,7 @@ export function ConfirmDialog({
   onClose,
 }: ConfirmDialogProps): JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title={title}
       closeLabel={`Close ${title.toLowerCase()}`}
@@ -102,14 +102,14 @@ export function ConfirmDialog({
       >
         {children}
       </Body>
-    </DeckDialog>
+    </Dialog>
   );
 }
 
 /**
  * The question itself, mounted only while the dialog is open.
  *
- * A separate component for the shell's stated rule — a closed `DeckDialog` renders no children
+ * A separate component for the shell's stated rule — a closed `Dialog` renders no children
  * — which is what makes the draft below a *session* rather than something an effect clears.
  */
 function Body({
