@@ -191,7 +191,11 @@ using it.
   one-time build — but it is a schema change (`TAG_INDEXES_SQL` runs unconditionally with
   `IF NOT EXISTS`, so widening it needs a ladder rung to `DROP` the narrow one first) bought
   against a breadth nobody has demonstrated in the real taxonomy, where `dog` reaches 439
-  illustrations. **Take the live measurement after an art sync before spending it.**
+  illustrations. **That measurement has since been taken and the answer was no** — see the
+  bullet above and `index/facets.rs`' `DO NOT WIDEN THAT INDEX TO (slug, weight)`: against the
+  real 952,729-row closure that index measured *ten times worse* than the status quo, and the
+  floor's cost was removed by changing the card filter's query shape instead, at no schema
+  cost. Everything above this sentence is the synthetic closure it was written against.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it

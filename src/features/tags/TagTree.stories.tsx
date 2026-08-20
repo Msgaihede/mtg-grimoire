@@ -131,7 +131,7 @@ export const Default: Story = {
 
     // **Nothing below the roots has been fetched.** `Cat` is two levels down, and the level that
     // holds it has never mounted — which is the whole of the lazy contract, and the only thing
-    // standing between this component and 3,219 rows on first paint.
+    // standing between this component and thousands of rows on first paint.
     await expect(canvas.queryByRole("button", { name: /^Cat, / })).toBeNull();
     // A leaf draws no disclosure at all: `childCount` counts only children that exist and are
     // not muted, so a triangle never opens onto nothing.
