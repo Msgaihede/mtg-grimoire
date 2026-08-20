@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
-import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
+import { expect, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { FilterBar } from "./FilterBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -500,12 +500,16 @@ export const SortedDescending: Story = {
     });
     await expect(direction).not.toBeDisabled();
     // The same sentence rides as the hover tooltip: there is no visible text on the button, so
-    // a pointer has nothing else to get.
+    // a pointer has nothing else to get. Bound `describes: false` (the button's `aria-label`
+    // already carries the sentence), so the panel carries no `role="tooltip"` — found by its
+    // one stable id instead.
     await userEvent.hover(direction);
-    const tooltip = await canvas.findByRole("tooltip", undefined, {
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    await expect(tooltip).toHaveTextContent("Sort direction: descending — press for ascending");
+    await expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction: descending — press for ascending",
+    );
     await userEvent.unhover(direction);
 
     // `toHaveValue`, never the text of the selected option. A controlled `<select>` whose value

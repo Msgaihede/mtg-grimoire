@@ -2644,7 +2644,9 @@ describe("TableView", () => {
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
       "Sol Ring is banned here.",
     );
-    expect(screen.getByTitle("Game changer")).toBeInTheDocument();
+    // `GameChangerBadge` carries no `title` either; it is found by its own visible letters —
+    // the `sr-only` twin beside it says the words, the badge itself is decoration.
+    expect(screen.getByText("GC")).toBeInTheDocument();
   });
 
   /**
@@ -2673,8 +2675,9 @@ describe("TableView", () => {
 
     expect(screen.getByText("Game changer")).toHaveClass("sr-only");
     expect(screen.getByText("Rule break: Sol Ring is banned here.")).toHaveClass("sr-only");
-    // The badge itself is decoration in every view.
-    expect(screen.getByTitle("Game changer")).toHaveAttribute("aria-hidden", "true");
+    // The badge itself is decoration in every view — found by its own letters now that it
+    // carries no `title`.
+    expect(screen.getByText("GC")).toHaveAttribute("aria-hidden", "true");
   });
 
   /**
