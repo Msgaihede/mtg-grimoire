@@ -4389,8 +4389,10 @@ function validMetaName(name: string, what: string): string {
 }
 
 /** `deck_meta::valid_color` — non-empty, and **nothing more**. `deck_tags.color` carries no
- *  CHECK: it names a token from the app's fixed palette, and picking from that palette is the
- *  webview's job (`features/decks/tagColors.ts`), not the backend's. */
+ *  CHECK: it holds `#rrggbb` (a palette token, before 2026-08-20), and deciding what a colour
+ *  *is* is the webview's job (`features/decks/tagColors.ts`), not the backend's. The seeds below
+ *  still hold the retired token words on purpose — a database older than the build is a shape
+ *  the workbench should be able to draw. */
 function validColor(color: string): string {
   const trimmed = color.trim();
   if (trimmed !== "") return trimmed;
