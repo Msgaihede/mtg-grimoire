@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -60,13 +61,14 @@ import {
 } from "./grouping";
 import { ImportDeckDialog } from "./import/ImportDeckDialog";
 import { RenameField } from "./metaRows";
+import { NewTagDialog } from "./NewTagDialog";
 import { PriceStrip } from "./PriceStrip";
 import { QuickAdd } from "./QuickAdd";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
-import { DEFAULT_TAG_COLOR } from "./tagColors";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
+import { theoryMatchSet } from "./theoryMatch";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -538,7 +540,29 @@ type Layer =
    * into, while this names a gesture that is over. There is nothing live to look it up from.
    */
   | { kind: "quickCategory"; payload: DragPayload }
+  /**
+   * A card's **Tag card ▸ New tag…** was pressed, and the label it will wear has no name and no
+   * colour yet.
+   *
+   * **The slot rather than a card id, and frozen on purpose** — `quickCategory`'s exception
+   * rather than `export`'s rule. The three arms above name a row the editor re-reads the deck
+   * into, so an id keeps them current; this one names a **press that is over**, on one card in
+   * one pile in one finish, and the write it ends in (`deck_card_set_tag`) is addressed by
+   * exactly that triple. Looking it back up would be looking up the answer the reader already
+   * gave. The name rides along because the dialog's header says which card it is about, and a
+   * card removed under the open dialog must not turn that sentence into a blank.
+   */
+  | { kind: "newTag"; slot: NewTagSlot }
   | null;
+
+/** The card a new label is being made for: the grain `deck_card_set_tag` is addressed at, plus
+ *  the name {@link NewTagDialog} says out loud. */
+interface NewTagSlot {
+  cardId: string;
+  categoryId: number;
+  finish: DeckFinish;
+  name: string;
+}
 
 /**
  * Is the open layer the one this control opens?
@@ -842,8 +866,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * strictly the stronger shape; the observer's own state still drives the banner, which is why
    * the rejection is swallowed here and not reported here.
    *
-   * The colour is `DEFAULT_TAG_COLOR` and the menu does not ask: recolouring a label is what the
-   * Tags dialog is for.
+   * **The colour is the reader's and arrives with the name**, which is what changed on
+   * 2026-08-20. It used to be `DEFAULT_TAG_COLOR`, chosen here and never asked for, because the
+   * control was a text field inside a context menu with no room for a picker — so every label a
+   * reader made this way was gold and had to be visited in the Tags dialog to be told from the
+   * last one. `NewTagDialog` asks for both, and this chain is otherwise untouched.
    */
   const startTagCreate = meta.createTag.mutateAsync;
   const setTagOnSlot = deck.setTag.mutate;
@@ -880,13 +907,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const clearCategory = deck.clearCategory.mutate;
   const clearPending = deck.clearCategory.isPending;
   const createTagFor = useCallback(
-    (card: DeckCard, name: string) => {
-      void startTagCreate({ name, color: DEFAULT_TAG_COLOR.token })
+    (slot: NewTagSlot, name: string, color: string) => {
+      void startTagCreate({ name, color })
         .then((tag) =>
           setTagOnSlot({
-            cardId: card.cardId,
-            categoryId: card.categoryId,
-            finish: card.finish,
+            cardId: slot.cardId,
+            categoryId: slot.categoryId,
+            finish: slot.finish,
             tagId: tag.id,
           }),
         )
@@ -1509,6 +1536,40 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [openLayer],
   );
 
+  /**
+   * **Tag card ▸ New tag…** — the one layer opened from a *card's* menu rather than a pile's or
+   * the toolbar's.
+   *
+   * **The hand-back is read off `document.activeElement`, and that is exact rather than a
+   * guess**: `ContextMenu`'s `run` focuses the opener *before* it calls a row's `onSelect` — in
+   * that order, and its own comment says why — so by the time this runs the caret is already
+   * back on the element the reader right-clicked. Every other opener here can name its
+   * destination (`chipRef`, `focusDeckGroup(id)`) because a pile has one heading and the check
+   * has one chip; a card row is drawn by four different views and has no id this file can focus.
+   * Reading the caret asks the question the other callers answer from a lookup, and answers it
+   * for all four views at once.
+   */
+  const openNewTag = useCallback(
+    (card: DeckCard) => {
+      const opener = document.activeElement;
+      openLayer(
+        {
+          kind: "newTag",
+          slot: {
+            cardId: card.cardId,
+            categoryId: card.categoryId,
+            finish: card.finish,
+            name: card.name,
+          },
+        },
+        () => {
+          if (opener instanceof HTMLElement) opener.focus();
+        },
+      );
+    },
+    [openLayer],
+  );
+
   // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
   // that is all a *drop* carries, and a drag and a control press must not be two ways of
   // writing the same thing. The card's stepper hands its own card to the first of the three;
@@ -1849,7 +1910,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           setTag: setCardTag,
           setFinish: setFinishAt,
           tags: deck.tags,
-          createTag: createTagFor,
+          newTag: openNewTag,
           remove: removeCard,
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
@@ -1866,7 +1927,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       moveCardTo,
       setCardTag,
       setFinishAt,
-      createTagFor,
+      openNewTag,
       removeCard,
     ],
   );
@@ -1991,8 +2052,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // **Only while the deck is grouped by category**, and absent is the whole of the off
       // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
       // the desk are buckets the app derived, so there is no order of the reader's on screen to
-      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends,
-      // and every one of those is in the rail anyway.
+      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends
+      // and the command zones it heads the list with, and neither is in the flow — the first is
+      // in the rail, the second in the box `splitRail` answers `command` for, whose piles are
+      // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
+      // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
+      // every grouping has no position for a drag to change, under `category` least of all.
       moveCategory: groupBy === "category" ? moveCategory : undefined,
     }),
     [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField, groupBy, moveCategory],
@@ -2134,6 +2199,36 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => (row && spec?.hasLegalityData ? { value: row.formatKey, label: spec.displayName } : null),
     [row, spec],
   );
+
+  /**
+   * Which rows on screen the plan also asks for — the four views' theory tick.
+   *
+   * **`deckTheorySlots`, and emphatically not a second `deck_get` of the other variant.** That
+   * read was deleted from this file on 2026-08-20 and the test above it pins the deletion:
+   * nothing may call `deckGet` for the list the reader is not looking at. Both halves of that
+   * decision are honoured here. The *duplicate rule* half — it re-implemented the comparison
+   * `deck_theory_diff` owns, and disagreed with it — does not apply, because this is not a
+   * comparison: it asks the plan for its rows, which is the one question about the pair that the
+   * diff cannot answer in either direction. A card the reader has **fully acquired is absent from
+   * the diff and still in the plan**; a card half-acquired is on the diff and also in the plan.
+   * The *cost* half is answered by the command itself: two columns of one indexed scan, no
+   * prices, no allocation roll-up, no marketplace.
+   *
+   * **`live` only, and `undefined` everywhere else.** On the Theory tab every row *is* the plan,
+   * so a mark on all of them is noise — and the query is not even mounted there, which is what
+   * makes that a promise rather than a filter. `undefined` rather than an empty set is the
+   * distinction {@link theoryMatchSet} exists to keep: no plan is not the same statement as a
+   * plan that wants none of this.
+   *
+   * Under `["decks"]` like every other read here, so a theory edit made in this session
+   * invalidates it with everything else.
+   */
+  const planned = useQuery({
+    queryKey: ["decks", "theorySlots", deckId],
+    queryFn: () => ipc.deckTheorySlots(deckId),
+    enabled: theoryEnabled && variant === "live",
+  });
+  const theoryMatches = useMemo(() => theoryMatchSet(planned.data), [planned.data]);
 
   /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
@@ -2347,6 +2442,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
+    theoryMatches,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this
@@ -3129,6 +3225,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         deckId={deckId}
         variant={variant}
         open={layer?.kind === "tags"}
+        onDismiss={dismiss}
+        onClose={close}
+      />
+      {/* The label a card's menu asked for. **The press closes it and the chain finishes without
+          it** — `createTagFor` is two writes on this component's observers, so the dialog is free
+          to go on the press exactly as the field it replaced did, and a create still in flight
+          when the reader dismisses still lands on the card. */}
+      <NewTagDialog
+        open={layer?.kind === "newTag"}
+        cardName={layer?.kind === "newTag" ? layer.slot.name : null}
+        pending={meta.createTag.isPending}
+        onCreate={(name, color) => {
+          if (layer?.kind !== "newTag") return;
+          createTagFor(layer.slot, name, color);
+          dismiss();
+        }}
         onDismiss={dismiss}
         onClose={close}
       />

@@ -11,7 +11,13 @@ import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
-import { DeckFinishMark, GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
+import {
+  DeckFinishMark,
+  GameChangerBadge,
+  rowMarkColor,
+  TagDot,
+  TheoryMatchBadge,
+} from "../CardMarks";
 import {
   deckCardBodyProps,
   deckCardName,
@@ -32,6 +38,7 @@ import {
 import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
+import { matchesTheory } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
@@ -67,6 +74,7 @@ export function TextView({
   groups,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -79,6 +87,9 @@ export function TextView({
    *  no price — a decklist line is a quantity, a name and its marks. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
+   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -112,8 +123,18 @@ export function TextView({
   // usually the far end of a long run, i.e. the piles a reader looks for by position, in the one
   // place they can never be. {@link splitRail} has which piles, why the kind is tested before the
   // switch, and why the rail is not sorted here.
-  const { flow, rail } = splitRail(groups);
-  const columns = packColumns(flow, groupHeight, columnHeight);
+  //
+  // **The command zone is packed at the head of the flow, and this view needs no box of its own
+  // for it.** `StackView` builds one, because its flow is a masonry: two short piles at the head
+  // of a grid are dealt into columns 1 and 2 side by side, so the companion lands *beside* the
+  // commander unless the two are made a single grid item. Here the layout is a greedy in-order
+  // pack, and a greedy in-order pack **is** a stack — it fills a column top-down in the reader's
+  // order, never re-ordering and never splitting a group — so putting the command run at the head
+  // of the packed list is the whole of the arrangement: the commander opens the first column and
+  // the companion is the next thing under it. The pack's own law does the rest, and nothing here
+  // has to know that those two piles are special.
+  const { command, flow, rail } = splitRail(groups);
+  const columns = packColumns([...command, ...flow], groupHeight, columnHeight);
 
   return (
     // Grows **down**, and scrolls sideways only when a single 300px column will not fit the desk
@@ -185,6 +206,7 @@ export function TextView({
                 group={group}
                 marketplace={marketplace}
                 violations={violations}
+                theoryMatches={theoryMatches}
                 onSelect={onSelect}
                 actions={actions}
                 selectedSlot={selectedSlot}
@@ -229,6 +251,7 @@ export function TextView({
               group={group}
               marketplace={marketplace}
               violations={violations}
+              theoryMatches={theoryMatches}
               onSelect={onSelect}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -247,6 +270,7 @@ function TextGroup({
   group,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -255,6 +279,9 @@ function TextGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
+   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the lines — see {@link TextView}'s own props. */
@@ -295,6 +322,7 @@ function TextGroup({
               key={card.id}
               card={card}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+              inTheory={matchesTheory(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardSlot(card.categoryId, card.cardId, card.finish) === selectedSlot}
@@ -319,6 +347,7 @@ function TextGroup({
 function TextRow({
   card,
   ruleBreakText,
+  inTheory,
   onSelect,
   actions,
   selected,
@@ -328,6 +357,9 @@ function TextRow({
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** The deck's plan asks for this row too — resolved by the group, so a line is handed a
+   *  boolean rather than a set to look itself up in. */
+  inTheory: boolean;
   /** This is the card the pane is open on. */
   selected: boolean;
   /** The nonce this line's last add was given, or `undefined`. The mark's `key`, so a second
@@ -364,7 +396,7 @@ function TextRow({
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
-        aria-label={deckCardName(card, ruleBreakText)}
+        aria-label={deckCardName(card, ruleBreakText, inTheory)}
         title={ruleBreakText ?? undefined}
         {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
@@ -392,6 +424,10 @@ function TextRow({
             `aria-label`, so the words are `deckCardName`'s. */}
         <DeckFinishMark card={card} />
         {card.gameChanger === true && <GameChangerBadge />}
+        {/* Decoration, like the two beside it — this line is a button with an explicit
+            `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view that says
+            it in text, because a cell is not swallowed by a label. */}
+        {inTheory && <TheoryMatchBadge />}
         {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />
       </button>

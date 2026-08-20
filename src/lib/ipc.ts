@@ -961,17 +961,21 @@ export interface DeckCategory {
 }
 
 /**
- * A tag's stored colour: a **token** from the app's palette (`gold`, `ember`, …), never a
- * CSS colour and never a hex string.
+ * A tag's stored colour: `#rrggbb`, the colour itself.
+ *
+ * **It was a palette token — `gold`, `ember`, … — until 2026-08-20**, and rows written before
+ * then still hold one. `features/decks/tagColors.ts` owns both ends of that: what the picker
+ * writes, and the six retired words it still reads. Nothing here changed shape, because nothing
+ * here ever described one.
  *
  * **Deliberately `string` and not a union**, which is the one place this file declines to
  * narrow a Rust `String`. `deck_tags.color` carries no CHECK — the backend validates only
  * that it is non-empty, because picking what a colour *is* belongs to the webview
- * (CLAUDE.md's Rust/TS boundary), and `features/decks/tagColors.ts` owns the palette. A union
- * here would make a tag written by a newer build a **type error at the read**, when the
- * behaviour that was actually designed is a fallback: `tagColorCss` answers the default for
- * any token it has never heard of, so an unknown colour is a visible dot rather than a
- * crash. The alias exists to say all of that at every field that holds one.
+ * (CLAUDE.md's Rust/TS boundary). A union here would make a colour written by a newer build a
+ * **type error at the read**, when the behaviour that was actually designed is a fallback:
+ * `tagColorCss` answers the default for any string it cannot read, so an unknown colour is a
+ * visible dot rather than a crash. The alias exists to say all of that at every field that
+ * holds one.
  */
 export type TagColor = string;
 
@@ -2735,8 +2739,8 @@ export const ipc = {
    *  scopes each row's `cardCount` and nothing else, exactly as it does for categories. */
   deckTagList: (deckId: number, variant: DeckVariant) =>
     invoke<DeckTag[]>("deck_tag_list", { deckId, variant }),
-  /** A new label for this deck. Refuses a name the deck already has; the colour is a palette
-   *  token and the backend checks only that it is non-empty — see {@link TagColor}. */
+  /** A new label for this deck. Refuses a name the deck already has; the colour is `#rrggbb`
+   *  and the backend checks only that it is non-empty — see {@link TagColor}. */
   deckTagCreate: (deckId: number, name: string, color: TagColor) =>
     invoke<DeckTag>("deck_tag_create", { deckId, name, color }),
   /** Rename **and** recolour: one command, both arguments required. There is no patch shape
@@ -2833,6 +2837,24 @@ export const ipc = {
    *  the whole point of drawing one. */
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
+  /**
+   * Every card the plan asks for, as `deck_theory.rs`'s own `group_key` strings —
+   * `` `${cardId}|${finish ?? ""}` ``, one per theory row, in no particular order and with
+   * duplicates left in for the caller's set to fold.
+   *
+   * The deck editor's theory tick, and **the one question about the pair that
+   * {@link ipc.deckTheoryDiff} cannot answer**: a card the reader has fully acquired is absent
+   * from the diff and is still in the plan. See `features/decks/theoryMatch.ts`, which builds
+   * the same string for a live row and looks it up.
+   *
+   * **Not a `deckGet` of the other variant**, deliberately: that read prices every row and rolls
+   * up allocations, and `DeckEditor.test.tsx` pins that nothing may call it for the list the
+   * reader is not looking at. This is two columns of one indexed scan and no marketplace.
+   *
+   * Inactive categories are excluded, which is `deck_theory_diff`'s rule and the same reasoning:
+   * a card parked in the theory Maybeboard is not something the reader has decided to play.
+   */
+  deckTheorySlots: (deckId: number) => invoke<string[]>("deck_theory_slots", { deckId }),
   /**
    * Copy the live list into the theory one. Answers how many **rows** were written.
    *

@@ -6,13 +6,15 @@ import {
   deckCard,
   deckCategory,
   deckGroups,
+  deckTheoryMatches,
   deckViolations,
   printing,
 } from "../../../../.storybook/fake/fixtures";
+import { THEORY_MATCH_LABEL } from "../CardMarks";
 import { DECK_CARD_ATTR } from "../dnd";
 import { buildGroups } from "../grouping";
 import { RAIL_ATTR } from "./columns";
-import { StackView, STACK_ATTR } from "./StackView";
+import { COMMAND_ATTR, StackView, STACK_ATTR } from "./StackView";
 
 const meta = {
   title: "Decks/Views/StackView",
@@ -146,8 +148,11 @@ function wideGroups(switchedOff?: string) {
  * Maybeboard's `INACTIVE`, an empty Sideboard that still draws because it is where the next
  * sideboard card goes, and two categories the reader named.
  *
- * **Three of the five flow**, where four did while the rail held the Sideboard alone. The
- * other two are the rail, in the reader's own `sortOrder` — the Sideboard at 3 above the
+ * **Two of the five flow now, and the deck is drawn in three boxes rather than two.** The
+ * Commander is the head of the desk — its own box, one column wide, holding the piles the deck was
+ * built *around* rather than the piles it is made of ({@link CommandZone} is the story about that
+ * box, and the one that shows it holding two piles). Ramp and Removal flow. The Sideboard and the
+ * Maybeboard are the rail, in the reader's own `sortOrder` — the Sideboard at 3 above the
  * Maybeboard at 4 — because both are piles played *beside* the deck rather than in it, and
  * nothing in the view sorts them. {@link Rail} is the story about the rail itself, and
  * {@link PinnedSideboard} the one about what taking those piles out of the flow is *for*.
@@ -187,11 +192,14 @@ export const Default: Story = {
  * stacks wrapping down the page, and the two railed piles beside them rather than somewhere
  * inside them.
  *
- * Eight piles in a canvas capped at 768px. **Six** of them flow, each in its own 224px box. 768
- * less the rail's 224 and the 16px between them leaves **528px** for the flow, which holds two
- * boxes and their gutter (464) and not three (704), so the six wrap onto three lines beside the
- * rail. Neither the Sideboard nor the Maybeboard is in any of it — `splitRail` pins both kinds, so
- * both are taken out of the list before the flow is drawn, and drawn in the rail after.
+ * Eight piles in a canvas capped at 768px, in **six** items of the flowing grid: the command zone,
+ * which is the Commander alone here, and then five piles each in its own 224px box. 768 less the
+ * rail's 224 and the 16px between them leaves **528px** for the flow, which holds two boxes and
+ * their gutter (464) and not three (704), so the six wrap onto three lines beside the rail. Every
+ * item is one column wide, the command zone included, so the arithmetic is what it was when the
+ * Commander was the first of six flowing piles rather than the first item of six. Neither the
+ * Sideboard nor the Maybeboard is in any of it — `splitRail` pins both kinds, so both are taken out
+ * of the list before the flow is drawn, and drawn in the rail after.
  *
  * **The flowing box is 528 again, and the 64px remainder is inside it** (changed 2026-08-18). It
  * was capped at 464 — two whole boxes and their gutter — for a day, which freed those 64px to sit
@@ -202,7 +210,7 @@ export const Default: Story = {
  * the desk's width leaves over, so it is a different number at every canvas width and at every
  * zoom stop, and it is the price of the rail being findable in one place.
  *
- * **Six of six, at any desk height, which is what changed on 2026-08-14.** The flow used to be
+ * **Six items at any desk height, which is what changed on 2026-08-14.** The flow used to be
  * `packColumns`' answer, and this story's count was arithmetic about the *height* the meta's
  * decorator declares: two piles never shared a 640px column, so six piles were six columns by
  * coincidence of the fixture rather than by rule. Give that pack a taller desk and it answered
@@ -238,15 +246,23 @@ export const PinnedSideboard: Story = {
   play: async ({ canvasElement }) => {
     const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
     // The heading each box carries, found by the id its section is `aria-labelledby` rather than
-    // by a guess at the header's shape. One box is one pile, so the six read in the reader's own
-    // order with the Sideboard and the Maybeboard simply absent from them.
+    // by a guess at the header's shape. One box is one pile, so the five read in the reader's own
+    // order with the Sideboard and the Maybeboard simply absent from them — and the Commander too,
+    // which is drawn in the command zone rather than in the flow and so carries no `STACK_ATTR`.
     expect(stacks.map((stack) => stack.querySelector('[id^="group-"]')?.textContent)).toEqual([
-      "Commander",
       "Ramp",
       "Removal",
       "Card draw",
       "Threats",
       "Lands",
+    ]);
+    // It is still an item of this grid, and the first one — six items on the three lines the doc's
+    // arithmetic counts, five of which are piles. `STACK_ATTR` means "a pile drawn in the flow",
+    // and this is a box drawn in the flow that *holds* piles, which is why it answers to a name of
+    // its own. {@link CommandZone} is the story about what that box is for.
+    const [command] = canvasElement.querySelectorAll<HTMLElement>(`[${COMMAND_ATTR}]`);
+    expect([...command.querySelectorAll('[id^="group-"]')].map((h) => h.textContent)).toEqual([
+      "Commander",
     ]);
     // And both are in the rail, which is **not** one of the boxes above: `STACK_ATTR` marks a pile
     // in the flow, and the rail's two are lifted out before the flow is drawn. One rail holding
@@ -272,8 +288,9 @@ export const PinnedSideboard: Story = {
  * how the bug read as a zoom problem. The count here now answers to nothing but how many piles the
  * deck has, and where they *sit* is CSS's answer to the width.
  *
- * **What to look at**: six stacks filling the width of the canvas before any of them uses its
- * height, and no gap at the right-hand end that a pile would have fitted in.
+ * **What to look at**: six items — the command zone and five stacks — filling the width of the
+ * canvas before any of them uses its height, and no gap at the right-hand end that a pile would
+ * have fitted in.
  */
 export const TallDesk: Story = {
   args: { groups: wideGroups() },
@@ -289,10 +306,13 @@ export const TallDesk: Story = {
   ],
   play: async ({ canvasElement }) => {
     const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
-    // Six flowing piles, six boxes — the assertion the packed layout failed at this desk height,
-    // where it answered three. jsdom lays nothing out, so this is the count and not the wrap; the
-    // wrap's arithmetic is {@link WrappedPiles}'.
-    expect(stacks).toHaveLength(6);
+    // Five flowing piles, five boxes, plus the command zone at the head of them — six items, which
+    // is the assertion the packed layout failed at this desk height, where it answered three. The
+    // command zone is counted separately because it is not a pile: it is a box holding one, and the
+    // point of the count is that nothing is packing anything. jsdom lays nothing out, so this is
+    // the count and not the wrap; the wrap's arithmetic is {@link WrappedPiles}'.
+    expect(stacks).toHaveLength(5);
+    expect(canvasElement.querySelectorAll(`[${COMMAND_ATTR}]`)).toHaveLength(1);
   },
 };
 
@@ -310,8 +330,8 @@ export const TallDesk: Story = {
  * held the Sideboard alone — one more than a 1024px desk fits on a line, so the fourth wrapped
  * and the story was about something. With the Maybeboard railed as well that deck flows three,
  * three fit, and the story went on passing while demonstrating nothing at all: its play only ever
- * asked whether the piles were drawn. The wide deck flows six, and the play below now asserts the
- * wrap itself.
+ * asked whether the piles were drawn. The wide deck fills six items — the command zone and five
+ * piles — and the play below now asserts the wrap itself.
  */
 export const WrappedPiles: Story = {
   args: { groups: wideGroups() },
@@ -335,6 +355,7 @@ export const WrappedPiles: Story = {
     const canvas = within(canvasElement);
     const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
     const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${RAIL_ATTR}]`);
+    const [command] = canvasElement.querySelectorAll<HTMLElement>(`[${COMMAND_ATTR}]`);
     // **The wrap, asserted as the arithmetic that causes it.** jsdom lays nothing out, so every
     // rectangle here is 0×0 and no play in this file can see a second line. What it *can* read is
     // what the layout is given: the widths this view writes inline — the same
@@ -351,8 +372,14 @@ export const WrappedPiles: Story = {
     const columnWidth = Number.parseFloat(stacks[0].style.width);
     const flowWidth = desk - Number.parseFloat(rail.style.width) - gap;
     const perLine = Math.floor((flowWidth + gap) / (columnWidth + gap));
-    expect(stacks).toHaveLength(6);
-    expect(stacks.length).toBeGreaterThan(perLine);
+    // **What wraps is the grid's *items*, and the command zone is one of them** — five piles and
+    // the box the Commander is drawn in, which claims a track of exactly the same width. Reading
+    // that width off the box rather than assuming it is what keeps this honest at every zoom stop:
+    // a command zone drawn at some other width would be a second geometry in a grid whose whole
+    // arithmetic is one column, and it would fail here rather than in a screenshot nobody took.
+    expect(stacks).toHaveLength(5);
+    expect(Number.parseFloat(command.style.width)).toBe(columnWidth);
+    expect(stacks.length + 1).toBeGreaterThan(perLine);
     // Every pile is still drawn, and that is the other half: wrapping moves a pile, it never
     // costs one. A pile that had run off the right edge was drawn too — just nowhere the reader
     // was going to look.
@@ -380,8 +407,8 @@ export const WrappedPiles: Story = {
  * hides in. A real one is not like that: the creature pile is the deck and the rest are two or
  * three cards apiece.
  *
- * No Sideboard and no Maybeboard, so there is no rail and the whole desk is flow — the piles are
- * the only thing in the picture.
+ * No Sideboard and no Maybeboard, so there is no rail: the desk is the command zone and the flow,
+ * and the piles are the only thing in the picture.
  */
 function unevenGroups() {
   const commander = deckCategory("commander");
@@ -438,10 +465,11 @@ function unevenGroups() {
  * **The story the masonry exists for**: one pile far taller than the rest, and the piles that wrap
  * under it starting at the foot of the pile *above* them rather than under the tall one.
  *
- * Three columns, six piles. Commander, Creatures and Ramp take the first line; the Creatures pile
- * is eight cards deep and the two beside it are one card each. Removal then starts directly under
- * the Commander, Card draw under Ramp, and Lands under Removal — all of it while the Creatures
- * stack is still running down the middle of the desk.
+ * Three columns, six items — the command zone holding the Commander, and five piles. The command
+ * zone, Creatures and Ramp take the first line; the Creatures pile is eight cards deep and the two
+ * beside it are one card each. Removal then starts directly under the command zone, Card draw under
+ * Ramp, and Lands under Removal — all of it while the Creatures stack is still running down the
+ * middle of the desk.
  *
  * **What this replaced, and what the reader saw.** The flow was a wrapping flex box until
  * 2026-08-15, and a flex line is as tall as the tallest item in it: Removal, Card draw and Lands
@@ -474,13 +502,14 @@ export const UnevenPiles: Story = {
   ],
   play: async ({ canvasElement }) => {
     const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
-    // The whole deck flows — no `side` and no `maybe` pile, so no rail — and the order is the
-    // reader's. **Where** each one is drawn is not a question jsdom can be asked: it lays nothing
-    // out, so every pile here measures 0 and every span is the gutter alone. The picture is the
-    // thing to look at, and the arithmetic behind it is `flowRowSpan`'s own test.
+    // The whole deck is on the desk — no `side` and no `maybe` pile, so no rail — and the order is
+    // the reader's, with the Commander at the head in a box of its own. **Where** each one is drawn
+    // is not a question jsdom can be asked: it lays nothing out, so every pile here measures 0 and
+    // every span is the gutter alone. The picture is the thing to look at, and the arithmetic
+    // behind it is `flowRowSpan`'s own test.
     expect(canvasElement.querySelectorAll(`[${RAIL_ATTR}]`)).toHaveLength(0);
+    expect(canvasElement.querySelectorAll(`[${COMMAND_ATTR}]`)).toHaveLength(1);
     expect(stacks.map((stack) => stack.querySelector('[id^="group-"]')?.textContent)).toEqual([
-      "Commander",
       "Creatures",
       "Ramp",
       "Removal",
@@ -551,8 +580,8 @@ export const Rail: Story = {
  * `is_active = 0` is the whole of what `maybe` ever meant: the pile counts toward nothing — not
  * size, not copy limits, not legality, and the allocator claims no copy for it. So it is not part
  * of the deck being laid out, and a column of desk spent on it was a column spent on cards the
- * reader had already said were out. `Threats` here is the pile they switched off; the flow is the
- * five that are still in the deck.
+ * reader had already said were out. `Threats` here is the pile they switched off; the desk is the
+ * command zone at its head and the four piles that are still in the deck.
  *
  * **What to look at, in this order:**
  *
@@ -585,10 +614,10 @@ export const SwitchedOffPile: Story = {
   ],
   play: async ({ canvasElement }) => {
     const stacks = [...canvasElement.querySelectorAll<HTMLElement>(`[${STACK_ATTR}]`)];
-    // Five flowing piles: the six of {@link PinnedSideboard} less the one the reader switched off,
-    // and the gap it left closed up rather than held open.
+    // Four flowing piles: the five of {@link PinnedSideboard} less the one the reader switched off,
+    // and the gap it left closed up rather than held open. The Commander is not among them here for
+    // the reason it is not there either — it is drawn in the command zone at the head of the desk.
     expect(stacks.map((stack) => stack.querySelector('[id^="group-"]')?.textContent)).toEqual([
-      "Commander",
       "Ramp",
       "Removal",
       "Card draw",
@@ -615,6 +644,14 @@ export const SwitchedOffPile: Story = {
  * itself — switched off, unchanged, and still reachable. Bucketing its cards into the curve
  * would count a scratchpad into the deck; dropping the pile would make it vanish the moment
  * the reader changed a select.
+ *
+ * **The Commander is not in the curve either, and it is not appended — it heads the desk.** A
+ * commander is the card the curve was built *around*, played from a zone of its own, so
+ * `buildGroups` leaves that pile out of the buckets and puts it first, and `splitRail` draws it in
+ * the command zone rather than in the flow. This deck's Commander is a one-mana creature, so what
+ * that changed here is visible in one heading: the `Mana value 1` bucket used to hold it beside the
+ * deck's own one-drops. {@link CommandZone} is the story about the box, and about the companion
+ * that stacks under the commander in it.
  *
  * **There is a rail here, holding one pile — and there used to be none.** The rail is whatever
  * `side` and `maybe` groups there are, and this grouping keeps only the buckets and the
@@ -646,6 +683,112 @@ export const ByManaValue: Story = {
 export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
 
 /**
+ * A Commander deck with **both** command zones filled — Kenrith in the Commander pile, Lurrus in
+ * the Companion — and a main deck spread across the curve, so that grouping it by mana value
+ * leaves those two as the only real categories on the desk.
+ *
+ * **Local to this file for {@link wideGroups}' reason**, and built through the app's own
+ * `buildGroups` for it too: what heads the desk under a derived grouping is then `grouping.ts`'s
+ * answer rather than a hand-written agreement about what it ought to be.
+ *
+ * **Lurrus is the corpus's real companion** — the printing whose oracle text `companions.ts`
+ * re-derives its rule from — so the pile this story is about is a companion rather than a `kind`
+ * pinned onto whatever creature came to hand. Kenrith is the same choice at the other end: a
+ * five-mana legend, which is a mana value the deck's own curve does not otherwise reach, so a
+ * commander that had been left in the buckets would show up as a column of its own rather than
+ * hiding inside one.
+ */
+function commandZoneGroups() {
+  const commander = deckCategory("commander");
+  const companion = deckCategory("companion");
+  // "Main deck" — schema v8's own pile, and the only category this deck has that a derived
+  // grouping dissolves. Everything below is filed into it, because under `manaValue` where a card
+  // *sits* stops being visible: the curve is the whole layout apart from the head.
+  const main = deckCategory("main");
+
+  const pile = (category: DeckCategory): Partial<DeckCard> => ({
+    categoryId: category.id,
+    categoryName: category.name,
+    categoryKind: category.kind,
+    categoryActive: category.isActive,
+  });
+
+  // Six mana values with something at each — 0, 1, 2, 3, 4 and 6 — which is six curve columns
+  // beside the one box at the head. The gap at 5 is the useful part rather than an oversight: that
+  // is Kenrith's mana value, so the day a commander is bucketed again this story grows a seventh
+  // column instead of quietly re-labelling one it already had.
+  const cards = [
+    deckCard(printing("eld", "303"), pile(commander)),
+    deckCard(printing("iko", "226"), pile(companion)),
+    deckCard(printing("lea", "288"), { ...pile(main), quantity: 4 }),
+    deckCard(printing("tmp", "315"), pile(main)),
+    deckCard(printing("c21", "263"), pile(main)),
+    deckCard(printing("ema", "32"), pile(main)),
+    deckCard(printing("dom", "168"), pile(main)),
+    deckCard(printing("mh2", "267"), { ...pile(main), quantity: 2 }),
+    deckCard(printing("fut", "153"), pile(main)),
+    deckCard(printing("pcy", "45"), pile(main)),
+    deckCard(printing("nph", "57"), pile(main)),
+    deckCard(printing("wwk", "31"), pile(main)),
+    deckCard(printing("mp2", "8"), pile(main)),
+  ].map((card) => ({ ...card, ownedQuantity: card.quantity }));
+
+  return buildGroups(cards, [commander, main, companion], "manaValue", "manaCost");
+}
+
+/**
+ * **The command zone**: the commander, and under it the companion, in one box at the head of the
+ * desk — with the curve running out to the right of them.
+ *
+ * A commander is not a card in the curve. It is the card the curve was built *around*, played from
+ * a zone of its own, and a companion is the same claim about the fifteenth card of a sideboard that
+ * is never in the deck either. So `buildGroups` leaves both piles out of the buckets it derives and
+ * puts them first — commander, then companion, in every grouping mode — and `splitRail` answers for
+ * them as a run of their own, the way it already answers for the piles played beside the deck.
+ *
+ * **The two share a single grid item, and that is the whole of what this story is here to show.**
+ * The flow is a masonry: it fills the first free cell at or after the cursor, so two short piles at
+ * the head of it are dealt into columns 1 and 2 **side by side** — the companion *beside* the
+ * commander, with the curve pushed a column to the right for as long as the deck has both. The
+ * reader asked for the rail's arrangement instead, one on top of the other, and one grid cell
+ * holding a `flex-col` is how a grid is told that without moving either pile in the DOM. Reading
+ * order, tab order, what a screen reader hears and where the arrow keys go are therefore exactly
+ * what they would have been.
+ *
+ * **What to look at, in this order:**
+ *
+ * * **Companion under Commander, one column wide, at the top-left of the desk.** The gutter between
+ *   them is 20px — the same `gap-5` the rail stacks its piles by, and the same number a flowing
+ *   pile carries inside its own row span — so the pair reads as one box rather than two that
+ *   happen to be near each other. Side by side is the failure this story makes obvious.
+ * * **The curve beside them starts at 0 and skips 5.** Neither Kenrith (five mana) nor Lurrus
+ *   (three) is in a bucket, which is the other half of the change: a commander counted into the
+ *   curve is a card the deck cannot cast being drawn as part of its mana base's job.
+ * * **Neither pile has a grip.** A zone pinned to the head of every grouping has no position a
+ *   reorder could move it to, and the box hands its piles no `flowWidth` — `StackGroup`'s one off
+ *   switch for the grip, the row span and the reorder drop at once. **The card drop is untouched**:
+ *   `useCategoryDrop` reads a `categoryId` and has never read that prop, so a card dragged onto the
+ *   commander still lands in it, which is the affordance this box could not afford to cost.
+ * * **The box is one item, so the pile beside it is not dragged down by it.** It claims its own
+ *   height in the masonry — the two piles and one gutter — and the `Mana value 0` column next to it
+ *   is as tall as its own two cards and no taller.
+ */
+export const CommandZone: Story = {
+  args: { groups: commandZoneGroups() },
+  decorators: [
+    // 1024px, the narrowest window this app promises to be usable in, and no rail in this deck to
+    // take a column of it — so the line holds four items (4 × 224 + 3 × 16 = 944, against 1184 for
+    // five) and the seven here wrap onto two. Width only and `shrink-0`, for {@link WrappedPiles}'
+    // reasons.
+    (Story) => (
+      <div className="flex w-[64rem] shrink-0">
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+/**
  * **The reader arranging their own columns** — a grip in every flowing heading, and none in the
  * rail.
  *
@@ -656,8 +799,12 @@ export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
  * **Where a pile is drawn and where a pile *sits* are two questions, and only the second is the
  * reader's to answer here.** The Sideboard and the Maybeboard are held against the right edge by
  * their `kind`, so their position is not an arrangement anybody made — which is why they carry no
- * grip even though they carry a `sortOrder` like every other pile. The Categories dialog is where
- * *those* two are reordered relative to each other, and it draws every row of the deck.
+ * grip even though they carry a `sortOrder` like every other pile. The Commander is the same
+ * answer from the head of the desk: a command zone is pinned first in all three grouping modes, so
+ * there is no position a drag could move it to, and the box it is drawn in hands its piles no
+ * `flowWidth` — which is `StackGroup`'s one off switch for the grip, the row span and the reorder
+ * drop together. The Categories dialog is where *those* three are reordered relative to each
+ * other, and it draws every row of the deck.
  *
  * `moveCategory` is what the editor hands down only while the deck is grouped by category; a view
  * given none draws no grip at all, which is every other story in this file.
@@ -674,18 +821,24 @@ export const Reorderable: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${RAIL_ATTR}]`);
+    const [command] = canvasElement.querySelectorAll<HTMLElement>(`[${COMMAND_ATTR}]`);
 
-    // Six flowing piles, six grips — and the count in each name is the flow's rather than the
-    // deck's eight, because the two railed piles are not part of the order this moves things in.
+    // Five flowing piles, five grips — and the count in each name is the flow's rather than the
+    // deck's eight, because neither the two railed piles nor the Commander is part of the order
+    // this moves things in. Both boxes are asserted, because the two absences have different
+    // causes and a regression would take one at a time: the rail's piles are a `kind` the split
+    // pins to the right, the command zone's is a `kind` it pins to the head, and only the second
+    // one has ever been in the flow.
     const grips = canvas.getAllByRole("button", { name: /^Move / });
-    expect(grips).toHaveLength(6);
+    expect(grips).toHaveLength(5);
     expect(within(rail).queryByRole("button", { name: /^Move / })).toBeNull();
-    expect(grips[0]).toHaveAccessibleName("Move Commander, 1 of 6");
+    expect(within(command).queryByRole("button", { name: /^Move / })).toBeNull();
+    expect(grips[0]).toHaveAccessibleName("Move Ramp, 1 of 5");
 
     // The keyboard's own move, and the assertion is the **pair of ids**: `deck_category_reorder`
     // is sent every id in a new order, so a view that answered with a position in its own flow
     // would have to be resolved by something that could not see the rail.
-    const ramp = canvas.getByRole("button", { name: "Move Ramp, 2 of 6" });
+    const ramp = canvas.getByRole("button", { name: "Move Ramp, 1 of 5" });
     ramp.focus();
     await userEvent.keyboard("{ArrowRight}");
     expect(args.actions?.moveCategory).toHaveBeenCalledWith(10, 11);
@@ -750,5 +903,41 @@ export const KeyboardWalk: Story = {
     await userEvent.keyboard("{ArrowUp}");
     expect(cards[1]).toHaveFocus();
     expect(args.onSelect).toHaveBeenCalledTimes(3);
+  },
+};
+
+/**
+ * The **Live** list of a deck that keeps a plan, where four of the ten cards are the plan and six
+ * are not.
+ *
+ * This is the whole point of the mark: a live list is what the reader has actually sleeved up, and
+ * the one thing it cannot say about itself is which of its cards are the deck they designed and
+ * which are the proxies and stand-ins waiting to be replaced. The tick says it, in the corner
+ * opposite the `RULE BREAK` mark — see `CardMarks.tsx` for why those two are never allowed to
+ * share one.
+ *
+ * `theoryMatches` is `undefined` in every other story in this file, which is what a deck with the
+ * theory list switched off looks like and what the **Theory** tab itself looks like: no plan to
+ * compare against, so no ticks.
+ */
+export const TheoryMatches: Story = {
+  args: { theoryMatches: deckTheoryMatches() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Four ticked cards, and the label is the one string `THEORY_MATCH_LABEL` defines — a
+    // `title`, so `getByTitle` is what a pointer would find. The marks are `aria-hidden`, which
+    // is why the words below are read off the button instead.
+    expect(canvas.getAllByTitle(THEORY_MATCH_LABEL)).toHaveLength(4);
+
+    // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
+    // one sentence because a button's `aria-label` replaces everything inside it.
+    const both = canvas.getByRole("button", { name: /^Island/ });
+    expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
+    expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
+
+    // And a card the plan does not ask for says neither.
+    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
+    );
   },
 };

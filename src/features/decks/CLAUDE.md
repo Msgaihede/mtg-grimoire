@@ -445,8 +445,10 @@ reader to configure the deck they had just made; it now asks all of them.
 - **The arrow keys walk the desk, and the printings modal walks the deck** (2026-08-18).
   In `StackView`, up/down move within a pile and left/right to the neighbouring pile's **top**
   card — the reader's own choice over "same depth, clamped" — with empty piles skipped and both
-  ends clamped rather than wrapped. The order is `splitRail`'s, `flow` then `rail`, which is what
-  the desk draws, so the keys and the layout cannot disagree. **It yields to `CategoryGrip`**,
+  ends clamped rather than wrapped. The order is `splitRail`'s, `command` then `flow` then `rail`,
+  which is what the desk draws, so the keys and the layout cannot disagree. (It was two runs until
+  2026-08-20; the command zones are the third and they come first, which changes nothing here
+  because the walk reads whatever that split answers.) **It yields to `CategoryGrip`**,
   whose arrows already reorder the piles and `preventDefault`, through the same `defaultPrevented`
   handshake `useDismissOnEscape` runs on; that is the one thing here most easily broken by a tidy.
   `onSelect` is `openCardFromDeck`, so the gold ring and the card pane follow the caret — one
@@ -480,10 +482,14 @@ reader to configure the deck they had just made; it now asks all of them.
     **not** `dnd.ts`'s: that one carries a **card** between piles, this one carries a **pile** past
     other piles, and each reader refuses anything without its own — so a card can never land as a
     reorder and a pile can never land as an add.
-  - **The rail is out, and the fence is `StackGroup`'s existing `flowWidth`** rather than a second
-    kind check. Where the Sideboard and the Maybeboard are drawn is decided by their `kind`
+  - **The rail is out, and so is the command zone; the fence is `StackGroup`'s existing
+    `flowWidth`** rather than a second kind check. Where the Sideboard, the Maybeboard and — since
+    2026-08-20 — the Commander and the Companion are drawn is decided by their `kind`
     (`splitRail`), so their position is not an arrangement anybody made; the Categories dialog is
-    where those two are reordered against each other, and it draws every row.
+    where those are reordered against each other, and it draws every row. The command zones grew
+    into this fence for free: they are drawn in a box of their own that carries the width, exactly
+    as the rail is, so `flowWidth` is absent on both and neither draws a grip. **Their drop target
+    is untouched** — a pile whose *place* is fixed is still a pile a card can be dragged into.
   - **The drop target is a wrapper `<div>` inside the section, not the section**, and that is
     pdnd's constraint rather than a layout choice: one drop target per element, and the section is
     already the card one. Because the wrapper is an **ancestor** of the heading and of every card,
@@ -509,7 +515,8 @@ reader to configure the deck they had just made; it now asks all of them.
   - **A move is two ids and never an index**, which is the whole of why `DeckCardActions
     .moveCategory` exists instead of the view calling `reorderCategories`. `deck_category_reorder`
     writes `sort_order` from position over **every** category, and the flow is a subset — the rail
-    taken out, the empty auto piles never built — so only `DeckEditor` holds both lists. It reads
+    taken out, the command zones taken out in front of it, the empty auto piles never built — so
+    only `DeckEditor` holds both lists. It reads
     them through a **ref** so the callback stays stable: it is a dependency of every pile's drop
     registration.
   - **The editor draws the new order before the write answers** (`localCategoryOrder`, the dialog's
@@ -547,6 +554,44 @@ reader to configure the deck they had just made; it now asks all of them.
   handed the reader was two identical lists with no way to tell which one they were editing.
   `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
   plan".
+- **The Live list marks which of its cards are the plan, and that mark is `theoryMatch.ts`.** A
+  live list is what the reader has actually sleeved up; the one thing it cannot say about itself is
+  which rows are the deck they designed and which are the proxies and stand-ins waiting to be
+  replaced. `TheoryMatchMark` — a tick in `CountTag`'s own banner, top-right — says it, on all four
+  views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
+  **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
+  sleeved into Main deck is still the card that was planned, and a mark that went dark because a
+  pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
+  `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
+  `foil` against a live row the reader never said anything about.
+  **The grain agrees with `deck_theory_diff`, which reached it independently the same day** —
+  that command groups on the exact card now, finish included, and `TheoryDiffDialog`'s `rowKey` is
+  the same pair with a `|` where this uses a space. Keep the two in step if either moves.
+  **What is not shared is the question, and neither is derivable from the other.** The shopping
+  list subtracts *quantities* and answers "what would I have to buy"; this answers "is the card in
+  front of me the one I planned". A card **fully acquired is absent from the diff and still in the
+  plan**; a card half-acquired is on the diff *and* in the plan. So the mark cannot be read off the
+  diff in either direction, which is the whole reason it needs the plan's rows.
+  **It is `deckTheorySlots`, and it is emphatically not a second `deck_get` of the other
+  variant.** That read was deleted from `DeckEditor` on 2026-08-20 and `DeckEditor.test.tsx` pins
+  the deletion — *nothing may call `deckGet` for the list the reader is not looking at* — and both
+  halves of that decision are honoured rather than argued with. The **duplicate rule** half does
+  not apply: what was removed re-implemented the comparison `deck_theory_diff` owns (it counted
+  disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
+  twice), while this asks for rows no command answers. The **cost** half is answered by the
+  command: two columns of one indexed scan, no join to `cards`, no prices, no allocation roll-up,
+  no marketplace — against a `deck_get` that does all four. It is mounted only when
+  `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
+  nothing at all.
+  `undefined` rather than an empty set is the other distinction `theoryMatchSet` keeps: no plan is
+  not the same statement as a plan that wants none of this.
+  **What moved to make room: the `RULE BREAK` mark, out of the stacked card's top-right corner and
+  down to its bottom-left** (2026-08-20), where `GridView` had always drawn it. A tick is the one
+  glyph a reader could take for "this card is fine", so `CardMarks.tsx`'s four separations stopped
+  being an observation and became a constraint — and **place** is the one a reader takes in before
+  they have read either mark. The stack's offset is the only sum on that card mixing a scaled term
+  with a fixed one (`0.25rem × --mark-scale + 4px`): the 4px is `STACK_DATA_RISE`, which does not
+  scale, so a wholly scaled offset clears the foot at 1× and hides behind it at 0.5×.
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
@@ -960,8 +1005,48 @@ price | type`). An **inactive category stays its own group in all three grouping
   `kind`, so a switched-off
   Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
   `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
-  views' rail — still sees a sideboard in the two modes that otherwise have no categories
+  views' rail, and since the bullet below their command box — still sees a sideboard in the two
+  modes that otherwise have no categories
   in them, which is the right answer in both cases and is a special case in neither.
+- **The command zones are the second kind of pile that is never bucketed, and the one place a
+  pile's position is not the reader's** (2026-08-20). A commander is not a card in the curve; it is the
+  card the curve was built _around_, on the table before the first draw, and a companion is that
+  same claim made from outside the deck (CR 100.4a). So under `manaValue` and `type` a `commander`
+  or `companion` pile is treated the way a switched-off one already was — its cards go into **no**
+  bucket and the pile is drawn whole — and then, in **all three** modes, the active command zones
+  are lifted to the **head** of what `buildGroups` answers, commander first and companion second,
+  whatever `sortOrder` says. Bucketing them was the defect the change removes: a commander counted
+  into `Mana value 4` is one more four-drop in the number a reader is reading to decide whether
+  they have too many, and it is the one card of the ninety-nine that is never drawn. Four things
+  hold it, and each of the last three is a case that looks as though it should have moved and did
+  not:
+  - **`COMMAND_ZONE_KINDS` is the whole rule, and the array's own order _is_ the
+    commander-before-companion half of it.** `commandZoneRank` reads it by index, so "is this a
+    command zone" and "which of the two is read first" come out of one list rather than out of a
+    set standing beside a comparator that could quietly stop agreeing with it. It is deliberately
+    **not** what `drawsWhenEmpty` branches on: that function treats the same two kinds specially
+    and gives them _opposite_ answers, so a membership test there would fold two rules into one and
+    lose the half that is about the format.
+  - **A switched-off command zone is not in the head run at all.** It counts toward nothing — not
+    size, not copies, not legality, not the allocator — so it is not what the rest of the deck is
+    read _against_ either, and it stays exactly where it was: in `sortOrder` under `category`, in
+    the inactive tail under a derived grouping, and in the rail under both. The tail is unchanged
+    by construction rather than by two filters that happen to agree — the head run takes only
+    active piles, so nothing it lifts out could have been in it.
+  - **An empty one is `drawsWhenEmpty`'s question and nobody else's.** The head run reorders the
+    piles that are _drawn_ and never decides which those are, so the two conditional zones stay
+    conditional on exactly what they were: an empty Commander draws only where the format has a
+    command zone, an empty Companion never draws at all.
+  - **`DeckStats` is untouched, and that is the half a reader is most likely to assume changed.**
+    The band derives the curve, the average mana value and the type bars from the deck's rows
+    itself and has never called `buildGroups`, so the commander is still counted in all three — a
+    four-drop commander still stands in the `4` bar beside a desk that has stopped filing it there.
+    That is not the failure the `Split X` bullets below name, which is about one _flag_ handed to
+    two surfaces that must not disagree about it; there is no flag here and nothing was handed
+    anywhere. It is the deliberate scope of this change, and it is written down so that nobody
+    closes it by accident in one surface: the counting argument above is an argument about a
+    number, and the chart is a number, so whether the curve should drop the commander too is a
+    question somebody has to ask the reader rather than infer from this rule.
 - **The toolbar asks those three questions with three identical `<select>`s** (changed
   2026-08-15). `View` was a four-button segmented group beside two selects, which made the control
   a reader reaches for most the one that looked unlike its neighbours and spent four buttons'
@@ -1394,7 +1479,9 @@ price | type`). An **inactive category stays its own group in all three grouping
   now maps `splitRail`'s `flow` straight into `flex flex-wrap gap-x-4 gap-y-5` items of
   `stackColumnWidth(zoom)` each, left to right in the reader's order, wrapping down. **The count of
   boxes is `flow.length` and nothing else** — no zoom, no desk height — and CSS decides how many sit
-  on a line. `columnHeight` is gone from this view's props and `DeckEditor` no longer passes it;
+  on a line. (Since 2026-08-20 it is `flow.length` plus **one** where the deck has an active
+  command zone: the two zones share a single box at the head, so the arithmetic gains a term and
+  not a variable.) `columnHeight` is gone from this view's props and `DeckEditor` no longer passes it;
   `DEFAULT_COLUMN_HEIGHT` and the view's `groupHeight` went with it. **`packColumns` is untouched
   and `TextView` still uses it**: a decklist line is 21px, so a column there holds thirty and
   filling one is what makes that view readable — the two views differ because a card is 300px tall
@@ -1429,12 +1516,17 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **`STACK_ATTR` (`data-deck-stack`) marks one pile in the flow**, and it replaced
   `STACK_COLUMN_ATTR` (`data-stack-column`), which meant "a box `packColumns` produced". It sits on
   `StackGroup`'s own `<section>` — there is no wrapper box left — beside the inline `width` and the
-  `grid-row` span it is placed by. **The rail's piles carry none of the three**, and one prop says
-  so: `flowWidth` is absent there, because the rail is a `flex-col` box that carries the width for
-  the piles in it and in which a grid row means nothing. (It used to be the `flex: 0 0 Npx` basis
+  `grid-row` span it is placed by. **Neither the rail's piles nor the command zone's carry any of
+  the three**, and one prop says so for both: `flowWidth` is absent there, because each of those is
+  a `flex-col` box that carries the width for the piles in it and in which a grid row means nothing.
+  (It used to be the `flex: 0 0 Npx` basis
   that was load-bearing here — a basis on a `flex-col` child is read down the main axis and becomes
   a _height_ — and that shorthand went with the flex flow.) It pairs with `RAIL_ATTR`
-  (`data-deck-rail`) — the two boxes a pile can be in, named the same way.
+  (`data-deck-rail`) and, since 2026-08-20, `COMMAND_ATTR` (`data-deck-command`) — the three boxes
+  a pile can be in, named the same way. **The command box is a grid item of the flow like any
+  other**, measured and spanned by the same `useLayoutEffect`/`ResizeObserver` pair, so the piles
+  inside it cost the masonry no arithmetic of their own: what is measured is the box, and the two
+  zones stack inside it.
 - **The rail costs a column of flow, and at the app's own window that is the column.** Measured
   live: at 1280×800 with the search panel docked the view is **602px**, so the rail's 224 and the
   16px gap leave **362 — room for exactly one**. The same deck that used to show ~2.7 columns
@@ -1458,13 +1550,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   and it is the other pile a reader looks for by _position_, which for a category seeded last means
   the far end of a long run. **The split changed neither view's contract** — `TextView`'s
   `packColumns` is still greedy, in the reader's order, never reordering, never splitting a group,
-  an over-tall group taking its own column, and `StackView` still maps `flow` straight through in
-  that same order; both are simply handed fewer groups. The rail is drawn for an **empty** pile too: an empty pile is where
+  an over-tall group taking its own column, and `StackView` still maps the flowing run straight
+  through in that same order; both are simply handed fewer groups. **`splitRail` answers three runs
+  since 2026-08-20** — `{ command, flow, rail }` — and `rail` and `flow` are exactly what they were:
+  the third is the active command zones, taken out in front of the flow rather than beside it, and
+  it is described in its own bullet below. The rail is drawn for an **empty** pile too: an empty pile is where
   the next card of that kind goes, and a rail that appeared with the first card would move the
   layout under the reader's hand. **No group with either kind is no rail at all** — and which groups
   carry the kind is `buildGroups`' answer, never a view's. Under `Group by` mana value or type the
   derived buckets are headings with `kind: null` and they flow, but **every switched-off category
-  is appended as itself**, so a reader who turns the Sideboard off and then groups by mana value
+  is appended as itself and every active command zone heads the list as itself**, so a reader who
+  turns the Sideboard off and then groups by mana value
   gets a rail beside a layout made almost entirely of headings — and the Maybeboard, seeded
   switched off, reaches the rail by that route almost every time. **Nothing here sorts the rail**:
   the Sideboard sits above the Maybeboard because that is where the reader's own `sortOrder` puts
@@ -1489,9 +1585,12 @@ price | type`). An **inactive category stays its own group in all three grouping
     piles and sink the rail's fixed head under whatever they turned off last — in the ordinary case
     rather than a corner. Swapping the two tests is the one edit `views.test.tsx`' rail block would
     catch and nothing else in the suite would.
-  - **`commander` and `companion` rail when they are switched off**, and that does not weaken their
-    exemption below: "one card each, read at a glance" is an argument about a pile that is _in_ the
-    deck, and a switched-off command zone is not one.
+  - **`commander` and `companion` rail when they are switched off**, and that is the one thing
+    about them the head run below did not take over: the head run is active piles only, so a
+    switched-off command zone falls through it to this test exactly as it always did, and lands in
+    the rail behind the Sideboard and the Maybeboard. The argument is the same one the head run
+    makes from the other end — a pile that counts toward nothing is not what the deck is read
+    _against_, so it is neither in front of the deck nor part of it.
   - **There is no divider between the rail's two runs, and no caption over the second.** A
     switched-off pile already says so three times — the section's `bg-surface/60` wash,
     `GroupHeader`'s dimmed name and `INACTIVE` chip, and the stack's `opacity-60` — and the pile
@@ -1564,10 +1663,30 @@ price | type`). An **inactive category stays its own group in all three grouping
   longer the only thing in it. `views.test.tsx` asserts
   those four absences alongside the classes, because reinstating a sticky rail is a two-word edit
   no other test would notice.
-- **`commander` and `companion` are still not railed while they are switched on, and that is not an
-  omission** — one card each, by construction, and railing either would spend a column's width on a
-  pile that is read at a glance, permanently, in every deck. (Switched off they rail like any other
-  pile; see the switch bullet above for why that leaves this reason intact.) What the rail prevents
+- **`commander` and `companion` are still not railed while they are switched on — and since
+  2026-08-20 they are not in the flow either. They are a box of their own at the head of it**,
+  marked `COMMAND_ATTR` (`data-deck-command`). The old reason for keeping them out of the rail is
+  untouched and is why they are still not in it: one card each, by construction, so railing either
+  would spend a column's width on a pile that is read at a glance, permanently, in every deck. What
+  changed is the other end of the same sentence — these two are what the rest of the deck is read
+  _against_, so they belong in front of it rather than among the piles that make it up, and
+  `buildGroups` puts them there in all three grouping modes.
+  **The two share one grid item, stacked, companion under commander**, and that is the reader's own
+  call rather than a layout convenience: the flowing half is a masonry, so two consecutive
+  one-card piles would sit **side by side** on the first line and read as two more of the deck's
+  columns. Inside the box the arrangement is the rail's, character for character — a `flex-col`
+  carrying the width, each pile a plain block with **no `flowWidth`** — which is why neither draws
+  a reorder grip and neither carries `STACK_ATTR`, and why the box itself is what the masonry
+  measures and spans. **Their drop targets are untouched**: the zone's _place_ is fixed now, not
+  the pile, and a card can still be dragged into either.
+  **`TextView` needs no third box, and the reason is `packColumns` itself.** That pack is greedy
+  and in order, which _is_ a stack, so handing it `[...command, ...flow]` puts the commander at the
+  top of the first column with the companion directly under it and the deck beginning below them —
+  the same picture the stack view builds a box to get, for free. (Switched off they rail like any
+  other pile; see the switch bullet above for why that leaves both of these reasons intact.)
+  **`TableView` and `GridView` do not call `splitRail` at all** — they render `groups` in the order
+  they were handed — so for those two the whole of this change is that the command zones come
+  first. What the rail prevents
   at the other end is a drag with no
   destination on screen: the two railed piles sort last, so packed they were the far end of the
   run, and a card dragged out of the main deck had nowhere to be let go of. The rail is drawn only
@@ -1905,6 +2024,54 @@ price | type`). An **inactive category stays its own group in all three grouping
   filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
   is still nothing mounted, which is what keeps the search off a deck nobody searched from.
   The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
+- **A tag's colour is the reader's own, stored as `#rrggbb`, and `tagColors.ts` is the only file
+  that knows it** (2026-08-20). It was one of **six token words** — `gold`, `ember`, … — and the
+  argument for that was real and is written down where it was made: a stored hex outlives the
+  theme that chose it, so a tag picked against last year's palette comes back as a colour this app
+  no longer uses. What overruled it is that a label is the one thing on a deck screen whose meaning
+  is the reader's rather than the game's, and six words cannot say what a reader means. Four
+  consequences, none of them optional. **The six are still the quick row of the picker** and are
+  still `--color-pie-*`, so the common answer is unchanged and no new colour entered the palette;
+  they are **literal hexes** in `TAG_COLORS` now rather than `var()`s, because these strings are
+  written to a column and a `var()` in a column is a colour with no value outside this build —
+  `tagColors.test.ts` compares them against `index.css` and is the only thing that would catch a
+  palette edit leaving the picker behind. **Rows written before the change still read**, through
+  `LEGACY_TOKENS`, which is a read path that does not expire: a database is not migrated by a build
+  being newer than it, and `CardStack.test.tsx` holds a legacy row on purpose. **`tagFgCss` is
+  computed rather than tabulated** — the quantity tag prints a count *on* the colour, and once the
+  reader picks it no table can hold the answer in advance; the formula is the sRGB luma the retired
+  table's own six answers were built from, and those six are pinned so a "more correct" curve
+  cannot flip one silently. And **nothing in Rust changed**: `deck_tags.color` never had a CHECK,
+  because picking what a colour *is* is the webview's job.
+- **The Tags dialog opens on the act of making one, and the swatch is the recolour** (2026-08-20).
+  Three moves, each with a reason that outlives the redesign that made it. The **add field went to
+  the top**: a reader with no tags is who this screen is hardest for, and the control that fixes
+  that sat below the list *and* below a four-line paragraph. That **paragraph became a subtitle and
+  two section headings** — "a card carries at most one" and "deleting a tag keeps its cards" are
+  true of the whole dialog and are the header's line; "the suggestions come from every deck" was
+  never a paragraph's job, it is what the section is *called*. And the **colour left the rename**,
+  which had made a reader who wanted a different red open the control for changing the word. Both
+  halves still send the other back, because `deck_tag_update` renames **and** recolours in one
+  command with no patch shape — the rename sends `tag.color`, the picker sends `tag.name`, and
+  `TagsDialog.test.tsx` has a case for each. **The picker holds a draft and Done is the write**:
+  `input[type=color]` fires all the way down a drag through the OS dialog, so a row writing on
+  every change would be a `deck_tag_update` per pixel of travel.
+- **"Tag card ▸ New tag…" is a row that opens `NewTagDialog`, and the submenu is `submenu` again**
+  (2026-08-20). It was a text field inside the panel, which is the whole reason that row was
+  `lazy` — a `MenuItem[]` cannot carry an input. The field created in `DEFAULT_TAG_COLOR` because
+  a context menu has no room for a picker, and that was the right trade while a colour was one of
+  six; it stopped being one when the colour became the reader's, since every label born from a
+  menu would then be gold and have to be visited again to be told apart. So the fast path is the
+  radio rows — the deck's existing labels, one press each, unchanged — and making a *new* one is
+  a dialog with the two things a new label needs. **The chain is untouched and must stay
+  untouched**: `createTagFor` is the editor's, `mutateAsync` rather than a `mutate`-scoped
+  `onSuccess`, because those callbacks belong to an *observer* and TanStack drops them when it
+  unmounts — a create started in the dialog and chained there loses its attach to an Escape
+  landing during the round trip, leaving the label made and silently never worn. The dialog closes
+  on the press exactly as the menu did; `DeckEditor.test.tsx` drives that with the create held
+  open across the dismissal. The `newTag` layer carries the **slot** (`cardId`, `categoryId`,
+  `finish`) and the card's name, frozen — `quickCategory`'s exception rather than `export`'s rule,
+  because a right-click names a press that is over rather than a row the deck is re-read into.
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
   `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
   `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded

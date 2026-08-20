@@ -16,8 +16,11 @@
  *
  * **A pure builder whose dependencies are an argument**, exactly as `cardMenu`'s and
  * `categoryMenu`'s are: every write arrives as a callback, so this file is testable with no
- * provider, no query client and no window — the one component in it, the tag body, holds that
- * contract too and is `MenuLazy.Content`, mounted on an expand rather than on a right-click.
+ * provider, no query client and no window. It has **no component in it at all** since
+ * 2026-08-20, when "New tag…" stopped being a text field inside the panel and became a row that
+ * opens `NewTagDialog` — the tag rows are a `MenuItem[]` built from `deps.tags`, which
+ * `DeckEditor` already holds from `deck_get`, so the whole submenu is `submenu` rather than
+ * `lazy` and nothing here mounts, queries or holds state.
  *
  * **Two rows are stricter than the rest of this menu, and the asymmetry is deliberate rather
  * than a drift.** `Move to ▸ Commander` is live for a card `Set as commander` greys two rows
@@ -33,16 +36,12 @@
  * assembled its own would be four copies of one rule, and the rule reads the deck's categories,
  * its format spec and its tags — three facts no view has.
  */
-import { useState } from "react";
-import { CircleMinus, Crown, FolderInput, Sparkles, Tag, UserRound } from "lucide-react";
-import { MenuRows } from "@/components/menu/ContextMenu";
+import { CircleMinus, Crown, FolderInput, Plus, Sparkles, Tag, UserRound } from "lucide-react";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
 import type { DeckCard, DeckCategory, DeckFinish, DeckTag, FormatSpec } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
-import { cn } from "@/lib/utils";
 import { commanderIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 
@@ -106,34 +105,28 @@ export interface DeckCardMenuDeps {
   setTag: (card: DeckCard, tagId: number | null) => void;
   /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
   setFinish: (card: DeckCard, to: DeckFinish) => void;
-  /** The deck's labels, already in hand from `deck_get` — the tag body draws these rather than
-   *  reading `deck_tag_list` a second time. */
+  /** The deck's labels, already in hand from `deck_get` — the tag rows are built from these
+   *  rather than from a second `deck_tag_list`, which is what lets the submenu be `submenu`
+   *  rather than `lazy`. */
   tags: readonly DeckTag[];
   /**
-   * "New tag…" — make a label with `DEFAULT_TAG_COLOR` and put it on this card, as **one write
-   * the surface owns**.
+   * **"New tag…"** — open the surface's `NewTagDialog` on this card. It writes nothing itself.
    *
-   * A callback rather than a hook mounted in the body below, and it is two decisions at once.
+   * This row used to be a text field inside the panel, and the field used to *be* the write:
+   * `createTag(card, name)`, in {@link DEFAULT_TAG_COLOR}, because a menu has no room for a
+   * colour picker. Both halves of that changed on 2026-08-20 — a tag's colour is the reader's
+   * own now (`tagColors.ts`) and picking gold silently for every label born from a menu would
+   * make them all alike, so the row opens a dialog with a name and a colour in it.
    *
-   * **It keeps this file's purity contract**: every write arrives as an argument, so the builder
-   * *and* its one component are testable with no provider and no query client. The body used to
-   * mount `useDeckMeta` itself, which is **four** reads — the categories as a priced aggregate,
-   * the tags of both lists, and the global suggestion palette — fired to draw a text field the
-   * reader may never type in. The editor mounts that hook now, for the *category* menu, and
-   * hands the one write down; four reads inside opening a deck are a different price from four
-   * inside expanding a submenu.
-   *
-   * **And it is what keeps the write alive.** A `mutate`-scoped `onSuccess` belongs to the
-   * *observer*, and TanStack drops it when the observer unmounts — so a create started here and
-   * chained to `setTag` in the body would lose its second half to an Escape or an outside press
-   * landing during the round trip: the label made and silently never attached. The surface's
-   * observer outlives the panel, so the chain does not depend on this component surviving its
-   * own press. It is `cardMenu.tsx`'s split, for `cardMenu.tsx`'s reason.
-   *
-   * Fire and forget: a refusal is the surface's to draw, because by the time one arrives there
-   * is no menu left to draw it in.
+   * **The write is still the surface's, and the two reasons are unchanged.** It keeps this
+   * file's purity contract — every write arrives as an argument, so the builder is testable with
+   * no provider and no query client — and, the one that is a defect rather than a preference, a
+   * `mutate`-scoped `onSuccess` belongs to the *observer*, and TanStack drops it when the
+   * observer unmounts. A create started in a panel and chained to `setTag` there loses its
+   * second half to an Escape landing during the round trip: the label made and silently never
+   * attached. The editor's observer outlives both the menu and the dialog.
    */
-  createTag: (card: DeckCard, name: string) => void;
+  newTag: (card: DeckCard) => void;
   /**
    * **Remove card** — take this row out of the pile it is in.
    *
@@ -151,14 +144,6 @@ export interface DeckCardMenuDeps {
 }
 
 export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
-  /** The tag body, closed over the card. Named rather than inline so its identity is stable for
-   *  the life of the built array — `cardMenu.tsx`'s `DeckPicker` does the same, for the same
-   *  reason: a fresh component type on every render remounts the body and loses what is typed
-   *  in it. */
-  function TagBody({ onDone }: { onDone: () => void }) {
-    return <DeckCardTags card={card} deps={deps} onDone={onDone} />;
-  }
-
   return [
     ...buildCardMenu(deckCardTarget(card), deps.card),
     // The rule is where "this card" stops and "this card in this deck" starts. Everything above
@@ -169,7 +154,26 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     // Beside the zone rows rather than beside `Move to`: those say what this card *is* in the
     // deck, and so does this. `Move to` is filing.
     finishItem(card, deps),
-    { kind: "lazy", id: "tag-card", label: "Tag card", Icon: Tag, Content: TagBody },
+    {
+      kind: "submenu",
+      id: "tag-card",
+      label: "Tag card",
+      Icon: Tag,
+      items: [
+        ...deckCardTagRows(card, deps.tags, deps.setTag),
+        // The line between putting a label on and making one. Above it every row is a press and
+        // the card is tagged; below it the menu closes and a dialog opens, which is a different
+        // kind of act and is drawn as one.
+        { kind: "separator", id: "sep-new-tag" },
+        {
+          kind: "action",
+          id: "tag-new",
+          label: "New tag…",
+          Icon: Plus,
+          onSelect: () => deps.newTag(card),
+        },
+      ],
+    },
     // A second rule, and it is the same kind of line as the first: everything above says where
     // this card goes or what it is called, and this one takes it out. A row that removes
     // cardboard does not sit flush against a row that renames it.
@@ -488,90 +492,4 @@ export function deckCardTagRows(
       }),
     ),
   ];
-}
-
-/**
- * The body behind **Tag card**: the deck's labels as radios, and a field for a new one.
- *
- * **`lazy` rather than `submenu`, and the field is why.** The rows themselves are free —
- * `DeckEditor` already holds `deck.tags` from `deck_get` — but a `MenuItem[]` cannot carry a
- * text field, and "New tag…" is an inline field by design: a reader who has just decided a card
- * is a cut candidate should not have to open a dialog to say so. The mount is the expand, so
- * nothing here runs on a right-click.
- *
- * **It writes nothing itself, and that is not tidiness.** `deps.createTag` is the surface's, for
- * two reasons stated in full on that field: this component keeps the file's no-provider,
- * no-query-client contract, and — the one that is a defect rather than a preference — a write
- * started *here* and chained here would lose its second half to an Escape or an outside press
- * arriving during the round trip, because a `mutate`-scoped callback belongs to an observer this
- * body takes with it when it goes. The label would be created and silently never attached.
- *
- * So `onDone` is called **immediately**, on the press, where it used to wait for a round trip.
- * The wait was the workaround for owning the write; with the write owned by the editor there is
- * nothing left here to keep alive, and a menu that lingered after the reader had committed would
- * be a menu waiting on a network for no reason. A refusal lands in the editor's banner, which is
- * where every other refused deck write already speaks.
- */
-function DeckCardTags({
-  card,
-  deps,
-  onDone,
-}: {
-  card: DeckCard;
-  deps: DeckCardMenuDeps;
-  onDone: () => void;
-}) {
-  const [name, setName] = useState("");
-  const ready = name.trim() !== "";
-
-  return (
-    <>
-      <MenuRows items={deckCardTagRows(card, deps.tags, deps.setTag)} />
-      <div role="separator" className="my-1 h-px bg-border" />
-      {/* `role="none"`, because a `role="menu"` may own only menu rows, a `group` or a
-          separator — and a form is none of those. `Submenu`'s own box takes the same role for
-          the same reason: presentational is what makes a wrapper legal here without inventing a
-          second name for the field inside it, which is what a named `group` would be. */}
-      <form
-        role="none"
-        className="flex items-center gap-1 px-2 py-1"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const trimmed = name.trim();
-          if (trimmed === "") return;
-          // The colour is `DEFAULT_TAG_COLOR`'s and is chosen by the write, not asked for here:
-          // recolouring a label is what `TagsDialog` is for, and a colour picker inside a
-          // context menu would make the fast path the slow one.
-          deps.createTag(card, trimmed);
-          onDone();
-        }}
-      >
-        <input
-          aria-label="New tag"
-          placeholder="New tag…"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className={cn(
-            "h-7 w-36 rounded-md border border-border bg-bg px-1.5 text-xs text-text",
-            FOCUS,
-          )}
-        />
-        {/* `aria-disabled` rather than `disabled`, this file's rule everywhere else and the
-            app's: an empty field is a state the reader types out of, and a control that leaves
-            the tab order while they are deciding is one they cannot get back to. */}
-        <button
-          type="submit"
-          aria-disabled={ready ? undefined : true}
-          className={cn(
-            "h-7 shrink-0 rounded-md border border-border px-2 text-xs",
-            "transition-colors duration-150 motion-reduce:transition-none",
-            ready ? "text-dim hover:text-text" : "text-dim opacity-50",
-            FOCUS,
-          )}
-        >
-          Add
-        </button>
-      </form>
-    </>
-  );
 }
