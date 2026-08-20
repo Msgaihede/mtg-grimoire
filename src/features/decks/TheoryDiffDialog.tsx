@@ -34,10 +34,11 @@ const ONE_DIRECTION =
  * below touches `deck_cards` — a shopping list is not an edit. That is why the only cache keys
  * they take are the wishlist's and the search's.
  *
- * `deck_theory_diff` is grouped and subtracted **by the backend, by oracle card**, and this hook
- * deliberately re-derives none of it: needing a second Sol Ring is not answered by owning a
- * different printing of one already in the live list, and a second grouping here would be a
- * second place for that rule to live. The rows arrive ready to draw.
+ * `deck_theory_diff` is grouped and subtracted **by the backend, by printing**, and this hook
+ * deliberately re-derives none of it. A second grouping here would be a second place for that
+ * rule to live — which is not hypothetical: `DeckEditor` kept one until 2026-08-20, to count the
+ * "N cards differ" readout the `Compare` button replaced, and it disagreed with this command in
+ * both directions it was possible to disagree in. The rows arrive ready to draw.
  *
  * Local to this file rather than added to `useDeck`/`useDeckMeta`, because it is one surface's
  * two questions and nothing else in the app asks them.
@@ -45,7 +46,7 @@ const ONE_DIRECTION =
  * **No `enabled` gate and no nullable deck**, unlike every other hook in this folder — and that is
  * the whole benefit of {@link DeckDialog} mounting nothing while it is closed. A closed dialog
  * does not mount {@link TheoryDiffBody}, so this hook does not exist, so nothing is read. The
- * query is a full pass over both of a deck's lists plus an allocation roll-up per oracle card; a
+ * query is a full pass over both of a deck's lists plus an allocation roll-up per printing; a
  * button nobody has pressed should not pay for it, and unmounting says that more plainly than a
  * flag does.
  */
@@ -159,6 +160,10 @@ interface Totals {
  * with `quantity` it counts the live list twice, which is the bug this row's doc comment in
  * `ipc.ts` exists to prevent. A reader may well own five spare Sol Rings while needing one; the
  * figure says so, and says nothing else.
+ *
+ * **A plain sum is only honest because `ownedSpare` is per printing**, which it has been since
+ * 2026-08-20. While it answered per oracle card, a plan holding two printings of one card put
+ * the same binder copies on two rows and this line added them up twice.
  */
 export function diffTotals(rows: readonly TheoryDiffRow[]): Totals {
   let copies = 0;
@@ -188,7 +193,8 @@ export interface TheoryDiffDialogProps {
  * list.
  *
  * **One direction, and the footer says so in words.** The other direction — what Live holds and
- * Theory dropped — is a cut the reader already made and needs no row. That is a product decision
+ * Theory dropped — is a cut the reader already made and needs no row. What *is* here is every
+ * printing the plan holds that the deck has not got, with the piles they sit in ignored. That is a product decision
  * taken in `deck_theory.rs`; drawing it silently would make a correct list read as a broken one,
  * which is why {@link ONE_DIRECTION} is copy rather than a comment.
  *
@@ -281,9 +287,11 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
   /**
    * The rows a press has already put on the wishlist, so the button can say so.
    *
-   * By `cardId`, which is unique per row — the backend groups by oracle card, so one card is one
-   * row. Kept here rather than read off the mutation, because a mutation remembers only its last
-   * variables and a reader presses several.
+   * By `cardId`, which is unique per row — the backend groups by printing, so one printing is
+   * one row. Kept here rather than read off the mutation, because a mutation remembers only its
+   * last variables and a reader presses several. **Two rows of one oracle card therefore mark
+   * separately while writing one folded wish**, which is right: the reader pressed two buttons
+   * and each says what that press did.
    */
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
 
@@ -431,7 +439,7 @@ function FigureStrip({
         // not "how many of these you have covered". It is a count of loose copies, and it is
         // deliberately not subtracted from anything above.
         title={
-          "Copies of these cards in your collection that no built deck has claimed. " +
+          "Copies of these exact printings in your collection that no built deck has claimed. " +
           "Not subtracted from what the plan needs."
         }
       />

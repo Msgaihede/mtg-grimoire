@@ -3772,8 +3772,8 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(rows[0].at).toBeGreaterThanOrEqual(rows[1].at);
   });
 
-  it("compares the two lists by oracle card, one direction, skipping inactive piles", () => {
-    const { r } = testbed();
+  it("compares the two lists by printing, one direction, skipping inactive piles", () => {
+    const { db, r } = testbed();
     const diff = r.deck_theory_diff({ deckId: 4 });
 
     expect(diff.map((d) => [d.name, d.quantity])).toEqual([
@@ -3786,11 +3786,26 @@ describe("categories, tags, folders, history and the plan", () => {
       ["Jace, the Mind Sculptor", 1],
     ]);
     expect(diff[0].unitPrice).toBeNull();
-    // The deck holds two Sol Rings and the plan wants one. A cut is not a purchase, so there
-    // is no row for it in either direction.
+    // The deck holds two `c21 263` Sol Rings and the plan wants one of the same printing. A cut
+    // is not a purchase, so there is no row for it in either direction.
     expect(diff.some((d) => d.name === "Sol Ring")).toBe(false);
     // A plan that is a copy of its deck asks for nothing.
     expect(r.deck_theory_diff({ deckId: 3 })).toEqual([]);
+
+    // **And the grain is the printing, not the oracle card** (2026-08-20). Re-print the live
+    // copies as `sld 913` and the plan's `c21 263` is suddenly something to go and find — where
+    // an oracle-grained answer saw a Sol Ring against a Sol Ring and reported nothing. This is
+    // the fixture's own "same card, different printing" pair.
+    const sld = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "sld")!;
+    for (const dc of db.deckCards) {
+      if (dc.deckId === 4 && dc.variant === "live" && dc.name === "Sol Ring") {
+        dc.cardId = sld.id;
+        dc.setCode = sld.setCode;
+        dc.collectorNumber = sld.collectorNumber;
+      }
+    }
+    const swapped = r.deck_theory_diff({ deckId: 4 });
+    expect(swapped.find((d) => d.name === "Sol Ring")).toMatchObject({ quantity: 1 });
   });
 
   it("seeds the plan from the deck without overwriting what the plan already says", () => {

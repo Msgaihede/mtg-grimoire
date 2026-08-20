@@ -42,9 +42,10 @@ const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TheoryDiffRow {
-    /// The printing **the theory row names**, which is the printing the user would be buying.
-    /// The grouping below is by oracle card, so this is the first theory row's printing when
-    /// the same card is filed in two categories — see [`theory_diff`].
+    /// The printing **the theory row names**, which is the printing the user would be buying —
+    /// and, since 2026-08-20, the whole of what makes two rows one line. The same printing filed
+    /// in two theory categories is one row named by the category the editor lists first; a
+    /// *different* printing of the same card is a row of its own. See [`Grouped`].
     pub card_id: String,
     pub name: String,
     /// The category the theory row is filed under — the pile this card is wanted *for*, which
@@ -69,10 +70,14 @@ pub struct TheoryDiffRow {
     pub unit_price: Option<f64>,
     pub set_code: String,
     pub collector_number: String,
-    /// Copies of this oracle card the collection holds and **no built deck has claimed**.
+    /// Copies of **this printing** the collection holds and **no built deck has claimed**.
     ///
-    /// The number that turns "I need two more Sol Rings" into "and one of them is in the box
-    /// already". Built is the whole of the test, and it is [`crate::deck::allocate_deck`]'s own
+    /// The number that turns "I need two more of these" into "and one of them is in the box
+    /// already". Per printing because [`Grouped`]'s key is, and the two cannot disagree: a line
+    /// that asks for the retro-frame Sol Ring over a spare-count taken across every printing
+    /// would be describing two different objects, and [`OWNED_SPARE_SQL`] says the rest.
+    ///
+    /// Built is the whole of the second test, and it is [`crate::deck::allocate_deck`]'s own
     /// rule read from the other end: a deck on a table has its cards, a deck being planned is
     /// planning with copies it may share with every other draft — so an unbuilt deck's claim
     /// does not make a copy unavailable to this plan.
@@ -87,31 +92,34 @@ pub struct TheoryDiffRow {
 
 /// A diff row and the oracle id its group was built on.
 ///
-/// The oracle id is deliberately **not** on [`TheoryDiffRow`]: the webview draws a printing and
-/// a count and has no use for it, while [`missing_to_wishlist`] cannot do without it — a wish
-/// is oracle-grained ("any printing"), because a shopping list is not a printing preference.
+/// **The group is keyed on the printing** — [`TheoryDiffRow::card_id`], and nothing else. This
+/// was the oracle card until 2026-08-20 and is deliberately no longer: the rule is "everything
+/// the plan holds that the deck has not got, different printings included". A plan that names
+/// the retro-frame Sol Ring is a plan for *that* object, and answering it with the
+/// Commander-precon one in the live list is the app deciding a substitution on the reader's
+/// behalf — the whole reason a deck keeps two lists is that the reader is tracking which
+/// cardboard they actually hold. Oracle grouping also put this command permanently at odds with
+/// the editor's own readout, which has always keyed on the printing.
+///
+/// **Not the finish**, which *is* part of [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN):
+/// a foil and a regular copy of one printing are two deck rows and one line here, summed. A
+/// finish is a property of the copy rather than of a printing, [`TheoryDiffRow`] has no field
+/// for one, and `cardId` is what the webview keys its list by — two rows sharing it would be two
+/// React children under one key.
+///
+/// An orphan — a row whose printing has left `cards` — needs no special case any more, which is
+/// the one simplification the change bought: its `card_id` is its identity like everything
+/// else's, so the prefix that used to keep oracle ids and card ids apart went with the oracle
+/// key.
+///
+/// The oracle id survives on *this* struct and is deliberately **not** on [`TheoryDiffRow`]: the
+/// webview draws a printing and a count and has no use for it, while [`missing_to_wishlist`]
+/// cannot do without it — a wish is oracle-grained ("any printing"), because a shopping list is
+/// not a printing preference. So two printings of one card are two lines here and **one** wish,
+/// folded on quantity by [`crate::wishlist::add_wish`]'s upsert.
 struct Grouped {
     oracle_id: Option<String>,
     row: TheoryDiffRow,
-}
-
-/// What makes two deck rows the same *card* for the purpose of a difference.
-///
-/// **Oracle id when there is one, the printing's id when there is not**, and the two are told
-/// apart by a prefix so that a card id can never be mistaken for an oracle id — both are UUIDs
-/// out of the same generator, and a bare string key would be one collision away from comparing
-/// a printing with an unrelated card.
-///
-/// Comparing by oracle is the whole point of the direction this list is read in: needing a
-/// second Sol Ring is not answered by owning a *different printing* of one already in the live
-/// list. An orphan — a row whose printing has left `cards` — has no oracle id and falls back to
-/// its own id, which is as far as the data can honestly go: two orphans of the same card look
-/// like two cards, and the alternative is guessing.
-fn group_key(oracle_id: Option<&str>, card_id: &str) -> String {
-    match oracle_id {
-        Some(oracle) => format!("o:{oracle}"),
-        None => format!("c:{card_id}"),
-    }
 }
 
 /// Every row of one deck, both variants, in the editor's own order — [`theory_diff`]'s input.
@@ -121,6 +129,10 @@ fn group_key(oracle_id: Option<&str>, card_id: &str) -> String {
 /// nothing, so a card parked in the theory Maybeboard is not something the user has decided to
 /// play, and a card parked in the *live* Maybeboard is not something the deck has. Filtering
 /// one side and not the other is how a scratchpad would come to fill a shopping list.
+///
+/// **That switch is the only thing a category decides here.** The join is otherwise for
+/// `cat.name`, which captions a row, and for the reading order — the comparison itself never
+/// looks at a pile, so re-filing a card in one list and not the other is not a difference.
 fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
         "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
@@ -135,7 +147,7 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     )
 }
 
-/// Copies of one card the collection holds that no **built** deck has spoken for.
+/// Copies of one **printing** the collection holds that no **built** deck has spoken for.
 ///
 /// One statement rather than two so the subtraction cannot see two different moments of the
 /// collection. `min(a.quantity, e.quantity)` is [`crate::deck::allocate_deck`]'s clamp, per
@@ -143,20 +155,23 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// stepped to one has one of them, and charging the plan for the other three would be charging
 /// it for copies that do not exist.
 ///
-/// The `?1 IS NULL` arm is the orphan's: a row whose printing has left `cards` is matched by
-/// **exact printing** against the collection instead, because that is the only identity it has
-/// left. `LEFT JOIN cards` is what lets that arm find an entry whose own card is missing too.
+/// **Per printing, because the diff above is** — and it was per oracle card until 2026-08-20,
+/// which stopped being defensible the moment a different printing became a difference. Two
+/// halves of one row cannot disagree about what a card is: a line that says "buy the retro-frame
+/// one" over "you already have one spare" would be describing two different objects, and the
+/// figure strip sums `owned_spare` across rows, so an oracle-wide answer on a deck holding two
+/// printings of one card counted the binder twice.
+///
+/// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
+/// entry whose card has left the corpus is matched by exactly the same equality as every other.
 const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
             coalesce((SELECT sum(min(a.quantity, e2.quantity))
                         FROM deck_allocations a
                         JOIN decks d ON d.id = a.deck_id
                         JOIN collection_entries e2 ON e2.id = a.collection_entry_id
-                        LEFT JOIN cards c2 ON c2.id = e2.card_id
-                       WHERE d.is_built = 1
-                         AND (c2.oracle_id = ?1 OR (?1 IS NULL AND e2.card_id = ?2))), 0)
+                       WHERE d.is_built = 1 AND e2.card_id = ?1), 0)
        FROM collection_entries e
-       LEFT JOIN cards c ON c.id = e.card_id
-      WHERE c.oracle_id = ?1 OR (?1 IS NULL AND e.card_id = ?2)";
+      WHERE e.card_id = ?1";
 
 /// Cards the **theory** list holds that **live** does not.
 ///
@@ -164,13 +179,17 @@ const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
 /// reconciliation. A card live plays and theory dropped is a cut the user already made and
 /// needs no line; a card theory wants two more of is one line saying two.
 ///
-/// **Compared by oracle card, not by printing.** Needing a second Sol Ring is not answered by
-/// owning a different printing of one already in the live list, so the two sides are summed per
-/// oracle card and subtracted — see [`group_key`], including what an orphan falls back to.
+/// **Compared by printing, not by oracle card** (changed 2026-08-20): a plan that names a
+/// particular Sol Ring is not answered by a different printing of one in the live list. The two
+/// sides are summed per `card_id` and subtracted — see [`Grouped`] for the whole of why, and for
+/// why the finish is not in that key.
 ///
-/// The same card filed in two theory categories is **one line**, for the sum, named by the
-/// category the editor lists first. That is the same choice [`crate::deck::missing_to_wishlist`]
+/// **Categories are not compared at all.** The same printing filed in two theory categories is
+/// **one line**, for the sum, named by the category the editor lists first — so moving a card
+/// from Ramp to Removal in the plan and not in the deck is not a difference, because it is not a
+/// card the reader has to find. That is the same choice [`crate::deck::missing_to_wishlist`]
 /// makes and for the same reason: a reader counting copies of a card counts copies of a card.
+/// The one thing a category still decides is whether a row is read at all — see [`diff_select`].
 ///
 /// Ordered by where the representative row falls in the editor's own reading order, so the
 /// shopping list runs down the deck the way the deck is drawn.
@@ -228,7 +247,10 @@ fn grouped_diff(
             oracle,
             unit_price,
         ) = row.map_err(|e| e.to_string())?;
-        let key = group_key(oracle.as_deref(), &card_id);
+        // The printing is the key — see [`Grouped`]. `category` is read for the row's caption
+        // and is deliberately *not* in it: where a card sits is placement, not possession, so a
+        // plan that moved a Bolt from Burn to Removal is short of no Bolts.
+        let key = card_id.clone();
         if variant == THEORY {
             *wanted.entry(key.clone()).or_insert(0) += quantity;
             if !order.iter().any(|(k, _)| *k == key) {
@@ -266,9 +288,7 @@ fn grouped_diff(
         // Floored at zero: a collection stepped down under a built deck's stored claim can make
         // the subtraction negative, and "you own −1 of these" is not a thing to tell anyone.
         grouped.row.owned_spare = spare
-            .query_row(params![grouped.oracle_id, grouped.row.card_id], |r| {
-                r.get::<_, i64>(0)
-            })
+            .query_row(params![grouped.row.card_id], |r| r.get::<_, i64>(0))
             .map_err(|e| e.to_string())?
             .max(0);
         diff.push(grouped);
@@ -557,7 +577,7 @@ mod tests {
     const ANY_MARKET: crate::sorting::Marketplace = crate::sorting::Marketplace::Tcgplayer;
 
     /// Two printings of one oracle card, plus a second card — the second printing is what
-    /// `the_diff_compares_oracle_cards_not_printings` turns on.
+    /// `the_diff_compares_printings_not_oracle_cards` turns on.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&conn).unwrap();
@@ -820,19 +840,53 @@ mod tests {
 
         let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
 
-        // `bolt-m10` is another printing of `bolt-lea`'s card, so the two theory rows are one
-        // group: 5 + 3 wanted against 4 held is 4 short. The Angel is a cut and is not here.
-        assert_eq!(diff.len(), 1, "{diff:?}");
+        // Two lines, because `bolt-m10` is a different printing and so a different thing to go
+        // and find: `bolt-lea` is 5 wanted against 4 held, `bolt-m10` is 3 wanted against none.
+        // The Angel is a cut and is not here at all.
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.card_id.as_str(), r.quantity))
+                .collect::<Vec<_>>(),
+            vec![("bolt-lea", 1), ("bolt-m10", 3)],
+            "{diff:?}"
+        );
         assert_eq!(diff[0].name, "Lightning Bolt");
-        assert_eq!(diff[0].quantity, 4);
         assert_eq!(diff[0].category_name, "Main deck");
     }
 
-    /// Rule 2, and the reason it is a rule: a second Sol Ring is not answered by owning a
-    /// different printing of one you already play. Live holds `bolt-lea`; theory asks for a
-    /// `bolt-m10` as well, and the diff must see one card at two copies rather than a new one.
+    /// **A card the two lists file in different piles is not a difference.** Placement is not
+    /// possession: the reader is being told what to go and buy, and a Bolt that moved from Burn
+    /// to Removal in the plan is a Bolt they already have. This is the half the editor's own
+    /// readout used to get wrong — it keyed rows on `(category, printing)` and counted both
+    /// directions, so one re-filed card scored two and a hundred-card deck read as a hundred
+    /// and fifty differences.
     #[test]
-    fn the_diff_compares_oracle_cards_not_printings() {
+    fn the_diff_ignores_which_pile_a_card_is_in() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let burn = category(&conn, id, "Burn");
+        let removal = category(&conn, id, "Removal");
+        add(&conn, id, "bolt-lea", burn, LIVE, 4);
+        add(&conn, id, "bolt-lea", removal, THEORY, 4);
+
+        assert!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap().is_empty(),
+            "the same four cards, in a different column"
+        );
+
+        // And each side is summed across its piles rather than compared pile by pile: two here
+        // and two there is four wanted, which is what the deck has.
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", removal, THEORY, None, 2).unwrap();
+        add(&conn, id, "bolt-lea", burn, THEORY, 2);
+        assert!(theory_diff(&conn, id, ANY_MARKET).unwrap().is_empty());
+    }
+
+    /// Rule 2, **reversed on 2026-08-20**: the comparison is by printing. A plan that names
+    /// the Alpha Bolt is a plan for that piece of cardboard, and the M10 one in the live list
+    /// does not answer it. Live holds `bolt-lea`; theory asks for both printings, and only the
+    /// one the deck has not got is a line.
+    #[test]
+    fn the_diff_compares_printings_not_oracle_cards() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
@@ -842,17 +896,20 @@ mod tests {
 
         let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
 
-        assert_eq!(diff.len(), 1, "one card, not two printings: {diff:?}");
-        assert_eq!(diff[0].quantity, 1, "two wanted, one held");
-        assert_eq!(
-            diff[0].card_id, "bolt-lea",
-            "named by the theory row the editor lists first"
-        );
+        assert_eq!(diff.len(), 1, "the Alpha one is held: {diff:?}");
+        assert_eq!(diff[0].card_id, "bolt-m10", "and the M10 one is not");
+        assert_eq!(diff[0].quantity, 1);
 
-        // The same comparison from the other side: swapping the live printing for the other
-        // one changes nothing, because the card is the same card.
+        // The same comparison from the other side, and the whole of what changed: swapping the
+        // live printing for the other one moves the difference onto the printing the deck
+        // stopped holding, where an oracle-grained answer saw nothing happen at all.
         crate::deck::swap_printing(&conn, id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
-        assert_eq!(theory_diff(&conn, id, ANY_MARKET).unwrap()[0].quantity, 1);
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(diff.len(), 1);
+        assert_eq!(
+            (diff[0].card_id.as_str(), diff[0].quantity),
+            ("bolt-lea", 1)
+        );
     }
 
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
@@ -926,10 +983,17 @@ mod tests {
         );
     }
 
-    /// Another printing of the same card counts: `owned_spare` is per oracle card, exactly as
-    /// the diff itself is, so a Bolt in the binder answers a Bolt in the plan.
+    /// **`owned_spare` counts this printing and no other**, exactly as the diff itself does —
+    /// and it was per oracle card until 2026-08-20, which stopped being defensible the moment a
+    /// different printing became a difference. A line asking for the Alpha Bolt over an
+    /// "already owned" earned from two M10 ones describes two different objects.
+    ///
+    /// **The second half is the arithmetic the figure strip does**, and it is why this is not
+    /// merely a matter of taste: `diffTotals` sums `ownedSpare` down the list, so an
+    /// oracle-wide answer on a plan holding two printings of one card counted the same binder
+    /// copies twice.
     #[test]
-    fn owned_spare_counts_every_printing_of_the_card() {
+    fn owned_spare_counts_this_printing_and_no_other() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
@@ -938,7 +1002,16 @@ mod tests {
 
         assert_eq!(
             theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
-            2
+            0,
+            "a different printing of the card is not this printing"
+        );
+
+        add(&conn, id, "bolt-m10", main, THEORY, 1);
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(
+            diff.iter().map(|r| r.owned_spare).collect::<Vec<_>>(),
+            vec![0, 2],
+            "each line answers for its own printing, so the strip's sum is 2 and not 4"
         );
     }
 

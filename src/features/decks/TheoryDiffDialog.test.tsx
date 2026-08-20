@@ -20,7 +20,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { diffTotals, TheoryDiffDialog } from "./TheoryDiffDialog";
 
 /**
- * A row as `deck_theory_diff` answers one: one **oracle card**, already grouped and already
+ * A row as `deck_theory_diff` answers one: one **printing**, already grouped and already
  * subtracted, naming the printing the theory row named.
  *
  * The three cards below are deliberately different shapes — priced, unpriced, and one the

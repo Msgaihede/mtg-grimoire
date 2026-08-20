@@ -1025,14 +1025,23 @@ export interface DeckFolder {
  * are excluded from *both* sides, so a card parked in either Maybeboard is neither wanted nor
  * owned for this purpose.
  *
- * The comparison is by **oracle card**, not by printing: needing a second Sol Ring is not
- * answered by the live list holding a different printing of one. An orphan — a row whose
- * printing has left `cards` — has no oracle id and is compared by its own id, which is as far
- * as the data honestly goes.
+ * The comparison is by **printing** — `deck_cards.card_id`, and it was the oracle card until
+ * 2026-08-20. A plan that names one Sol Ring is a plan for that piece of cardboard, and a
+ * different printing of it in the live list does not answer it. An orphan needs no special case
+ * under that rule: its `cardId` is its identity like everything else's.
+ *
+ * **Which pile a card is in is not compared at all.** Placement is not possession, so a card
+ * the two lists file differently is no difference, and each side is summed across its
+ * categories before they are subtracted — the row is captioned by the category the editor lists
+ * first purely so the shopping list reads. Not the finish either: a foil and a regular copy of
+ * one printing are two deck rows and **one** line here, summed, because `cardId` is what this
+ * list is keyed by.
  */
 export interface TheoryDiffRow {
-  /** The printing **the theory row names**, which is the printing the reader would be buying.
-   *  When the same card is filed in two theory categories this is the first row's printing. */
+  /** The printing **the theory row names**, which is the printing the reader would be buying —
+   *  and the whole of what makes two rows one line. Unique across the list, so it is what a
+   *  render keys by. When the same printing is filed in two theory categories this is the first
+   *  row's category. */
   cardId: string;
   name: string;
   /** The category the theory row is filed under — the pile this card is wanted *for*, which is
@@ -1049,8 +1058,11 @@ export interface TheoryDiffRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * Copies of this oracle card the collection holds that **no built deck has claimed** — the
-   * number that turns "I need two more Sol Rings" into "and one is in the box already".
+   * Copies of **this printing** the collection holds that **no built deck has claimed** — the
+   * number that turns "I need two more of these" into "and one is in the box already". Per
+   * printing because the comparison above is, which is also what keeps the strip's plain sum of
+   * this field honest: an oracle-wide answer would count one binder twice for a plan holding
+   * two printings of one card.
    *
    * **A display field, and never a term in an arithmetic.** It is deliberately not netted out
    * of {@link TheoryDiffRow.quantity}, least of all by `deckTheoryMissingToWishlist`:
@@ -2793,8 +2805,8 @@ export const ipc = {
   deckRedoApply: (deckId: number, auditId: number) =>
     invoke<void>("deck_redo_apply", { deckId, auditId }),
   /** What the plan wants and the deck does not have — see {@link TheoryDiffRow}. One
-   *  direction only, inactive categories excluded from both sides. `marketplace` prices the
-   *  shopping list, which is the whole point of drawing one. */
+   *  direction only, by printing, categories not compared, inactive ones excluded from both
+   *  sides. `marketplace` prices the shopping list, which is the whole point of drawing one. */
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
