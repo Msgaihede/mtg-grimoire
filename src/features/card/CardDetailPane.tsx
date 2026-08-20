@@ -1082,30 +1082,61 @@ function LangBadge({ lang }: { lang: string }) {
   );
 }
 
+/**
+ * Where this card may be played — the chips, under a word saying what they are.
+ *
+ * They sat bare under the prices until 2026-08-20, reading as a tail of the price block rather
+ * than a subject of their own, so this is a section now and it is built exactly like `Printings`:
+ * the same hairline, the same 12px uppercase heading. **"Formats", not "Legal formats"** — 3 461
+ * of the 116 712 cards carrying legality data (3.0%, measured 2026-08-20 over the dev corpus)
+ * show a *banned* or *restricted* chip, and Black Lotus shows eight of which seven are one or the
+ * other, so a heading promising "legal" would contradict the ink beneath it.
+ *
+ * The caption answers the other half of the same complaint. `legalityChips` drops every
+ * `not_legal` key before anything is drawn — a card keeps **11.3 of 23 formats on average** — so
+ * absence was the only thing saying "not legal here", and absence says it to nobody. One dim
+ * line, in the caption voice the sections either side of it already use (`pricesAsOf` above, the
+ * printings count below).
+ *
+ * Still `null` rather than an empty section when nothing survives the filter: **9 176 cards keep
+ * no key at all**, and a heading over no chips — or a caption explaining a total absence — would
+ * be the pane inventing a fact about a card that is not a card. The `NoLegalities` story holds
+ * that end.
+ */
 function Legalities({ card }: { card: CardDetail }) {
+  const headingId = useId();
   const chips = legalityChips(card.legalities);
   if (chips.length === 0) return null;
   return (
-    <ul aria-label="Format legality" className="flex flex-wrap gap-1">
-      {chips.map(({ format, status }) => (
-        <li
-          key={format}
-          className={cn(
-            "rounded-full border px-2 py-0.5 text-[0.7rem] capitalize",
-            STATUS_CLASS[status] ?? "border-border text-dim",
-          )}
-        >
-          {format}
-          {/* Never colour alone: a banned chip says "banned". "Legal" is the case that
-              needs no ink, so its word is there for a screen reader and nowhere else.
-              `lowercase` undoes the chip's `capitalize`, which would otherwise make it
-              "Commander Banned" — sentence case is the app's voice. */}
-          <span className={status === "legal" ? "sr-only" : "ml-1 lowercase opacity-80"}>
-            {status}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <section aria-labelledby={headingId} className="space-y-2 border-t border-border pt-3">
+      <h3 id={headingId} className="text-xs uppercase tracking-wide text-dim">
+        Formats
+      </h3>
+      {/* The list keeps a name of its own, and it is the more exact of the two: the heading says
+          what the section is about, `Format legality` says what the items in it *are*. A reader
+          moving list to list rather than heading to heading arrives here without the heading. */}
+      <ul aria-label="Format legality" className="flex flex-wrap gap-1">
+        {chips.map(({ format, status }) => (
+          <li
+            key={format}
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[0.7rem] capitalize",
+              STATUS_CLASS[status] ?? "border-border text-dim",
+            )}
+          >
+            {format}
+            {/* Never colour alone: a banned chip says "banned". "Legal" is the case that
+                needs no ink, so its word is there for a screen reader and nowhere else.
+                `lowercase` undoes the chip's `capitalize`, which would otherwise make it
+                "Commander Banned" — sentence case is the app's voice. */}
+            <span className={status === "legal" ? "sr-only" : "ml-1 lowercase opacity-80"}>
+              {status}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[0.7rem] text-dim">Formats not listed are not legal.</p>
+    </section>
   );
 }
 
@@ -1203,10 +1234,12 @@ function Printings({
   // What the groups *are*, in this mode's own word — `null` in `price`, which makes none.
   const noun = PRINTING_GROUP_BY_OPTIONS.find((option) => option.value === mode)?.noun ?? null;
   return (
-    // The rule separates "this card" from "every card like it", which is the pane's one
-    // real division. Set in the same hairline as the credit line below it rather than a
-    // heavier rule: three sections, two hairlines, no boxes. The heading is rendered while
-    // the list is still loading so the pane does not reflow around it when it arrives.
+    // The rule separates "this card" from "every card like it", which is the pane's deepest
+    // division — `Legalities` above draws the same one because a reader asking "where can I
+    // play this" has stopped reading the card too. Set in the same hairline as the credit line
+    // below rather than a heavier rule: every hairline in this pane is the one hairline, and
+    // no section is a box. The heading is rendered while the list is still loading so the pane
+    // does not reflow around it when it arrives.
     <section aria-labelledby={headingId} className="space-y-2 border-t border-border pt-3">
       {/* The heading and the control that reorders what it names, on one line — 32px of select
           against a 12px heading, so the row is the select's height and the words sit in it.
