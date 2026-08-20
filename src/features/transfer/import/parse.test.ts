@@ -403,3 +403,68 @@ describe("the format fixtures", () => {
     expect(count(EMPTY_HINT_LIST, / \/\/ /)).toBe(0);
   });
 });
+
+describe("a CSV", () => {
+  it("is recognised by its header row and read by column", () => {
+    const list = parseDecklist("Quantity,Name,Set,Collector number\n2,Lightning Bolt,LEA,161\n");
+    expect(list.lines).toHaveLength(1);
+    expect(list.lines[0]).toMatchObject({
+      quantity: 2,
+      name: "Lightning Bolt",
+      setCode: "LEA",
+      collectorNumber: "161",
+    });
+  });
+
+  it("carries the columns no decklist format has, for a destination that wants them", () => {
+    const list = parseDecklist("Quantity,Name,Condition,Purchase price\n1,Sol Ring,LP,2.5\n");
+    expect(list.lines[0].extra).toMatchObject({ condition: "LP", purchasePrice: "2.5" });
+  });
+
+  it("matches a header regardless of case and surrounding space", () => {
+    const list = parseDecklist(" quantity , NAME \n3,Forest\n");
+    expect(list.lines[0]).toMatchObject({ quantity: 3, name: "Forest" });
+  });
+
+  it("ignores a column it does not know, rather than refusing the file", () => {
+    const list = parseDecklist("Quantity,Name,Scryfall ID\n1,Sol Ring,abc-123\n");
+    expect(list.lines).toHaveLength(1);
+    expect(list.issues).toHaveLength(0);
+  });
+
+  it("refuses a file with no name column, in one sentence rather than 400", () => {
+    const list = parseDecklist("Quantity,Set\n1,LEA\n2,LTC\n");
+    expect(list.lines).toHaveLength(0);
+    expect(list.issues).toHaveLength(1);
+    expect(list.issues[0].reason).toMatch(/name/i);
+  });
+
+  it("reads the finish column as the marker every other format spells *F*", () => {
+    const list = parseDecklist("Quantity,Name,Finish\n1,Sol Ring,foil\n");
+    expect(list.lines[0].finish).toBe("foil");
+  });
+
+  it("leaves a list whose first line is not a header exactly as it was", () => {
+    // The one file-level judgement this parser makes, and it is made on the header alone.
+    const list = parseDecklist("2 Lightning Bolt\n1 Sol Ring\n");
+    expect(list.lines.map((l) => l.name)).toEqual(["Lightning Bolt", "Sol Ring"]);
+  });
+
+  it("does not mistake a one-column list for a header", () => {
+    // `Name` alone maps to one known header; two are required, one of which is the name.
+    const list = parseDecklist("Name\nSol Ring\n");
+    expect(list.lines.map((l) => l.name)).toEqual(["Name", "Sol Ring"]);
+  });
+
+  it("sets the section rather than a category name for a bracket-style pile word", () => {
+    // parse.ts's own correction: `Sideboard` in a Category column names one of the four seeded
+    // zones, so it must set `section`, not become a category called "Sideboard".
+    const list = parseDecklist("Quantity,Name,Category\n1,Path to Exile,Sideboard\n");
+    expect(list.lines[0]).toMatchObject({ section: "sideboard", categoryName: null });
+  });
+
+  it("keeps a free-form category name in the deck section", () => {
+    const list = parseDecklist("Quantity,Name,Category\n1,Sol Ring,Ramp\n");
+    expect(list.lines[0]).toMatchObject({ section: "deck", categoryName: "Ramp" });
+  });
+});

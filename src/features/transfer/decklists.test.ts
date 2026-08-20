@@ -294,22 +294,21 @@ describe("exporting a real deck", () => {
 /**
  * Text in, deck out, text out, deck in — over a real 105-line decklist rather than three cards.
  *
- * **Two formats are write-only and are excluded by name**, not by omission. CSV, because nothing
- * in `parse.ts` reads a comma-separated decklist and adding one would be a second grammar rather
- * than a rule inside the one there is. TCGplayer, because its line is addressed to a shopping
- * cart rather than to us: the set code sits in a bracket with the collector number *after* it,
- * and `parse.ts`'s `BRACKET` is anchored to the end of the line — so the tail is not a bracket to
- * that parser at all and lands in the card's name. `format.test.ts` measures that rather than
- * asserting it here. The exclusion is asserted, so dropping a format out of this table by
- * accident is a failure rather than a quietly smaller matrix.
+ * **One format is still write-only and is excluded by name**, not by omission: TCGplayer, because
+ * its line is addressed to a shopping cart rather than to us — the set code sits in a bracket with
+ * the collector number *after* it, and `parse.ts`'s `BRACKET` is anchored to the end of the line,
+ * so the tail is not a bracket to that parser at all and lands in the card's name. `format.test.ts`
+ * measures that rather than asserting it here. The exclusion is asserted, so dropping a format out
+ * of this table by accident is a failure rather than a quietly smaller matrix.
+ *
+ * **CSV rejoined this matrix** (Task 10): `parse.ts` now reads a CSV by its header row, and this
+ * is the strongest evidence that arm works — three real decklists, driven write-then-read.
  */
 describe("a real decklist round-trips through every format this app can read", () => {
-  const READABLE = EXPORT_FORMATS.filter(
-    (format) => format !== "csv" && format !== "tcgplayer",
-  );
+  const READABLE = EXPORT_FORMATS.filter((format) => format !== "tcgplayer");
 
-  it("excludes only the two write-only formats", () => {
-    expect(READABLE).toEqual(["plain", "mtgo", "arena", "moxfield", "archidekt"]);
+  it("excludes only the one write-only format", () => {
+    expect(READABLE).toEqual(["plain", "mtgo", "arena", "moxfield", "archidekt", "csv"]);
   });
 
   it.each(READABLE)("keeps every card and copy through %s", (format) => {

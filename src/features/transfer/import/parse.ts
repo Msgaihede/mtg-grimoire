@@ -17,9 +17,51 @@
  * never aborts the parse. The only lines that leave no trace are the ones making no claim —
  * blanks and comments.
  */
-// The only import here, and it is a **type**. This file stays text in, data out: no React, no
-// hook, no IPC — which is what lets `parse.test.ts` drive every rule as a pure function.
+// `parseCsv` is a value import — the only non-type one here — and it is still text in, data
+// out: no React, no hook, no IPC, which is what lets `parse.test.ts` drive every rule as a pure
+// function.
 import type { DeckFinish } from "@/lib/ipc";
+import { parseCsv } from "../csv";
+import { TRANSFER_FIELDS, TRANSFER_FIELD_IDS, type TransferFieldId } from "../fields";
+
+/**
+ * A CSV header maps to field ids by `csvHeader`, case- and space-insensitively.
+ *
+ * Built from the registry rather than written out, so a field added there is readable back
+ * without a second edit here — which is the whole reason the registry carries a `csvHeader` at
+ * all rather than the writer spelling one inline.
+ */
+const HEADER_TO_FIELD = new Map<string, TransferFieldId>(
+  TRANSFER_FIELD_IDS.map((id) => [normalizeHeader(TRANSFER_FIELDS[id].csvHeader), id]),
+);
+
+function normalizeHeader(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Is the first row a header?
+ *
+ * **Two known columns, one of which is the name.** One is not enough: a plain list whose first
+ * card happens to be called `Name` would otherwise be read as a header over a nameless file.
+ * This is the only file-level judgement in this parser, and every line after it is still read
+ * by the per-line rules — a file whose first row is not a header is read exactly as before.
+ */
+function csvHeaderOf(row: readonly string[]): TransferFieldId[] | null {
+  if (row.length < 2) return null;
+  const mapped = row.map((cell) => HEADER_TO_FIELD.get(normalizeHeader(cell)) ?? null);
+  const known = mapped.filter((id) => id !== null);
+  if (known.length < 2) return null;
+  if (!known.includes("name")) return null;
+  return mapped as TransferFieldId[];
+}
+
+/** Two or more known column names, whatever they are — the test `csvHeaderOf` makes before it
+ *  insists on a name. */
+function nearlyAHeader(row: readonly string[]): boolean {
+  if (row.length < 2) return false;
+  return row.filter((cell) => HEADER_TO_FIELD.has(normalizeHeader(cell))).length >= 2;
+}
 
 /**
  * Which of the deck's four zones a line is in — **the fixed word the rules read**, beside
@@ -71,6 +113,9 @@ export interface ParsedLine {
   /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's
    *  `is_active = 0`. */
   excluded: boolean;
+  /** Every column a CSV named that this app recognises, verbatim. `{}` for every other format —
+   *  a decklist line has no channel for a condition or a purchase price. */
+  extra: Partial<Record<TransferFieldId, string>>;
 }
 
 /** A line that named nothing this could import, kept so the preview can show it. */
@@ -353,12 +398,115 @@ function namesASection(rows: readonly string[], index: number, trimmed: string):
 }
 
 /**
+ * A CSV grid into the same lines every other format produces.
+ *
+ * `extra` carries every recognised column verbatim — including the ones no decklist format has
+ * a channel for. The deck planner never looks at it; the collection's reads condition, purchase
+ * price and the rest out of it. Keeping them on the line rather than in a second return value is
+ * what lets one `ParsedList` serve four destinations.
+ */
+function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null)[]): ParsedList {
+  const lines: ParsedLine[] = [];
+  const issues: ParseIssue[] = [];
+
+  for (let r = 1; r < grid.length; r += 1) {
+    const row = grid[r];
+    const lineNumber = r + 1;
+    const raw = row.join(",");
+    const cell = (id: TransferFieldId): string => {
+      const at = header.indexOf(id);
+      return at === -1 ? "" : (row[at] ?? "").trim();
+    };
+
+    const name = cell("name");
+    if (name === "") {
+      // A wholly blank row is a spreadsheet's trailing line, not a claim about a card.
+      if (row.every((v) => v.trim() === "")) continue;
+      issues.push({ lineNumber, raw, reason: "this row names no card" });
+      continue;
+    }
+    const quantityCell = cell("quantity");
+    const quantity = quantityCell === "" ? 1 : Number.parseInt(quantityCell, 10);
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      issues.push({ lineNumber, raw, reason: `\`${quantityCell}\` is not a count of copies` });
+      continue;
+    }
+
+    const extra: Partial<Record<TransferFieldId, string>> = {};
+    for (const id of header) {
+      if (id === null) continue;
+      const value = cell(id);
+      if (value !== "") extra[id] = value;
+    }
+
+    const setCode = cell("setCode");
+    const finish = cell("finish").toLowerCase();
+    const categoryCell = cell("category") === "" ? null : cell("category");
+    // **A Category cell goes through the same section vocabulary a bracket does** — parse.ts
+    // already does exactly this for a bracket's first entry. `Sideboard` names one of the four
+    // seeded zones, so it must set the SECTION rather than becoming a category called
+    // "Sideboard" that `category_for_name` would then find-or-create by name anyway.
+    const knownSection =
+      categoryCell === null ? null : (SECTIONS.get(categoryCell.toLowerCase()) ?? null);
+    lines.push({
+      lineNumber,
+      raw,
+      quantity,
+      name,
+      setCode: setCode === "" ? null : setCode.toUpperCase(),
+      collectorNumber: cell("collectorNumber") === "" ? null : cell("collectorNumber"),
+      section: knownSection ?? "deck",
+      // Null whenever the section is not `deck` — `ParsedLine`'s stated invariant, and what
+      // keeps plan.ts's precedence chain three rungs rather than four. Only a word the section
+      // vocabulary has never heard of lands here.
+      categoryName: knownSection === null ? categoryCell : null,
+      finish: finish === "foil" ? "foil" : finish === "etched" ? "etched" : null,
+      excluded: false,
+      extra,
+    });
+  }
+  // `ParsedList` carries four fields, not two. `totalCards` is copies rather than rows, and
+  // `suggestedName` is Arena's `About` block — a CSV has no such thing and answers null.
+  return {
+    lines,
+    issues,
+    totalCards: lines.reduce((n, l) => n + l.quantity, 0),
+    suggestedName: null,
+  };
+}
+
+/**
  * Read a pasted decklist.
  *
  * Never throws and never returns partial nonsense: every line ends up in `lines`, in
  * `issues`, or was blank or a comment.
  */
 export function parseDecklist(text: string): ParsedList {
+  // The one file-level judgement this parser makes, and it is made on the header alone: a CSV
+  // is detected before any per-line rule runs, and every line after that header is still read
+  // by column rather than by the per-line grammar below.
+  const grid = parseCsv(text);
+  const header = grid.length > 0 ? csvHeaderOf(grid[0]) : null;
+  if (header !== null) return parseCsvGrid(grid, header);
+
+  // A header this app *nearly* recognises — two or more known columns but no name — is a CSV
+  // somebody exported from somewhere else, and reading it line by line would produce one issue
+  // per row saying nothing useful. One sentence is the honest answer.
+  if (grid.length > 0 && nearlyAHeader(grid[0])) {
+    return {
+      lines: [],
+      issues: [
+        {
+          lineNumber: 1,
+          raw: grid[0].join(","),
+          reason: "this looks like a spreadsheet, but no column names the card",
+        },
+      ],
+      totalCards: 0,
+      suggestedName: null,
+    };
+  }
+
   const lines: ParsedLine[] = [];
   const issues: ParseIssue[] = [];
   let section: SectionKind = "deck";
@@ -503,6 +651,9 @@ export function parseDecklist(text: string): ParsedList {
       categoryName,
       finish: decorated.finish,
       excluded,
+      // A decklist line has no channel for a condition or a purchase price — only a CSV's
+      // column reader ever fills this.
+      extra: {},
     });
   }
 
