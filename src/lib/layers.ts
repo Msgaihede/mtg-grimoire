@@ -118,6 +118,19 @@ export const LAYER = {
    * name, which is exactly the reading a `LAYER` entry exists to make impossible.
    */
   overlay: "z-45",
+  /**
+   * The app's one tooltip, over anything a view or a dialog draws.
+   *
+   * **Above {@link LAYER.overlay} because a hint is shown over the deck editor's dialogs** — a
+   * control inside a modal has as much to explain as one outside it, and a tooltip painted behind
+   * the scrim would be a tooltip that never appears. Below {@link LAYER.gate} because
+   * `SyncProgress` takes the window: a hint floating over it would describe a control the reader
+   * cannot see or reach.
+   *
+   * One rung and one panel — the provider holds at most one open tooltip, so there is no second
+   * one for a number to order against.
+   */
+  tooltip: "z-46",
   /** `SyncProgress`'s full-window takeover, over everything. */
   gate: "z-50",
 } as const;

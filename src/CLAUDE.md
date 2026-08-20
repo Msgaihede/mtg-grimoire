@@ -92,6 +92,14 @@ Every one of these has its measurement and its story in
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is
   `pointer-events-auto` against its wrapper's `none` for exactly this reason; it is inside the
   enclosing button, so a click on it still opens the card.
+- **A hint is `useTooltip()`'s spread, never a `title` attribute or an SVG `<title>`.** One
+  `fixed` panel mounts at the app root (`LAYER.tooltip`) because a virtualised row is both
+  `position: absolute` and transformed, which caps a nested `z-index` *and* makes the row the
+  containing block for a `fixed` descendant — root-mounting is what escapes both at once. The
+  sweep off `title` is in progress rather than finished, so both still appear in the app today;
+  new and changed hints bind through `useTooltip()`. Full rule, the three ways a site is
+  classified, and the `pointer-events`/Escape/no-op-provider traps carried into the new API:
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
   credited** (Scryfall's image policy). A `grid`/`thumb`/`display` image carries the printed
   credit itself and needs nothing. Never distort, blur, recolour or watermark a card image, and

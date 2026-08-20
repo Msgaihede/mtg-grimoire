@@ -57,6 +57,7 @@ import {
   dropTargetForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { ToggleChip } from "@/components/FilterChips";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -354,6 +355,7 @@ function CategoryRow({
   /** Where this category's cards could go instead of being deleted with it. */
   others: readonly DeckCategory[];
 }) {
+  const tip = useTooltip();
   const rowRef = useRef<HTMLLIElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
@@ -447,7 +449,7 @@ function CategoryRow({
             }
           }}
           aria-label={`Move ${category.name}, ${index + 1} of ${total}`}
-          title="Drag to reorder, or press the up and down arrow keys"
+          {...tip("Drag to reorder, or press the up and down arrow keys")}
           className={cn(
             "shrink-0 cursor-grab rounded-sm text-dim",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",

@@ -5,6 +5,15 @@ import { describe, expect, it } from "vitest";
  * and `?raw` is how `iconFont.test.ts` already reads the files it asserts against.
  */
 import css from "@/index.css?raw";
+/**
+ * The same trick, for the two files the mount sweep at the bottom of this file reads.
+ * `App.tsx` is under `SOURCES`' glob already, but `.storybook/preview.tsx` is not — the glob
+ * below is scoped to `/src/**`, on purpose, so the stylesheet's Tailwind scan does not also
+ * sweep the workbench's own source — and a second `?raw` import is what the top of this file
+ * already reaches for rather than `node:fs`.
+ */
+import appSource from "@/App.tsx?raw";
+import previewSource from "../../.storybook/preview.tsx?raw";
 
 /**
  * Every source file in the app, as text, for the sweep below.
@@ -186,5 +195,46 @@ describe("motion vocabulary", () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * **The two mounts that make `useTooltip` do anything.**
+ *
+ * The hook falls back to a no-op API when no provider is above it — deliberately, because after
+ * the sweep most surfaces bind a tooltip and every one of them is also a story and a test that
+ * renders it alone, so a throw would be `stories.test.tsx` red for everybody. The cost of that
+ * choice is that a dropped provider is *silent*: every hint in the app, or every hint in the
+ * workbench, simply stops appearing. This is what makes it loud.
+ */
+describe("the tooltip provider is mounted where it has to be", () => {
+  it("wraps the app", () => {
+    expect(appSource).toContain("<TooltipProvider>");
+  });
+
+  it("wraps every story too", () => {
+    expect(previewSource).toContain("<TooltipProvider>");
+  });
+
+  it("mounts the tooltip provider outside the context menu's, in the app", () => {
+    // Not a style rule. `ContextMenuProvider` renders its menu panel as a *sibling* of its
+    // children, so a tooltip context nested inside it would wrap every view and none of the
+    // menu's own rows — and a row that binds a tooltip would get the no-op API, silently.
+    //
+    // `toBeGreaterThan(-1)` matters on its own: without it, a *deleted* provider's `indexOf`
+    // of -1 is "less than" everything, and this assertion would pass on the exact failure —
+    // a dropped `TooltipProvider` — it exists to catch. The presence test above already
+    // covers that failure; this one is only for the ordering.
+    expect(appSource.indexOf("<TooltipProvider>")).toBeGreaterThan(-1);
+    expect(appSource.indexOf("<TooltipProvider>")).toBeLessThan(
+      appSource.indexOf("<ContextMenuProvider>"),
+    );
+  });
+
+  it("mounts the tooltip provider outside the context menu's, in the workbench too", () => {
+    expect(previewSource.indexOf("<TooltipProvider>")).toBeGreaterThan(-1);
+    expect(previewSource.indexOf("<TooltipProvider>")).toBeLessThan(
+      previewSource.indexOf("<ContextMenuProvider>"),
+    );
   });
 });
