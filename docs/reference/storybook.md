@@ -49,9 +49,12 @@ it says `tags: ["autodocs"]`.
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **twelve** faults — `busy`/`syncError`/
-  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/`errorLog`/
-  `feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`. Saying nothing gets `starter` with no
+  seeds `empty`/`starter`/`needsReview`/`large`, **fifteen** faults — `busy`/`syncing`/
+  `syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/
+  `errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/`imageUrisMissing`/
+  `exportWriteError`. (Re-counted 2026-08-20: this line said _twelve_ while `imageUrisMissing`
+  and `exportWriteError` had both been in the union for a feature each, which is the third time
+  this number has rotted.) Saying nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
   refusal rather than what one mocked call returns. **`indexCold` is one of the two that are not
   a failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
@@ -85,7 +88,14 @@ it says `tags: ["autodocs"]`.
   `stale: true` — and both tag reads answer an empty slug list for every id, so `autoCategoryFor`
   files by type line. It is applied by emptying the *rows* in `installWorld` (the `errorLog`
   fault's shape, inverted) rather than by branching in the handlers, which is what lets a story
-  press Refresh in that state and watch the piles regroup. **`oracleTagsFetchError`** is
+  press Refresh in that state and watch the piles regroup.
+  **`syncing` arrived last, with the Settings page's four clears**, and it is the narrowest fault
+  here: it reaches `cache_clear` and nothing else. That command sweeps `data/images/` and
+  `data/tmp/`, and the second of those is where the corpus download puts 77 MB that the ingest
+  reads back — so the crate refuses the whole command rather than skipping one directory, and
+  refuses it *before* the write connection is asked for, which is why a mid-sync story cannot be
+  told with `busy`. The three destructive clears beside it are unaffected by it, deliberately.
+  **`oracleTagsFetchError`** is
   `feedFetchError` one dataset over: `oracle_tags_refresh` refuses, the taxonomy already ingested
   **stays**, and the reason goes to `error_log` — a refusal a story has to be able to show
   without the screen behind it changing at all, because nothing about categorising a card may

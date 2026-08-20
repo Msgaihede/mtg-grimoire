@@ -1026,3 +1026,24 @@ describe("ipcError", () => {
     expect(ipcError({ code: 42 })).toContain('{"code":42}');
   });
 });
+
+/**
+ * The four clears take **no arguments at all**, so the only half of the contract that can drift
+ * is the command name — and a name Rust does not register is a runtime rejection with no type
+ * error anywhere. These are irreversible commands reached from one button each, so "it silently
+ * did nothing" and "it silently did it to the wrong table" are both worth a spelling test.
+ */
+describe("the Settings clears name the commands `reset.rs` registers", () => {
+  it.each([
+    ["collectionClear", "collection_clear"],
+    ["wishlistClear", "wishlist_clear"],
+    ["decksClear", "decks_clear"],
+    ["cacheClear", "cache_clear"],
+  ] as const)("%s invokes %s with no arguments", async (method, command) => {
+    invoke.mockResolvedValue({});
+
+    await ipc[method]();
+
+    expect(invoke).toHaveBeenCalledWith(command);
+  });
+});

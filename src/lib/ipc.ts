@@ -2491,6 +2491,46 @@ export interface ErrorEntry {
   count: number;
 }
 
+/**
+ * What emptying the collection took with it — `src-tauri/src/reset.rs`.
+ *
+ * `allocations` is the number nobody predicts and is why this is a shape rather than a count:
+ * `deck_allocations.collection_entry_id` cascades from `collection_entries`, so every deck's
+ * reservation against an owned copy goes with the collection. The decks themselves stay.
+ */
+export interface CollectionCleared {
+  entries: number;
+  allocations: number;
+}
+
+/**
+ * What emptying the decks took with it.
+ *
+ * `folders` is its own number because the schema keeps folders their own thing —
+ * `decks.folder_id` is `ON DELETE SET NULL`, so clearing them is a second statement the
+ * backend takes deliberately. `covers` is files beside the database, not rows.
+ */
+export interface DecksCleared {
+  decks: number;
+  folders: number;
+  covers: number;
+}
+
+/**
+ * What the cache sweep freed.
+ *
+ * `failed` is not an error: a file another thread holds open cannot be deleted on Windows, and
+ * the honest answer is the count that went plus the count that would not. The panel says the
+ * second number only when it is non-zero.
+ */
+export interface CacheCleared {
+  files: number;
+  bytes: number;
+  /** `image_cache` rows dropped — the bookkeeping that vouched for those pictures. */
+  rows: number;
+  failed: number;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /**
@@ -3135,6 +3175,30 @@ export const ipc = {
   errorLogList: (limit: number) => invoke<ErrorEntry[]>("error_log_list", { limit }),
   /** Empty the log. Answers how many rows went. */
   errorLogClear: () => invoke<number>("error_log_clear"),
+  /**
+   * The four Settings can throw away — `src-tauri/src/reset.rs`.
+   *
+   * **The first three are irreversible and write no history**, which is not an oversight: the
+   * deck audit log is per-deck and cascades away with the decks it describes, so there is
+   * nowhere for a wipe to be recorded. The typed confirmation in `ConfirmDialog` is the whole
+   * of the safety, and it is this side's — the backend takes no `confirm` argument, because a
+   * fence the caller passes is a fence the caller can forget.
+   *
+   * Every one of them is a **table**, not a row: none takes an id, and none can be scoped.
+   */
+  collectionClear: () => invoke<CollectionCleared>("collection_clear"),
+  wishlistClear: () => invoke<number>("wishlist_clear"),
+  decksClear: () => invoke<DecksCleared>("decks_clear"),
+  /**
+   * The fourth, and the one that is not destructive: `data/images/` and `data/tmp/`, both of
+   * which the app refetches on demand. It never touches `data/covers/` — a deck cover is a
+   * picture the reader chose — and never a table but `image_cache`.
+   *
+   * **Rejects while a sync is running**, in a sentence meant to be shown: the corpus download
+   * puts 77 MB in `data/tmp/` and reads it back, so a sweep landing between the two fails a
+   * job the reader is watching a progress bar for.
+   */
+  cacheClear: () => invoke<CacheCleared>("cache_clear"),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /**
    * Every release the last check saw, newest first — the version history.
