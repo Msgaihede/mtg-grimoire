@@ -195,8 +195,31 @@ pasting that into Moxfield would get a deck with a duplicate.
 So: **before writing, entries are folded on the identity the chosen field set can express.** Two
 rows that differ only in a field nobody selected become one row with the quantities summed. Turn
 Condition on in a CSV and they separate again, because now the file can say why they are two.
-This is one function, `foldForFields(cards, fields)`, and it is the single most testable rule in
-the export half.
+This is one function, `foldForFields(cards, fields, discriminator?)`, and it is the single most
+testable rule in the export half.
+
+**The key must include every fact the writer branches on, not merely the fields the reader
+picked** — the correction that came out of building it (2026-08-20). `sectionOf` reads
+`categoryKind` and `categoryActive`, and neither is a selectable field: `category` maps to
+`categoryName` alone. So a fold keyed on the chosen fields put the same printing's **Sideboard**
+and **Main deck** rows into one row, which then inherited the first card's category — and the
+sideboard copy was written under `Deck`. That is not a formatting difference; it moves cards
+between zones of the exported deck, and no test could see it because the suite had no fixture
+with two same-name deck rows differing only outside a format's default set.
+
+The rule, stated properly: **fold may only merge rows the file itself cannot tell apart.** A
+format that writes sections *can* tell a Sideboard row from a Deck row, so the section is part of
+the key even when the reader has switched the category field off. In practice that is a
+discriminator per format — the section for `arena`, `moxfield` and `mtgo`; `[categoryName,
+categoryActive]` for `archidekt`, which groups by the one and writes `{noDeck}` from the other;
+nothing for `plain`, `tcgplayer` and `csv`, which are flat and branch on nothing structural.
+
+**Folding *within* a section stays, and is the point.** A foil and a regular copy of one printing
+exported to Arena fold to one summed line, because Arena has nowhere to record a finish and two
+identical lines are a malformed decklist. The same pair exported to Moxfield stays two lines,
+because Moxfield has the `*F*` marker to tell them apart with. That is this section's rule read
+in the other direction, and it is the one place where this feature deliberately writes something
+different from what the app wrote before it.
 
 ### 5.4 What "the list" means
 
