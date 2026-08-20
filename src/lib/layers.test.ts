@@ -30,7 +30,11 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
     expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.dragTray));
     expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.overlay));
-    expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.gate));
+    // A tooltip is shown over the deck editor's dialogs, so it outranks the scrim they draw at
+    // `overlay` — and it stays under `gate` because `SyncProgress`'s full-window takeover must
+    // still cover a hint describing a control the reader can no longer see.
+    expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.tooltip));
+    expect(numberOf(LAYER.tooltip)).toBeLessThan(numberOf(LAYER.gate));
   });
 
   /**

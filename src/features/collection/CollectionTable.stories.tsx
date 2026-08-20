@@ -270,11 +270,12 @@ export const NeedsReview: Story = {
     await expect(row.getByText(usdPrice(42.19))).toBeInTheDocument();
     // **Six cells, not seven.** The band is drawn *inside* the name's cell rather than beside
     // it, because a `<p>` among a row's cells is not a cell and what is not a cell is never
-    // announced. Found by its `title`, which is the same sentence: the band's own element also
-    // holds the "Needs review:" prefix, so its text is not the sentence on its own.
+    // announced. Found by its own text: Testing Library's `getNodeText` concatenates only
+    // *direct* text-node children, so the "Needs review:" prefix `<span>` beside it is excluded
+    // and this matches the band's element exactly, the same element the tooltip is bound to.
     const cells = row.getAllByRole("cell");
     await expect(cells).toHaveLength(6);
-    await expect(canvas.getByTitle(UNFOLDABLE).closest('[role="cell"]')).toBe(cells[0]);
+    await expect(row.getByText(UNFOLDABLE).closest('[role="cell"]')).toBe(cells[0]);
     // The sentence reaches anything that reads text, clip or no clip — the band is one line and
     // this one is 182 characters, of which the *second* half is what to do about it. The
     // tooltip is what makes that half reachable by eye; `toHaveTextContent` is what proves it
