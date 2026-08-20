@@ -135,11 +135,20 @@ function columnsFor(
       cell: (row) => (
         <>
           {finishLabel(row.finish)} ·{" "}
-          {/* The grade as it is printed on the listing the card came from, with the words one
-            hover — or one screen reader — away. */}
-          <abbr title={conditionLabel(row.condition)} className="no-underline">
+          {/* Not like this table's other tooltips (spec §4, "the one site that is not a
+            tooltip"): on `<abbr>`, `title` is the standard HTML expansion mechanism rather
+            than decoration, and `aria-label` on this roleless element is not reliably
+            announced. So the expansion also rides as `sr-only` text right beside the
+            abbreviation — text is the one route to assistive tech that always works — and the
+            hover/focus panel is bound separately, with `describes: false` so it does not also
+            wire `aria-describedby` onto a sentence the accessibility tree already has. */}
+          <abbr
+            className="no-underline"
+            {...tip(conditionLabel(row.condition), { describes: false })}
+          >
             {row.condition}
           </abbr>
+          <span className="sr-only"> ({conditionLabel(row.condition)})</span>
         </>
       ),
     },
