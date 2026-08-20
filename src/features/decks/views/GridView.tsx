@@ -17,7 +17,7 @@ import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { RuleBreakMark, TagDot } from "../CardMarks";
+import { RuleBreakMark, TagDot, TheoryMatchMark } from "../CardMarks";
 import {
   DECK_CARD_VARIANT,
   deckCardBodyProps,
@@ -37,6 +37,7 @@ import {
   type DeckCardActions,
 } from "../cardControl";
 import { deckCardSlot } from "../dnd";
+import { matchesTheory } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -88,6 +89,7 @@ export function GridView({
   groups,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -99,6 +101,10 @@ export function GridView({
    *  tile's own unit price. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
+   *  whole like `violations` beside it. `undefined` for a deck with no plan, and on the plan
+   *  itself. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -165,6 +171,7 @@ export function GridView({
           group={group}
           marketplace={marketplace}
           violations={violations}
+          theoryMatches={theoryMatches}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -182,6 +189,7 @@ function GridGroup({
   group,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -191,6 +199,8 @@ function GridGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Handed through to the tiles — see {@link GridView}'s own props. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
@@ -246,6 +256,7 @@ function GridGroup({
               card={card}
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+              inTheory={matchesTheory(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardSlot(card.categoryId, card.cardId, card.finish) === selectedSlot}
@@ -287,6 +298,7 @@ function GridCard({
   card,
   currency,
   ruleBreakText,
+  inTheory,
   onSelect,
   actions,
   selected,
@@ -297,6 +309,9 @@ function GridCard({
   /** How the tile's foot writes the row's one unit price. */
   currency: Currency;
   ruleBreakText: string | null;
+  /** The deck's plan asks for this row too — resolved by the group, so a tile is handed a
+   *  boolean rather than a set to look itself up in. */
+  inTheory: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** This is the card the pane is open on. */
@@ -358,7 +373,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText)}
+        aria-label={deckCardName(card, ruleBreakText, inTheory)}
         {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
         // Inset, for the stacked card's reason: the button holds a face that clips its own
@@ -433,6 +448,38 @@ function GridCard({
             </span>
           </span>
 
+          {/* The plan's tick, in the corner this wall does **not** otherwise own.
+              `src/CLAUDE.md`'s standing rule is that top-right belongs to `FoilOverlay`'s chip
+              and a surface's own marks take the corners it leaves — and this is the one mark
+              that cannot honour it, because the same fact is drawn in the same corner on the
+              stack, where the chip is switched off, and a mark that changed corners between two
+              drawings of one deck would be a mark nobody could find twice.
+
+              So the chip keeps the corner and the tick **stacks under it**, on the one card in
+              four that has a chip at all. `1.5rem` is that chip's own box measured rather than
+              guessed: `FinishMark` and `GameChangerMark` are `0.75rem` glyphs in `py-[0.125rem]`
+              — 16px — plus the 4px inset above it and 4px of gap, every term scaled by the same
+              `--mark-scale` the chip is. The condition has to be spelled the way `FoilOverlay`
+              spells it (`finish !== null || gameChanger`), because a chip is drawn for **either**
+              fact and reading only the finish would put the tick under an empty corner on every
+              non-foil game changer. */}
+          {inTheory && (
+            <span
+              className={cn(
+                "absolute right-[calc(0.25rem*var(--mark-scale,1))]",
+                playedFinish(card.finish, card.finishes) !== null || card.gameChanger === true
+                  ? "top-[calc(1.5rem*var(--mark-scale,1))]"
+                  : "top-[calc(0.25rem*var(--mark-scale,1))]",
+              )}
+            >
+              {/* The tile's own quantity chip, not the stack's banner — see the component. */}
+              <TheoryMatchMark variant="chip" />
+            </span>
+          )}
+
+          {/* Bottom-left, opposite the tick above — `CardMarks.tsx` has why the two must never
+              share a corner. This wall has drawn it here all along; it is the **stack** that
+              moved its copy down to match, on 2026-08-20. */}
           {ruleBreakText !== null && (
             <RuleBreakMark
               text={ruleBreakText}

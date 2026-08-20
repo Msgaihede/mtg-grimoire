@@ -554,6 +554,44 @@ reader to configure the deck they had just made; it now asks all of them.
   handed the reader was two identical lists with no way to tell which one they were editing.
   `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
   plan".
+- **The Live list marks which of its cards are the plan, and that mark is `theoryMatch.ts`.** A
+  live list is what the reader has actually sleeved up; the one thing it cannot say about itself is
+  which rows are the deck they designed and which are the proxies and stand-ins waiting to be
+  replaced. `TheoryMatchMark` — a tick in `CountTag`'s own banner, top-right — says it, on all four
+  views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
+  **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
+  sleeved into Main deck is still the card that was planned, and a mark that went dark because a
+  pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
+  `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
+  `foil` against a live row the reader never said anything about.
+  **The grain agrees with `deck_theory_diff`, which reached it independently the same day** —
+  that command groups on the exact card now, finish included, and `TheoryDiffDialog`'s `rowKey` is
+  the same pair with a `|` where this uses a space. Keep the two in step if either moves.
+  **What is not shared is the question, and neither is derivable from the other.** The shopping
+  list subtracts *quantities* and answers "what would I have to buy"; this answers "is the card in
+  front of me the one I planned". A card **fully acquired is absent from the diff and still in the
+  plan**; a card half-acquired is on the diff *and* in the plan. So the mark cannot be read off the
+  diff in either direction, which is the whole reason it needs the plan's rows.
+  **It is `deckTheorySlots`, and it is emphatically not a second `deck_get` of the other
+  variant.** That read was deleted from `DeckEditor` on 2026-08-20 and `DeckEditor.test.tsx` pins
+  the deletion — *nothing may call `deckGet` for the list the reader is not looking at* — and both
+  halves of that decision are honoured rather than argued with. The **duplicate rule** half does
+  not apply: what was removed re-implemented the comparison `deck_theory_diff` owns (it counted
+  disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
+  twice), while this asks for rows no command answers. The **cost** half is answered by the
+  command: two columns of one indexed scan, no join to `cards`, no prices, no allocation roll-up,
+  no marketplace — against a `deck_get` that does all four. It is mounted only when
+  `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
+  nothing at all.
+  `undefined` rather than an empty set is the other distinction `theoryMatchSet` keeps: no plan is
+  not the same statement as a plan that wants none of this.
+  **What moved to make room: the `RULE BREAK` mark, out of the stacked card's top-right corner and
+  down to its bottom-left** (2026-08-20), where `GridView` had always drawn it. A tick is the one
+  glyph a reader could take for "this card is fine", so `CardMarks.tsx`'s four separations stopped
+  being an observation and became a constraint — and **place** is the one a reader takes in before
+  they have read either mark. The stack's offset is the only sum on that card mixing a scaled term
+  with a fixed one (`0.25rem × --mark-scale + 4px`): the 4px is `STACK_DATA_RISE`, which does not
+  scale, so a wholly scaled offset clears the foot at 1× and hides behind it at 0.5×.
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.
