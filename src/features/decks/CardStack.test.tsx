@@ -24,6 +24,7 @@ import {
   stackDataHeight,
   stackHeight,
   stackImageHeight,
+  stackLiftRoom,
 } from "./CardStack";
 import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";
@@ -131,6 +132,43 @@ describe("CardStack geometry", () => {
     for (const n of [1, 2, 5, 17]) expect(stackHeight(n)).toBe(34 * n + 293);
     // The last card's bottom edge, with the slack under it.
     expect(stackHeight(5) - (STACK_ADVANCE * 4 + STACK_CARD_HEIGHT)).toBe(STACK_LIFTED_MARGIN);
+  });
+
+  /**
+   * **What the fixed height costs, stated as a number a caller can reserve.**
+   *
+   * The list keeps its height so a pile does not resize under the pointer, and the reflow leaves
+   * the box instead. `stackLiftRoom` is how much of it leaves, and the two identities below are
+   * why it can be trusted: it is the collapsed margin read from the other side, and it is one
+   * card's step less the slack the height already carries.
+   *
+   * Live on 2026-08-20 those 285px were the second scrollbar — the flowing box's own overflow,
+   * beside the editor's page scroller. `StackView` reserves this at its foot; the assertion that
+   * it does is in `views.test.tsx`.
+   */
+  it("says how far an open card's tail leaves the box", () => {
+    expect(stackLiftRoom()).toBe(STACK_CARD_HEIGHT - STACK_ADVANCE);
+    expect(stackLiftRoom()).toBe(285);
+    // The distance out is the distance the collapsed margin pulled it in — the same number, one
+    // sign apart, which is what makes this a property of the stack rather than a second constant.
+    expect(stackLiftRoom()).toBe(-STACK_COLLAPSED_MARGIN);
+    // One step down the stack is 293px and the list's height already holds 8 of them.
+    expect(stackLiftRoom() + STACK_LIFTED_MARGIN).toBe(STACK_LIFTED_MARGIN - STACK_COLLAPSED_MARGIN);
+  });
+
+  /** A bigger card leaves the box by more, at every stop, and the zoom defaults like the rest. */
+  it("scales the lift room with the card, at every zoom", () => {
+    expect(stackLiftRoom()).toBe(stackLiftRoom(DEFAULT_ZOOM));
+    for (const zoom of ZOOM_STEPS) {
+      expect(stackLiftRoom(zoom)).toBe(stackCardHeight(zoom) - stackAdvance(zoom));
+      expect(stackLiftRoom(zoom)).toBe(-stackCollapsedMargin(zoom));
+      // Always positive, at both ends of the ladder: an advance that reached the card's height
+      // would mean nothing ever left the box, and would stack the pile the wrong way round.
+      expect(stackLiftRoom(zoom)).toBeGreaterThan(0);
+    }
+    const rooms = ZOOM_STEPS.map((zoom) => stackLiftRoom(zoom));
+    expect(rooms).toEqual([...rooms].sort((a, b) => a - b));
+    expect(new Set(rooms).size).toBe(ZOOM_STEPS.length);
   });
 
   it("draws no box for a group with nothing in it", () => {

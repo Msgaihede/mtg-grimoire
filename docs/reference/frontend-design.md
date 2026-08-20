@@ -1129,10 +1129,43 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     there reaches it rather than the pile painted underneath.
   - **The one horizontal case the entries above reserve still behaves, and is still contained.**
     `overflow-x-auto` replaces `overflow-auto` on all three views: it implies `overflow-y: auto`,
-    which can never find anything to scroll in a box with no height of its own. At 1280×800 and
+    which **was claimed here to have nothing it could ever scroll** — see the 2026-08-20 entry
+    below, which is the day that turned out to be false in both of its clauses. At 1280×800 and
     2× zoom the rail simply wraps and nothing overflows either axis; at **1024×600** and 2×, a
     448px column in a 346px view overflowed by **88px** — inside the view, with the page, `main`
     and the document all at **0**.
+- **The second scrollbar survived that pass in the one state it never measured — a card open —
+  and `StackView` now reserves the room instead of scrolling it** (found and fixed 2026-08-20,
+  driven at `npm run tauri dev`, a **debug** build, at 1400×1300 and 1280×800). Every reading
+  above was taken with the deck at rest, and the implied rule — "a box with no height of its own
+  is never taller than its own content" — is wrong twice:
+  - **The box does get a height of its own.** `StackView`'s root is `h-full` off a desk row that
+    is `flex-1` in the editor's column, so whenever the window is taller than the deck the row is
+    sized by flex rather than by content and hands the view a **definite** height. Measured on a
+    15-card pile beside three 1-card piles at 1400×1300: content **894px** in a root of
+    **1081** — 187px of slack, and a definite box is one that can be overflowed.
+  - **And the content does outgrow it.** A pile's list keeps a fixed height with
+    `overflow-visible` (`CardStack`), so an open card pushes the cards after it `stackLiftRoom` =
+    `stackCardHeight − stackAdvance` = **285px at 1×** clean out of that box, on purpose. Under
+    the tallest column there is nothing to absorb it. With one card open the root read
+    `clientHeight` **1081** against `scrollHeight` **1144** and painted a **15px** bar beside the
+    editor's page scroller — the two-scrollbar screen this whole section exists to remove, back
+    by a third route.
+  - **A long pile among short ones is the shape that finds it**, which is how it was reported: the
+    long pile is what sets the box's height, so it is the one with nothing underneath to land in.
+  - **The other half of the case grew instead of scrolling, which is no better.** A deck _taller_
+    than the window is content-sized rather than stretched (the row's automatic minimum size
+    floors it), so the same open card had the desk row jump **1914 → 2318px** — 404px of page
+    appearing and vanishing under the reader's pointer, at 1280×800 on a 51-card deck.
+  - **The fix is one card's worth of lift reserved at the view's foot, always** — `padding-bottom`
+    of `8 + stackLiftRoom(zoom)`, 293px at 1× and 322px at the next stop up, gated on the deck
+    holding a pile of more than one card so a freshly created deck reserves nothing. Reserved
+    rather than grown-on-hover for `stackHeight`'s own reason: a box that resizes under the
+    pointer walks the page away from what the reader is pointing at. After: **1179/1179** with a
+    card open at 1400×1300 and **2199/2199** at 1280×800, `0` bar in both, and the root's height
+    identical at rest and open.
+  - **jsdom cannot referee this either**, so the suite asserts the inline `padding-bottom` the
+    view asks for rather than the scrollbar it prevents.
 - **The X scrollbar that pass declared gone came back through the docked panel, and it was a
   filter row 25px too wide** (found and fixed 2026-08-14, driven on the reader's own deck at
   `npm run tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain

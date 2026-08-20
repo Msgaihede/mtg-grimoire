@@ -304,6 +304,35 @@ export function stackHeight(count: number, zoom: number = DEFAULT_ZOOM): number 
 }
 
 /**
+ * How far an open card pushes the cards after it **outside** the list's box — the room whatever
+ * draws this pile has to leave under it.
+ *
+ * {@link stackHeight} being a function of the count alone is what stops a pile resizing under
+ * the reader's pointer, and the reflow leaving the box is the price of it. Card *N* opening puts
+ * every card after it `stackCardHeight + STACK_LIFTED_MARGIN − stackAdvance` lower, and the box
+ * already carries one {@link STACK_LIFTED_MARGIN} of that. What is left over is this:
+ *
+ * ```
+ * stackCardHeight(1) − stackAdvance(1)  =  319 − 34  =  285
+ * ```
+ *
+ * which is exactly `−stackCollapsedMargin`, and not by coincidence: the distance a card leaves
+ * the box by is the distance it was pulled *into* the box by.
+ *
+ * **It does not depend on the count.** Opening the last card of a pile moves nothing, and opening
+ * any other one moves the tail by that one step, so one card's worth of room answers a pile of two
+ * and a pile of forty alike. A pile of **one** needs none of it, which is the only case worth
+ * asking about and the reason this takes no count: the caller knows which piles it is drawing.
+ *
+ * `StackView` is that caller, and it reserves this at the foot of the whole view rather than under
+ * each pile — the piles below one in a column are painted *over* on purpose (see `LAYER.raised`
+ * above), and it is only the view's own bottom edge that has nothing under it to spare.
+ */
+export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
+  return stackCardHeight(zoom) - stackAdvance(zoom);
+}
+
+/**
  * The one strip of a collapsed card the reader can see — its printed title bar — as the box the
  * app's own marks are laid over.
  *
