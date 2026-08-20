@@ -4,6 +4,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import type { CollectionQuery, CollectionRow, CollectionSummary, DeckRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -157,12 +162,14 @@ const lastQuery = () =>
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
 /**
- * The page, under the two providers `App` mounts above it.
+ * The page, under the providers `App` mounts above it.
  *
  * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
  * is above it (so that every surface offering a right-click stays renderable on its own), which
  * means a page
  * rendered bare would open nothing and pass every menu assertion below by never being asked.
+ * `TooltipProvider` is the same trade, for `useTooltip` — the needs-review band's hover
+ * assertion below would bind a tooltip that can never open without it.
  */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -170,7 +177,9 @@ function wrap(ui: ReactElement) {
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <ContextMenuProvider>{ui}</ContextMenuProvider>
+        <TooltipProvider>
+          <ContextMenuProvider>{ui}</ContextMenuProvider>
+        </TooltipProvider>
       </QueryClientProvider>,
     ),
   };
@@ -656,8 +665,21 @@ describe("CollectionPage", () => {
     expect(within(row).getByText("Needs review:")).toBeInTheDocument();
     // The band is one line and the sentence is 175 characters, so what is on screen is the
     // half that says what happened and not the half that says what to do about it. The whole
-    // of it is one hover away — and a screen reader reads the text, never the clip.
-    expect(band).toHaveAttribute("title", REVIEW_NOTE);
+    // of it is one hover away — and a screen reader reads the text, never the clip (proven by
+    // `getByText` above, since a screen reader reads text and not `title`).
+    //
+    // The hover affordance itself: jsdom lays nothing out, so `scrollWidth`/`clientWidth` are
+    // faked the way `tooltip.test.tsx` stands in for a real clip. `whenClipped` wins over
+    // `interactive`'s own default, so the open panel is `describes: false` and carries no
+    // `role="tooltip"` (it would double what a screen reader already has from the band's own
+    // text) — found by `TOOLTIP_PANEL_ID` instead, the one stable id the provider ever draws.
+    Object.defineProperty(band, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(band, "clientWidth", { value: 100, configurable: true });
+    fireEvent.pointerEnter(band);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(REVIEW_NOTE);
     // A price the data does not have is a dash, never an invented `$0.00`.
     expect(within(row).queryByText(/\$/)).not.toBeInTheDocument();
     expect(within(row).getAllByText("—").length).toBeGreaterThanOrEqual(2);

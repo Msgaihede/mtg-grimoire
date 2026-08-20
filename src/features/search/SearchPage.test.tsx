@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -134,12 +135,17 @@ const cards = (n: number, from = 0): CardSummary[] =>
  * `ContextMenuProvider` and not inside it: the menu panel is drawn as a *sibling* of that
  * provider's children, so a provider around this page is around none of the menu's rows.
  * `CollectionPage.test.tsx` has the wiring, and `App.tsx` uses the same nesting.
+ *
+ * `TooltipProvider` is here for `useTooltip`'s own no-op reason: the price column's hint below
+ * would bind a tooltip that can never open without it.
  */
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <ContextMenuProvider>{ui}</ContextMenuProvider>
+      <TooltipProvider>
+        <ContextMenuProvider>{ui}</ContextMenuProvider>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -572,13 +578,16 @@ describe("SearchPage", () => {
     await screen.findByText("Lightning Bolt");
     const header = screen.getByRole("columnheader", { name: /^Price/ });
 
-    // On the button, because the button fills the header cell — a `title` on the cell is a
-    // tooltip nothing can reach. And beside the sort hint rather than instead of it: a
-    // sortable price column has two things to say and may drop neither.
-    expect(screen.getByRole("button", { name: /^Price/ })).toHaveAttribute(
-      "title",
-      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price — Shift-click to add to the sort`,
+    // On the button, because the button fills the header cell — a tooltip on the cell is one
+    // nothing can reach. And beside the sort hint rather than instead of it: a sortable price
+    // column has two things to say and may drop neither.
+    const button = screen.getByRole("button", { name: /^Price/ });
+    await userEvent.hover(button);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(
+      `${pricesAsOf(MARKETPLACES.tcgplayer)} Sort by Price — Shift-click to add to the sort`,
     );
+    await userEvent.unhover(button);
     // And in the accessible name, because a tooltip is not an answer for anyone who is not
     // holding a mouse over the right four pixels. It still *starts* with "Price", so the
     // column is still addressable by the word on screen.
