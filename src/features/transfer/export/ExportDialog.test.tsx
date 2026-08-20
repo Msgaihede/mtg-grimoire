@@ -21,7 +21,7 @@ import { ipc } from "@/lib/ipc";
 import { save as saveMock } from "@tauri-apps/plugin-dialog";
 import { copyText as copyTextMock } from "@/lib/clipboard";
 import { useAppStore } from "@/lib/store";
-import { ExportDialog } from "./ExportDialog";
+import { ExportDialog, type ExportDialogProps } from "./ExportDialog";
 
 /**
  * One card, overridden per test.
@@ -318,5 +318,72 @@ describe("ExportDialog", () => {
     expect(await screen.findByText("Copied.")).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Finish" }));
     expect(screen.queryByText("Copied.")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Task 11's `scope` prop — the collection and the wishlist pages' own line, drawn above the
+ * format radios. `surface="collection"` here rather than `"deck"`: nothing about `scope` cares
+ * which surface it is on, but the two real callers are the collection and the wishlist, and
+ * `props.cards` (deck-shaped) is irrelevant to every assertion below — none of them read the
+ * preview text.
+ *
+ * This suite is what fix round 1 added: the prop shipped in Task 11 with no coverage at all,
+ * which is how the marketplace regression (below, and in `scope.ts`) reached review unnoticed.
+ */
+describe("the scope line", () => {
+  const scope = (
+    over: Partial<NonNullable<ExportDialogProps["scope"]>> = {},
+  ): NonNullable<ExportDialogProps["scope"]> => ({
+    label: "250 cards matching your filters",
+    loading: false,
+    everything: false,
+    onEverything: vi.fn(),
+    ...over,
+  });
+
+  it("draws the caller's label and an unticked Everything toggle", async () => {
+    render(<ExportDialog {...props} surface="collection" scope={scope()} />);
+    expect(await screen.findByText("250 cards matching your filters")).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    ).not.toBeChecked();
+  });
+
+  it("calls onEverything when the checkbox is ticked", async () => {
+    const user = userEvent.setup();
+    const onEverything = vi.fn();
+    render(<ExportDialog {...props} surface="collection" scope={scope({ onEverything })} />);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+
+    expect(onEverything).toHaveBeenCalledWith(true);
+  });
+
+  /**
+   * A still-sweeping `cards` array is a decklist that looks smaller than it is — the failure
+   * `scope.loading` exists to prevent is a reader writing or copying a truncated file that
+   * looks complete. `aria-busy` on Save as… is the minor half of the same fix round: it used to
+   * track `saving` alone, so a screen-reader user got no busy signal for the whole sweep and
+   * only for the file write at the very end of it.
+   */
+  it("makes Copy and Save as… un-pressable while the sweep is still running", async () => {
+    const user = userEvent.setup();
+    render(<ExportDialog {...props} surface="collection" scope={scope({ loading: true })} />);
+
+    const copyButton = screen.getByRole("button", { name: "Copy" });
+    const saveButton = screen.getByRole("button", { name: /Save as/ });
+    expect(copyButton).toHaveAttribute("aria-disabled", "true");
+    expect(saveButton).toHaveAttribute("aria-disabled", "true");
+    expect(saveButton).toHaveAttribute("aria-busy", "true");
+
+    // Not just visually disabled: a press on either must do nothing, or the guard is
+    // decoration rather than the thing stopping a truncated file from being written.
+    await user.click(copyButton);
+    expect(copyTextMock).not.toHaveBeenCalled();
+    await user.click(saveButton);
+    expect(saveMock).not.toHaveBeenCalled();
   });
 });

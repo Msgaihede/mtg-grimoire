@@ -16,6 +16,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ipc, type CollectionQuery, type WishlistQuery } from "@/lib/ipc";
+import type { MarketplaceId } from "@/lib/marketplace";
 import { fromCollectionRow, fromWishRow, type TransferCard } from "../TransferCard";
 
 export const SWEEP_PAGE = 500;
@@ -77,11 +78,24 @@ const NO_CARDS: TransferCard[] = [];
  * downloads until asked" (this repo's price-feed rule, applied here) forbids. The caller passes
  * its own `exporting` flag.
  *
- * **`everything` drops every filter, marketplace included** — `{}` rather than `filters` with
- * the narrowing fields stripped out, because "ignoring the filters" is the whole of what the
- * toggle promises and a half-ignored filter is not that. A row's price then comes back quoted at
- * the backend's own default (TCGplayer), which is worth knowing rather than worth hiding.
+ * **`everything` drops every row-narrowing filter and keeps `marketplace`.** `marketplace` sits
+ * inside the same `filters` object as `text`/`sets`/`finishes`/… (`useCollection.ts`,
+ * `useWishlist.ts`), but it does not decide *which cards appear* — it decides which price a row
+ * is quoted at, and it is not one of the filter bar's own controls, so a reader ticking "ignoring
+ * the filters" has no reason to read it as one of the things being ignored. `useWishlist.ts`
+ * already says this about the same field, for the same reason: "The marketplace is always sent:
+ * it is which prices the list is quoting rather than a refinement that can be left off." Dropping
+ * it too would silently reprice every exported row at the backend's default (TCGplayer) for a
+ * reader who had picked Card Kingdom, Mana Pool or Cardmarket, with nothing in the dialog saying
+ * so — `everythingFilters` below is the one place that split is made, so both surfaces read it the
+ * same way.
  */
+function everythingFilters<F extends { marketplace?: MarketplaceId }>(
+  filters: F,
+): Pick<F, "marketplace"> {
+  return { marketplace: filters.marketplace } as Pick<F, "marketplace">;
+}
+
 export function useExportScope(
   surface: "collection",
   filters: CollectionScopeFilters,
@@ -113,10 +127,11 @@ export function useExportScope(
       setProgress({ loaded: 0, total: 0 });
       const onProgress = (loaded: number, total: number) => setProgress({ loaded, total });
       if (surface === "collection") {
+        const collectionFilters = filters as CollectionScopeFilters;
         const rows = await sweep(
           (limit, offset) =>
             ipc.collectionList({
-              ...(everything ? {} : (filters as CollectionScopeFilters)),
+              ...(everything ? everythingFilters(collectionFilters) : collectionFilters),
               limit,
               offset,
             }),
@@ -124,10 +139,11 @@ export function useExportScope(
         );
         return rows.map(fromCollectionRow);
       }
+      const wishlistFilters = filters as WishlistScopeFilters;
       const rows = await sweep(
         (limit, offset) =>
           ipc.wishlistList({
-            ...(everything ? {} : (filters as WishlistScopeFilters)),
+            ...(everything ? everythingFilters(wishlistFilters) : wishlistFilters),
             limit,
             offset,
           }),

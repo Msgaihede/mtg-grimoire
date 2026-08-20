@@ -432,7 +432,7 @@ function Body({
           onClick={() => {
             if (!saving && !scope?.loading) void handleSaveAs();
           }}
-          aria-busy={saving || undefined}
+          aria-busy={saving || scope?.loading || undefined}
           className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
         >
           Save as…

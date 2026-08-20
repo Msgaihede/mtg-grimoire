@@ -868,6 +868,45 @@ describe("CollectionPage", () => {
     // header row. Asserting the row count here is how a correct implementation reads as red.
     expect(await screen.findByText(/251 lines/)).toBeInTheDocument();
   });
+
+  /**
+   * **Fix round 1's marketplace ruling.** `marketplace` sits inside the same `filters` object as
+   * every row-narrowing field (`useCollection.ts`), but it decides which *price* a row is quoted
+   * at rather than which rows match, and it is not one of the filter bar's own controls — so
+   * "Export everything, ignoring the filters" must not also silently reprice the export at the
+   * backend's default (TCGplayer) for a reader who had picked another marketplace. A regression
+   * to `scope.ts`'s old `{}` for the "everything" case fails this the moment `getMarketplace`
+   * answers anything but the default.
+   */
+  it("keeps the reader's marketplace when Export everything is ticked, and drops only the filters", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
+
+    // A filter switched on, so there is something real for "everything" to have dropped — the
+    // marketplace assertion below is not just "the field was never set to begin with".
+    await user.click(screen.getByRole("button", { name: "Foil" }));
+    await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    collectionList.mockClear();
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    const asked = lastQuery();
+    // The marketplace survives the toggle...
+    expect(asked.marketplace).toBe("cardmarket");
+    // ...and the filter that was on does not: "everything" really does ignore the filters.
+    expect(asked.finishes).toBeUndefined();
+  });
 });
 
 /**
