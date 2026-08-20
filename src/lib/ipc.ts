@@ -47,10 +47,17 @@ import type { ImageVariant } from "./images";
 import type { SortSpec } from "./sort";
 
 /**
- * The search table's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`;
- * a key that is not there is dropped at the far end, which is a header that does nothing.
+ * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key
+ * that is not there is dropped at the far end, which is a control that does nothing.
+ *
+ * The first five are the table's headers. `manaValue` and `released` have **no column to
+ * press** and are reachable only from the filter bar's sort picker — the trade the
+ * collection's `added` and `price` already made. There is no room for a column: the search
+ * table shares its squeeze between two flexible tracks and already reaches 1280px with the
+ * card pane open (see `columnsFor` in `SearchPage.tsx`), so a seventh and an eighth would come
+ * out of the Name column, which is what identifies a row.
  */
-export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price";
+export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price" | "manaValue" | "released";
 
 /**
  * The collection's sortable columns.

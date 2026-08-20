@@ -1030,6 +1030,71 @@ describe("ordering", () => {
       ]);
     });
 
+    /**
+     * The first of the two keys with **no column to press** — added 2026-08-20 and reachable
+     * only from the filter bar's sort picker, so nothing in the table can ask for this order
+     * and a story that wants it is driving that control.
+     *
+     * `cards.cmc` is REAL and nullable and **no row of `CARDS` has a null one**, so the hole
+     * is made rather than found, exactly as the type-line fixture above it is. Little Girl's
+     * 0.5 is found, and is the fixture's own proof that the column is REAL rather than an
+     * INTEGER: a cast would file her with the Forest.
+     */
+    it("keeps a missing mana value last in both directions", () => {
+      const noCmc: FakeCard = { ...at("2x2", "117"), id: "no-mana-value", cmc: null };
+      const db = makeDb({
+        cards: [
+          at("mb2", "502"), // Kozilek, Compleated — 10
+          at("unf", "239"), // Forest — 0
+          noCmc, // `2x2 117` with its cost taken away
+          at("unh", "16"), // Little Girl — 0.5
+          at("fut", "153"), // Tarmogoyf — 2
+        ],
+      });
+      expect(setCodesFor(db, [{ key: "manaValue", dir: "asc" }])).toEqual([
+        "unf",
+        "unh",
+        "fut",
+        "mb2",
+        "2x2",
+      ]);
+      // Reversed rows, not moved holes — the rule every nullable column in `SEARCH_SORTS`
+      // states twice, and the whole reason this one is `nullsLast` and not `reversible`.
+      expect(setCodesFor(db, [{ key: "manaValue", dir: "desc" }])).toEqual([
+        "mb2",
+        "fut",
+        "unh",
+        "unf",
+        "2x2",
+      ]);
+    });
+
+    /**
+     * The other key with no column. `released_at` is ISO `YYYY-MM-DD`, so the byte order
+     * {@link cmp} applies *is* date order — which is the claim worth pinning, because a
+     * comparator that parsed the string first would agree with this on every row here and
+     * disagree with SQLite the moment a corpus held a date it could not parse.
+     *
+     * Its hole cannot be storied: `FakeCard.releasedAt` is not nullable where
+     * `cards.released_at` is (the fake says so at `toCardSummary`), so the both-directions
+     * rule is carried by `nullsLast` and pinned above, on the one of the two whose fixture
+     * column can hold a null.
+     */
+    it("orders `released` by the date and not by the order the rows arrived", () => {
+      // Declared newest-first, so insertion order is a wrong answer this can catch.
+      const db = makeDb({
+        cards: [
+          at("sld", "913"), // 2025-12-01 — the corpus's newest printing
+          at("lea", "161"), // 1993-08-05 — its oldest
+          at("pcy", "45"), // 2000-06-05
+        ],
+      });
+      expect(setCodesFor(db, [{ key: "released", dir: "asc" }])).toEqual(["lea", "pcy", "sld"]);
+      // Newest first, which is the direction the picker opens this key on and the one
+      // `SEARCH_FIRST_DIR` gives it.
+      expect(setCodesFor(db, [{ key: "released", dir: "desc" }])).toEqual(["sld", "pcy", "lea"]);
+    });
+
     it("answers name order for an empty spec, for no spec, and reverses on desc", () => {
       // Declared out of name order, so insertion order is a wrong answer this can catch.
       const db = makeDb({
@@ -1051,10 +1116,16 @@ describe("ordering", () => {
     it("drops a key it does not know, and keeps a repeated key's first appearance", () => {
       const db = makeDb({ cards: [at("c21", "263"), at("2ed", "48"), at("unf", "239")] });
       const nameOrder = ["2ed", "unf", "c21"];
-      // `released` is the key the contract lost. A key the table does not list is dropped
-      // rather than interpolated, so this spec is empty and the browse order answers.
+      // A key the table does not list is dropped rather than interpolated, so this spec is
+      // empty and the browse order answers. **Synthetic on purpose**: this used to be
+      // `released`, which stopped being an unknown key the day the filter bar's sort picker
+      // gave it a control (2026-08-20). A hyphenated word is something no member of
+      // `SEARCH_SORTS` can ever become — they are camelCase — so the next real key cannot
+      // collide with it and quietly turn this assertion into its opposite.
       expect(
-        setCodesFor(db, [{ key: "released", dir: "desc" }] as unknown as SortSpec<SearchSortKey>),
+        setCodesFor(db, [
+          { key: "not-a-sort-key", dir: "desc" },
+        ] as unknown as SortSpec<SearchSortKey>),
       ).toEqual(nameOrder);
       // A repeated key is dead SQL whose second copy reads like the one that won. The first
       // appearance is the one the reader built first.

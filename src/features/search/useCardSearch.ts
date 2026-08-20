@@ -88,12 +88,47 @@ export function formatParams(selection: string): { format?: string; playableOnly
 }
 
 /**
- * Which direction one press on each column asks for first.
+ * The orders the filter bar's sort picker offers.
+ *
+ * **This array's order is its declaration order and nothing else.** `FilterBar`'s sort
+ * `<select>` draws it alphabetically by label through `sortOptions` (`lib/options.ts`), and
+ * the only other reader — `sortSelection` below — asks nothing about position. So reordering
+ * these seven lines moves nothing a reader sees; it only costs them the one grouping they
+ * have, which is the five the table's headers also reach, then the two nothing on screen can.
+ * Add to the end.
+ *
+ * **`manaValue` and `released` have no header to press**, and they are why this picker is
+ * more than the table's headers restated. There is no room for two more columns — the reason
+ * is at {@link SearchSortKey} — so this is the same trade the collection's select made for
+ * "Recently added", from the view whose table is one column wider.
+ *
+ * **No `Custom…` row, and none can be needed here.** The collection's select carries one
+ * because it offers 5 of its 7 keys, so a header can build a sort that select cannot name.
+ * This list is *every* key the search sorts by, so `sortSelection` can only ever come back
+ * `""` for an empty spec — a state the picker has a real row for.
+ */
+export const SEARCH_SORT_OPTIONS = [
+  { value: "name", label: "Name" },
+  { value: "set", label: "Set" },
+  { value: "type", label: "Type" },
+  { value: "rarity", label: "Rarity" },
+  { value: "price", label: "Price" },
+  { value: "manaValue", label: "Mana value" },
+  { value: "released", label: "Released" },
+] as const satisfies readonly { value: SearchSortKey; label: string }[];
+
+/**
+ * Which direction one press on each key asks for first.
  *
  * Descending on price, because "highest first" is what clicking a money column means, and
  * ascending on everything that reads as a list. The table's own columns carry this too, as
  * documentation; this table is the one that runs, because the state lives here with the
  * query. Keep the two in step.
+ *
+ * The two keys with no column follow the same split from the picker: `manaValue` ascending
+ * because a curve reads as a list, and `released` **descending** because "newest first" is
+ * what pressing a release date means — the argument `price` above it carries, and the one
+ * behind the collection's `added: "desc"`.
  */
 const SEARCH_FIRST_DIR: Record<SearchSortKey, SortDir> = {
   name: "asc",
@@ -101,6 +136,8 @@ const SEARCH_FIRST_DIR: Record<SearchSortKey, SortDir> = {
   type: "asc",
   rarity: "asc",
   price: "desc",
+  manaValue: "asc",
+  released: "desc",
 };
 
 /**
@@ -609,8 +646,9 @@ export function useCardSearch(
       owned,
     }),
     /**
-     * The columns this list is ordered by, first one deciding. Empty is the view's own
-     * default: relevance when there is a query, name order when there is not.
+     * The keys this list is ordered by, first one deciding. Keys rather than columns since
+     * the picker landed: two of the seven have no header. Empty is the view's own default —
+     * relevance when there is a query, name order when there is not.
      */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
@@ -620,6 +658,51 @@ export function useCardSearch(
           additive,
           firstDir: SEARCH_FIRST_DIR[key as SearchSortKey] ?? "asc",
         }),
+      ),
+    /**
+     * The filter bar's select: one term, replacing whatever was there.
+     *
+     * `""` is a row of that select rather than an absence — the empty spec, which is this
+     * view's own order and the only way back to relevance once a key has been picked. The
+     * collection's twin takes a key and nothing else, because its list is never empty.
+     */
+    setSortKey: (key: SearchSortKey | "") =>
+      setSort(key === "" ? [] : [{ key, dir: SEARCH_FIRST_DIR[key] }]),
+    /**
+     * What the select shows: the sort's first term, or `""` for the view's own order.
+     *
+     * The *first* term rather than a requirement that there be only one, because "sorted
+     * primarily by Name" is true of a Shift-built two-key sort and is what a reader glancing
+     * at the control wants to know.
+     *
+     * **It falls back to `""` where the collection's falls back to `"name"`, and that is the
+     * one place the two views differ.** An empty spec here is relevance when there is a query
+     * and name when there is not, so pinning `name` would have the control state a name order
+     * over a ranked search — a lie the collection cannot tell, because name order is exactly
+     * what its empty spec means.
+     *
+     * It cannot come back `""` from a *non-empty* spec, which is why there is no `Custom…`
+     * row to draw: see {@link SEARCH_SORT_OPTIONS}.
+     */
+    sortSelection: sort.length === 0 ? "" : sort[0].key,
+    /**
+     * The direction button beside the select: rewrites the first term's direction in place,
+     * leaving any Shift-built secondary keys where they are.
+     *
+     * In place for `applySort`'s reason — a first key that jumped to the end of the sort when
+     * its direction changed would silently hand the order to whatever was second.
+     *
+     * **A no-op on an empty spec**, rather than seeding a term to flip: the view's own order
+     * is relevance under a query, which has no other direction to offer, and a button that
+     * invented a name sort would be answering a question nobody asked.
+     */
+    flipSortDir: () =>
+      setSort((spec) =>
+        spec.length === 0
+          ? spec
+          : spec.map((term, at) =>
+              at === 0 ? { key: term.key, dir: term.dir === "asc" ? "desc" : "asc" } : term,
+            ),
       ),
     /**
      * Clear every filter at once, including the search box.

@@ -418,8 +418,12 @@ fn non_card_rank(alias: &str) -> String {
 /// SQLite's (NULLs first ascending, last descending): a reader reversing a sort expects the
 /// rows reversed, not the holes moved.
 ///
-/// There is no `released` key. The table has no Released column to press, the frontend has
-/// never sent one, and an order nothing can reach is dead code.
+/// **`manaValue` and `released` have no column of their own to press, and are reached from
+/// the filter bar's sort picker instead** — exactly as the collection's `added` and `price`
+/// keys are. That is why they are not "dead code an order nothing can reach", which is what
+/// this paragraph said about `released` while the table's headers were the only way to ask
+/// for an order at all. A picker key still has to be here: [`crate::sorting::order_by`]
+/// drops a key this list does not carry, silently, so the control would simply do nothing.
 ///
 /// `price` is not here: it is the one key whose SQL depends on the reader's marketplace, so
 /// it lives in [`SEARCH_PRICE_SORT`] and is appended by [`crate::sorting::sorts_for`].
@@ -445,6 +449,16 @@ const SEARCH_SORTS: &[crate::sorting::SortColumn] = &[
               WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5 ELSE 6 END ASC",
         desc: "CASE c.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 \
                WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5 ELSE 6 END DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "manaValue",
+        asc: "c.cmc ASC NULLS LAST",
+        desc: "c.cmc DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "released",
+        asc: "c.released_at ASC NULLS LAST",
+        desc: "c.released_at DESC NULLS LAST",
     },
 ];
 
@@ -473,11 +487,50 @@ const SEARCH_PRICE_SORT: &[crate::sorting::PricedSort] = &[crate::sorting::Price
 /// printing, which the group step has not resolved yet, so they are applied after the join
 /// instead (see [`run_search`]). Listing them here would sort by an aggregate — "the best
 /// rarity this card was ever printed at" — which is not what the column shows.
-const SEARCH_SORTS_COLLAPSED: &[crate::sorting::SortColumn] = &[crate::sorting::SortColumn {
-    key: "name",
-    asc: "min(c.name) ASC",
-    desc: "min(c.name) DESC",
-}];
+///
+/// **`manaValue` and `released` are here rather than in [`REPRESENTATIVE_SORTS`], and each
+/// has its own reason** — the next reader will otherwise file them beside `rarity` and pay
+/// the whole-join price for nothing:
+///
+/// - `min(c.cmc)` is **exact, not an approximation**. [`COLLAPSE_KEY`] is
+///   `coalesce(c.oracle_id, c.id)` and mana value is a fact about the *oracle card*, so every
+///   printing in a group carries the same `cmc` and `min` is that one value. (A printing with
+///   no `oracle_id` is a group of one, where `min` is trivially its own.) Sorting by an
+///   aggregate is only wrong when the group disagrees with itself, and **0 of 31 894 groups
+///   do**: `HAVING min(c.cmc) IS NOT max(c.cmc)` over the live database on 2026-08-20
+///   (98 323 paper printings legal somewhere) returned nothing.
+/// - `max(c.released_at)` is **the representative's own release date**, not an aggregate
+///   standing in for one. [`collapse_rep`] picks by `released_at` DESC before anything else,
+///   so the representative *is* the group's newest printing — and **0 of those same 31 894
+///   groups** have a `max(c.released_at)` differing from the `released_at` of the printing
+///   `collapse_rep` actually returns.
+///
+/// Both counts are facts about *this* corpus on *that* day rather than proofs, which is why
+/// each argument is structural first and counted second, and why
+/// `a_collapsed_released_sort_agrees_with_the_representative_it_shows` checks the second one
+/// against the query rather than trusting the expression.
+///
+/// Both therefore answer inside the group step, where the `LIMIT` is, instead of costing the
+/// 37 553-group join before it. Every column named is already in `idx_cards_collapse`, so the
+/// group scan stays covering. Which order the *page* then comes back in is
+/// [`SEARCH_SORTS_JOINED`]'s half.
+const SEARCH_SORTS_COLLAPSED: &[crate::sorting::SortColumn] = &[
+    crate::sorting::SortColumn {
+        key: "name",
+        asc: "min(c.name) ASC",
+        desc: "min(c.name) DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "manaValue",
+        asc: "min(c.cmc) ASC NULLS LAST",
+        desc: "min(c.cmc) DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "released",
+        asc: "max(c.released_at) ASC NULLS LAST",
+        desc: "max(c.released_at) DESC NULLS LAST",
+    },
+];
 
 /// The collapsed `price` order — the ends of the range the row shows.
 ///
@@ -489,6 +542,58 @@ const SEARCH_PRICE_SORT_COLLAPSED: &[crate::sorting::PricedSort] = &[crate::sort
     asc: "min({price}) ASC NULLS LAST",
     desc: "max({price}) DESC NULLS LAST",
 }];
+
+/// The **outer** half of a group-step order: the same keys again, written against the joined
+/// row instead of against the aggregates.
+///
+/// The group step decides *which* groups the page holds; this decides what order they come
+/// back in, and the two have to agree or the reader gets the right 50 cards shuffled.
+/// [`run_search`] used to restate only the two fallbacks by hand — `g.nm ASC, c.id ASC`
+/// unranked, the score triple when ranked — and had nothing to restate an *explicit* sort
+/// with, so the outer `ORDER BY` quietly overrode it: a collapsed `price` DESC returned the
+/// dearest groups **in name order**. Found 2026-08-20 while adding the picker's two keys, by
+/// probing two groups whose price order and name order disagree; nothing was red because the
+/// fixture in `a_collapsed_price_sort_orders_by_the_ends_of_the_range` sorts the same way
+/// both ways, which is exactly the vacuity CLAUDE.md warns a test can hide.
+///
+/// One [`crate::sorting::order_by`] call over this list replaces both hand-rolled strings —
+/// they are what it emits for an empty sort — so the third case cannot go missing again.
+/// Each clause re-reads the group's own expression off the joined row, exactly rather than
+/// approximately:
+///
+/// * `name` → `g.nm`, which **is** `min(c.name)`: the CTE's column, never `c.name`, because
+///   71 groups span two names and the row displays `g.nm` (see [`ORDER_NAME_COLLAPSED`]).
+/// * `price` → `g.lo`/`g.hi`, the CTE's own aggregates. That is why it is an ordinary
+///   [`crate::sorting::SortColumn`] here and not a [`crate::sorting::PricedSort`]: the
+///   marketplace was folded in when they were computed, so there is no
+///   [`crate::sorting::PRICE_HOLE`] left to fill.
+/// * `manaValue` → `c.cmc`, `released` → `c.released_at`, the representative's own columns,
+///   for the two arguments [`SEARCH_SORTS_COLLAPSED`] makes and counts.
+///
+/// `set`, `rarity` and `type` are absent because naming one takes the other branch entirely —
+/// see `sorts_after_join` in [`run_search`].
+const SEARCH_SORTS_JOINED: &[crate::sorting::SortColumn] = &[
+    crate::sorting::SortColumn {
+        key: "name",
+        asc: "g.nm ASC",
+        desc: "g.nm DESC",
+    },
+    crate::sorting::SortColumn {
+        key: "price",
+        asc: "g.lo ASC NULLS LAST",
+        desc: "g.hi DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "manaValue",
+        asc: "c.cmc ASC NULLS LAST",
+        desc: "c.cmc DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "released",
+        asc: "c.released_at ASC NULLS LAST",
+        desc: "c.released_at DESC NULLS LAST",
+    },
+];
 
 /// The sort keys a collapsed search must resolve **after** the join, because they belong to
 /// the representative printing rather than to the group.
@@ -741,12 +846,30 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         } else {
             "LIMIT ? OFFSET ?"
         };
+        // Otherwise the group step has already chosen and limited the page, and the join
+        // only has to hand it back in the order it was chosen in — restated against `g` and
+        // the representative, because the aggregates are not in scope out here. An empty
+        // sort emits the two strings this used to hard-code, which is the point: the
+        // fallbacks and an explicit order now come out of one list instead of one being
+        // written down and the other forgotten. See [`SEARCH_SORTS_JOINED`].
+        //
+        // No priced half, and no price to fold: `g.lo`/`g.hi` were computed inside the CTE
+        // with the marketplace's own expression.
+        let joined_sorts = crate::sorting::sorts_for(SEARCH_SORTS_JOINED, &[], "");
+        let joined_fallback = if ranked {
+            "g.nc ASC, g.score ASC, g.nm ASC"
+        } else {
+            "g.nm ASC"
+        };
         let final_order = if sorts_after_join {
             format!("{order} LIMIT ? OFFSET ?")
-        } else if ranked {
-            "g.nc ASC, g.score ASC, g.nm ASC, c.id ASC".to_owned()
         } else {
-            "g.nm ASC, c.id ASC".to_owned()
+            crate::sorting::order_by(
+                req.sort.as_deref(),
+                &joined_sorts,
+                joined_fallback,
+                "c.id ASC",
+            )
         };
 
         format!(
@@ -1478,12 +1601,18 @@ mod tests {
         // Every single-column order, and a two-key one — which is the case a multi-key
         // sort adds and the one where a missing tiebreak would be easiest to miss, because
         // the second key makes the order *look* more determined than it is.
-        let orders: [(&str, Vec<crate::sorting::SortTerm>); 6] = [
+        let orders: [(&str, Vec<crate::sorting::SortTerm>); 8] = [
             ("name", vec![term("name", "asc")]),
             ("set", vec![term("set", "desc")]),
             ("type", vec![term("type", "asc")]),
             ("rarity", vec![term("rarity", "asc")]),
             ("price", vec![term("price", "desc")]),
+            // The picker's two, which have no header to press and were therefore easy to
+            // leave off a list that says "every single-column order". These six Forests
+            // agree on both — same `released_at`, no `cmc` at all — so they are exactly
+            // the tie this test is about.
+            ("manaValue", vec![term("manaValue", "asc")]),
+            ("released", vec![term("released", "desc")]),
             (
                 "rarity+price",
                 vec![term("rarity", "asc"), term("price", "desc")],
@@ -2147,60 +2276,106 @@ mod tests {
         assert_eq!(b2.owned_quantity, 0, "uncollapsed is still per printing");
     }
 
-    /// Sorting a collapsed list by price sorts by the **range**: cheapest-first ascending,
-    /// dearest-available first descending. That is what pressing a range column means in
-    /// each direction, and it is what the column shows.
-    #[test]
-    fn a_collapsed_price_sort_orders_by_the_ends_of_the_range() {
-        let conn = seeded();
-        for (id, name, oracle, price) in [
-            ("s1", "Shock", "o-shock", 1.0),
-            ("s2", "Shock", "o-shock", 90.0),
-            ("t1", "Terror", "o-terror", 10.0),
-            ("t2", "Terror", "o-terror", 20.0),
-        ] {
+    /// Three cards in one set, two printings apiece, with **crossing** price ranges:
+    /// `(id, name, oracle_id, price_usd)`.
+    ///
+    /// Every number here is load-bearing, and the arithmetic is the test rather than the
+    /// decoration — `Alpha` spans 5–60, `Bravo` 1–10, `Charlie` 3–100, so:
+    ///
+    /// | order | answer | why it is not something else |
+    /// | --- | --- | --- |
+    /// | `min` ASC | Bravo, Charlie, Alpha | `max` ASC would be Bravo, Alpha, Charlie |
+    /// | `max` DESC | Charlie, Alpha, Bravo | `min` DESC would be Alpha, Charlie, Bravo |
+    ///
+    /// and the alphabet — Alpha, Bravo, Charlie — is neither of them, in either direction.
+    /// That is four ways to be wrong that this fixture can see and the `Shock`/`Terror` pair
+    /// it replaced could not: those two sorted `["Shock", "Terror"]` under `min` ASC, under
+    /// `max` DESC **and** under the alphabet, so the test named for the ends of the range
+    /// asserted neither end, and stayed green through the whole life of the bug
+    /// [`SEARCH_SORTS_JOINED`] describes. A fixture that cannot distinguish the order it
+    /// names is not a weak test, it is the reason the next one goes unnoticed.
+    #[rustfmt::skip]
+    fn seed_crossing_price_ranges(conn: &Connection) {
+        let rows = [
+            ("a-lo", "Alpha",     "o-a",   5.0),
+            ("a-hi", "Alpha",     "o-a",  60.0),
+            ("b-lo", "Bravo",     "o-b",   1.0),
+            ("b-hi", "Bravo",     "o-b",  10.0),
+            ("c-lo", "Charlie",   "o-c",   3.0),
+            ("c-hi", "Charlie",   "o-c", 100.0),
+        ];
+        for (id, name, oracle, price) in rows {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,price_usd,
                                     is_paper,oracle_id,raw)
                  VALUES (?1,?2,'zzz',?1,'en','normal',?3,1,?4,'{}')",
                 rusqlite::params![id, name, price, oracle],
-            )
-            .unwrap();
+            ).unwrap();
         }
-        let up = run_search(
-            &conn,
-            &SearchRequest {
-                set_code: Some("zzz".into()),
-                collapse: Some(true),
-                sort: Some(vec![term("price", "asc")]),
-                limit: 50,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let names: Vec<&str> = up.items.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["Shock", "Terror"],
-            "cheapest printing first: 1 before 10"
-        );
+    }
 
-        let down = run_search(
-            &conn,
+    /// The page `seed_crossing_price_ranges` produces under one collapsed sort, as names.
+    fn collapsed_order(conn: &Connection, key: &str, dir: &str) -> Vec<String> {
+        run_search(
+            conn,
             &SearchRequest {
                 set_code: Some("zzz".into()),
                 collapse: Some(true),
-                sort: Some(vec![term("price", "desc")]),
+                sort: Some(vec![term(key, dir)]),
                 limit: 50,
                 ..Default::default()
             },
         )
-        .unwrap();
-        let names: Vec<&str> = down.items.iter().map(|c| c.name.as_str()).collect();
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|c| c.name)
+        .collect()
+    }
+
+    /// Sorting a collapsed list by price sorts by the **range**: cheapest-first ascending,
+    /// dearest-available first descending. That is what pressing a range column means in
+    /// each direction, and it is what the column shows.
+    ///
+    /// Both directions, over ranges that cross, so `min` and `max` are each observable on
+    /// their own — see `seed_crossing_price_ranges` for the arithmetic and for what this
+    /// test used to fail to say.
+    #[test]
+    fn a_collapsed_price_sort_orders_by_the_ends_of_the_range() {
+        let conn = seeded();
+        seed_crossing_price_ranges(&conn);
         assert_eq!(
-            names,
-            ["Shock", "Terror"],
-            "dearest printing first: 90 before 20"
+            collapsed_order(&conn, "price", "asc"),
+            ["Bravo", "Charlie", "Alpha"],
+            "cheapest end first — 1, 3, 5 — and not the cheapest group's dearest printing"
+        );
+        assert_eq!(
+            collapsed_order(&conn, "price", "desc"),
+            ["Charlie", "Alpha", "Bravo"],
+            "dearest end first — 100, 60, 10 — which is not the ascending order reversed"
+        );
+    }
+
+    /// A collapsed `name` DESC has to actually reverse.
+    ///
+    /// The other half of what the join's own `ORDER BY` used to override: it restated the
+    /// *fallback* `g.nm ASC` whatever was asked for, so a reversed name order fetched the
+    /// Z-end of the corpus and then presented it ascending — right rows, wrong order, on the
+    /// default search. Reproduced against the live 98 323-printing database on 2026-08-20.
+    /// Nothing else in this file asks a collapsed list to reverse a group-step order.
+    /// See [`SEARCH_SORTS_JOINED`].
+    #[test]
+    fn a_collapsed_name_sort_reverses_when_it_is_asked_to() {
+        let conn = seeded();
+        seed_crossing_price_ranges(&conn);
+        assert_eq!(
+            collapsed_order(&conn, "name", "asc"),
+            ["Alpha", "Bravo", "Charlie"]
+        );
+        assert_eq!(
+            collapsed_order(&conn, "name", "desc"),
+            ["Charlie", "Bravo", "Alpha"],
+            "reversed, rather than the ascending order the group step was limited on"
         );
     }
 
@@ -2279,6 +2454,123 @@ mod tests {
             ["rare", "mythic"],
             "the second page of the rank order"
         );
+    }
+
+    /// Two printings per card, in one set, with the release dates and the names deliberately
+    /// disagreeing: `(id, name, oracle_id, released_at, cmc)`.
+    ///
+    /// `cmc` is the **same within each group**, because that is what the corpus says and what
+    /// [`SEARCH_SORTS_COLLAPSED`]'s `min(c.cmc)` rests on — a fixture that disagreed with
+    /// itself would be testing a card that cannot exist.
+    #[rustfmt::skip]
+    fn seed_two_printings_apiece(conn: &Connection) {
+        let rows = [
+            ("a-old", "Aaa", "o-a", "2001-01-01", 2.0),
+            ("a-new", "Aaa", "o-a", "2015-05-05", 2.0),
+            ("b-old", "Bbb", "o-b", "1999-09-09", 4.0),
+            ("b-new", "Bbb", "o-b", "2020-02-02", 4.0),
+        ];
+        for (id, name, oracle, released, cmc) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,cmc,
+                                    is_paper,oracle_id,raw)
+                 VALUES (?1,?2,'zzz',?1,'en','normal',?3,?4,1,?5,'{}')",
+                rusqlite::params![id, name, released, cmc, oracle],
+            ).unwrap();
+        }
+    }
+
+    /// The collapsed `released` order is `max(c.released_at)` — an aggregate — while the row
+    /// shows a single printing, and the two agree only because [`collapse_rep`] picks by
+    /// `released_at` DESC before anything else. This checks that against the query rather
+    /// than trusting the expression: the assertion is on the **ids the search returned**, so
+    /// it fails both if the groups come back in the wrong order and if the printing each row
+    /// shows is not the one whose date decided its place.
+    ///
+    /// Alphabetical order would answer `["a-new", "b-new"]`, which is what a dropped key
+    /// falls back to.
+    ///
+    /// The second page is asked for as well, and it is the assertion that bites hardest:
+    /// [`SEARCH_SORTS_JOINED`] re-states this order after the join, so a `released` missing
+    /// from [`SEARCH_SORTS_COLLAPSED`] still comes back looking right on a single page —
+    /// it is only which groups the group step's `LIMIT` took that gives it away. Measured by
+    /// misspelling the key on 2026-08-20: page one passed, page two did not.
+    #[test]
+    fn a_collapsed_released_sort_agrees_with_the_representative_it_shows() {
+        let conn = seeded();
+        seed_two_printings_apiece(&conn);
+        let req = |limit: u32, offset: u32| SearchRequest {
+            set_code: Some("zzz".into()),
+            collapse: Some(true),
+            sort: Some(vec![term("released", "desc")]),
+            limit,
+            offset,
+            ..Default::default()
+        };
+
+        let r = run_search(&conn, &req(50, 0)).unwrap();
+        let ids: Vec<&str> = r.items.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["b-new", "a-new"],
+            "newest group first, each row showing the printing that dated it"
+        );
+        assert!(
+            r.items.iter().all(|c| c.printings == 2),
+            "and both rows really are groups of two"
+        );
+
+        let page2 = run_search(&conn, &req(1, 1)).unwrap();
+        let ids: Vec<&str> = page2.items.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["a-new"], "the second page of the release order");
+    }
+
+    /// A collapsed `manaValue` sort is answered **inside the group step**, where the `LIMIT`
+    /// is, rather than after the 37 553-group join.
+    ///
+    /// **Which property distinguishes the two paths, and why the ordering alone does not.**
+    /// Every printing of a card carries the same `cmc` — that is the whole argument for
+    /// `min(c.cmc)` — so the group step and the representative path would return the same
+    /// page in the same order, and an ordering assertion passes on either. The property that
+    /// actually decides is `sorts_after_join` in [`run_search`], and it is
+    /// [`REPRESENTATIVE_SORTS`] membership and nothing else: on that list the group CTE gives
+    /// up its `LIMIT` and every group is joined before the page is cut. So this test asserts
+    /// both halves, and neither is redundant — the membership check is the path, and the
+    /// ordering is what says the key is wired at all, since
+    /// [`crate::sorting::order_by`] drops a key its whitelist misses **silently** and a
+    /// picker entry that sorts nothing would otherwise fail nowhere.
+    ///
+    /// The paged assertion is the third: with the `LIMIT` inside the CTE the offset walks the
+    /// *sorted* groups, not the ones that led in name order.
+    #[test]
+    fn a_collapsed_mana_value_sort_uses_the_group_step() {
+        assert!(
+            !REPRESENTATIVE_SORTS.contains(&"manaValue"),
+            "listing it there moves the LIMIT to after the join, at ~5.5× the cost"
+        );
+
+        let conn = seeded();
+        seed_two_printings_apiece(&conn);
+        let req = |limit: u32, offset: u32| SearchRequest {
+            set_code: Some("zzz".into()),
+            collapse: Some(true),
+            sort: Some(vec![term("manaValue", "desc")]),
+            limit,
+            offset,
+            ..Default::default()
+        };
+
+        let all = run_search(&conn, &req(50, 0)).unwrap();
+        let ids: Vec<&str> = all.items.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["b-new", "a-new"],
+            "the higher mana value first — `Bbb` is 4, `Aaa` is 2 — and not the alphabet"
+        );
+
+        let page2 = run_search(&conn, &req(1, 1)).unwrap();
+        let ids: Vec<&str> = page2.items.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["a-new"], "the second page of the mana-value order");
     }
 
     /// A collapsed text search is still ranked by relevance, the group taking the best score
@@ -2619,6 +2911,85 @@ mod tests {
         assert_eq!(rarities, ["rare", "uncommon", "common"]);
     }
 
+    /// Cards for the two picker-only orders: `(id, name, cmc, released_at)`.
+    ///
+    /// A set of its own so [`seeded`]'s three rows — none of which carries either column —
+    /// cannot pad the answer, and names deliberately at odds with both orders, because
+    /// alphabetical is what a dropped key falls back to and a fixture that agrees with the
+    /// fallback proves nothing.
+    #[rustfmt::skip]
+    fn seed_picker_orders(conn: &Connection) {
+        let rows = [
+            ("q1", "Alpha",   Some(3.0), Some("2019-01-01")),
+            ("q2", "Bravo",   None,      None),
+            ("q3", "Charlie", Some(0.0), Some("1993-08-05")),
+            ("q4", "Delta",   Some(7.0), Some("2024-06-14")),
+        ];
+        for (id, name, cmc, released) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,released_at,
+                                    is_paper,oracle_id,raw)
+                 VALUES (?1,?2,'zzz',?1,'en','normal',?3,?4,1,?1,'{}')",
+                rusqlite::params![id, name, cmc, released],
+            ).unwrap();
+        }
+    }
+
+    /// The page `seed_picker_orders` produces under one sort, as names.
+    fn picker_order(conn: &Connection, key: &str, dir: &str) -> Vec<String> {
+        run_search(
+            conn,
+            &SearchRequest {
+                set_code: Some("zzz".into()),
+                sort: Some(vec![term(key, dir)]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|c| c.name)
+        .collect()
+    }
+
+    /// `cmc` is nullable, and this key has no table header of its own — it is reached from
+    /// the filter bar's sort picker, so nothing else in the app would notice if
+    /// [`crate::sorting::order_by`] dropped it.
+    #[test]
+    fn mana_value_sorts_ascending_and_descending_with_nulls_last() {
+        let conn = seeded();
+        seed_picker_orders(&conn);
+        assert_eq!(
+            picker_order(&conn, "manaValue", "asc"),
+            ["Charlie", "Alpha", "Delta", "Bravo"],
+            "0, 3, 7 — and the card with no mana value last"
+        );
+        assert_eq!(
+            picker_order(&conn, "manaValue", "desc"),
+            ["Delta", "Alpha", "Charlie", "Bravo"],
+            "the rows reversed, not the hole moved"
+        );
+    }
+
+    /// Same shape for `released_at`, whose holes are commoner: a card the sync has no
+    /// release date for is not a card printed at the dawn of time.
+    #[test]
+    fn released_sorts_ascending_and_descending_with_nulls_last() {
+        let conn = seeded();
+        seed_picker_orders(&conn);
+        assert_eq!(
+            picker_order(&conn, "released", "asc"),
+            ["Charlie", "Alpha", "Delta", "Bravo"],
+            "1993, 2019, 2024 — and the undated card last"
+        );
+        assert_eq!(
+            picker_order(&conn, "released", "desc"),
+            ["Delta", "Alpha", "Charlie", "Bravo"],
+            "the rows reversed, not the hole moved"
+        );
+    }
+
     /// The whole point of a list rather than one key: cheapest *within* each rarity is a
     /// question one sort key cannot ask.
     #[test]
@@ -2722,29 +3093,47 @@ mod tests {
 
     /// `NULLS LAST` needs SQLite ≥ 3.30 — older builds reject it at *prepare* time, so
     /// this fails loudly rather than silently sorting priceless cards to the top.
+    ///
+    /// The unpriced card is named `Aa Unpriced` and both directions are asked for, and both
+    /// of those are deliberate. It was `Unpriced Card`, which sorts last **alphabetically
+    /// too**, so the expected answer was also the fallback's answer and the assertion could
+    /// not tell a working price sort from a dropped one; and descending is the direction
+    /// SQLite would get right on its own, since its own rule is NULLs last descending.
+    /// Ascending is the half that needs the words `NULLS LAST` written down, and it was the
+    /// half not being asked (2026-08-20).
     #[test]
     fn price_sort_puts_unpriced_cards_last() {
         let conn = seeded();
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
-             VALUES ('4','Unpriced Card','lea','2','en','normal',1,'{}')",
+             VALUES ('4','Aa Unpriced','lea','2','en','normal',1,'{}')",
             [],
         )
         .unwrap();
-        let r = run_search(
-            &conn,
-            &SearchRequest {
-                sort: Some(vec![term("price", "desc")]),
-                limit: 50,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let names: Vec<&str> = r.items.iter().map(|c| c.name.as_str()).collect();
+        let names = |dir: &str| -> Vec<String> {
+            run_search(
+                &conn,
+                &SearchRequest {
+                    sort: Some(vec![term("price", dir)]),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+        };
         assert_eq!(
-            names,
-            ["Lightning Bolt", "Lightning Helix", "Unpriced Card"],
-            "descending by price, NULLs last"
+            names("desc"),
+            ["Lightning Bolt", "Lightning Helix", "Aa Unpriced"],
+            "descending by price — $400.50, $1.50 — and the hole last"
+        );
+        assert_eq!(
+            names("asc"),
+            ["Lightning Helix", "Lightning Bolt", "Aa Unpriced"],
+            "the rows reversed, and the hole did not move to the top with them"
         );
     }
 
@@ -3708,11 +4097,18 @@ mod tests {
     /// a column — a separate sort table, and therefore a separate chance to have wired one
     /// marketplace and not another.
     ///
-    /// Read through a `limit` of one rather than off the page's order, because for an
-    /// unranked collapsed browse the group step takes the `LIMIT` and the outer join then
-    /// re-orders the page by name (see `final_order`). *Which* group survives the limit is
-    /// therefore the observable that the group order actually decides — and it is the one
-    /// that matters, since it is what decides whether the dearest card is on page one.
+    /// Read through a `limit` of one: *which* group survives the limit is what the group
+    /// order decides, and it is the thing that matters, since it is what puts the dearest
+    /// card on page one.
+    ///
+    /// **This paragraph used to give a second reason, and that reason was a bug being
+    /// written down as a rule** — "the group step takes the `LIMIT` and the outer join then
+    /// re-orders the page by name". It did, for every collapsed sort, and the page really
+    /// did come back alphabetical; the workaround was reached for here instead of the
+    /// defect being seen. Fixed 2026-08-20 ([`SEARCH_SORTS_JOINED`]), so the page's order is
+    /// now readable too — `a_collapsed_price_sort_orders_by_the_ends_of_the_range` reads it.
+    /// The `limit` of one stays because it is the sharper observable, not because the other
+    /// one lies.
     #[test]
     fn a_collapsed_price_sort_orders_by_the_marketplace_it_is_asked_for() {
         let conn = seeded_marketplaces();
