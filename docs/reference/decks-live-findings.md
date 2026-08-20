@@ -412,7 +412,7 @@ it.
 
 Driven against the **live corpus of 116 712 cards, Scryfall data of 2026-08-15**, through the real
 `deck_import_resolve` / `deck_import_commit` rather than a stub. The three fixtures are the reader's
-own exports of one deck, held verbatim in `src/features/decks/import/fixtures.ts`; two decks were
+own exports of one deck, held verbatim in `src/features/transfer/import/fixtures.ts`; two decks were
 created for this pass and deleted afterwards.
 
 ### Import: all three lists resolved, and nothing was lost

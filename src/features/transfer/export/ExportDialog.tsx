@@ -16,7 +16,7 @@
  * closed dialog — `open={false}` — mounts nothing: no format state, no memoized preview text.
  *
  * **The file picker's own half is unverifiable**, for the reason `deck_set_cover_image`'s is
- * (`src/features/decks/CLAUDE.md`'s Import section says the same of the open dialog):
+ * (`src/features/transfer/CLAUDE.md`'s Import section says the same of the open dialog):
  * `dialog:allow-save` opens a native window CDP cannot reach, and nothing in a test or a browser
  * can drive it either. So this file's tests cover **path → write**, not **click → path** — `save`
  * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way

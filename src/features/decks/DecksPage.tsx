@@ -30,7 +30,7 @@ import {
   type FolderNode,
   type FolderRowMenu,
 } from "./FolderTree";
-import { ImportDeckDialog, type ImportTarget } from "./import/ImportDeckDialog";
+import { ImportDeckDialog, type ImportTarget } from "@/features/transfer/import/ImportDeckDialog";
 import type { Panel } from "./panels";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDecks, type Decks } from "./useDecks";

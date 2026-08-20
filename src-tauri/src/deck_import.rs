@@ -1,6 +1,6 @@
 //! Importing a decklist: the one question TypeScript cannot answer.
 //!
-//! A reader pastes a list; the TypeScript half (`src/features/decks/import/`, mirrored across
+//! A reader pastes a list; the TypeScript half (`src/features/transfer/import/`, mirrored across
 //! IPC by `src/lib/ipc.ts`) parses it into lines and
 //! decides everything a *deck* decision is — which pile a card lands in, which card is the
 //! commander, what the format is. What it cannot decide is **which printing in this app's

@@ -4,7 +4,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { useDeck } from "../useDeck";
+import { useDeck } from "@/features/decks/useDeck";
 import { REFERENCE_LIST } from "./fixtures";
 import { ImportDeckDialog, type ImportTarget } from "./ImportDeckDialog";
 
@@ -69,7 +69,7 @@ function Dialog({
 }
 
 const meta = {
-  title: "Decks/Import deck dialog",
+  title: "Transfer/Import deck dialog",
   component: Dialog,
   tags: ["autodocs"],
   args: { deckId: null, variant: "live" as DeckVariant, onDismiss: fn(), onImported: fn() },

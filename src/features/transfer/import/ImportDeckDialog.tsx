@@ -16,9 +16,9 @@ import { statusLine } from "@/lib/motion";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
-import { DEFAULT_FORMAT, FormatSelect, GameSelect } from "../FormatSelect";
-import { DEFAULT_VARIANT, useDeck } from "../useDeck";
-import { ANY_GAME, useFormatSpecs } from "../useFormatSpecs";
+import { DEFAULT_FORMAT, FormatSelect, GameSelect } from "@/features/decks/FormatSelect";
+import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
+import { ANY_GAME, useFormatSpecs } from "@/features/decks/useFormatSpecs";
 import { parseDecklist } from "./parse";
 import {
   buildImportPlan,

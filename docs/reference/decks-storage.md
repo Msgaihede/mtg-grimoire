@@ -588,8 +588,8 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   card name should cost that one name, not the other hundred lines — the `U+FFFD` it leaves bears
   no card's name, so the damaged line comes back quoted in the preview while everything else
   resolves. A `from_utf8` would answer `Err` for the whole file and name no line.
-- **The TypeScript half decides everything a _deck_ decision is** (`src/features/decks/import/`,
-  and its own [CLAUDE.md](../../src/features/decks/CLAUDE.md) carries the binding rules): one
+- **The TypeScript half decides everything a _deck_ decision is** (`src/features/transfer/import/`,
+  and its own [CLAUDE.md](../../src/features/transfer/CLAUDE.md) carries the binding rules): one
   parser with per-line rules only, the pile from `autoCategoryFor`, the commander from
   `commanderIneligibility`. The one type that crosses for it is **`CardIdentity`, the card-level
   half of `CardFacts`** — everything true of a printing and nothing true only of a row in a deck —
@@ -598,7 +598,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `quantity`, so a card in a deck is more than a card, and every existing caller passes a whole
   `DeckCard`, which satisfies a `Pick` of itself.
 - **The corpus the format work was designed against is three real exports of _one_ deck**, held
-  verbatim in `src/features/decks/import/fixtures.ts`. **Most of this table is asserted rather than
+  verbatim in `src/features/transfer/import/fixtures.ts`. **Most of this table is asserted rather than
   remembered**: `parse.test.ts`'s `the format fixtures` block counts the rows, the card lines, the
   copies, the 17 first-entry `{noDeck}` lines and the decoration columns off the fixture **text**
   rather than off the parser's reading of it, so a tidied fixture is a failing assertion rather
@@ -624,7 +624,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   what makes preferring the bracket safe.
 
 - **What the TypeScript side learnt for those exports**, each rule with the failure behind it in
-  [the deck folder's own CLAUDE.md](../../src/features/decks/CLAUDE.md): four per-line decorations
+  [the transfer feature's own CLAUDE.md](../../src/features/transfer/CLAUDE.md): four per-line decorations
   (an **empty** `()` hint, an Archidekt `^Tag,#colour^`, the `[Category]` bracket, the existing
   `*F*`) plus one heading rule that is **the only lookahead in the parser**; a bracket's first
   entry as the pile with `{flag}`s stripped, `{noDeck}` there meaning `is_active = 0` and `{noDeck}`
@@ -668,7 +668,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   **That `6 categories` is the tally bug being measured, not the shipped behaviour**: the pile
   count was computed before the commander was chosen and never recomputed, so the same press
   today reads **7 categories** with a `Commander` row — see
-  [the frontend's own rules](../../src/features/decks/CLAUDE.md) for the fix and the numbers.
+  [the transfer feature's own rules](../../src/features/transfer/CLAUDE.md) for the fix and the numbers.
   Read back through `deck_get`: **105 of 105 lines resolved** against the live corpus — 0
   unmatched, 0 hint misses, 0 parse issues — **105 rows carrying 117 copies**, and ten categories:
   the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,

@@ -12,7 +12,7 @@ import type {
   ImportResolveLine,
   SyncStatus,
 } from "@/lib/ipc";
-import { spec } from "../validation/fixtures";
+import { spec } from "@/features/decks/validation/fixtures";
 import { ARENA_LIST } from "./fixtures";
 
 const deckImportResolve = vi.hoisted(() => vi.fn());

@@ -18,7 +18,7 @@ import {
   type ImportResolveRow,
   type PrintingTags,
 } from "@/lib/ipc";
-import { DEFAULT_VARIANT } from "../useDeck";
+import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
 
 /** What a commit into a deck that already exists needs — the four arguments of the command,
  *  because every one of them is a decision the dialog made and none can be defaulted here. */

@@ -50,7 +50,7 @@ import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
-import { ExportDialog } from "./export/ExportDialog";
+import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import {
   asGroupBy,
   buildGroups,
@@ -58,7 +58,7 @@ import {
   GROUP_BY_OPTIONS,
   type GroupBy,
 } from "./grouping";
-import { ImportDeckDialog } from "./import/ImportDeckDialog";
+import { ImportDeckDialog } from "@/features/transfer/import/ImportDeckDialog";
 import { RenameField } from "./metaRows";
 import { PriceStrip } from "./PriceStrip";
 import { QuickAdd } from "./QuickAdd";

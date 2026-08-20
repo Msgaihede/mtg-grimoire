@@ -6,8 +6,8 @@ import type {
   ImportResolveRow,
   PrintingTags,
 } from "@/lib/ipc";
-import { PREDEFINED_CATEGORY_NAMES, UNCATEGORIZED } from "../autoCategory";
-import { spec } from "../validation/fixtures";
+import { PREDEFINED_CATEGORY_NAMES, UNCATEGORIZED } from "@/features/decks/autoCategory";
+import { spec } from "@/features/decks/validation/fixtures";
 // `match` is the stubbed resolver, and it lives beside the corpus because `decklists.test.ts`
 // needs the same one — see its doc for what it claims and what it refuses to claim.
 import { ARCHIDEKT_SECTIONED, match } from "./fixtures";

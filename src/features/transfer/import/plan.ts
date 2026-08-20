@@ -34,9 +34,9 @@ import {
   PREDEFINED_CATEGORY_NAMES,
   UNCATEGORIZED,
   autoCategoryFor,
-} from "../autoCategory";
-import { commanderIneligibility } from "../validation/commanders";
-import type { CardIdentity } from "../validation/types";
+} from "@/features/decks/autoCategory";
+import { commanderIneligibility } from "@/features/decks/validation/commanders";
+import type { CardIdentity } from "@/features/decks/validation/types";
 import type { ParseIssue, ParsedLine, ParsedList, SectionKind } from "./parse";
 
 /**

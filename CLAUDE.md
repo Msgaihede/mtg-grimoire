@@ -45,7 +45,8 @@ on — do not work from this page alone.
 | --- | --- |
 | [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities |
 | [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
-| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, decklist import, the editor's views and drags |
+| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
+| [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
 

@@ -154,7 +154,7 @@ const DECK_CARDS: ExportCard[] = [
  * {@link SaveRefused} refuses in cannot be the world another story's press is answered from.
  */
 const meta = {
-  title: "Decks/Export dialog",
+  title: "Transfer/Export dialog",
   component: ExportDialog,
   tags: ["autodocs"],
   args: {
