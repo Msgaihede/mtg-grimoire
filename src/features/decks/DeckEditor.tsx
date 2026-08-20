@@ -74,7 +74,7 @@ import { useDeckMeta } from "./useDeckMeta";
 import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
-import { validateDeck } from "./validation/engine";
+import { validateForMarks } from "./validation/engine";
 import { violationsByCard } from "./violations";
 import { GridView } from "./views/GridView";
 import { StackView } from "./views/StackView";
@@ -2293,14 +2293,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * Every finding, filed under each card it names, so a view can mark a card.
    *
-   * The second pass of `validateDeck` on this screen — `ValidationPanel` makes its own for the
-   * chip's count — and that is the cheaper of the two arrangements rather than an oversight:
-   * the engine is pure over a few hundred rows, and the alternative is lifting the panel's
-   * state out of the panel so that a chip and a set of marks share one array. Two `useMemo`s
-   * over the same input cannot disagree; two owners of one array can.
+   * The second validation pass on this screen — `ValidationPanel` makes its own for the chip's
+   * count — and that is the cheaper of the two arrangements rather than an oversight: the engine
+   * is pure over a few hundred rows, and the alternative is lifting the panel's state out of the
+   * panel so that a chip and a set of marks share one array. Two `useMemo`s over the same input
+   * cannot disagree; two owners of one array can.
+   *
+   * **`validateForMarks` rather than `validateDeck`, and the difference is the whole of issue
+   * #134.** The panel counts the deck, which a card in a switched-off pile is not part of; the
+   * marks answer for every card *drawn*, parked ones included, because a card a reader has put
+   * in their Maybeboard is a card they are asking a question about. The two are separate
+   * functions rather than one with a flag precisely so the chip cannot pick up the answer
+   * meant for the frames.
    */
   const violations = useMemo(
-    () => (spec ? violationsByCard(validateDeck([...deck.cards], spec)) : undefined),
+    () => (spec ? violationsByCard(validateForMarks([...deck.cards], spec)) : undefined),
     [deck.cards, spec],
   );
 
