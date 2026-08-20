@@ -11,8 +11,10 @@ import { isFinish } from "@/lib/finish";
 import { ipc, ipcError, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { WishlistFilterBar } from "./WishlistFilterBar";
+import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
 import { useWishlist, type Wishlist } from "./useWishlist";
 import { missingOf } from "./wish";
@@ -59,13 +61,20 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
  * place.
  *
  * The thin mirror of the collection, deliberately — a wishlist is a shopping list, not an
- * inventory. One list and no layout toggle: a shopping list is read by name, and forty pieces
- * of art answer none of what it is for. The whole view is grey; the only arithmetic it does
- * out loud is the one number the reader came for.
+ * inventory — and, like the other two lists, it is drawn either as a wall of art or as a
+ * table. **It opens on the wall**, which is where it differs from the collection and agrees
+ * with the search: these are cards the reader does not have yet and may never have held, so
+ * the picture is how you recognise the thing you are about to buy. The table is a press away
+ * for the trip where the question is what it all costs.
+ *
+ * Both layouts draw one list and answer alike: the same wishes, the same two writes, the same
+ * menu on the same rows. What differs is only what there is room to say — see
+ * {@link WishlistGrid} for what a 170px tile keeps and what it moves into a panel.
  */
 export function WishlistPage() {
   const wishlist = useWishlist();
   const { query, rows, total, marketplace } = wishlist;
+  const view = useAppStore((s) => s.wishlistView);
   const queryClient = useQueryClient();
 
   /**
@@ -322,21 +331,33 @@ export function WishlistPage() {
             from a menu that has already closed. */}
         <CardMenuRefusal error={menuFailure} />
 
-        {!empty && (
-          <WishlistTable
-            rows={rows}
-            total={total}
-            listKey={wishlist.queryKeyString}
-            sort={wishlist.sort}
-            onSort={wishlist.toggleSort}
-            onNeedNextPage={onNeedNextPage}
-            onSetQuantity={onSetQuantity}
-            onRemove={onRemove}
-            rowMenu={rowMenu}
-            rowMenuKey={rowMenuKey}
-            marketplace={marketplace}
-          />
-        )}
+        {!empty &&
+          (view === "grid" ? (
+            <WishlistGrid
+              rows={rows}
+              listKey={wishlist.queryKeyString}
+              onNeedNextPage={onNeedNextPage}
+              onSetQuantity={onSetQuantity}
+              onRemove={onRemove}
+              rowMenu={rowMenu}
+              rowMenuKey={rowMenuKey}
+              marketplace={marketplace}
+            />
+          ) : (
+            <WishlistTable
+              rows={rows}
+              total={total}
+              listKey={wishlist.queryKeyString}
+              sort={wishlist.sort}
+              onSort={wishlist.toggleSort}
+              onNeedNextPage={onNeedNextPage}
+              onSetQuantity={onSetQuantity}
+              onRemove={onRemove}
+              rowMenu={rowMenu}
+              rowMenuKey={rowMenuKey}
+              marketplace={marketplace}
+            />
+          ))}
       </div>
     </section>
   );

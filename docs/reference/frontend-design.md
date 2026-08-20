@@ -286,13 +286,15 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   own zoom.** The gesture was already attached per _card section_ — `CardGrid`'s scroller and the
   deck editor's own `StackView` and `GridView` roots — so the sidebar, the ribbon, the tables and
   the card pane never move. What changed is what those listeners write. `useAppStore`'s `cardZoom`
-  is a `Record<ZoomSection, number>` over **four** sections (`ZOOM_SECTIONS`, `src/lib/cardZoom.ts`):
-  `search` and `collection`, the two walls; `deckSearch`, the deck editor's docked search column,
-  which is a third `CardGrid`; and `deck`, the editor's desk — **one key for both deck views**,
-  because Stacks and Grid are two drawings of the same pile and switching between them must not
-  resize the cards the reader just settled on. `useCardZoomGesture(ref, section)` names the section
-  it is stepping. **The wishlist has no zoom because it has no card section** — it is `VirtualTable`
-  only.
+  is a `Record<ZoomSection, number>` keyed by `ZOOM_SECTIONS` (`src/lib/cardZoom.ts`, which is the
+  list — no count is written here, because a count is a fact about a tree and the constant already
+  answers it): `search`, `collection` and `wishlist`, the three list walls; `deckSearch`, the deck
+  editor's docked search column, which is a fourth `CardGrid`; `deck`, the editor's desk — **one key
+  for both deck views**, because Stacks and Grid are two drawings of the same pile and switching
+  between them must not resize the cards the reader just settled on; and `printings`, the modal's
+  wall, which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)`
+  names the section it is stepping. **The wishlist joined the list on 2026-08-20**, when it gained a
+  card view of its own; until then it was `VirtualTable` only and had no card section to zoom.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
   owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
@@ -318,7 +320,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
     is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
     stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
-    card), the banner's drop shadow, and the two walls' gutters.
+    card), the banner's drop shadow, and the gutters `CardGrid` splits either side of a row.
   - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build at
     1280×800, against a real 116 712-card corpus, ctrl+wheel dispatched synthetically). Search
     wall, 0.5× / 1× / 2×: tile **85 / 170 / 340**, caption type **6 / 12 / 24px**, rarity gem
