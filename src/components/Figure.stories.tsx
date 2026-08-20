@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, userEvent, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 
@@ -73,17 +74,24 @@ export const WithNote: Story = {
 
 /**
  * Spec §5 requires every price on screen to say how old it is, and there is no room on the
- * row to write it — so it is a `title`, on the figure's own wrapper.
+ * row to write it — so it is a tooltip, bound on the figure's own wrapper through
+ * `useTooltip()`.
  *
  * A tooltip is invisible until the pointer rests on it and invisible in a screenshot forever,
  * which is what the `play` is for. Note where it lands: on the `<div>` that holds the pair, not
- * on the `<dd>`, so the hover target is the label as well as the number.
+ * on the `<dd>`, so the hover target is the label as well as the number. It describes the pair
+ * (the default `describes: true`) rather than repeating it, so the panel carries
+ * `role="tooltip"` and `aria-describedby` points at it while open.
  */
 export const WithAsOfTitle: Story = {
   args: { label: "Value (EUR)", value: "€3,640.18", title: PRICES_AS_OF },
   play: async ({ canvasElement }) => {
-    const label = within(canvasElement).getByText("Value (EUR)");
-    await expect(label.parentElement).toHaveAttribute("title", PRICES_AS_OF);
+    const canvas = within(canvasElement);
+    const label = canvas.getByText("Value (EUR)");
+    await userEvent.hover(label.parentElement!);
+    const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    await expect(panel).toHaveTextContent(PRICES_AS_OF);
+    await expect(label.parentElement).toHaveAttribute("aria-describedby", panel.id);
   },
 };
 

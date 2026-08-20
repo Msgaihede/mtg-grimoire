@@ -78,6 +78,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { AppShell } from "./AppShell";
 import { REPORT_MS } from "./useSidebarDrops";
+import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { Update } from "@/lib/useUpdate";
@@ -114,16 +115,22 @@ const noUpdate: Update = {
  * in exactly this client, so this is what the shell really renders in. The *module's* client
  * rather than a fresh one per test, so a query seeded here is the one the sidebar reads and
  * `invalidate` below is the spy it fires.
+ *
+ * **`TooltipProvider` joined the stack 2026-08-20**, outside `CardToDeckProvider` in `App.tsx`'s
+ * own order — without it the ribbon's status-line tooltip (below) binds the no-op API and never
+ * opens, which is `useTooltip()`'s documented trade for a dropped provider rather than a throw.
  */
 const render = (ui: ReactElement) =>
   renderBare(
     <QueryClientProvider client={queryClient}>
-      {/* The shell draws the sentence a refused card-menu deck add leaves and reads it through
-          this context, so it is as much a part of the shell's surroundings as the query client.
-          `App.tsx` mounts it **above `ContextMenuProvider`** rather than here, because that
-          provider draws its panel as a sibling of the shell — a menu's rows are not inside the
-          shell, which is a trap that cost one commit. */}
-      <CardToDeckProvider>{ui}</CardToDeckProvider>
+      <TooltipProvider>
+        {/* The shell draws the sentence a refused card-menu deck add leaves and reads it through
+            this context, so it is as much a part of the shell's surroundings as the query client.
+            `App.tsx` mounts it **above `ContextMenuProvider`** rather than here, because that
+            provider draws its panel as a sibling of the shell — a menu's rows are not inside the
+            shell, which is a trap that cost one commit. */}
+        <CardToDeckProvider>{ui}</CardToDeckProvider>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 
@@ -237,10 +244,10 @@ describe("the status line", () => {
 
     render(<AppShell update={noUpdate}>{null}</AppShell>);
 
-    expect(await screen.findByText(/116,568 cards/)).toHaveAttribute(
-      "title",
-      "C:\\Users\\x\\AppData\\Roaming\\mtg\\data",
-    );
+    const line = await screen.findByText(/116,568 cards/);
+    await userEvent.hover(line);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: 2000 });
+    expect(panel).toHaveTextContent("C:\\Users\\x\\AppData\\Roaming\\mtg\\data");
   });
 
   /**

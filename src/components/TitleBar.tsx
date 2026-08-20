@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import {
   SNAP_BUTTON_ID,
   closeWindow,
@@ -47,13 +48,18 @@ function CaptionButton({
   /** Draw the hover state regardless of the pointer — see {@link TitleBar}'s snap overlay. */
   forceHover?: boolean;
 }) {
+  const tip = useTooltip();
   return (
     <button
       type="button"
       id={id}
       onClick={onSelect}
       aria-label={label}
-      title={label}
+      // `describes: false`: `label` is this button's whole `aria-label` already, so a wired
+      // `aria-describedby` would have a screen reader hear "Minimize, Minimize". This is also
+      // the one anchor in the app pinned to the window's top edge, so its tooltip is the one
+      // `placeTooltip` always has to flip downward rather than open above the window.
+      {...tip(label, { describes: false })}
       className={cn(
         "inline-flex h-full w-[46px] shrink-0 items-center justify-center",
         "text-dim transition-colors duration-150 motion-reduce:transition-none",

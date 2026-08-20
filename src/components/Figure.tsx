@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 
 /**
  * The header a list of cards is captioned with: a few figures, in the data face, with no
@@ -22,7 +23,9 @@ export function FigureRow({ children }: { children: ReactNode }) {
  *
  * `note` is the qualification a number needs to stay honest — how many copies the value
  * could not price, how much of a list a sum was taken over. `title` is where spec §5's
- * as-of sentence rides on a money figure, because the row has no space to write it out.
+ * as-of sentence rides on a money figure, because the row has no space to write it out —
+ * a description of the label/value pair beside it, so it binds with the tooltip's default
+ * (`aria-describedby` while open) rather than `describes: false`.
  */
 export function Figure({
   label,
@@ -37,8 +40,9 @@ export function Figure({
   note?: string;
   title?: string;
 }) {
+  const tip = useTooltip();
   return (
-    <div className="min-w-0" title={title}>
+    <div className="min-w-0" {...tip(title)}>
       <dt className="text-xs text-dim">{label}</dt>
       <dd className="font-mono text-lg tabular-nums">
         {value}

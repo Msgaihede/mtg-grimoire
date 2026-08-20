@@ -1,4 +1,5 @@
 import { Heart } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -33,12 +34,17 @@ export function OwnedBadge({
   wishlisted?: boolean;
   className?: string;
 }) {
+  // The hook is a hook: called unconditionally, ahead of the early return below.
+  const tip = useTooltip();
   if (owned <= 0 && !wishlisted) return null;
   // The two sentences this badge makes, written once and said twice — as `sr-only` text, which
-  // is how a screen reader gets them, and joined into a `title`, which is how a pointer does.
+  // is how a screen reader gets them, and joined into a tooltip, which is how a pointer does.
   // `×3` beside a filled heart is two glyphs of shorthand, and a reader who can see it still
   // has to be told once which count that is and whose list the heart means. One tooltip rather
   // than one per half: the halves sit 4px apart, and two would flicker between them.
+  //
+  // `describes: false`, because the `sr-only` spans below already say the same words to
+  // assistive tech — a wired `aria-describedby` would have a screen reader say them twice.
   const ownedSentence = `${owned} in your collection`;
   const wishSentence = "On your wishlist";
   const hint = [owned > 0 ? ownedSentence : null, wishlisted ? wishSentence : null]
@@ -46,7 +52,7 @@ export function OwnedBadge({
     .join(" · ");
   return (
     <span
-      title={hint}
+      {...tip(hint, { describes: false })}
       className={cn(
         "inline-flex shrink-0 items-center gap-[calc(0.25rem*var(--mark-scale,1))] font-mono",
         "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",

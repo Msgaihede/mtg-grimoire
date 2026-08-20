@@ -1,8 +1,17 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { RANK, type Activity } from "@/lib/activity";
 import { Ribbon, type RibbonProps } from "./Ribbon";
+
+const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
+const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
+const fireHover = (el: HTMLElement) => {
+  fireEvent.pointerEnter(el);
+  advance(TOOLTIP_OPEN_MS);
+};
+const fireLeave = (el: HTMLElement) => fireEvent.pointerLeave(el);
 
 const props = (over: Partial<RibbonProps> = {}): RibbonProps => ({
   title: "Search",
@@ -31,10 +40,7 @@ describe("Ribbon", () => {
     render(<Ribbon {...props()} />);
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
-    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toHaveAttribute(
-      "title",
-      "D:\\app\\data",
-    );
+    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /refresh/i })).toBeEnabled();
   });
 
@@ -42,29 +48,50 @@ describe("Ribbon", () => {
    * The one consumer of `images::Cache::store_failures`, which counted for a whole plan
    * with nothing reading it. Non-zero means the images on screen are never being cached —
    * invisible otherwise, because they display perfectly and simply re-download forever.
+   *
+   * Through `useTooltip()` rather than a native `title` now — the words are a *description* of
+   * the status line (spec §3's data-dir hint plus this), so they bind with the tooltip's
+   * default `describes: true` and the panel carries `role="tooltip"`.
    */
   it("says so in the tooltip when images could not be cached, and stays quiet when they could", () => {
-    const { rerender } = render(<Ribbon {...props({ imageStoreFailures: 12 })} />);
+    vi.useFakeTimers();
+    const { rerender } = mount(<Ribbon {...props({ imageStoreFailures: 12 })} />);
 
-    const line = screen.getByText("116,568 cards · data from 2026-08-03");
-    expect(line).toHaveAttribute(
-      "title",
+    const line = () => screen.getByText("116,568 cards · data from 2026-08-03");
+    // `normalizeWhitespace: false`, so the literal `\n` the tooltip joins its two sentences with
+    // is checked rather than collapsed to a space — `whitespace-pre-line` on the panel is what
+    // keeps that break, and a normalized comparison would pass even if the join lost it.
+    fireHover(line());
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
       "D:\\app\\data\n12 card images could not be saved to the cache — the data folder may be read-only or full.",
+      { normalizeWhitespace: false },
     );
+    fireLeave(line());
 
     // Singular, because "1 card images" is the sort of thing that makes a reader distrust
     // the number beside it.
-    rerender(<Ribbon {...props({ imageStoreFailures: 1 })} />);
-    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toHaveAttribute(
-      "title",
+    rerender(
+      <TooltipProvider>
+        <Ribbon {...props({ imageStoreFailures: 1 })} />
+      </TooltipProvider>,
+    );
+    fireHover(line());
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
       "D:\\app\\data\n1 card image could not be saved to the cache — the data folder may be read-only or full.",
+      { normalizeWhitespace: false },
     );
+    fireLeave(line());
 
-    rerender(<Ribbon {...props({ imageStoreFailures: 0 })} />);
-    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toHaveAttribute(
-      "title",
-      "D:\\app\\data",
+    rerender(
+      <TooltipProvider>
+        <Ribbon {...props({ imageStoreFailures: 0 })} />
+      </TooltipProvider>,
     );
+    fireHover(line());
+    expect(screen.getByRole("tooltip")).toHaveTextContent("D:\\app\\data", {
+      normalizeWhitespace: false,
+    });
+    vi.useRealTimers();
   });
 
   it("runs and then refuses a second sync while one is in flight", async () => {
