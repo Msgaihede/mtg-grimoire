@@ -1062,7 +1062,13 @@ describe("CardStack cards", () => {
     const tag = screen.getByTitle("Wincon · 3 in this pile");
     expect(tag).toHaveAttribute("aria-hidden", "true");
     expect(tag).toHaveTextContent("3");
-    expect(tag.style.backgroundColor).toBe("var(--color-pie-g)");
+    // **The fixture's `"moss"` is a colour written by a build older than this one**, and the
+    // assertion is what proves such a row still draws: `deck_tags.color` held one of six token
+    // words until 2026-08-20 and holds `#rrggbb` now, so `tagColorCss` maps the six retired
+    // words through `LEGACY_TOKENS` rather than falling them to gold. jsdom normalises the hex,
+    // which is why this reads as an `rgb()` where it used to read as the `var()` the token
+    // resolved to.
+    expect(tag.style.backgroundColor).toBe("rgb(0, 115, 62)");
     // The word itself is in the button's name, which is the only place a reader inside a
     // labelled button hears anything.
     expect(
