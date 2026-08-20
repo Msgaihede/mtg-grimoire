@@ -34,6 +34,7 @@
 | `src/features/transfer/formats.ts` | Format identity: the seven names, labels, extensions |
 | `src/features/transfer/fields.ts` | The field registry, per-format and per-surface declarations, the intersection rule |
 | `src/features/transfer/TransferCard.ts` | The one card shape, and the three surface adapters |
+| `src/features/transfer/fixtures.ts` | `transferCard()` — the typed, cast-free fixture builder every suite here uses |
 | `src/features/transfer/csv.ts` | RFC 4180 writer and reader |
 | `src/features/transfer/export/fold.ts` | `foldForFields` — merging rows a field set cannot tell apart |
 | `src/features/transfer/export/format.ts` | The seven writers, composed from a field set |
@@ -865,16 +866,7 @@ import { describe, expect, it } from "vitest";
 import type { TransferCard } from "../TransferCard";
 import { foldForFields } from "./fold";
 
-const card = (over: Partial<TransferCard> = {}): TransferCard =>
-  ({
-    name: "Lightning Bolt", quantity: 1, setCode: "LEA", collectorNumber: "161",
-    finish: null, lang: "en", categoryName: null, categoryKind: null, categoryActive: null,
-    condition: null, tradelistQuantity: null, purchasePrice: null, purchaseCurrency: null,
-    acquiredAt: null, acquisitionSource: null, serialNumber: null, grading: null,
-    altered: null, signed: null, proxy: null, misprint: null, tags: null, notes: null,
-    setName: null, rarity: null, typeLine: null, unitPrice: null,
-    ...over,
-  }) satisfies TransferCard;
+import { transferCard as card } from "../fixtures";
 
 describe("foldForFields", () => {
   it("sums two rows the chosen fields cannot tell apart", () => {
@@ -920,13 +912,78 @@ describe("foldForFields", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 2: Write the shared fixture builder the rest of the plan uses**
+
+Six later test files need a `TransferCard` fixture. Write **one** typed builder rather than a
+cast-based literal per file — the pattern this repo already uses at
+`src/features/decks/validation/fixtures.ts:318`, where `card()` builds a fully-typed row with
+sensible defaults plus a `Partial<T>` override and is reused across four suites.
+
+**No `as unknown as` cast.** A cast suppresses excess- and missing-property checking on the
+literal, so a fixture can quietly omit a field the shape requires and the omission surfaces later
+as `undefined` reaching code that expected a value. A builder returning a complete
+`TransferCard` cannot do that, and it is the difference between a fixture that type-checks and
+one that merely compiles.
+
+Create `src/features/transfer/fixtures.ts`:
+
+```ts
+/**
+ * A whole `TransferCard`, overridden per test.
+ *
+ * The defaults are a plain regular-finish printing on a surface with **no** categories and no
+ * collection fields — `null` everywhere meaning "this surface does not have this fact", which is
+ * what `availableFields` reads. A deck test overrides the three category fields; a collection
+ * test overrides `condition` and friends.
+ */
+import type { TransferCard } from "./TransferCard";
+
+export function transferCard(over: Partial<TransferCard> = {}): TransferCard {
+  return {
+    name: "Lightning Bolt",
+    quantity: 1,
+    setCode: "LEA",
+    collectorNumber: "161",
+    finish: null,
+    lang: "en",
+    categoryName: null,
+    categoryKind: null,
+    categoryActive: null,
+    condition: null,
+    tradelistQuantity: null,
+    purchasePrice: null,
+    purchaseCurrency: null,
+    acquiredAt: null,
+    acquisitionSource: null,
+    serialNumber: null,
+    grading: null,
+    altered: null,
+    signed: null,
+    proxy: null,
+    misprint: null,
+    tags: null,
+    notes: null,
+    setName: null,
+    rarity: null,
+    typeLine: null,
+    unitPrice: null,
+    ...over,
+  };
+}
+```
+
+Note the file sits beside `src/features/transfer/import/fixtures.ts`, which is a different file in
+a subfolder and unrelated. Windows resolves case-insensitively, so do **not** name it
+`Fixtures.ts` — a case-only difference between two files in one tree resolves to the wrong one and
+tsc stays green while every test fails with "not a function".
+
+- [ ] **Step 3: Run the test and watch it fail**
 
 Run: `npm run test:run -- src/features/transfer/export/fold.test.ts`
 
 Expected: FAIL — cannot resolve `./fold`.
 
-- [ ] **Step 3: Write `fold.ts`**
+- [ ] **Step 4: Write `fold.ts`**
 
 ```ts
 /**
@@ -972,16 +1029,16 @@ export function foldForFields(
 
 The key is JSON rather than a joined string because a card name may contain any printable character. With a plain separator, the rows `Sol Ring` + `` and `Sol` + `Ring` produce one key and fold into a single line — a file with the wrong number of cards in it.
 
-- [ ] **Step 4: Run the test**
+- [ ] **Step 5: Run the test**
 
 Run: `npm run test:run -- src/features/transfer/export/fold.test.ts`
 
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/features/transfer/export/fold.ts src/features/transfer/export/fold.test.ts
+git add src/features/transfer/fixtures.ts src/features/transfer/export/fold.ts src/features/transfer/export/fold.test.ts
 git commit -m "feat(transfer): fold rows a field set cannot tell apart"
 ```
 
@@ -1194,7 +1251,21 @@ git commit -m "feat(transfer): RFC 4180 CSV, readable as well as writable"
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `src/features/transfer/export/format.test.ts`. First replace its `card()` helper so it builds a `TransferCard` (copy the helper from Task 6's `fold.test.ts` and add the three category defaults back: `categoryName: "Main deck", categoryKind: "main", categoryActive: true`). Then add:
+Add to `src/features/transfer/export/format.test.ts`. First replace its `card()` helper with the
+shared builder Task 6 created, keeping this file's deck-shaped defaults:
+
+```ts
+import { transferCard } from "../fixtures";
+
+/** This suite's cards are **deck** cards: the three category defaults are what a single-pile
+ *  export always looked like — the main deck, switched on — so every assertion written before
+ *  `TransferCard` existed still means what it did. */
+const card = (over: Partial<TransferCard> = {}): TransferCard =>
+  transferCard({ name: "Sol Ring", setCode: "LTC", collectorNumber: "285",
+    categoryName: "Main deck", categoryKind: "main", categoryActive: true, ...over });
+```
+
+Then add:
 
 ```ts
 import { defaultFields } from "../fields";
