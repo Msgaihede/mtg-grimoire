@@ -528,7 +528,10 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   and the rail is a plain
   flex child.** Both column views split `kind === "side"` and `kind === "maybe"` out of `groups`
   before the flowing half is built (`splitRail`, `views/columns.ts`) and draw them in one box after
-  it, at the same inline width and `flex` basis. **The box is pinned to the desk's right edge and nothing else
+  it, at the same inline width and `flex` basis. (**`splitRail` answers three runs since
+  2026-08-20** — `{ command, flow, rail }` — and this entry is about the last two, which are
+  exactly what they were. The third is the active command zones, taken out in _front_ of the flow;
+  the entry two below is theirs.) **The box is pinned to the desk's right edge and nothing else
   positions it** — `ml-auto`, which went on 2026-08-17 and came back on **2026-08-18** with the cap
   on the flowing half removed (`flowMaxWidth` is deleted). The day between is the whole argument:
   capping the flow at whole columns did put the rail one gutter from the deck's last pile, and it
@@ -576,12 +579,69 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   `opacity-60`, and the pile heading the rail is switched off too, so a rule under it would mark a
   boundary that is not the one it looks like. The width is unchanged for the Maybeboard's reason:
   the rail is one column wide however many piles are in it, and each one costs height.
+- **The command zones are a third box, at the head of the flow, and the two of them stack inside
+  it** (2026-08-20). A commander is not a card in the curve; it is the card the curve was built
+  _around_, played from a zone of its own before the deck is drawn from, and a companion is that
+  same claim made from outside the deck. So `buildGroups` stopped bucketing either under
+  `Group by mana value` and `Group by type` — each pile is drawn whole — and in **all three**
+  grouping modes it puts the active ones **first**, commander then companion, whatever `sortOrder`
+  says. That much is a domain rule and it is written out in
+  [`features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); what belongs here is the box
+  they are drawn in and the five things that fall out of it.
+  - **They are still not railed, and the old reason is intact.** One card each, by construction, so
+    a column's width spent on either is spent permanently, in every deck, on a pile that is read at
+    a glance. What changed is the other end of that sentence: these two are what the rest of the
+    deck is read _against_, so they sit in front of it rather than among the piles that make it up.
+  - **One grid item for the two of them, because the flow is a masonry.** Drawn as two items they
+    are two one-card piles, and a masonry fills across the line before it walks down the page — so
+    commander and companion would sit **side by side** at the top of the desk and read as two more
+    of the deck's columns, which is exactly the thing the head run exists to stop them looking
+    like. The reader's call is that they stack, companion under commander, the way the rail stacks
+    its piles. So they share a single flow item: a `flex-col` box marked `COMMAND_ATTR`
+    (`data-deck-command`).
+  - **Inside that box the arrangement is the rail's** — the same `flex flex-col gap-5`, the box
+    carrying the width, each pile a plain block with **no `flowWidth`**. What differs is only how
+    the box itself is placed: a grid item with a `grid-row` span here against an `ml-auto` flex
+    child with a `flex` basis there. Three consequences come with that missing prop rather than
+    being decided again. The piles carry no `STACK_ATTR`, so every sweep
+    that counts the deck's own piles goes on counting the deck's. They take no `grid-row` span,
+    because the box is the grid item and the box is what the masonry measures and spans. And they
+    draw no category-reorder grip, which is now right rather than incidental: the zone's position
+    is the rule's and not the reader's, so there is nothing there to drag. **The drop target is
+    untouched** — what is fixed is the zone's _place_, not the pile, and a card can still be
+    dragged into either.
+  - **`TextView` gets the same picture with no third box at all.** `packColumns` is greedy and in
+    the reader's order, which _is_ a stack, so packing `[...command, ...flow]` puts the commander at
+    the top of the first column with the companion directly under it and the deck beginning below
+    them. A box there would be a second mechanism for an arrangement the pack already produces, and
+    the two would part company the first time one of them was adjusted.
+  - **`TableView` and `GridView` never called `splitRail`** — they draw `groups` in the order they
+    are handed — so for those two the whole of this change is that the command zones come first.
+  - **The stats band did not change, and it is the thing a reader will assume did.** `DeckStats`
+    derives the curve, the average mana value and the type bars from the deck's rows itself and has
+    never called `buildGroups`, so a four-drop commander still stands in the `4` bar beside a desk
+    that has stopped filing it there. The reasoning, and why that is not the two-surfaces-disagree
+    failure the `Split X` entries name, is in
+    [`features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+  - **None of this has been driven in the window, and nothing in this entry is a measurement.** The
+    box is one grid item, so it takes one track of the `auto-fill` grid the way any pile does, and
+    the rail widths and gutters quoted above are untouched by it — but what a head box costs a
+    small deck's first line, and how the masonry closes up around it, are live questions nobody has
+    asked yet.
 - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build, 1280×800,
   against a real synced corpus — a 14-card Commander deck of nine categories). Every figure is a
   `getBoundingClientRect` off the running window. **Two of the numbers below are the capped
   build's and are no longer what this app draws** (the cap was deleted 2026-08-18): the rail's
   16px gutter and the 1184px flowing box. Everything about _which pile is where_ — the split, the
   order, the masonry closing up — is unaffected, which is what this pass was for.
+  **One more thing here is the pre-2026-08-20 build's, and it is a pile rather than a number**:
+  this deck's `Commander` was an ordinary flowing pile on the day, which is what let it be first in
+  the flow and, switched off, third in the rail. It is drawn in the head box now, so the flow lists
+  below start at `Instant` and the switching-back-on reading returns it to that box rather than to
+  the head of the flow. **The switched-off readings are exactly what they were** — the head run is
+  active piles only, so a command zone the reader has turned off still falls through to the rail's
+  own tests, which is the one thing this pass proved that no arithmetic in the suite substitutes
+  for.
   - **Before**: flow `Commander, Instant, Artifact, Creature, Test` at x **234 / 474 / 714**, the
     last two wrapping to a second line at y **699** and **767**; rail at x **954**, 224 wide, 480
     tall. The last flow column ends at 938, so the gutter is exactly **16** — `flowMaxWidth` holding.
@@ -986,6 +1046,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   Chromium at a story's own viewport rather than the app's. What that cannot answer is anything
   about the desk's real width, the docked search panel beside it, or the editor's page scroller.
   What it does answer is the mechanism, which is where the risk was.
+  **A second carve-out was added on 2026-08-20 and it is about the fixture rather than the
+  harness**: `UnevenPiles`' `Commander` is a `commander`-kind category, so it is drawn in the
+  command box at the head of the flow now and is no longer one of the flow's own items. The item
+  count and the span array below are that build's — the box is a grid item like any other and the
+  placement the pass was for is a property of the grid, so what it proved is untouched, but a
+  re-run of the same story will not count six.
   - **The declaration arrives intact.** The flowing box computed
     `grid-template-columns: repeat(auto-fill, 224px)`, `grid-auto-rows: 1px`, class
     `grid flex-1 items-start gap-x-4`, and its six piles carried spans
@@ -1014,7 +1080,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   group), so a category like any other lands wherever the run puts it, and the two piles a reader
   most often wants beside the deck sat at the far end of a long sideways run, off screen.
   `splitRail` takes the `side` and `maybe` groups out before the pack runs and draws them as one
-  column pinned right; the pack keeps its whole contract and is handed fewer groups. Whether there
+  column pinned right; the pack keeps its whole contract and is handed fewer groups. (Since
+  2026-08-20 the split also takes the active command zones out, and `TextView` packs
+  `[...command, ...flow]` — the flowing groups it was already handed, with the command run put back
+  in front of them. It keeps its contract there too, and being a greedy in-order pack is what
+  makes the commander and the companion a stacked column of their own: see the command-zone entry
+  above for why the stack view needs a box to get the same picture and this view does not.) Whether there
   is room for that rail is decided by
   the flowing area's `minWidth` of one column plus the outer container's own `flex-wrap`: while
   the desk holds two columns and the gap between them the rail sits beside the flow, and below
@@ -1131,10 +1202,43 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     there reaches it rather than the pile painted underneath.
   - **The one horizontal case the entries above reserve still behaves, and is still contained.**
     `overflow-x-auto` replaces `overflow-auto` on all three views: it implies `overflow-y: auto`,
-    which can never find anything to scroll in a box with no height of its own. At 1280×800 and
+    which **was claimed here to have nothing it could ever scroll** — see the 2026-08-20 entry
+    below, which is the day that turned out to be false in both of its clauses. At 1280×800 and
     2× zoom the rail simply wraps and nothing overflows either axis; at **1024×600** and 2×, a
     448px column in a 346px view overflowed by **88px** — inside the view, with the page, `main`
     and the document all at **0**.
+- **The second scrollbar survived that pass in the one state it never measured — a card open —
+  and `StackView` now reserves the room instead of scrolling it** (found and fixed 2026-08-20,
+  driven at `npm run tauri dev`, a **debug** build, at 1400×1300 and 1280×800). Every reading
+  above was taken with the deck at rest, and the implied rule — "a box with no height of its own
+  is never taller than its own content" — is wrong twice:
+  - **The box does get a height of its own.** `StackView`'s root is `h-full` off a desk row that
+    is `flex-1` in the editor's column, so whenever the window is taller than the deck the row is
+    sized by flex rather than by content and hands the view a **definite** height. Measured on a
+    15-card pile beside three 1-card piles at 1400×1300: content **894px** in a root of
+    **1081** — 187px of slack, and a definite box is one that can be overflowed.
+  - **And the content does outgrow it.** A pile's list keeps a fixed height with
+    `overflow-visible` (`CardStack`), so an open card pushes the cards after it `stackLiftRoom` =
+    `stackCardHeight − stackAdvance` = **285px at 1×** clean out of that box, on purpose. Under
+    the tallest column there is nothing to absorb it. With one card open the root read
+    `clientHeight` **1081** against `scrollHeight` **1144** and painted a **15px** bar beside the
+    editor's page scroller — the two-scrollbar screen this whole section exists to remove, back
+    by a third route.
+  - **A long pile among short ones is the shape that finds it**, which is how it was reported: the
+    long pile is what sets the box's height, so it is the one with nothing underneath to land in.
+  - **The other half of the case grew instead of scrolling, which is no better.** A deck _taller_
+    than the window is content-sized rather than stretched (the row's automatic minimum size
+    floors it), so the same open card had the desk row jump **1914 → 2318px** — 404px of page
+    appearing and vanishing under the reader's pointer, at 1280×800 on a 51-card deck.
+  - **The fix is one card's worth of lift reserved at the view's foot, always** — `padding-bottom`
+    of `8 + stackLiftRoom(zoom)`, 293px at 1× and 322px at the next stop up, gated on the deck
+    holding a pile of more than one card so a freshly created deck reserves nothing. Reserved
+    rather than grown-on-hover for `stackHeight`'s own reason: a box that resizes under the
+    pointer walks the page away from what the reader is pointing at. After: **1179/1179** with a
+    card open at 1400×1300 and **2199/2199** at 1280×800, `0` bar in both, and the root's height
+    identical at rest and open.
+  - **jsdom cannot referee this either**, so the suite asserts the inline `padding-bottom` the
+    view asks for rather than the scrollbar it prevents.
 - **The X scrollbar that pass declared gone came back through the docked panel, and it was a
   filter row 25px too wide** (found and fixed 2026-08-14, driven on the reader's own deck at
   `npm run tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain
@@ -1755,6 +1859,17 @@ full-width and anything hung off its edge would sit off-window.
 Both are 36px discs on the panel's vertical centre (`cy` 400 against the panel's own 400 at
 1280×800), and `elementFromPoint` at each centre hits the chevron rather than the scrim — the check
 this repo's drag pass learnt to make before concluding anything about a control.
+
+**Those two rows are unchanged by the width the panel asks for now, which is the argument for it.**
+It asked for `w-[72rem]` when they were taken and `max-w-full` clamped it to the column at both
+sizes, so 1120 and 864 were already the *column's* numbers rather than the request's. On 2026-08-20
+it became `w-full` — the request **is** the column — and both figures come out the same. What moves
+is the case the table has no row for: at 2560 maximised the reserved column is 2400 and the panel
+used to draw 1152 in the middle of it, six 170px tiles with the rest of the window left to the
+scrim. It draws 13 across now. Nothing about the chevrons had to change, and that is the point of
+spelling the width this way rather than as a `calc(100vw - 10rem)`: the room they sit in is
+`FLANK_COLUMNS` plus the scrim's own padding, and a length here would have had to restate both and
+would have parted company with them the first time either moved.
 
 ### What the walk does, confirmed live
 

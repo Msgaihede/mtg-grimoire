@@ -351,6 +351,13 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
  * as a heading), and a Maybeboard (`INACTIVE`, and the pile whose cards are never called
  * short of copies).
  *
+ * **The Commander comes back first under every `groupBy`, and that is `buildGroups`' answer
+ * rather than this fixture's `sortOrder`.** A command zone is never bucketed into a curve or a
+ * type column — it is the card the rest of the deck was chosen around — so it is appended as
+ * itself and heads the list in all three modes. Nothing here had to change for that, which is
+ * the argument for building these groups through the real function restated: the day the rule
+ * moved, every view story moved with it.
+ *
  * **There is no `currency` argument any more**, and its absence says something true: a row
  * arrives already priced at the marketplace its query named, so `buildGroups` has nothing to
  * choose between and neither has this. A view story about another marketplace is a story about
