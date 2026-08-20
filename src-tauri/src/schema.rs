@@ -563,7 +563,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //
         // The indexes are deliberately not here. [`CARDS_INDEXES`] describes the table at
         // head and names columns later steps add, so the newest step replays it and no
-        // older one may — see the constant. A fresh install gets its indexes at v10, in the
+        // older one may — see the constant. A fresh install gets its indexes at v20, in the
         // same `migrate` call as this.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
@@ -986,13 +986,15 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 7 {
         // v7 is `idx_cards_collapse`, the collapsed search's covering index — and it has no
-        // statements of its own any more. It used to replay [`CARDS_INDEXES`] here; v10 puts
-        // a column in that list which no step before v10 has added, so the replay moved down
-        // to v10 and this step's index is created there, in its widened form, for every
-        // database that walks past here. What is left is the version this step stands for,
-        // kept rather than deleted because the ladder is the record of what each version
-        // was — and because creating the narrow index only for v10 to drop it would be a
-        // 0.7 s index build over the live corpus, spent on nothing.
+        // statements of its own any more. It used to replay [`CARDS_INDEXES`] here; that
+        // list describes `cards` at head, so only the newest step to touch the table may
+        // create from it — and the replay has moved twice since: down to v10, which put
+        // `legal_mask` in the list, and on to **v20**, which put `illustration_id` there.
+        // This step's index is created wherever the replay lives now, in its widened form,
+        // for every database that walks past here. What is left is the version this step
+        // stands for, kept rather than deleted because the ladder is the record of what each
+        // version was — and because creating the narrow index only for v10 to drop it would
+        // be a 0.7 s index build over the live corpus, spent on nothing.
         //
         // Nothing here reads `raw`, so [`json_raw`] has no part to play. Nothing here
         // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
@@ -1375,7 +1377,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // rather than file a foil price under a nonfoil key.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables) and
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables) and
         // v9 (the error log) left it. Nothing here is FTS-indexed and no rowid is renumbered,
         // so no `cards_fts` rebuild is owed: the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
@@ -1417,7 +1419,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // per session.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables), v9
         // (the error log) and v11 (the price tables) left it. Nothing here is FTS-indexed and
         // no rowid is renumbered, so no `cards_fts` rebuild is owed either: the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
@@ -1477,7 +1479,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // lives; there is no backfill because there is nothing to compute.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid
+        // replay — v20 holds the title of newest creator. Nothing is FTS-indexed and no rowid
         // is renumbered, so no `cards_fts` rebuild is owed either.
         tx.execute_batch(
             "ALTER TABLE decks ADD COLUMN separate_x_group INTEGER NOT NULL DEFAULT 0;",
@@ -1525,7 +1527,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // tagging and inventing it back later would need a re-download.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables),
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables),
         // v9 (the error log) and v11 (the price tables) left it. Nothing here is FTS-indexed
         // and no rowid is renumbered, so no `cards_fts` rebuild is owed: the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
@@ -1563,7 +1565,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // before the upgrade.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables), v9
         // (the error log), v11 (the price tables), v12/v13 (the two `decks` rungs) and v14
         // (the oracle-tag tables) left it. Nothing here is FTS-indexed and no rowid is
         // renumbered, so no `cards_fts` rebuild is owed either: the reasoning
@@ -1641,7 +1643,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // would recover was never stored anywhere.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables), v9
         // (the error log), v11 (the price tables), v12/v13 (the two earlier `decks` rungs), v14
         // (the oracle-tag tables) and v15 (`deck_categories.origin`) left it. Nothing here is
         // FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild is owed either: the
@@ -1683,7 +1685,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // feature was asked for.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid
+        // replay — v20 holds the title of newest creator. Nothing is FTS-indexed and no rowid
         // is renumbered, so no `cards_fts` rebuild is owed either.
         //
         // **`AUDIT_KINDS` is untouched and stays at nine.** An undo records `kind = 'deck'`
@@ -1742,7 +1744,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // below, which adds one.)
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid is
+        // replay — v20 holds the title of newest creator. Nothing is FTS-indexed and no rowid is
         // renumbered, so no `cards_fts` rebuild is owed either.
         tx.execute_batch(
             "ALTER TABLE format_specs
@@ -2240,9 +2242,19 @@ const ORACLE_TAG_STAGING_SQL: &str = "
         -- `oracle_tags` reads `slug, label, description, id, slug_norm` and this twin has to
         -- read the same, or the fence test fails at the rename rather than here.
         --
-        -- `DEFAULT ''` so an ingest written before these columns existed still loads: empty
-        -- is 'not computed yet', which the search reads as a tag that matches nothing rather
-        -- than as an error. See [`ART_TAG_TABLES_SQL`] for what each holds.
+        -- **The two DEFAULTs are a temporary bridge and not a decision.** `art_tags_staging`
+        -- declares both columns NOT NULL with no default, so an art ingest that forgets one
+        -- fails loudly at the insert. The oracle ingest predates both columns, and without a
+        -- default v20 would break a tag refresh that works today — so the bridge is what
+        -- stops a schema step taking the oracle sync down mid-flight, and nothing more.
+        --
+        -- What it costs while it stands is exactly the silent failure the comments around it
+        -- exist to prevent: every `oracle_tags.slug_norm` stays empty, `idx_oracle_tags_norm`
+        -- indexes one value, and the tag search matches nothing in this namespace with no
+        -- error anywhere. **Task 2, the engine extraction, owes the fill of `id` and
+        -- `slug_norm` on every tag insert, and these two defaults come off in the commit that
+        -- lands it** — which is what makes a forgotten column loud on both sides.
+        -- See [`ART_TAG_TABLES_SQL`] for what each column holds.
         id TEXT NOT NULL DEFAULT '',
         slug_norm TEXT NOT NULL DEFAULT ''
     ) WITHOUT ROWID;
@@ -2655,13 +2667,14 @@ pub(crate) mod tests {
     /// `IF NOT EXISTS`, which is what lets the newest step replay the whole list rather than
     /// naming the one index it changed.
     ///
-    /// **Which step that is has moved, and moves again with every merge: the index arrives at
-    /// v10 now, not v7.** v7 used to replay [`CARDS_INDEXES`] itself; the list names
-    /// `legal_mask`, which v10 is what adds, so the replay moved to v10 and every step below
-    /// it creates no index at all. What this test asserts is unchanged and is deliberately
-    /// written in terms of the *outcome* — a pre-collapse-index database ends up with the
-    /// index, whichever step hands it over. That is why the renumber from v9 to v10 left this
-    /// test's body untouched.
+    /// **Which step that is has moved twice, and moves again with every merge: the index
+    /// arrives at v20 now — not v7, and no longer v10 either.** v7 used to replay
+    /// [`CARDS_INDEXES`] itself; the list named `legal_mask`, which v10 is what adds, so the
+    /// replay moved to v10 — and then to v20, which adds `illustration_id` to the same list.
+    /// Every step below the replay creates no index at all. What this test asserts is
+    /// unchanged and is deliberately written in terms of the *outcome* — a pre-collapse-index
+    /// database ends up with the index, whichever step hands it over. That is why neither the
+    /// renumber from v9 to v10 nor the move to v20 touched this test's body.
     ///
     /// The fixture is [`v6_deck_database`] — a database genuinely *at* version 6, with
     /// `cards` in its v1 shape and the three indexes v1 created — rather than a head
@@ -3142,7 +3155,7 @@ pub(crate) mod tests {
     /// `migrate` now runs straight through to head and there is no way back.
     ///
     /// No indexes, for the reason the v1 step creates none: [`CARDS_INDEXES`] describes the
-    /// table at head and names columns a v1 table does not have. The v10 step replays the
+    /// table at head and names columns a v1 table does not have. The v20 step replays the
     /// list, so a database built here has its indexes by the time `migrate` returns —
     /// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what asserts it.
     fn v1_database() -> Connection {
@@ -4088,11 +4101,14 @@ pub(crate) mod tests {
     /// **`cards` is here for the v10 step, which also runs.** [`migrate`] reads
     /// `user_version` once and then walks *every* step above it, so a database that says 6
     /// runs v7, the v8 rebuild, v9's error log and v10 alike — and v10's body is
-    /// `ALTER TABLE cards … / UPDATE cards … / CREATE INDEX … ON cards(…)`, a hard error
-    /// against a database with no `cards` table. (v7 used to be the step that needed it; it
-    /// has no statements of its own any more, because the [`CARDS_INDEXES`] replay moved up
-    /// to v10 where the list's newest column exists. The requirement moved with it, it did
-    /// not go away.)
+    /// `ALTER TABLE cards … / UPDATE cards … / DROP INDEX idx_cards_collapse`, a hard error
+    /// against a database with no `cards` table. **v20 needs it for the same reason**: it is
+    /// where the [`CARDS_INDEXES`] replay lives now, so it is the step that puts the widened
+    /// collapse index back and creates every other index over `cards`. (v7 used to be the
+    /// step that needed it; it has no statements of its own any more, because the replay
+    /// moved up to v10 and then on to v20 — always to the newest step that touches `cards`,
+    /// which is the only version at which every column the list names exists. The requirement
+    /// moved with it, it did not go away.)
     ///
     /// It is built from [`CARDS_COLUMNS`], which is frozen to exactly the v1 shape and so is
     /// exactly what a v6 database has, and it carries the three indexes v1 created and *not*
@@ -6404,6 +6420,21 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(row, (String::new(), String::new()));
 
+        // **And on an upgraded database, not only a fresh one.** The sibling test that checks
+        // these two indexes runs over a fresh install, where they could have come from
+        // anywhere in the step; here they have to arrive on a database that already carried
+        // `oracle_tags`. That is this rung's own thesis turned on itself — an index declared
+        // where only a fresh install reaches it is an index every existing reader lacks, with
+        // nothing wrong and only the tag search slow.
+        for index in ["idx_art_tags_norm", "idx_oracle_tags_norm"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} must arrive on an upgraded database"));
+        }
+
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
@@ -6495,7 +6526,9 @@ pub(crate) mod tests {
         conn
     }
 
-    /// `deck_cards` columns with this name — 0 or 1.
+    /// Columns of `table` with this name — 0 or 1. Parameterised by table and read that way:
+    /// callers ask it about `deck_cards`, `oracle_tags`, `art_tags` and
+    /// `art_tag_illustrations`.
     fn has_column(conn: &Connection, table: &str, column: &str) -> i64 {
         conn.query_row(
             &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
@@ -6987,9 +7020,12 @@ pub(crate) mod tests {
     ///
     /// The rewound fixtures are the honest ones available — [`v1_database`] is built from the
     /// frozen v1 DDL, [`v6_deck_database`] is a hand-built v6, [`v9_database`] undoes the steps
-    /// above 9 over a head database, [`v11_database`] undoes v12 to v15,
-    /// [`v12_database`] undoes v13 to v15, [`v13_database`] undoes v14 and v15, and
-    /// [`v14_database`] undoes v15 alone. The v9 one is
+    /// above 9 over a head database, and the rest each undo every rung above the version they
+    /// claim: [`v11_database`] undoes v12 to v20, [`v12_database`] v13 to v20,
+    /// [`v13_database`] v14 to v20, [`v14_database`] v15 to v20, [`v15_database`] v16 to v20
+    /// and [`v19_database`] v20 alone. **The ranges are named rather than counted, and this
+    /// line read "to v15" through five later rungs** — a prose-only edit routes to neither CI
+    /// job, so nothing here can go red on its own. The v9 one is
     /// the case an earlier merge added: a database sitting at main's v9, above every step that
     /// could hand it an index and below the one that does. A rewind that skipped a step's own
     /// table rebuild would fail here for a reason no upgrade could produce, which is why the
@@ -7045,7 +7081,7 @@ pub(crate) mod tests {
             // The rungs the same-day v12/v13/v14 collision created. A machine that ran v12
             // before v13 existed — or v13 before v14 did — is the commonest database in the
             // world the day after a release, and those are the arrivals this list would
-            // otherwise not cover. `v13` is head minus one.
+            // otherwise not cover.
             ("v12", v12_database()),
             ("v13", v13_database()),
             ("v14", v14_database()),
