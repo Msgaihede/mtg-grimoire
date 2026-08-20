@@ -1,7 +1,16 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { cn } from "@/lib/utils";
 import { TooltipProvider, TOOLTIP_OPEN_MS } from "./TooltipProvider";
 import { useTooltip, type TooltipOptions } from "./useTooltip";
+
+interface StageProps {
+  words: string;
+  options?: TooltipOptions;
+  label: string;
+  /** Constrain the anchor to a width its label cannot fit in, truncated — see {@link Control}. */
+  clamped?: boolean;
+}
 
 /**
  * One control with a tooltip bound to it — the whole of what a call site does.
@@ -9,22 +18,31 @@ import { useTooltip, type TooltipOptions } from "./useTooltip";
  * The provider is mounted here as well as globally in `preview.tsx`, so that this file reads as
  * the documentation of how to use it rather than relying on a decorator the reader cannot see.
  */
-function Stage({ words, options, label }: { words: string; options?: TooltipOptions; label: string }) {
+function Stage({ words, options, label, clamped }: StageProps) {
   return (
     <TooltipProvider>
       <div className="grid min-h-[220px] place-items-center bg-bg p-8">
-        <Control words={words} options={options} label={label} />
+        <Control words={words} options={options} label={label} clamped={clamped} />
       </div>
     </TooltipProvider>
   );
 }
 
-function Control({ words, options, label }: { words: string; options?: TooltipOptions; label: string }) {
+function Control({ words, options, label, clamped }: StageProps) {
   const tip = useTooltip();
   return (
     <button
       type="button"
-      className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text"
+      className={cn(
+        "rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text",
+        // `whenClipped` asks the anchor whether its own text is cut off, so a story about it needs
+        // an anchor that is actually cut off: a width the text cannot fit in, and the `truncate`
+        // recipe (`overflow-hidden`, `text-overflow: ellipsis`, `white-space: nowrap`) that every
+        // real call site of this option uses. Without both, `scrollWidth === clientWidth`,
+        // `enter()`/`focus()` early-return, and the story demonstrates nothing — in a real browser
+        // as much as in jsdom, since the grid item around it has no width of its own to clip against.
+        clamped && "block max-w-[10rem] truncate text-left",
+      )}
       {...tip(words, options)}
     >
       {label}
@@ -106,14 +124,41 @@ export const OnFocus: Story = {
 };
 
 /**
- * The largest group of call sites: a clipped cell whose tooltip is its own full text. It says
- * nothing when the text is *not* cut off — which is most rows most of the time, and is why this
- * costs a virtualised table nothing.
+ * The largest group of call sites: a clipped cell whose tooltip is its own full text.
+ *
+ * The anchor is `clamped` — `max-w-[10rem] truncate` — so its label genuinely overflows and
+ * `scrollWidth > clientWidth` is true, the way a real truncating cell's is. Without a real clip
+ * `enter()`/`focus()` early-return on the `whenClipped` guard and this story demonstrates nothing
+ * at all — not only in jsdom, in a live browser too, since the plain grid cell around an
+ * unconstrained button never clips its label regardless of viewport.
+ *
+ * **No `play`, on this story or {@link NotClipped}, and that omission is deliberate.** jsdom lays
+ * nothing out, so `scrollWidth` and `clientWidth` both read `0` there and the clipped/not-clipped
+ * branch cannot be exercised through a real hover — `tooltip.test.tsx`'s unit tests cover both
+ * directions already, with `Object.defineProperty` standing in for the layout jsdom cannot
+ * produce. Faking that measurement in a `play` here would make the play pass in jsdom and lie
+ * about what a real browser — where plays also run — actually does.
  */
 export const OnlyWhenClipped: Story = {
   args: {
     label: "A set name long enough to be cut off",
     words: "A set name long enough to be cut off",
     options: { whenClipped: true },
+    clamped: true,
+  },
+};
+
+/**
+ * The other half of `whenClipped`, and the one that matters most for a virtualised table: most
+ * rows, most of the time, are not cut off, and hovering one has to say nothing rather than
+ * repeat a label the reader can already read in full. Same clamp as {@link OnlyWhenClipped}, a
+ * label short enough to sit inside it without truncating.
+ */
+export const NotClipped: Story = {
+  args: {
+    label: "Bolt",
+    words: "Bolt",
+    options: { whenClipped: true },
+    clamped: true,
   },
 };
