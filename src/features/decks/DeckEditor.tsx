@@ -10,6 +10,7 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
@@ -683,6 +684,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * reader right-clicks one of them.
    */
   const { menu, menuKey } = useContextMenu();
+  const tip = useTooltip();
   const { deps: cardMenuDeps, error: menuFailure } = useCardMenuDeps();
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
@@ -2807,7 +2809,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 // caret that is sitting on it.
                 aria-disabled={on === null || undo.busy}
                 aria-label={label}
-                title={label}
+                {...tip(label, { describes: false })}
                 className={cn(
                   CONTROL,
                   FILTER_FOCUS,
@@ -2895,6 +2897,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 no select beside it. It begins with the visible label all the same (WCAG 2.5.3),
                 so the chip is still addressable by what is written on it. */}
             {groupBy === "manaValue" && (
+              // `ToggleChip` (`components/FilterChips.tsx`) owns turning its `title` prop into
+              // a `useTooltip()` binding internally — that file is outside this bucket, but the
+              // prop's name and shape are unchanged, so this call needed no edit.
               <ToggleChip
                 label="Split X"
                 pressed={separateX}

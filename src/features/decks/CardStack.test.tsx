@@ -1,9 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { THEORY_MATCH_ATTR } from "./CardMarks";
 import {
   CardStack,
   STACK_ADVANCE,
@@ -30,6 +36,31 @@ import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
+
+/**
+ * Hover a tooltip anchor open and hand back its panel — the shared shape every converted-mark
+ * test below needs, since every one of them is `describes: false` (redundant with the button's
+ * own `aria-label`) and therefore carries no `role="tooltip"` — see `TooltipPanel.tsx`. Found by
+ * `TOOLTIP_PANEL_ID`, the one stable id the provider ever draws, rather than by role.
+ *
+ * Real timers: the provider commits its open timer through a plain `setTimeout`, so this needs
+ * only a generous `waitFor`, not a fake clock — unlike `CardStack flip-through` above, which
+ * pins the two delays *exactly* and does need one.
+ */
+async function openTooltip(anchor: Element): Promise<HTMLElement> {
+  fireEvent.pointerEnter(anchor);
+  await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+    timeout: TOOLTIP_OPEN_MS + 1000,
+  });
+  return document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
+}
+
+/** The other half of {@link openTooltip} — waited for the same reason: `AnimatePresence`'s exit
+ *  is still a commit away, even with `skipAnimations` set. */
+async function closeTooltip(anchor: Element): Promise<void> {
+  fireEvent.pointerLeave(anchor);
+  await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull());
+}
 
 /** Sol Ring is the only card here the collection cannot cover, so the shortage is legible in
  *  one place and its absence is legible everywhere else. */
@@ -1040,28 +1071,33 @@ describe("CardStack cards", () => {
    * `title`. A stack's reveal strip is 34px and was spending it twice to say two things a
    * reader takes in as one.
    */
-  it("shows a tag as the colour of the copy count, with both facts behind it", () => {
+  it("shows a tag as the colour of the copy count, with both facts behind it", async () => {
     render(
-      <CardStack
-        cards={[
-          card({
-            name: "Sol Ring",
-            quantity: 3,
-            ownedQuantity: 1,
-            tagId: 1,
-            tagName: "Wincon",
-            tagColor: "moss",
-          }),
-        ]}
-        label="Ramp"
-        currency="usd"
-      />,
+      <TooltipProvider>
+        <CardStack
+          cards={[
+            card({
+              name: "Sol Ring",
+              quantity: 3,
+              ownedQuantity: 1,
+              tagId: 1,
+              tagName: "Wincon",
+              tagColor: "moss",
+            }),
+          ]}
+          label="Ramp"
+          currency="usd"
+        />
+      </TooltipProvider>,
     );
 
-    // One mark, carrying the count as its text and the tag as its colour.
-    const tag = screen.getByTitle("Wincon · 3 in this pile");
+    // One mark, carrying the count as its text and the tag as its colour. Found by its own
+    // text rather than `getByTitle` — `QuantityTag` forwards to `components/CountTag`, which
+    // now binds `useTooltip()` (`describes: false`) rather than a native `title`.
+    const tag = screen.getByText("3");
     expect(tag).toHaveAttribute("aria-hidden", "true");
-    expect(tag).toHaveTextContent("3");
+    expect(await openTooltip(tag)).toHaveTextContent("Wincon · 3 in this pile");
+    await closeTooltip(tag);
     // **The fixture's `"moss"` is a colour written by a build older than this one**, and the
     // assertion is what proves such a row still draws: `deck_tags.color` held one of six token
     // words until 2026-08-20 and holds `#rrggbb` now, so `tagColorCss` maps the six retired
@@ -1078,11 +1114,16 @@ describe("CardStack cards", () => {
 
   /** An untagged card still needs a colour under its count, and it is the colourless deep —
    *  never the gold a missing token falls to, or gold would stop being something a tag says. */
-  it("draws an untagged card's count on the colourless deep", () => {
-    render(<CardStack cards={[card({ name: "Sol Ring" })]} label="Ramp" currency="usd" />);
+  it("draws an untagged card's count on the colourless deep", async () => {
+    render(
+      <TooltipProvider>
+        <CardStack cards={[card({ name: "Sol Ring" })]} label="Ramp" currency="usd" />
+      </TooltipProvider>,
+    );
 
-    const tag = screen.getByTitle("1 in this pile");
+    const tag = screen.getByText("1");
     expect(tag.style.backgroundColor).toBe("var(--color-pie-c)");
+    expect(await openTooltip(tag)).toHaveTextContent("1 in this pile");
   });
 
   /**
@@ -1129,7 +1170,9 @@ describe("CardStack cards", () => {
     for (const label of ["Game Changer", "RULE BREAK", "0/2"]) {
       expect(screen.getByText(label).closest("[aria-hidden]")).not.toBeNull();
     }
-    expect(screen.getByTitle("Fast mana · 2 in this pile")).toHaveAttribute("aria-hidden", "true");
+    // Found by its own text — `QuantityTag` forwards to `components/CountTag`, which now binds
+    // `useTooltip()` rather than a native `title`.
+    expect(screen.getByText("2")).toHaveAttribute("aria-hidden", "true");
 
     expect(
       screen.getByRole("button", {
@@ -1154,67 +1197,100 @@ describe("CardStack tooltips", () => {
    * The rarity gem is the one worth naming: it is drawn here **without** its word, so the colour
    * was the entire message until `RarityGem` grew a `title` of its own.
    */
-  it("gives every mark on a card its own sentence for the pointer", () => {
+  it("gives every mark on a card its own sentence for the pointer", async () => {
     render(
-      <CardStack
-        cards={[
-          card({
-            name: "Mana Crypt",
-            quantity: 2,
-            ownedQuantity: 0,
-            rarity: "mythic",
-            gameChanger: true,
-            tagId: 1,
-            tagName: "Fast mana",
-            tagColor: "ember",
-            finishes: JSON.stringify(["foil"]),
-          }),
-        ]}
-        label="Ramp"
-        currency="usd"
-        violations={
-          new Map([
-            [
-              "c-Mana Crypt",
+      <TooltipProvider>
+        <CardStack
+          cards={[
+            card({
+              name: "Mana Crypt",
+              quantity: 2,
+              ownedQuantity: 0,
+              rarity: "mythic",
+              gameChanger: true,
+              tagId: 1,
+              tagName: "Fast mana",
+              tagColor: "ember",
+              finishes: JSON.stringify(["foil"]),
+            }),
+          ]}
+          label="Ramp"
+          currency="usd"
+          violations={
+            new Map([
               [
-                {
-                  severity: "error" as const,
-                  code: "banned",
-                  message: "Mana Crypt is banned in Commander.",
-                  cardIds: ["c-Mana Crypt"],
-                },
+                "c-Mana Crypt",
+                [
+                  {
+                    severity: "error" as const,
+                    code: "banned",
+                    message: "Mana Crypt is banned in Commander.",
+                    cardIds: ["c-Mana Crypt"],
+                  },
+                ],
               ],
-            ],
-          ])
-        }
-      />,
+            ])
+          }
+        />
+      </TooltipProvider>,
     );
 
-    for (const sentence of [
-      // The tag and the count are one mark, so one `title` says both.
-      "Fast mana · 2 in this pile",
-      "Game changer",
+    // Two marks this bucket does not draw, `RarityGem` and `FinishMark` — both outside this
+    // bucket's files, and both also converted, so their tooltips are checked the same way as
+    // this bucket's own. `describes: false` on both, redundant with an accessible name they
+    // already carry (a sibling `sr-only` word, an SVG's own `aria-label`), so neither panel is
+    // `role="tooltip"` — found by `TOOLTIP_PANEL_ID` like this bucket's marks.
+    const rarityDot = screen.getByText("mythic").previousElementSibling as HTMLElement;
+    expect(await openTooltip(rarityDot)).toHaveTextContent("Mythic");
+    await closeTooltip(rarityDot);
+
+    const finish = screen.getByRole("img", { name: "Foil" });
+    expect(await openTooltip(finish)).toHaveTextContent("Foil");
+    await closeTooltip(finish);
+
+    // The rest are `useTooltip()`, every one `describes: false` — redundant with the button's
+    // own `aria-label` — so the panel carries no `role="tooltip"` and is found by its one
+    // stable id (`TOOLTIP_PANEL_ID`) instead of by role or by name. `QuantityTag` forwards to
+    // `components/CountTag` (outside this bucket's files), which now binds the same way.
+    const tag = screen.getByText("2");
+    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this pile");
+    await closeTooltip(tag);
+
+    const gameChanger = screen.getByText("Game Changer").closest("[aria-hidden]") as HTMLElement;
+    expect(await openTooltip(gameChanger)).toHaveTextContent("Game changer");
+    await closeTooltip(gameChanger);
+
+    const ruleBreak = screen.getByText("RULE BREAK");
+    expect(await openTooltip(ruleBreak)).toHaveTextContent(
       "Mana Crypt is banned in Commander.",
-      // The gem's colour, in a word — the data line draws no rarity text.
-      "Mythic",
-      // What the three-letter code stands for. `PF26` is not a word anybody knows.
-      "Limited Edition Alpha · #161",
+    );
+    await closeTooltip(ruleBreak);
+
+    const shortage = screen.getByText("0/2");
+    expect(await openTooltip(shortage)).toHaveTextContent(
       "You own 0 of the 2 this deck wants",
-      // `FinishMark`'s own `<title>`, which is how an SVG says it.
-      "Foil",
-    ]) {
-      expect(screen.getByTitle(sentence)).toBeInTheDocument();
-    }
+    );
+    await closeTooltip(shortage);
+
+    // The set code's own span is `whenClipped`, which never opens on its own in jsdom —
+    // `scrollWidth`/`clientWidth` are both 0 by default, unclipped — so it is faked exactly as
+    // the needs-review band's is in `CollectionPage.test.tsx`.
+    const setCode = screen.getByText("LEA · 161");
+    Object.defineProperty(setCode, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(setCode, "clientWidth", { value: 100, configurable: true });
+    expect(await openTooltip(setCode)).toHaveTextContent("Limited Edition Alpha · #161");
   });
 
   /** An untagged card still answers the question the colour raises — the count alone, with no
    *  tag name invented for it. */
-  it("says only the count on an untagged card", () => {
+  it("says only the count on an untagged card", async () => {
     render(
-      <CardStack cards={[card({ name: "Sol Ring", quantity: 4 })]} label="Ramp" currency="usd" />,
+      <TooltipProvider>
+        <CardStack cards={[card({ name: "Sol Ring", quantity: 4 })]} label="Ramp" currency="usd" />
+      </TooltipProvider>,
     );
 
-    expect(screen.getByTitle("4 in this pile")).toBeInTheDocument();
+    expect(await openTooltip(screen.getByText("4"))).toHaveTextContent("4 in this pile");
   });
 
   /**
@@ -1224,16 +1300,29 @@ describe("CardStack tooltips", () => {
    * that has left the corpus is still listed and counted; `setName` is read from `cards`, which
    * no longer has the row. The code stands on its own rather than being annotated with a guess.
    */
-  it("leaves the printing unannotated when the set's name is not known", () => {
+  it("leaves the printing unannotated when the set's name is not known", async () => {
     render(
-      <CardStack
-        cards={[card({ name: "Gone Card", setName: null, needsReview: "It left the database." })]}
-        label="Ramp"
-        currency="usd"
-      />,
+      <TooltipProvider>
+        <CardStack
+          cards={[
+            card({ name: "Gone Card", setName: null, needsReview: "It left the database." }),
+          ]}
+          label="Ramp"
+          currency="usd"
+        />
+      </TooltipProvider>,
     );
 
-    expect(screen.getByText("LEA · 161")).not.toHaveAttribute("title");
+    // Faked clipped, exactly as the positive case above — so a tooltip that opened here would
+    // be caught. `tip(null, { whenClipped: true })` binds nothing at all: `useTooltip.ts`'s
+    // null guard runs before `whenClipped` is even asked, which is the one case a genuinely
+    // clipped span still says nothing.
+    const setCode = screen.getByText("LEA · 161");
+    Object.defineProperty(setCode, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(setCode, "clientWidth", { value: 100, configurable: true });
+    fireEvent.pointerEnter(setCode);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 150));
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull();
   });
 });
 
@@ -1266,29 +1355,40 @@ describe("CardStack marks", () => {
    * is not, on a card that has both — which is the whole reason the rule break moved, since a
    * tick is the one glyph a reader could take for "this card is fine".
    */
-  it("draws the theory tick opposite the rule break on a card carrying both", () => {
+  it("draws the theory tick opposite the rule break on a card carrying both", async () => {
     const planned = card({ name: "Mana Crypt", gameChanger: true });
     render(
-      <CardStack
-        cards={[planned, card({ name: "Sol Ring" })]}
-        label="Ramp"
-        currency="usd"
-        violations={new Map([["c-Mana Crypt", [banned]]])}
-        // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
-        // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
-        // this notices the grain changing under it instead of agreeing with it by construction.
-        theoryMatches={new Set([`${planned.cardId}|`])}
-      />,
+      <TooltipProvider>
+        <CardStack
+          cards={[planned, card({ name: "Sol Ring" })]}
+          label="Ramp"
+          currency="usd"
+          violations={new Map([["c-Mana Crypt", [banned]]])}
+          // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
+          // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
+          // this notices the grain changing under it instead of agreeing with it by construction.
+          theoryMatches={new Set([`${planned.cardId}|`])}
+        />
+      </TooltipProvider>,
     );
 
     // One card of the two, which is the point: a mark every row carries says nothing.
-    const ticks = screen.getAllByTitle("In the theory list");
+    // **Found by `THEORY_MATCH_ATTR` rather than by `getByTitle`.** The tick carries no visible
+    // text of its own — unlike `RULE BREAK`'s or `Game Changer`'s spelled-out words — so once
+    // its words moved off the one DOM attribute a query could read, it needed an attribute of
+    // its own, the same way `STACK_OPEN_ATTR` and `LANDED_ATTR` exist for marks CSS alone
+    // cannot answer for.
+    const ticks = document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`);
     expect(ticks).toHaveLength(1);
 
     // The tick rides the marks strip's own row (`ml-auto`), which is what puts it in the
     // top-right without any offsets of its own — see `CardStack.tsx`.
     expect(ticks[0].className).toContain("ml-auto");
     expect(ticks[0].className).not.toContain("absolute");
+
+    // …and its sentence is still one hover away — `describes: false`, redundant with the
+    // button's own name, so the panel carries no `role="tooltip"` and is found by its id.
+    expect(await openTooltip(ticks[0])).toHaveTextContent("In the theory list");
 
     // …and the rule break is at the other end of the card.
     expect(screen.getByText("RULE BREAK").className).toContain("left-");
@@ -1308,7 +1408,7 @@ describe("CardStack marks", () => {
   it("draws no tick when the deck keeps no plan", () => {
     withIssue();
 
-    expect(screen.queryByTitle("In the theory list")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(0);
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
       expect.not.stringContaining("theory"),
     );
@@ -1324,13 +1424,19 @@ describe("CardStack marks", () => {
     withIssue();
     const [first, second] = screen.getAllByRole("listitem");
     const mark = screen.getByText("RULE BREAK");
-    const banners = screen.getAllByTitle("Game changer");
+    // `getAllByTitle("Game changer")` found these once; the hint now rides `useTooltip()`
+    // (`describes: false`, redundant with the button's own name), so the banner is found by
+    // its spelled-out words and `closest` walks up to the `aria-hidden` element the words
+    // decorate — the same climb the mark's own class assertions below need regardless.
+    const banners = screen
+      .getAllByText("Game Changer")
+      .map((el) => el.closest("[aria-hidden]") as HTMLElement);
 
-    // The words, and the whole sentence behind them — in the mark's `title` for the pointer
-    // and in the card's own name for everyone else. Both marks are spelled out on this
-    // surface, which is what makes the other three separations carry the whole load.
+    // The words, and the whole sentence behind them — in the card's own name for a screen
+    // reader, which is now the *only* place either sentence is written down; the pointer's
+    // copy of it is `CardStack tooltips`' concern, not this test's, which is about the four
+    // separations rather than about the tooltip surface.
     expect(mark).toBeInTheDocument();
-    expect(mark).toHaveAttribute("title", "Mana Crypt is banned in Commander.");
     expect(
       screen.getByRole("button", {
         name: /rule break: Mana Crypt is banned in Commander\./,

@@ -33,6 +33,7 @@
 import { Check, Crown } from "lucide-react";
 import { COUNT_TAG_BOX, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { playedFinish } from "@/lib/finish";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -60,10 +61,15 @@ export function TagDot({
   color: string | null;
   className?: string;
 }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={name}
+      // Redundant with the button's own name: the tag's word is already one of
+      // `deckCardName`'s clauses (`card.tagName`), so the hint here is for the pointer only —
+      // `describes: false` leaves `aria-describedby` unset, which an `aria-hidden` span could
+      // not usefully carry anyway.
+      {...tip(name, { describes: false })}
       style={{ backgroundColor: tagColorCss(color) }}
       className={cn(
         "size-[calc(0.5rem*var(--mark-scale,1))] shrink-0 rounded-[2px]",
@@ -120,6 +126,10 @@ export function QuantityTag({
       // Both facts, because the count alone would make the colour a riddle and the name alone
       // would make the number one. The words themselves are in `deckCardName`, which is the
       // only text inside a labelled button anyone hears.
+      //
+      // Still a `title` **prop** — `CountTag` (`components/CountTag.tsx`) owns turning it into
+      // a `useTooltip()` binding internally, since that component's file is outside this
+      // sweep's list. The prop's name and shape are unchanged, so this call site needed no edit.
       title={name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`}
       // Nothing for an untagged card, which is how it lands on the neutral grey — see above.
       paint={name === null ? undefined : { css: tagColorCss(color), fg: tagFgCss(color) }}
@@ -149,6 +159,18 @@ export function QuantityTag({
  * thing this mark must never be mistaken for. See {@link TheoryMatchMark}.
  */
 export const THEORY_MATCH_LABEL = "In the theory list";
+
+/**
+ * How the tick says which one it is, for anything that has to find it **after the fact**.
+ *
+ * The same problem `STACK_OPEN_ATTR` and `LANDED_ATTR` solve one file over: the mark used to be
+ * addressable by its `title`, and the tooltip sweep moved that text off the DOM attribute a
+ * `getByTitle` could read. It is `aria-hidden` and carries no visible text of its own (unlike
+ * `RuleBreakMark`'s `RULE BREAK` or `GameChangerBanner`'s spelled-out words), so a test or a
+ * live probe needs its own handle rather than `getByText`. On both {@link TheoryMatchMark} and
+ * {@link TheoryMatchBadge} — one fact, two drawings, one attribute.
+ */
+export const THEORY_MATCH_ATTR = "data-theory-match";
 
 /**
  * A card the plan also asks for, as a tick in the shape of that surface's own quantity badge.
@@ -223,10 +245,15 @@ export function TheoryMatchMark({
   className?: string;
 }) {
   const banner = variant === "banner";
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={THEORY_MATCH_LABEL}
+      {...{ [THEORY_MATCH_ATTR]: "" }}
+      // Redundant with `deckCardName`'s own clause (`inTheory && THEORY_MATCH_LABEL`) — the
+      // words are already the whole of what a keyboard reader gets from the button this sits
+      // inside, so `describes: false` leaves `aria-describedby` unset.
+      {...tip(THEORY_MATCH_LABEL, { describes: false })}
       // Mirrored, because this sits in the card's **right**-hand corner — see the constant. The
       // chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a 14px
       // box is most of the box.
@@ -284,10 +311,13 @@ export function TheoryMatchMark({
  * No `--mark-scale` anywhere in it: neither surface is a card face, so neither zooms.
  */
 export function TheoryMatchBadge({ className }: { className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={THEORY_MATCH_LABEL}
+      {...{ [THEORY_MATCH_ATTR]: "" }}
+      // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
+      {...tip(THEORY_MATCH_LABEL, { describes: false })}
       // 12px, matching `DeckFinishMark`'s glyph on the same line rather than `GC`'s 9px type —
       // a stroked tick needs the height that two letters in a box do not.
       className={cn("flex shrink-0 items-center text-pie-u", className)}
@@ -305,10 +335,13 @@ export function TheoryMatchBadge({ className }: { className?: string }) {
  * nothing about one is a finding.
  */
 export function GameChangerBadge({ className }: { className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title="Game changer"
+      // Redundant with `deckCardName`'s own "game changer" clause — the words are already the
+      // whole of what a keyboard reader gets from the button this sits inside.
+      {...tip("Game changer", { describes: false })}
       className={cn(
         "shrink-0 rounded-[2px] border border-pie-gold px-0.5 font-mono text-[0.5625rem]",
         "leading-3 text-pie-gold",
@@ -362,10 +395,14 @@ export function GameChangerBadge({ className }: { className?: string }) {
  * that doubles reads as the banner lifting off the card.
  */
 export function GameChangerBanner({ className }: { className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title="Game changer"
+      // Redundant twice over: the words are `deckCardName`'s "game changer" clause **and**
+      // already spelled out on the ribbon itself ("Game Changer", below) — a hint repeating
+      // visible text is the other half of the `describes: false` rule.
+      {...tip("Game changer", { describes: false })}
       style={{
         // The ribbon's forked tail. The notch is cut into the *right* edge, so the banner
         // points away from the tag it emerges from rather than back into it.
@@ -418,10 +455,13 @@ export function GameChangerBanner({ className }: { className?: string }) {
  * where they are: all three are one pixel or three, and a hairline is a hairline at every size.
  */
 export function RuleBreakMark({ text, className }: { text: string; className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={text}
+      // Redundant with `deckCardName`'s own `rule break: ${text}` clause — the button beside
+      // this mark already says the finding in full to a keyboard reader.
+      {...tip(text, { describes: false })}
       className={cn(
         "rounded-[3px] border border-destructive/50 bg-bg/85 py-px",
         "px-[calc(0.25rem*var(--mark-scale,1))]",

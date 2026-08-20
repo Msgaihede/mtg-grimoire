@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Figure, FigureRow } from "@/components/Figure";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
@@ -631,6 +632,9 @@ export function DeckStats({
             behaves as a reader expects.) The sideboard and the companion are real cards and are
             counted by the price, the shortfall and every chart; they are just not what "a
             60-card deck" means, and the chip beside this says so in a sentence. */}
+        {/* `Figure` (`components/Figure.tsx`) owns turning its `title` prop into a
+            `useTooltip()` binding internally — that file is outside this bucket, but the
+            prop's name and shape are unchanged, so neither call below needed an edit. */}
         <Figure
           label="Cards"
           value={count(stats.sized)}
@@ -698,11 +702,12 @@ export function DeckStats({
  * again every time. A colour the deck has none of is dimmed rather than dropped.
  */
 function Pips({ pips }: { pips: Record<PipKey, number> }) {
+  const tip = useTooltip();
   return (
     <div
       role="group"
       aria-label="Color pips"
-      title="Copies of each colour. A two-colour card counts in both."
+      {...tip("Copies of each colour. A two-colour card counts in both.")}
       className="flex items-center gap-3"
     >
       {MANA_LINE_KEYS.map((key) => (
@@ -754,6 +759,7 @@ function Missing({
   added: number | null;
   failure: string | null;
 }) {
+  const tip = useTooltip();
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {stats.missing > 0 ? (
@@ -764,32 +770,40 @@ function Missing({
           <p className="font-mono tabular-nums text-destructive">
             {count(stats.missing)} of {count(stats.copies)} missing
           </p>
-          <button
-            ref={sendRef}
-            type="button"
-            // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
-            // half-second the write is in flight. **Spent is `aria-disabled`**, because it
-            // outlasts the press by as long as the deck stays the same: a real `disabled` there
-            // is a control the browser refuses to focus, so the caret this button lost when it
-            // disabled itself could never come back to it, and a keyboard reader would find the
-            // control simply gone from the tab order with no way to ask why. The rail in the
-            // docked search panel says no the same way, for the same reason.
-            disabled={pending}
-            aria-disabled={spent || undefined}
-            title={spent ? "This shortfall is already on your wishlist." : undefined}
-            onClick={() => {
-              if (!spent) onSend();
-            }}
-            className={cn(
-              "rounded-md border border-border px-2 py-1 text-dim",
-              "transition-colors duration-150 hover:text-text disabled:opacity-50",
-              "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
-              "motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            Send missing to wishlist
-          </button>
+          {/* **A `<span>` wrapper, and it earns its keep**: the button is genuinely `disabled`
+              for the half-second the write is in flight, and a real `disabled` attribute fires
+              no pointer events at all — so a `tip()` bound on the button alone would show
+              nothing at exactly the moment `spent` (set in the same render as the press) makes
+              the hint's words true. A disabled control still lets the pointer's hover reach a
+              plain ancestor, which is the same trick a native `title` relied on without anyone
+              having to ask for it. */}
+          <span {...tip(spent ? "This shortfall is already on your wishlist." : null)}>
+            <button
+              ref={sendRef}
+              type="button"
+              // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
+              // half-second the write is in flight. **Spent is `aria-disabled`**, because it
+              // outlasts the press by as long as the deck stays the same: a real `disabled` there
+              // is a control the browser refuses to focus, so the caret this button lost when it
+              // disabled itself could never come back to it, and a keyboard reader would find the
+              // control simply gone from the tab order with no way to ask why. The rail in the
+              // docked search panel says no the same way, for the same reason.
+              disabled={pending}
+              aria-disabled={spent || undefined}
+              onClick={() => {
+                if (!spent) onSend();
+              }}
+              className={cn(
+                "rounded-md border border-border px-2 py-1 text-dim",
+                "transition-colors duration-150 hover:text-text disabled:opacity-50",
+                "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              Send missing to wishlist
+            </button>
+          </span>
         </>
       ) : (
         stats.copies > 0 && (
