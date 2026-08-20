@@ -1,5 +1,6 @@
 import { ArrowUp } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS_INSET } from "@/lib/focus";
 import { TRANSITION } from "@/lib/motion";
 import { ariaSortOf, sortRankOf, sortTermOf, type SortSpec } from "@/lib/sort";
@@ -43,6 +44,7 @@ export function SortableHeader({
   onSort: (key: string, additive: boolean) => void;
   className?: string;
 }) {
+  const tip = useTooltip();
   const term = sortTermOf(spec, sortKey);
   const rank = sortRankOf(spec, sortKey);
   // Only when there is more than one, because "1 of 1" is a number that says nothing and
@@ -84,11 +86,12 @@ export function SortableHeader({
         // name identical to the visible text is a name the browser already computes.
         aria-label={name === label ? undefined : name}
         // Appended rather than replaced, and on the button rather than on the header cell:
-        // the button fills the cell, so a `title` on the cell is a tooltip nothing can
-        // reach. The Price column has a sentence of its own to say (how old the prices
-        // are), and a header that swapped it for the sort hint would lose the one fact
-        // spec §5 says a price may never be shown without.
-        title={title ? `${title}\n${SORT_HINT(label)}` : SORT_HINT(label)}
+        // the button fills the cell, so a tooltip on the cell is one nothing can reach. The
+        // Price column has a sentence of its own to say (how old the prices are), and a
+        // header that swapped it for the sort hint would lose the one fact spec §5 says a
+        // price may never be shown without. Two lines — the panel's `whitespace-pre-line` is
+        // what keeps the `\n` a break rather than a space.
+        {...tip(title ? `${title}\n${SORT_HINT(label)}` : SORT_HINT(label))}
         className={cn(
           "flex w-full min-w-0 items-center gap-1",
           "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
