@@ -1,6 +1,6 @@
 [package]
 name = "mtg-grimoire"
-version = "0.11.0"
+version = "0.12.0"
 description = "MTG Grimoire"
 authors = ["Markus Seerup"]
 edition = "2021"
