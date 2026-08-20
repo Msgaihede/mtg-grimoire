@@ -2306,6 +2306,58 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * Issue #134: a card in a pile the reader has switched off drew no mark at all, so a Golgari
+   * card dropped into a mono-white Commander deck's Maybeboard looked exactly like a card that
+   * fits.
+   *
+   * **Both halves in one test, because either alone is satisfied by the wrong fix.** The mark
+   * has to be on the parked card — that is what the reader reported missing — *and* the chip
+   * beside it has to go on counting only the deck, or the change has quietly put the Maybeboard
+   * back inside the validation that schema v8 took it out of. The chip reads `1 issue` for the
+   * size and nothing else: the colour-identity sentence exists on the card and nowhere in the
+   * panel.
+   */
+  it("marks a rule break on a parked card without counting it as a finding of the deck", async () => {
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "commander", formatName: "Commander" }, [
+        card({
+          name: "Sram, Senior Edificer",
+          categoryKind: "commander",
+          typeLine: "Legendary Creature — Dwarf Advisor",
+          manaCost: "{2}{W}",
+          cmc: 3,
+          colors: "W",
+          colorIdentity: "W",
+          quantity: 1,
+        }),
+        card({
+          name: "Deadly Rollick",
+          categoryKind: "maybe",
+          categoryActive: false,
+          typeLine: "Instant",
+          manaCost: "{3}{B}",
+          cmc: 4,
+          colors: "B",
+          colorIdentity: "BG",
+          quantity: 1,
+        }),
+      ]),
+    );
+    wrap(<DeckEditor deckId={4} />);
+
+    const parked = await screen.findByRole("button", { name: /^Deadly Rollick/ });
+    expect(parked.getAttribute("aria-label")).toContain(
+      "rule break: Deadly Rollick's color identity (BG) is outside your commander's (W).",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "1 issue · Commander" }));
+    expect(
+      screen.getByText("Commander decks are exactly 100 cards including the commander; you have 1."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/color identity/)).not.toBeInTheDocument();
+  });
+
+  /**
    * Beside the check chip rather than folded into it, because the two answer different
    * questions: the chip counts what is *wrong*, and this counts what is *powerful*. A game
    * changer is legal by definition — it is the bracket conversation, not the legality one — so
