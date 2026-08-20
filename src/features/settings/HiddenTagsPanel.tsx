@@ -33,14 +33,23 @@ export function HiddenTagsPanel({ hidden }: { hidden: HiddenTags }): JSX.Element
 
   return (
     <SettingsSection id="hidden-tags" title="Hidden tags">
-      <p className="text-sm text-dim">
-        {/* One sentence for the state and one for the mechanism, and the mechanism is said even
-            when the list is empty: this panel is where a reader arrives *looking* for a tag they
-            hid, and "nothing here" with no explanation is where they stop. */}
-        {tags !== null && tags.length === 0
-          ? "You have not hidden any tags. Right-click a tag on the Tags page to hide it and everything filed under it."
-          : "These tags are not offered on the Tags page — nor is anything filed under them. Names are as they read when you hid them, so a tag Scryfall has since renamed keeps its old word here."}
-      </p>
+      {/* One sentence for the state and one for the mechanism, and the mechanism is said even
+          when the list is empty: this panel is where a reader arrives *looking* for a tag they
+          hid, and "nothing here" with no explanation is where they stop.
+
+          **`tags === null` gets no sentence at all**, which is the third state and not a fourth
+          copy of the second. It covers a read still in flight and a read that failed, and both
+          would be described wrongly by either line — "these tags are not offered" over an empty
+          space is a caption for a list that is not there, and "you have not hidden any tags" is
+          a claim about a table nothing has successfully read. The failed half says so through
+          the alert below instead. */}
+      {tags !== null && (
+        <p className="text-sm text-dim">
+          {tags.length === 0
+            ? "You have not hidden any tags. Right-click a tag on the Tags page to hide it and everything filed under it."
+            : "These tags are not offered on the Tags page — nor is anything filed under them. Names are as they read when you hid them, so a tag Scryfall has since renamed keeps its old word here."}
+        </p>
+      )}
 
       {tags !== null && tags.length > 0 && (
         <ul className="space-y-2">
@@ -84,7 +93,9 @@ export function HiddenTagsPanel({ hidden }: { hidden: HiddenTags }): JSX.Element
 
       {/* `problem`, unlike the cache panel's: a press that did not happen left a tag hidden that
           the reader asked to have back, and the list above still shows it — so the red is the
-          only thing distinguishing "refused" from "nothing happened yet". */}
+          only thing distinguishing "refused" from "nothing happened yet". It carries a failed
+          *read* too, which is the only thing standing between that case and a panel that looks
+          like an empty one. */}
       <PanelAlert tone="problem">{error}</PanelAlert>
     </SettingsSection>
   );

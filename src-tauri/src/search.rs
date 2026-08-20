@@ -4414,12 +4414,14 @@ mod tests {
     ///
     /// This is the assertion no test about ids can make, and it is the *whole* of why the
     /// includes are `IN (SELECT …)` rather than a correlated `EXISTS`. Both answer a four-row
-    /// fixture identically. In the field the correlated form scans all 116 700 cards and probes
-    /// the closure once per card, which measured **315 ms unfloored and ~900 ms floored** on
-    /// `dog` against the real taxonomy (2026-08-20); this form measured **8 ms either way**,
-    /// because the floor's extra column costs nothing once the slug is read a single time.
-    /// `filters.rs` carries the full table and the reason the `(slug, weight)` index that shape
-    /// seemed to want is a trap.
+    /// fixture identically. In the field the correlated form scans the whole `cards` table and
+    /// probes the closure once per row: on `dog` against the real 952 729-row art taxonomy it
+    /// measured **315 ms unfloored and 882–1 147 ms floored**, against **8 ms either way** for
+    /// this form, because the floor's extra column costs nothing once the slug is read a single
+    /// time. Measured 2026-08-20 through `node:sqlite` against the dev database — SQLite's own
+    /// numbers, no debug-build multiplier — and the gain narrows on a wide motif, which is why
+    /// `filters.rs` carries the whole table rather than a headline. It also carries the reason
+    /// the `(slug, weight)` index that shape seemed to want is a trap.
     ///
     /// So the plan this pins is three steps and each is load-bearing:
     ///

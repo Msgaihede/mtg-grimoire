@@ -76,13 +76,15 @@ const meta = {
           "taxonomies at once; `artTagsMissing` and `oracleTagsMissing` are separate faults " +
           "precisely because the datasets are two files on two schedules, and the page has to " +
           "stand in all four.\n\n" +
-          "**The rail is not virtualised, and the real taxonomy has 3,219 art roots** against " +
-          "the fake's four — so nothing here can feel that first paint. The live pass measured " +
-          "it on 2026-08-20 and it stays unvirtualised: 4,142 rows painted in 575–673 ms and " +
+          "**The rail is not virtualised, and the real taxonomy has thousands of art roots** " +
+          "against the fake's four — so nothing here can feel that first paint. The live pass " +
+          "measured it in the shipped window on 2026-08-20 (debug build, 1920×1080, real " +
+          "taxonomy ingested) and it stays unvirtualised: 4,142 rows painted in 575–673 ms and " +
           "then scrolled at full frame rate. See `docs/reference/tags-live-findings.md`, which " +
           "also carries the two things that pass *did* find in this rail — names rendering one " +
           "pixel wide, and the hit list inheriting the tree's disclosures — and " +
-          "`docs/superpowers/research/2026-08-20-scryfall-art-tags.md` for the corpus figures.",
+          "`docs/superpowers/research/2026-08-20-scryfall-art-tags.md` for a dated root count, " +
+          "which is where one belongs: Scryfall regenerates that file daily.",
       },
     },
   },

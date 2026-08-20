@@ -43,7 +43,23 @@ describe("HiddenTagsPanel", () => {
     render(<HiddenTagsPanel hidden={state({ tags: null })} />);
 
     expect(panel()).not.toHaveTextContent("You have not hidden any tags.");
+    expect(panel()).not.toHaveTextContent("These tags are not offered");
     expect(within(panel()).queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The third state, and the one that used to be indistinguishable from an empty panel: the read
+   * itself failed. Saying "these tags are not offered on the Tags page" over an empty space is a
+   * caption for a list that is not there, and saying "you have not hidden any tags" is a claim
+   * about a table nothing successfully read. So the panel says neither and the alert says what
+   * happened.
+   */
+  it("says a failed read happened rather than looking like an empty list", () => {
+    render(<HiddenTagsPanel hidden={state({ tags: null, error: "the database is locked" })} />);
+
+    expect(panel()).not.toHaveTextContent("You have not hidden any tags.");
+    expect(panel()).not.toHaveTextContent("These tags are not offered");
+    expect(within(panel()).getByRole("alert")).toHaveTextContent("the database is locked");
   });
 
   /**

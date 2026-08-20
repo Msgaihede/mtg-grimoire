@@ -185,7 +185,10 @@ export function TagTree({
     <TagRailContext.Provider value={api}>
       <div className="flex min-h-0 flex-1 flex-col gap-2">
         {/* **The rail scrolls itself**, because `tag_children` is deliberately unlimited: there
-            are 3 219 art roots and an arbitrary cut would silently lose branches. `relative`, so
+            are thousands of art roots and an arbitrary cut would silently lose branches — the
+            count is a fact about a file Scryfall regenerates daily, and
+            `docs/superpowers/research/2026-08-20-scryfall-art-tags.md` is where a dated one
+            lives. `relative`, so
             the scroller is the containing block for its own absolutely positioned content — an
             `.sr-only` label with no positioned ancestor is laid out at its static position inside
             the scrolled content, clipped by nothing, and stretches the *document* instead.
@@ -193,11 +196,12 @@ export function TagTree({
             boxes: `overflow` clips at the padding box, `FOCUS` stands 4px proud, and half a focus
             indicator is a WCAG 2.4.7 failure. Same number as `CardGrid`'s `scroll-m-1.5`.
             **Not virtualised** — a recursive graph of disclosures is the wrong shape for
-            `VirtualTable`, and how a 3 219-row level actually feels was a question for the live
-            pass rather than for jsdom, which has no layout engine at all. **It has been driven
-            and the answer is that it is fine** — 4 142 rows on `Both` painted in 575–673 ms and
-            then scrolled 116 000 px at p50 6.9 ms with not one frame over 33, measured in the
-            shipped window on 2026-08-20 (debug build). What it costs is one 622 ms long task on
+            `VirtualTable`, and how a level of thousands actually feels was a question for the
+            live pass rather than for jsdom, which has no layout engine at all. **It has been
+            driven and the answer is that it is fine** — 4 142 rows on `Both` painted in
+            575–673 ms and then scrolled a 115 988 px scroller at p50 6.9 ms with not one frame
+            over 33, measured in the shipped window on 2026-08-20 (debug build) with a real
+            taxonomy in. What it costs is one 622 ms long task on
             the navigation; `docs/reference/tags-live-findings.md` has the figures and why a cap
             plus a "Show all" row was not taken. */}
         <div className="relative min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -227,22 +231,32 @@ export function TagTree({
 }
 
 /**
+ * What every hit's path is rooted at, so that the tree's disclosures are not also the hit list's.
+ *
+ * `expanded` is keyed on a path, and a hit's path used to be `childPath("", hit)` — byte-identical
+ * to the same tag's path as a *root* of the tree, so a category opened while browsing came back
+ * open here. Measured in the shipped window on 2026-08-20: with `cloud` expanded in the tree,
+ * searching `cloud` drew its five children inline **and then listed three of them again** as hits
+ * of their own, a few rows down, with nothing saying why. In the tree a tag under two parents
+ * appears twice and its two headings explain it; in a flat list of hits there is no heading to
+ * explain anything, so the duplicate reads as a rendering fault. The reader can still open a hit
+ * here — they just have to ask.
+ *
+ * Any string a slug cannot be would do. This one is a word rather than a sigil because it shows
+ * up in nothing but a `Set` of strings, where a debugger print of `hits/art:cloud` says which
+ * list a path belongs to and a bare `art:cloud` does not. `TagTree.test.tsx`'s
+ * `does not open a search hit because the same tag is open in the tree` is what fails if it is
+ * deleted — without which this whole constant is one word nothing would redden.
+ */
+const HIT_LIST_PATH = "hits";
+
+/**
  * The type-ahead's rows: one flat list, in the backend's own rank order — exact hit first, then
  * the prefix hits, then the rest. Not through `sortOptions`, because that ranking *is* the
  * information and alphabetising it would bury the exact match.
  *
- * **Its paths are prefixed, so the tree's disclosures are not also this list's.** `expanded` is
- * keyed on a path and a hit's path used to be `childPath("", hit)` — byte-identical to the same
- * tag's path as a *root* of the tree, so a category opened while browsing came back open here.
- * Measured in the shipped window on 2026-08-20: with `cloud` expanded in the tree, searching
- * `cloud` drew its five children inline **and then listed three of them again** as hits of their
- * own, a few rows down, with nothing saying why. In the tree a tag under two parents appears
- * twice and its headings explain it; in a flat list of hits there is no heading to explain
- * anything, so the duplicate reads as a rendering fault. The reader can still open a hit here —
- * they just have to ask.
+ * Rows are pathed under {@link HIT_LIST_PATH}; see there for what shares a path with what.
  */
-const HIT_LIST_PATH = "hits";
-
 function TagHitList({ hits, pending }: { hits: readonly TagHit[]; pending: boolean }) {
   if (hits.length === 0) {
     return <Aside>{pending ? "Searching…" : "No tags match that."}</Aside>;

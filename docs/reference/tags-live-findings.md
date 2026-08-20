@@ -60,9 +60,18 @@ It was. **Verdict: keep it. No cap and no "Show all" row.**
 | nav click → 4,142 rail rows painted, cold | **673 ms** |
 | …warm (query cached), three runs | **639 / 627 / 575 ms** |
 | rail scroll height | **115,988 px** against a 716 px viewport — 162 screens |
-| scrolling it, 150 frames at 700 px/frame | p50 **6.9 ms**, p90 7.0, p99 8.2, **max 10.0** |
+| scrolling it, 150 steps of 700 px | p50 **6.9 ms**, p90 7.0, p99 8.2, **max 10.0** |
 | frames over 33 ms | **0** |
-| jump to the end | **7 ms** |
+| jump to the end (`scrollTop = scrollHeight`) | **7 ms** |
+
+**How each of those was taken, because two of them would mean different things otherwise.** The
+`tag_children` figure is `ipc.tagChildren` awaited from a `cdp.mjs eval` — **through the app**, so
+it includes the IPC round trip and the debug build's own cost, and it is not a SQL figure. The
+scroll figure is **`scrollTop` written once per `requestAnimationFrame` and the rAF deltas
+measured**, not a real wheel: it drives style, layout and paint for a 4,142-row list and is the
+right measurement for whether that much DOM can be moved at frame rate, but it does **not**
+exercise the wheel-event path, `useCardZoomGesture`'s `preventDefault`, or WebView2's own
+scrolling. A hand on a real mouse has not been measured.
 
 So the rail **scrolls at full frame rate** — the thing virtualisation would have bought is the
 thing that was already fine, which is the reviewer's argument confirmed rather than merely
@@ -262,6 +271,30 @@ the recovery story was that Settings had nothing in it, which is fixed above.
   a second tile with the pane already open keeps focus. Not chased: the wall and the pane are
   shared with the search view and this is not the Tags page's code. **Open.**
 
+## What reviewing this pass added
+
+Recorded because two of them are things the pass itself got wrong, and one is a defect the pass
+*created*.
+
+- **A hide did not mark the Settings list stale.** `TagsPage`'s `hideTag` invalidated
+  `tag-children` and `tag-search` and not `HIDDEN_TAGS_KEY`, so a reader who had opened Settings
+  once, come back, hidden a tag and followed the rail's own sentence within the client's 30 s
+  `staleTime` would have reached a cached list **without the tag they had just hidden on it** —
+  the same broken promise the panel was built to end, in a narrower window. Fixed, with the
+  assertion on the cache's own `isInvalidated` rather than on a refetch, because nothing on that
+  page observes the key.
+- **`index/facets.rs` was still telling the next maintainer to build the trap.** Its note ended by
+  proposing `(slug, weight)` "pending a live measurement; it is Task 13's to take" — and the live
+  measurement is what showed that index to be ten times *worse*. Rewritten in the same commit that
+  overturned it, because a deferral lives in a file no CI job can redden.
+- **The hit-list fix had no test**, and unlike the other two UI findings it is testable in jsdom.
+  `TagTree.test.tsx`'s `does not open a search hit because the same tag is open in the tree` is
+  now it, and it was **falsified before being kept**: reverted to `childPath("", hit)` it fails on
+  the duplicate row, so the one-word constant it guards cannot be deleted silently.
+- **The `IN` rewrite gives the planner a second driver on a text+tag request** and it may now
+  drive from the tag list rather than from FTS. Usually right, and previously impossible. A
+  text-only search moved 12 → 16 ms, within noise; **text plus tag at real breadth is unmeasured.**
+
 ## Still open
 
 1. **622 ms of blocked input** on entering the page, debug build (gate 1). Measure a release build
@@ -272,6 +305,16 @@ the recovery story was that Settings had nothing in it, which is fixed above.
    615 ms through the app on `plane` (38,144 illustrations), against 17 ms on `dog` (439),
    because a wide slug materialises tens of thousands of illustration ids into a list. Nobody has
    looked at whether the facet side's bitset could serve the page query too.
-4. **`3,219 art roots` is written in nine places and the live count was 3,215** (and 4,142 on
-   `Both`), both on 2026-08-20. Not chased — the file regenerates daily, so any figure is a
-   snapshot and each of those sites carries its date. Worth knowing before quoting one.
+4. **The facet index's own floored probe has never been measured at real breadth.** Everything in
+   `index/facets.rs`' note is the synthetic 588,744-row closure it was written against; the set
+   form is a third query shape again, so neither the card filter's new numbers nor the old
+   synthetic ones can be quoted for it. This pass ingested a real taxonomy and did not re-run it.
+5. **A text-plus-tag search is unmeasured** under the new plan — see above.
+6. **The rail's scroll was measured with `scrollTop` writes, not a wheel.** Frame-rate evidence for
+   the layout and paint, not for the wheel-event path or WebView2's own scrolling.
+7. **`3,219 art roots` is written in nine places and the live count was 3,215** (and 4,142 on
+   `Both`), both on 2026-08-20. The three lines this branch was already editing now say
+   "thousands" and point at the dated research doc; the other six were left alone, because the
+   file regenerates daily and each of those sites carries its own date. The deltas make the point
+   better than the prose does: 11,531 → 11,530 tags and 951,499 → 952,729 closure rows between two
+   readings of the same week.

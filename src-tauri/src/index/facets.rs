@@ -577,16 +577,40 @@ fn tag_probes(req: &SearchRequest) -> Vec<TagProbe> {
 /// `weight` is not in `idx_art_tag_illustrations_slug`, so each closure row takes a second seek
 /// into the `WITHOUT ROWID` table. Same harness, same day, over a **synthetic** art closure —
 /// 588 744 rows over the corpus's *real* `illustration_id` column (111 735 non-NULL, 50 536
-/// distinct), because no art taxonomy has been ingested anywhere yet, so the join cardinality is
+/// distinct), because no art taxonomy had been ingested anywhere yet, so the join cardinality is
 /// the live one and the tag breadth is not: the widest slug ran **25.6 ms** unfloored against
 /// **91.3 ms** floored (78.5 ms on a re-run), the plan dropping from `SEARCH t USING COVERING
-/// INDEX` to `SEARCH t USING INDEX`. **The fix is measured and deliberately not taken here**:
-/// widening that index to `(slug, weight)` restores the covering plan and the floored query to
-/// **24.0 ms**, leaving the unfloored one unmoved at 23.2 ms, for a 0.7 s one-time build — but
-/// it is a schema change, `TAG_INDEXES_SQL` runs unconditionally with `IF NOT EXISTS` so
-/// widening it needs a ladder rung to `DROP` the narrow one first, and no real art tag has been
-/// shown to be anywhere near that wide (`dog` reaches 439 illustrations). Take the live
-/// measurement first; it is Task 13's to take.
+/// INDEX` to `SEARCH t USING INDEX`.
+///
+/// # DO NOT WIDEN THAT INDEX TO `(slug, weight)`
+///
+/// This note used to end by proposing exactly that — 24.0 ms, 0.7 s build — and deferring it
+/// until somebody measured a real taxonomy. **Task 13 ingested one and measured it, and the
+/// proposal was wrong.** Against the real 952 729-row closure (2026-08-20, `node:sqlite` against
+/// the dev database, native), `(slug, weight)` built and forced with `INDEXED BY` ran the widest
+/// floored lookup at **3 180–3 367 ms** — an order of magnitude *worse* than the ~900 ms it was
+/// meant to fix — and the planner never chooses it unforced. The reason is structural rather
+/// than statistical: these closures are `WITHOUT ROWID`, so `(slug, weight)` expands to
+/// `(slug, weight, subject_id)` and the subject id lands *behind* a range test, leaving the plan
+/// able to seek only the slug before scanning that slug's whole bucket. `plane` reaches 38 144
+/// illustrations, so that bucket is not small — which also retires this note's old closing claim
+/// that "no real art tag has been shown to be anywhere near that wide (`dog` reaches 439)".
+/// `(slug, subject_id, weight)` *is* the correctly ordered index and is still not worth a rung:
+/// forced it is excellent, unforced SQLite prefers the primary key even with the narrow index
+/// dropped, so it would need an `ANALYZE` this app does not run.
+///
+/// The card-filter side needed no index at all in the end. `push_card_filters`' include arm —
+/// which this note used to call unmeasured — is no longer a correlated `EXISTS`: it is
+/// `subject_id IN (SELECT … WHERE slug = ?)`, which reads the closure once instead of once per
+/// card and makes the floor free. `filters.rs` carries that table.
+///
+/// **What is still unmeasured is this file's own floored probe at real breadth.** Everything
+/// above the heading is the synthetic 588 744-row closure; nobody has re-run [`closure_sql`]
+/// against the live one. The set form is a third query shape again — it materialises a bitset
+/// rather than driving `cards` — so neither the card filter's numbers nor the synthetic ones
+/// here can be quoted for it. If it turns out to matter, note that the fix that helped the card
+/// filter is available here too and costs no schema change: what made the difference there was
+/// reading each slug once, which this statement already does.
 fn closure_sql(closure: TagClosure, floor: bool) -> String {
     let TagClosure { table, subject } = closure;
     // The bare `'weak'` literal is coupled to `crate::tags::WEIGHTS[0]` by convention only,

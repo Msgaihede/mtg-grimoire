@@ -86,12 +86,12 @@ interface DrawOptions {
   mute?: () => Promise<void>;
 }
 
-function draw({ namespace = "art", hits = null, pending, picked, mute }: DrawOptions = {}) {
+function draw(options: DrawOptions = {}) {
   const onPick = vi.fn();
   // Typed with the parameter, so `onMute.mock.calls[0][0]` below stays a `TagHit` rather than
   // an index into an empty tuple — `vi.fn(impl)` otherwise infers the signature of `impl`.
-  const onMute = vi.fn<(hit: TagHit) => Promise<void>>(mute ?? (() => Promise.resolve()));
-  render(
+  const onMute = vi.fn<(hit: TagHit) => Promise<void>>(options.mute ?? (() => Promise.resolve()));
+  const element = ({ namespace = "art", hits = null, pending, picked }: DrawOptions) => (
     <TagTree
       namespace={namespace}
       hits={hits}
@@ -99,10 +99,16 @@ function draw({ namespace = "art", hits = null, pending, picked, mute }: DrawOpt
       onPick={onPick}
       onMute={onMute}
       picked={picked}
-    />,
-    { wrapper },
+    />
   );
-  return { onPick, onMute };
+  const { rerender } = render(element(options), { wrapper });
+  /**
+   * Change the props **without remounting**, which is the only way to ask a question about state
+   * the component owns — `expanded` is a `useState` inside `TagTree`, so a second `render` would
+   * answer about a fresh one and pass whatever the code did.
+   */
+  const change = (next: DrawOptions) => rerender(element({ ...options, ...next }));
+  return { onPick, onMute, change };
 }
 
 /** The row a reader presses to pick a tag, found by the label it starts with. */
@@ -193,6 +199,38 @@ describe("TagTree", () => {
     // `forest` has no children in this fixture, so it draws no disclosure at all — which is the
     // other half of the contract: a triangle never opens onto nothing.
     expect(twisties).toHaveLength(0);
+  });
+
+  /**
+   * The same property one level over, and the one `HIT_LIST_PATH` exists for: a tag opened in the
+   * **tree** must not come back opened in the **hit list**.
+   *
+   * Found by driving the shipped window on 2026-08-20 rather than here, and it is worth saying
+   * why a suite could have caught it and did not: `expanded` is keyed on a path, and a hit's path
+   * was `childPath("", hit)` — byte-identical to that tag's path as a root of the tree. So
+   * searching `cloud` with `cloud` open in the tree inlined its five children **and then listed
+   * three of them again** as hits a few rows down. In the tree a tag under two parents appears
+   * twice under two headings that explain it; a flat list of hits has no heading to explain
+   * anything, so the duplicate reads as a rendering fault.
+   *
+   * The rerender is load-bearing: `expanded` is `TagTree`'s own `useState`, so a second `render`
+   * would ask a freshly mounted component and pass no matter what the paths did.
+   */
+  it("does not open a search hit because the same tag is open in the tree", async () => {
+    const user = userEvent.setup();
+    const { change } = draw();
+    await user.click(await twisty("Plant"));
+    // The tree really is open — otherwise the assertion below is vacuous.
+    expect(screen.getByRole("list", { name: "Tags under Plant" })).toBeInTheDocument();
+
+    change({ hits: [hit("plant"), hit("forest")] });
+
+    expect(await screen.findByRole("list", { name: "Matching tags" })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Tags under Plant" })).not.toBeInTheDocument();
+    await expect(twisty("Plant")).resolves.toHaveAccessibleName("Show tags under Plant");
+    // The symptom, stated as the reader met it: `forest` is a hit **and** a child of `plant`, so
+    // an inherited disclosure draws it twice in one flat list.
+    expect(screen.getAllByRole("button", { name: /^Forest,/ })).toHaveLength(1);
   });
 
   /**

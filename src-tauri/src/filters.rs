@@ -47,10 +47,15 @@ pub const VARIABLE_COST_LIKE: &str = "%{X}%";
 
 /// One taxonomy's tag chips: the tags a row must carry, and the tags it must not.
 ///
-/// **`include` INTERSECTS.** A themed deck asks for dogs AND snow, so each included slug
-/// becomes an `EXISTS` of its own rather than joining one `slug IN (…)` — which is the union
-/// and would answer a superset that looks plausible. `exclude` is the same subquery under
-/// `NOT EXISTS`, and the two lists AND with each other and with every other filter.
+/// **`include` INTERSECTS.** A themed deck asks for dogs AND snow, so each included slug gets a
+/// **subquery of its own**, and the subqueries AND together. What is forbidden is folding them
+/// into one — `… WHERE slug IN ('dog','snow')` is the *union*, and would answer a superset that
+/// looks plausible. Note that the shipped predicate is itself an `IN`
+/// (`illustration_id IN (SELECT … WHERE slug = ?)`) and that is not the same thing at all: the
+/// `IN` is over *subject ids*, one slug is still bound per statement, and the count of
+/// subqueries still equals the count of picked tags. **The invariant is one subquery per slug,
+/// not the absence of the keyword.** `exclude` is a `NOT EXISTS` per slug, correlated rather
+/// than listed, and the two lists AND with each other and with every other filter.
 ///
 /// Both are `#[serde(default)]`, so a payload naming one list omits the other, and an absent
 /// [`CardFilters::art_tags`] adds no SQL at all — see [`picked_tags`] for what a *blank* entry
@@ -393,10 +398,12 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         p.wheres.push(format!("{alias}.legal_mask != 0"));
     }
 
-    // Tag terms. **One `EXISTS` per included tag rather than an `IN (…)`, because includes
-    // INTERSECT**: a themed deck asks for dogs AND snow, and `slug IN ('dog','snow')` is the
-    // union — a superset that looks plausible and is never reported. Excludes are the same
-    // subquery under `NOT EXISTS`, and every term ANDs with every other filter here.
+    // Tag terms. **One subquery per included tag, because includes INTERSECT**: a themed deck
+    // asks for dogs AND snow, and folding them into one `… WHERE slug IN ('dog','snow')` is the
+    // union — a superset that looks plausible and is never reported. The predicate below *is*
+    // an `IN`, and that is not the forbidden shape: it lists **subject ids**, binds one slug,
+    // and there is still exactly one of them per picked tag. Excludes are one correlated
+    // `NOT EXISTS` per tag, and every term ANDs with every other filter here.
     //
     // **Against the CLOSURE tables, never the taggings.** The bulk file stores direct
     // taggings only and a category tag has none of its own: `dog` is directly tagged on 137
@@ -414,25 +421,40 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // `NOT IN` would turn its NULL into "no" and quietly drop those 4 977 printings from a
     // result the reader only asked to have no dogs in.
     //
-    // **An include is `IN (SELECT …)` and not a correlated `EXISTS`, and the difference is two
-    // orders of magnitude.** Both are correct; only one is a plan. `EXISTS` correlates on
-    // `illustration_id`, so the slug is constant and the *card* varies — SQLite scans all 116 700
-    // cards and probes the closure once each, and a floored probe loses
-    // `idx_art_tag_illustrations_slug` (no `weight` in it) and falls back to random seeks into a
-    // 952 729-row `WITHOUT ROWID` primary key. `IN` inverts it: the closure is read **once** for
-    // the slug and `cards` is driven through `idx_cards_illustration`. Measured against the real
-    // taxonomy on 2026-08-20, as the collapsed count `search.rs` really runs:
+    // **An include is `IN (SELECT …)` and not a correlated `EXISTS`, and on a narrow motif the
+    // difference is two orders of magnitude.** Both are correct; only one is a plan. `EXISTS`
+    // correlates on `illustration_id`, so the slug is constant and the *card* varies — SQLite
+    // scans the whole `cards` table and probes the closure once per row, and a floored probe
+    // loses `idx_art_tag_illustrations_slug` (no `weight` in it) and falls back to random seeks
+    // into a 952 729-row `WITHOUT ROWID` primary key. `IN` inverts it: the closure is read
+    // **once** for the slug and `cards` is driven through `idx_cards_illustration`.
     //
-    //     slug     floor   EXISTS      IN
-    //     dog      any     315 ms      8 ms
-    //     dog      strong  ~900 ms     8 ms
-    //     plane    any     725 ms      614 ms
-    //     plane    strong  1 284 ms    752 ms
+    // Measured 2026-08-20 against the real art taxonomy (952 729 closure rows), through
+    // `node:sqlite` against the dev database rather than through the app, so these are SQLite's
+    // own numbers and carry no debug-build multiplier. The statement is the collapsed count
+    // `search.rs` really runs, best of three:
     //
-    // The floored column is the point: under `EXISTS` the weight floor cost 1.7–2.9x and looked
-    // like it wanted a `(slug, weight)` index (it does not — forced, that index is *ten times
-    // worse* than the status quo, because it can only seek the slug and must then scan the whole
-    // bucket). Under `IN` the floor is free, and no migration rung is owed.
+    //     slug     floor   EXISTS            IN
+    //     dog      any       315 ms          8 ms
+    //     dog      strong    882–1 147 ms    8 ms
+    //     plane    any       722–782 ms      614 ms
+    //     plane    strong  1 177–1 319 ms    752 ms
+    //
+    // **The gain is a function of how wide the motif is**, which the table says and a headline
+    // figure would hide: `dog` reaches 439 illustrations and goes 39x/110x, `plane` reaches
+    // 38 144 and goes 1.2x/1.7x, because a wide slug's list is tens of thousands of ids to
+    // materialise. The floored column is the point either way: under `EXISTS` the weight floor
+    // cost **1.7–3.6x** and looked like it wanted a `(slug, weight)` index (it does not — forced,
+    // that index is *ten times worse* than the status quo, because it can only seek the slug and
+    // must then scan the whole bucket; `index/facets.rs` carries the refutation in full). Under
+    // `IN` the floor is free, and no migration rung is owed.
+    //
+    // **One trade-off nobody has to accept but everybody should know about.** On a request with
+    // *both* a text term and a tag term, the planner now has a second driver to choose from and
+    // may drive from the tag list rather than from FTS. That is usually right — a tag list is
+    // often the smaller set — but it is a plan this shape did not previously permit. Measured on
+    // the same pass, a text-only search moved 12 ms -> 16 ms, i.e. within noise and not a
+    // regression; a text-plus-tag request has not been measured at real breadth.
     //
     // **No `rows` fallback**, unlike the set code above: a tag is a claim only a card row can
     // answer, so an orphaned collection or wishlist entry fails it exactly as it fails the

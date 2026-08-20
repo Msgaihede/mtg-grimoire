@@ -98,6 +98,7 @@ import { AppShell } from "@/components/AppShell";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
+import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
@@ -236,6 +237,7 @@ function rightClick(element: HTMLElement): void {
  */
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  lastQueryClient = qc;
   return render(
     <QueryClientProvider client={qc}>
       <TooltipProvider>
@@ -246,6 +248,10 @@ function wrap(ui: ReactElement) {
     </QueryClientProvider>,
   );
 }
+
+/** The client the last {@link wrap} built, for the one assertion about a key **no observer on
+ *  this page holds** — see `puts the Settings list out of date too`. */
+let lastQueryClient: QueryClient | null = null;
 
 /** The shell's update state, in its resting position — `App` owns the real one. */
 const noUpdate: Update = {
@@ -522,6 +528,35 @@ describe("hiding a tag", () => {
     await user.click(screen.getByRole("menuitem", { name: /^Hide this tag/ }));
 
     await waitFor(() => expect(tagSearch.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  /**
+   * The **third** key, and the only one this page never draws: Settings' hidden-tag list.
+   *
+   * It cannot be observed as a refetch the way the two above are, because nothing on this page
+   * subscribes to it — which is exactly why it was missed. The rail's own answer to a hide is a
+   * live line saying hidden tags "come back from Settings", so a reader who had opened Settings
+   * once and followed that sentence back inside the client's 30 s `staleTime` would arrive at a
+   * cached list **without the tag they had just hidden on it** — the same broken promise
+   * `HiddenTagsPanel` exists to end, in a narrower window. Asserted on the cache's own state,
+   * since a stale mark is the whole of what the writer owes a reader it cannot see.
+   */
+  it("puts the Settings list out of date too, though nothing here reads it", async () => {
+    const user = userEvent.setup();
+    wrap(<TagsPage />);
+    const qc = lastQueryClient!;
+    // Seeded rather than fetched: an unobserved key has no query at all until something puts one
+    // there, and `invalidateQueries` on a key with no entry is silently a no-op — so without this
+    // the assertion would pass against a page that named the wrong key.
+    qc.setQueryData(HIDDEN_TAGS_KEY, []);
+    expect(qc.getQueryState(HIDDEN_TAGS_KEY)?.isInvalidated).toBe(false);
+
+    await openRowMenu("Landscape");
+    await user.click(screen.getByRole("menuitem", { name: /^Hide this tag/ }));
+
+    await waitFor(() =>
+      expect(qc.getQueryState(HIDDEN_TAGS_KEY)?.isInvalidated).toBe(true),
+    );
   });
 
   /**

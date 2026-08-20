@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { FilterBar } from "@/features/search/FilterBar";
+import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { useCardSearch } from "@/features/search/useCardSearch";
 import {
   ipc,
@@ -256,12 +257,22 @@ export function TagsPage() {
         setMuteFailure(`Could not hide ${hit.label} — ${ipcError(e)}`);
         throw e;
       }
-      // Only past the write: a refusal leaves both lists exactly as they were, so re-reading them
-      // would be two round trips to be told the same thing.
+      // Only past the write: a refusal leaves all three lists exactly as they were, so re-reading
+      // them would be three round trips to be told the same thing.
+      //
+      // **`HIDDEN_TAGS_KEY` is the third and it is the one that is easy to forget**, because it
+      // is not on this page. The rail's answer to a hide is "hidden tags come back from
+      // Settings", and Settings' list is a cached read with the app's ordinary 30 s `staleTime`
+      // — so without this a reader who had opened Settings once, come back, hidden a tag and
+      // followed that sentence inside half a minute would arrive at a list that does not have it
+      // on. Which is the same broken promise `HiddenTagsPanel` was built to end, in a narrower
+      // window. `useHiddenTags` invalidates in the other direction for the mirror of this
+      // reason; a write and its reader have to name each other.
       setMuteFailure(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tag-children"] }),
         queryClient.invalidateQueries({ queryKey: ["tag-search"] }),
+        queryClient.invalidateQueries({ queryKey: HIDDEN_TAGS_KEY }),
       ]);
     },
     [queryClient],
@@ -312,11 +323,11 @@ export function TagsPage() {
 
             **`w-72` and not `w-64`, and the 32px was measured.** A row is a disclosure, the name,
             the namespace mark and the reach figure, and the name is the only one of the four that
-            shrinks. Driving the shipped window on 2026-08-20 at 1920×1080 with the real taxonomy
-            in, `w-64` left the name 14–55px of a 199px row and clipped 23 of the 24 widest roots;
-            dropping the unit word off the reach (`tagReachFigure`) fixed 21 of those and `w-72`
-            fixed the rest — measured as a pair, in the window, both wanted. It costs the wall
-            32px of 1660. */}
+            shrinks. Driving the shipped window on 2026-08-20 at 1920×1080 (debug build) with the
+            real taxonomy in, `w-64` left the name 14–55px of a 199px row and clipped **23 of the
+            24** widest roots; dropping the unit word off the reach (`tagReachFigure`) took that
+            to **3**, and `w-72` took it to **0**. Measured as a pair, in the window, and both
+            wanted — `w-80` alone also left 3. It costs the wall 32px of 1660. */}
         <div className="flex min-h-0 w-72 shrink-0 flex-col gap-3 border-r border-border pr-4">
           <TagSearchBox
             value={text}
