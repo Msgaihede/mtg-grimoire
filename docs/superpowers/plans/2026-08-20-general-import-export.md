@@ -247,6 +247,17 @@ Run: `npx rg -n "deck_import" src-tauri/src/`
 
 Rewrite `crate::deck_import::deck_import_read_file` (referenced in `export.rs`'s doc comment) to `crate::import::import_read_file`, and every other `deck_import::` to `import::`. `deck_import_commit` keeps its own name throughout.
 
+**Do not do this with a blind substring replace of `deck_import` → `import`.** `deck_import_commit`
+contains `deck_import`, and that name must survive this task intact — a naive pass renames it to
+`import_commit` in Rust, in `lib.rs`'s handler list, in `ipc.ts` and in the Storybook fake, and the
+command then no longer exists under the name the frontend invokes. Nothing type-checks `ipc.ts`
+against the crate, so the failure surfaces at runtime as a deck import that refuses with "command
+not found" rather than as a red build. Task 1 hit the same class of bug — `CreateDeckDialog`
+contains `DeckDialog` — so rename by **whole identifier**, matching the three exact names
+`deck_import_resolve`, `deck_import_read_file` and the module path `deck_import::`, and leave every
+other occurrence alone. After the rename, `rg -n "deck_import" .` must show `deck_import_commit`
+and nothing else.
+
 - [ ] **Step 3: Rename the mirror**
 
 In `src/lib/ipc.ts`:
