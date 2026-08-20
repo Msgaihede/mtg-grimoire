@@ -60,7 +60,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `variant` widens it again: `live` is what is sleeved up, `theory` is what the deck is being
   built toward (`schema::DECK_VARIANTS`), so a change tried out in Theory can never silently
   overwrite the deck as it stands. Every card command takes all of them.
-- **`finish` is the fifth part, and it is v18's** (2026-08-17). `deck_cards.finish` is
+- **`finish` is the fifth part, and it is v19's** (2026-08-17). `deck_cards.finish` is
   `NULL | 'foil' | 'etched'`, so a pile holds `1 × Sol Ring (foil)` beside `3 × Sol Ring` as two
   rows — which is what a reader means by picking the foil printing, since Scryfall models foil as
   a _finish of a printing_ rather than as a printing and 53 224 of 107 337 paper printings carry
@@ -155,7 +155,7 @@ preferred_finish`'s nullability one table over.
 - **`last_variant` is validated in Rust and the other two are not, which is the boundary rather
   than an omission.** None of the three carries a CHECK in SQL, and the fence has to
   sit somewhere. **Not because `ALTER TABLE … ADD COLUMN` cannot add one** — that is what this
-  said until 2026-08-17 and it is false, as v18's `deck_cards.finish` demonstrates. `last_variant` is checked against
+  said until 2026-08-17 and it is false, as v19's `deck_cards.finish` demonstrates. `last_variant` is checked against
   `schema::DECK_VARIANTS`, because that is a word the crate owns — the same word
   `deck_cards.variant` holds. `last_group_by` and `last_sort_by` hold a **TypeScript**
   vocabulary (`category|manaValue|type` and `alphabetical|manaCost|price|type`) the crate
@@ -820,7 +820,7 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   category list to translate an id through). It refuses same-printing, a missing from-row
   (naming the category), a raced sync (the to-printing has left `cards`), and a **different
   oracle card** — the guard is inside the transaction, because "swap this printing" must never
-  become "swap this card". Since v18 it also carries the row's **finish** across, and
+  become "swap this card". Since v19 it also carries the row's **finish** across, and
   deliberately does _not_ check it against the target printing's `finishes`: a swap onto a
   printing sold in no foil would then be refused outright, where what a reader wants is the
   printing they picked.

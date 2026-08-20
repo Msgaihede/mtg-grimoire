@@ -458,8 +458,10 @@ The rules, and where each is enforced, are in
   regenerates them daily**, and the two cadences must not be blurred: the week is
   `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, this app's own answer to how often to ask, because
   the taxonomies are hand-curated and a deck's categories should not regroup between two sessions
-  on the same afternoon. Art is the larger file by 2.1×, which is why `tags::art::refresh_if_due`
-  is emphatic that neither the launch, the card sync nor the **oracle** refresh may wait on it.
+  on the same afternoon. Art is the larger file by 2.1× — 12 544 874 B against 5 852 962 B, both
+  read on 2026-08-20, because a ratio across two runs is not a ratio — which is why
+  `tags::art::refresh_if_due` is emphatic that neither the launch, the card sync nor the
+  **oracle** refresh may wait on it.
 - Scryfall's shapes: `cards.oracle_id`/`cmc`/`type_line` are NULLABLE, `collector_number` is
   TEXT, prices are decimal strings, `legalities` is JSON (23 keys, grows), finishes are an enum
   and never a boolean.

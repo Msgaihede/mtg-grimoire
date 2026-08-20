@@ -256,8 +256,8 @@ export const Matches: Story = {
     const canvas = within(canvasElement);
     const list = await canvas.findByRole("list", { name: "Matching tags" });
     // Generous, because `useTagSearch` debounces by `DEBOUNCE_MS` before it asks anything and
-    // this suite runs 3,900 tests against one machine — the wait is wall-clock under
-    // contention rather than anything this story does.
+    // several thousand tests share this machine under `npm run verify` — what runs out is
+    // wall-clock under contention rather than anything this story does.
     await waitFor(
       async () => {
         await expect(

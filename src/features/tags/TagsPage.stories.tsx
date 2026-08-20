@@ -14,7 +14,13 @@ const FLOOR = new RegExp(`^${HIDE_BACKGROUND_LABEL}`);
  * **A bare `getByText("3 cards")` is ambiguous on this page, and not by accident of the
  * fixture.** The rail draws each tag's reach in the same grammar — `protection` reaches
  * `3 cards` — so the caption under the wall and a row in the column beside it read identically.
- * `summaryOf`'s line is the one `role="status"` paragraph, which is what tells them apart.
+ * The selector picks the caption because it is a **paragraph** and a rail row's count is a
+ * `<span>` inside a button.
+ *
+ * **It is not the page's only `role="status"` paragraph** — `TagTree` mounts a second one for
+ * the hidden-tags sentence, empty until a tag is hidden — so this narrows rather than
+ * identifies, and it is enough only because that element never holds a card count. A story
+ * that needs the caption *itself* should reach for the element, not for these words.
  */
 const CAPTION = { selector: "p[role='status']" } as const;
 

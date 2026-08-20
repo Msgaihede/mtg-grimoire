@@ -326,10 +326,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   two-state switch and a `coalesce` at every read site. It touches `cards` not at all, so it takes
   the same free pass v8, v9, v11 and v12 take below: it neither needs the `CARDS_INDEXES` replay
   nor takes it over, and no `cards_fts` rebuild is owed. **It was written as v12 and renumbered
-  to v13 on the merge** — main's view-state step claimed the same number the same day — which is the ordinary weather of
-  this ladder rather than an accident; v10's paragraph below is the standing warning. What the
-  column _means_ is [decks-storage.md](decks-storage.md); nothing about the grouping it controls
-  is in Rust.
+  to v13 on the merge** — main's view-state step claimed the same number the same day — which
+  is the ordinary weather of this ladder rather than an accident; v10's paragraph below is the
+  standing warning. What the column _means_ is [decks-storage.md](decks-storage.md); nothing
+  about the grouping it controls is in Rust.
   v12 adds three columns to `decks` — `last_variant`, `last_group_by` and
   `last_sort_by`, all `TEXT NOT NULL` with defaults `live`, `category` and `alphabetical` — so
   the deck editor reopens on whatever the reader was last looking at, per deck. Like v8, v9 and
@@ -374,23 +374,32 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **Schema is v20**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
-  v20 adds **six tables, two columns, three indexes and a replay that moved**.
+  v20 adds **six tables, two columns, five indexes and a replay that moved**, and every one of
+  them is named below — a bare count is the thing that rots here, and a list is not.
   Five of them: `art_tags`, `art_tag_parents`, `art_taggings`, the closure `art_tag_illustrations`
   and the watermark `art_tag_meta` — Scryfall Tagger's *art* taxonomy, a parallel set rather than
   a `kind` column on the oracle five, because an art tag is a fact about an **illustration** and a
   single table would need a key that is an `oracle_id` on some rows and an `illustration_id` on
   others. The sixth is the user table `muted_tags` (`namespace, tag_id, slug, muted_at`),
-  deliberately
-  outside both `*_TAG_TABLES` lists: those are what a refresh drops and rebuilds wholesale, and a
-  reader's mutes must survive one.
+  deliberately outside both `*_TAG_TABLES` lists: those are what a refresh drops and rebuilds
+  wholesale, and a reader's mutes must survive one.
   The two columns are `oracle_tags.id` and `oracle_tags.slug_norm`, both
   `TEXT NOT NULL DEFAULT ''` — the default is what makes `ADD COLUMN` legal on a `NOT NULL`
   column, and it is why `tags::query`'s not-muted clause is `{alias}.id <> ''`: without that
   fence one `muted_tags` row with an empty `tag_id` would equal every un-refreshed row and take
   the whole oracle taxonomy off the page silently. Neither staging twin carries the default.
-  The three indexes are `idx_cards_illustration` (in `CARDS_INDEXES`) and the two `slug_norm`
-  ones, which live in `TAG_INDEXES_SQL` beside the tables rather than in them, because both live
-  tag tables are renamed over by a swap.
+  The five indexes are `idx_cards_illustration`, which joins `CARDS_INDEXES`, plus the **four**
+  in `TAG_INDEXES_SQL`: `idx_art_tags_norm` and `idx_oracle_tags_norm` over the two `slug_norm`
+  columns the type-ahead matches against, and `idx_art_tag_illustrations_slug` and
+  `idx_oracle_tag_cards_slug` over the two closures the reach count scans. **Those two
+  constants are the census** — read them rather than this sentence. The arithmetic that keeps
+  the number honest is `UNDO_V20`'s: three of the five come down by hand and two ride along on
+  the `art_*` tables being dropped. The four sit beside the tables rather than in them, because
+  both live tag tables are renamed over by a swap.
+  **This sentence said *three* on the day it was written**, and it is worth leaving the scar:
+  the paragraph below it already said four, `UNDO_V20` already said five, and the count still
+  went in wrong — inside the entry that opens by warning about exactly this. A number nobody
+  can go red over is a number to name a constant instead of writing down.
   **And v20 takes the `CARDS_INDEXES` replay over from v10** — the ladder's standing rule, since
   the list describes `cards` at head and v20 is the newest step to touch it. A database sitting
   anywhere above v10 would otherwise never be handed `idx_cards_illustration`.
