@@ -2077,6 +2077,10 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     // the wishlist draws it; it is what files a dragged wish into a deck category
     // (`autoCategoryFor`), which is a story `AppShell` can play.
     typeLine: card?.typeLine ?? null,
+    // `c.id` from the same join, which is what makes the wall drawable: a pinned wish is its
+    // own printing, an any-printing wish is the newest printing of its oracle card, and only a
+    // genuine orphan is `null`.
+    artCardId: card?.id ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
     unitPrice: finishPriceAt(db, card, finish, mp),
