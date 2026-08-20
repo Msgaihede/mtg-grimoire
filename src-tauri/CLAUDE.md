@@ -66,8 +66,10 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v18** — see
-  [the ladder's history](../docs/reference/data-and-sync.md).
+  never reuse one. Schema is at **v20** — `schema::SCHEMA_VERSION` is the answer, and
+  [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
+  **v18** for two whole rungs, because a prose-only edit routes to neither CI job: v19 added
+  `deck_cards.finish` and v20 the art-tag tables, and nothing went red for either.)
 - **A step that writes to a table an older *forward-built* fixture never created fails on that
   fixture alone**, and v18 is the first one to do it. `schema.rs`'s `v1_database` and
   `v6_deck_database` are hand-written old schemas rather than rewinds, so they carry only what
@@ -79,8 +81,10 @@ both plus the frontend.
 - **A deck's platform is `decks.game_key` and a format's is `format_specs.games`** (schema v18),
   and neither is a rule Rust applies. `game_key` is one of `schema::DECK_GAMES`
   (`any|paper|arena|mtgo`, `'any'` a **sentinel** for `default_category_id`'s reason — `DeckPatch`'s
-  `coalesce` reads a bound NULL as "leave it"), fenced by `deck::valid_game` because `ADD COLUMN`
-  cannot carry a CHECK. `games` is a comma-joined list of `schema::GAMES` written **only by
+  `coalesce` reads a bound NULL as "leave it"), fenced by `deck::valid_game` in Rust rather
+  than by a CHECK — **not because `ADD COLUMN` cannot carry one**, which is what this said until
+  v19 added a checked `deck_cards.finish`, but because a command parameter reaches it and a
+  refusal in Rust can say why. `games` is a comma-joined list of `schema::GAMES` written **only by
   `FORMAT_SPECS_SEED`**, so it needs no fence and gets a test instead. Rust supplies both facts;
   narrowing the format picker by them is TypeScript's, and **nothing in the crate compares the
   two** — a Modern deck may say Arena, and refusing that pair would be refusing a deck over a
@@ -101,7 +105,7 @@ shared_cell` walks both into two databases and compares them column by column.
   `deck::duplicate_deck`, which **copies** the source pile's answer — a copy has the same shape as
   its original, and defaulting there would make every auto pile in the duplicate draw empty. No
   CHECK — **not because `ADD COLUMN` cannot carry one**, which is what this line claimed until
-  2026-08-17 and is false: v18's `finish` column adds one and it is enforced
+  2026-08-17 and is false: v19's `finish` column adds one and it is enforced
   (`the_deck_card_finish_column_refuses_nonfoil` is the proof, and SQLite's documented ADD COLUMN
   restrictions are PRIMARY KEY, UNIQUE, a non-constant DEFAULT, NOT NULL without a default,
   REFERENCES without a NULL default, and GENERATED STORED). It has none because no command
@@ -114,13 +118,28 @@ shared_cell` walks both into two databases and compares them column by column.
   plus the 22 names the rule could answer with on the day it shipped) and is deliberately not kept
   in step with TypeScript's list; **"Main deck" is not on it** — that is the v8 migration's pile
   and it holds real cards.
-- **Scryfall's Oracle Tags live in four tables plus a watermark** (schema v14), keyed on the
-  tag **slug** and on `cards.oracle_id` — both soft, no foreign key anywhere.
-  `src/tags/` is the only writer — the shared `tags::ingest_gz`, bound to `tags::oracle::ORACLE`,
-  which is the one place this taxonomy's tables, columns and weekly schedule are named. It
-  streams the `oracle_tags` bulk file, flattens the hierarchy **once** into `oracle_tag_cards`
-  (every tag a card holds *and* every ancestor of those tags), and swaps four staging tables
-  into place with the watermark in the same transaction. **Rust stores slugs and nothing else** — no category names, no priority order,
+- **Each Tagger taxonomy lives in four tables plus a watermark, and there are two of them** —
+  Oracle Tags at schema v14 (`oracle_tags`, `oracle_tag_parents`, `oracle_taggings`, the closure
+  `oracle_tag_cards`, `oracle_tag_meta`) and Art Tags at **v20** (`art_tags`, `art_tag_parents`,
+  `art_taggings`, the closure `art_tag_illustrations`, `art_tag_meta`). Keyed on the tag **slug**
+  and on `cards.oracle_id` / `cards.illustration_id` respectively — all soft, no foreign key
+  anywhere.
+  **Two table sets rather than a `kind` column, because the join column differs**: an art tag is
+  a fact about a *picture*, so a card with five arts has five illustrations and the dog is in one
+  of them. One table would need a key that is an `oracle_id` on some rows and an
+  `illustration_id` on others — a column no index can serve and no join can trust.
+  `src/tags/` is the only writer, and it is **one engine with two bindings**: `mod.rs` holds the
+  fetch, the parse, the graph walk, the staged write and the swap, parameterised over a
+  `Dataset`; `oracle.rs` and `art.rs` are each a `const Dataset` plus that namespace's commands,
+  and are the one place a taxonomy's tables, columns and weekly schedule are named. (It replaced a
+  standalone `oracle_tags.rs` when the second dataset landed.) `query.rs` and `muted.rs` are
+  shared and serve both. Each ingest streams its bulk file, flattens the hierarchy **once** into
+  its closure (every tag a subject holds *and* every ancestor of those tags), and swaps four
+  staging tables into place with the watermark in the same transaction.
+  **`Dataset::carries_weight` is the one behavioural difference and `write_closure` is its only
+  reader**: an art tagging's `weight` survives the fold — to the *strongest* weight the row
+  descends from — because Scryfall means something by it there, and an oracle one's does not.
+  **Rust stores slugs and nothing else** — no category names, no priority order,
   no whitelist; that is TS's half. Two read commands answer a whole decklist in one round
   trip: `oracle_tags_for_cards` keyed on `oracle_id`, and **`oracle_tags_for_printings` keyed
   on `cards.id`**, which is the one most call sites want — a quick add, every drag source and
@@ -128,9 +147,33 @@ shared_cell` walks both into two databases and compares them column by column.
   all. Both answer one entry **per requested id, in request order**, with an empty slug list
   for an unknown id, a NULL `oracle_id` and an untagged card alike: all three mean "fall back
   to the type line", and **nothing about categorising a card may fail a deck add**.
-  **684 of 4 521 tags have more than one parent**, so
-  `tags::ancestor_closures` follows *every* `parent_ids` entry and is the one place
-  that decision is written down.
+  Multiple parents are the normal case, not an edge: **684 of 4 521 oracle tags and 4 970 of
+  11 531 art tags (43%) have more than one**, so `tags::ancestor_closures` follows *every*
+  `parent_ids` entry and is the one place that decision is written down.
+- **`oracle_tags` gained `id` and `slug_norm` at v20, and both are `NOT NULL DEFAULT ''` for a
+  reason that reaches the read side.** `ALTER TABLE` cannot add a `NOT NULL` column without a
+  default, so every row predating a refresh new enough to write ids carries `''` — which is why
+  `tags::query`'s `not_muted` clause is `{alias}.id <> ''` and `tag_mute` refuses a blank id
+  outright. Without both fences one `muted_tags` row with an empty `tag_id` would equal every
+  un-refreshed row and take the **whole** oracle taxonomy off the page, with no error raised and
+  nothing in `error_log`. **Neither staging twin carries the default** — both are bare `NOT NULL`,
+  so an ingest that forgets a column fails at its first insert rather than writing a table of
+  empty strings that indexes one value and matches nothing. The two spellings are on purpose: the
+  live table needs the default to make the `ALTER` legal at all, and the staging table must not
+  have one.
+- **`muted_tags` is a user table and sits outside both `*_TAG_TABLES` lists** (schema v20) — it is
+  the reader's answer about which tags they never want offered, and those two lists are what a
+  refresh drops and rebuilds wholesale. It carries the namespace rather than being two tables,
+  and it stores the `slug` it was given at mute time without ever joining the live taxonomy: a tag
+  muted before a rename still lists, which is exactly what that column is for.
+- **The tag indexes are replayed on every launch, outside the ladder, and that is not belt and
+  braces.** `tags::query` counts a tag's reach with a correlated `count(*)` over the closure:
+  **49 ms** with `idx_art_tag_illustrations_slug` and **531 seconds** without it — 11 531
+  candidate tags against a 951 499-row scan each, measured 2026-08-20 on a release build. A
+  database missing them does not get a slow Tags page, it gets a window that stops responding on
+  the first keystroke in the tag box, and nothing about that symptom points at an index. So
+  `migrate` ends with `TAG_INDEXES_SQL` (`CREATE INDEX IF NOT EXISTS` throughout) **from every
+  version**, and it is fatal where `prepare_database`'s other repairs merely log.
 - **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
   is dropped on every sync, so a price column would be destroyed by the next refresh —
   and `card_id` there is a **soft** reference with no foreign key, because a feed and the
@@ -242,7 +285,7 @@ Full detail, with the measurements and the traps behind each rule, is in
   decks in it and deleting a tag must never delete a card.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`). `variant` is `live` (sleeved up) or `theory` (being built toward)
-  and `finish` is `NULL | 'foil' | 'etched'` (schema v18); every card command takes all of them.
+  and `finish` is `NULL | 'foil' | 'etched'` (schema v19); every card command takes all of them.
   `deck_cards` has `CHECK (quantity > 0)`, so zero removes the row.
 - **`deck_cards.finish` is NULL for the regular copy and `'nonfoil'` is never stored.**
   `deck::normalise_finish` is the one place the word becomes NULL and the column's CHECK is what
@@ -292,7 +335,7 @@ Full detail, with the measurements and the traps behind each rule, is in
 viewState)` — absent field means "leave it". It moves **no `updated_at`**, records **no
   `deck_audit` row**, reallocates nothing, and refuses an unknown deck by name (`GONE`).
   None of the three carries a CHECK — **not because `ALTER TABLE … ADD COLUMN` cannot add
-  one**, which is what this said until 2026-08-17 and is false (v18's `deck_cards.finish` adds
+  one**, which is what this said until 2026-08-17 and is false (v19's `deck_cards.finish` adds
   one and it is enforced); it is that the vocabulary of two of them is not the crate's to own.
   `last_variant` is fenced against
   `DECK_VARIANTS` here (through the one `deck_meta::valid_variant`) while the other two hold a
@@ -406,13 +449,17 @@ The rules, and where each is enforced, are in
   5xx/timeouts only — **never a 429** (the docs forbid exactly that) and never a 404.
 - **Bulk data is the only card source**, gzipped **JSONL** (one object/line; old JSON-array
   endpoints 404). There is no per-card API lookup anywhere.
-- **Two bulk datasets, one client.** `default_cards` (the corpus) and `oracle_tags` (~5.85 MB,
-  4 521 tags) both go through `Client::check_bulk_dataset` and so share the one pacing gate
+- **Three bulk datasets, one client.** `default_cards` (the corpus), `oracle_tags` (~5.85 MB,
+  4 521 tags) and `art_tags` (~12.5 MB, 11 531 tags over 475 163 taggings, measured 2026-08-20)
+  all go through `Client::check_bulk_dataset` and so share the one pacing gate
   and the one 429 lockout — a second `reqwest::Client` would be a second application as far
   as the rate limiter can tell. The price feeds are the deliberate exception: they are not
-  Scryfall and must not spend its budget. The tag file is checked **weekly**, not daily; the
-  taxonomy is hand-curated and a deck's categories should not regroup between two sessions on
-  the same afternoon.
+  Scryfall and must not spend its budget. **Both tag files are checked weekly while Scryfall
+  regenerates them daily**, and the two cadences must not be blurred: the week is
+  `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, this app's own answer to how often to ask, because
+  the taxonomies are hand-curated and a deck's categories should not regroup between two sessions
+  on the same afternoon. Art is the larger file by 2.1×, which is why `tags::art::refresh_if_due`
+  is emphatic that neither the launch, the card sync nor the **oracle** refresh may wait on it.
 - Scryfall's shapes: `cards.oracle_id`/`cmc`/`type_line` are NULLABLE, `collector_number` is
   TEXT, prices are decimal strings, `legalities` is JSON (23 keys, grows), finishes are an enum
   and never a boolean.

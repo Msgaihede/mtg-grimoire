@@ -898,8 +898,8 @@ describe("dragging a tile", () => {
     const tile = container.querySelector('[draggable="true"]') as HTMLElement;
 
     // **The guard for the `queryClient.clear()` above, and it is not ceremony.** These two
-    // tests share the app'''s module-level client at a 30 s `staleTime`, so without that clear
-    // this one reads the previous test'''s cached page and never calls the backend at all —
+    // tests share the app's module-level client at a 30 s `staleTime`, so without that clear
+    // this one reads the previous test's cached page and never calls the backend at all —
     // measured, not assumed. It passes either way while both fixtures are the same card, which
     // is exactly the kind of test that stops meaning anything without anyone noticing.
     expect(searchCards).toHaveBeenCalled();

@@ -9,10 +9,20 @@ construction: nothing downloads until a reader selects that marketplace, and a f
 answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
 needs a per-user JWT and publishes no bulk download.
 
-**Scryfall's Oracle Tags are a second bulk download from the same source, and optional the same
-way.** They say what a card _does_ (`removal`, `ramp`, `recursion`), which is what a deck add is
-filed by; a database that has never fetched them files by card type instead, and that fallback is
-the floor rather than an error. Weekly, ~5.85 MB — [the research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md).
+**Scryfall's two Tagger datasets are further bulk downloads from the same source, and optional
+the same way.** **Oracle Tags** say what a card _does_ (`removal`, `ramp`, `recursion`), which is
+what a deck add is filed by; a database that has never fetched them files by card type instead,
+and that fallback is the floor rather than an error. **Art Tags** say what an illustration
+_shows_ (`forest`, `dragon`, `dog`), which is what the Tags page browses by; a database that
+has never fetched them has a Tags page that says so and still answers from the oracle side.
+~5.85 MB and ~12.5 MB — [the oracle research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md)
+and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
+
+**Both files regenerate _daily_; _weekly_ is this app's refresh interval, and the two must not be
+blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and both `updated_at`
+stamps were the previous day when checked on 2026-08-20. The week is
+`tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
+taxonomy up to seven days behind Scryfall is the design working, not a stale download.
 
 ## Commands
 

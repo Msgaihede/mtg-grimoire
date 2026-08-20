@@ -605,6 +605,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 | Path | What lives there |
 | --- | --- |
 | `components/` | Shared UI — `CardImage`, `CardArt`, `table/VirtualTable`, `menu/` (the one context menu) |
-| `features/` | `card`, `collection`, `decks`, `search`, `settings`, `wishlist` |
+| `features/` | One directory per surface — **`ls src/features` is the census.** This row named six while the tree held eight; a prose-only edit routes to neither CI job |
 | `lib/` | `ipc.ts` (the Rust mirror), `layers.ts`, `activity.ts`, `sort.ts`, `tokens.test.ts` |
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |
+| `features/tags/` | Browse by what a card **is of**. Storied under `Tags/*`; the wall is `features/search`'s, reused with collapse off |

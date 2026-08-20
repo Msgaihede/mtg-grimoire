@@ -67,10 +67,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     }),
     tagChildren: vi.fn().mockResolvedValue([]),
     tagSearch: vi.fn().mockResolvedValue([]),
-    // The Tags page subscribes to the art taxonomy'''s progress channel so a finished ingest takes
-    // its notice down without a reload. Mocked for '''onSyncProgress'''s reason: the registration is
-    // a bare call inside a mount effect, so a '''vi.fn()''' that is not there is a synchronous
-    // '''TypeError''' rather than a rejection anything can catch.
+    // The Tags page subscribes to the art taxonomy's progress channel so a finished ingest takes
+    // its notice down without a reload. Mocked for `onSyncProgress`'s reason: the registration is
+    // a bare call inside a mount effect, so a `vi.fn()` that is not there is a synchronous
+    // `TypeError` rather than a rejection anything can catch.
     onArtTagProgress: vi.fn().mockResolvedValue(() => {}),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
