@@ -40,7 +40,13 @@ describe("Ribbon", () => {
     render(<Ribbon {...props()} />);
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
-    expect(screen.getByText("116,568 cards · data from 2026-08-03")).toBeInTheDocument();
+    // The status line's own role, not a bare text lookup — the tooltip sweep left this at a
+    // mere `toBeInTheDocument()` once the `title="D:\\app\\data"` assertion it replaced no
+    // longer applied, which stopped checking that this text lives in the live region
+    // `src/CLAUDE.md` documents (`role="status"`, mounted for the ribbon's whole life) rather
+    // than merely somewhere on the page. Exact, since a status line that grew a second sentence
+    // (as the failures test below shows it can) would still pass a substring check.
+    expect(screen.getByRole("status").textContent).toBe("116,568 cards · data from 2026-08-03");
     expect(screen.getByRole("button", { name: /refresh/i })).toBeEnabled();
   });
 
@@ -88,7 +94,11 @@ describe("Ribbon", () => {
       </TooltipProvider>,
     );
     fireHover(line());
-    expect(screen.getByRole("tooltip")).toHaveTextContent("D:\\app\\data", {
+    // Exact, not a substring — this leg is the "stays quiet when they could" half of the test's
+    // own name, and `toHaveTextContent`'s string form is `.includes()`: a panel that still
+    // appended "0 card images could not be saved…" would pass a bare `"D:\\app\\data"` check as
+    // readily as a genuinely quiet one. The anchored regex is what actually asserts silence.
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^D:\\app\\data$/, {
       normalizeWhitespace: false,
     });
     vi.useRealTimers();

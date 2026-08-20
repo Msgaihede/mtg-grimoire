@@ -171,7 +171,11 @@ describe("CardArt", () => {
     );
     fireEvent.pointerEnter(chip()!);
     advance(TOOLTIP_OPEN_MS);
-    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Game changer");
+    // Exact, not a substring: this card carries no `finish`, so the panel must read "Game
+    // changer" alone — `toHaveTextContent`'s string form is `.includes()`, and "Game changer" is
+    // a prefix of the foil card's "Game changer · Foil" above, so a stale or wrongly-suffixed
+    // panel here would pass a substring check just as readily as the correct one.
+    expect(document.getElementById(TOOLTIP_PANEL_ID)?.textContent).toBe("Game changer");
     vi.useRealTimers();
   });
 
