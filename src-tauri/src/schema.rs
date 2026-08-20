@@ -2021,17 +2021,46 @@ const MUTED_TAGS_SQL: &str = "
 /// A tag refresh renames a staging table *over* the live one, and a rename carries the staging
 /// table's indexes rather than the live table's — so an index declared once at migration time
 /// is an index that vanishes at the first weekly refresh, with the app staying correct and
-/// merely becoming slow. Every swap that promotes a staging table over `art_tags` or
-/// `oracle_tags` replays this, and `IF NOT EXISTS` is what makes that a no-op the rest of the
-/// time.
+/// merely becoming slow. **Every table indexed here is renamed over by a swap** — the
+/// taxonomies and both closures are all on [`ART_TAG_TABLES`] / [`ORACLE_TAG_TABLES`], and the
+/// staging twins carry no indexes at all — so [`swap_tag_staging`] replays this after its
+/// renames, and `IF NOT EXISTS` is what makes that a no-op the rest of the time.
 ///
-/// Only the two taxonomy tables need one: the taggings and closures carry no index but their
-/// own primary key, which a rename does bring with it. Both families are in one constant and
-/// every swap replays all of it — the statement for the family that was not swapped is an
-/// `IF NOT EXISTS` no-op, and one list is one place to look.
+/// Four indexes: each family has one on its taxonomy and one on its closure. The taggings
+/// tables need none — nothing reads them but the ingest that wrote them, and their primary
+/// key is the only order anyone asks for. Both
+/// families are in one constant and every swap replays all of it — the statements for the
+/// family that was not swapped are `IF NOT EXISTS` no-ops, and one list is one place to look.
+///
+/// `slug_norm` is what the tag search matches a normalised needle against.
+///
+/// **The closure indexes are what make the tag search's card counts affordable**, and the
+/// numbers are worth writing down because the shape looks harmless without them. A closure is
+/// `WITHOUT ROWID` on `(subject_id, slug)`, so counting *by slug* — which is the only count the
+/// Tags page wants, since a tag's reach is the whole point of showing it — has no path but a
+/// full scan of 951 499 rows.
+///
+/// Measured 2026-08-20 at that day's file size, release build, in memory: the grouped count
+/// these replace was **271 ms per `tag_search` call and flat** (a needle answering 11 tags cost
+/// the same as one answering 11 531, because SQLite materialises the subquery before the
+/// `WHERE` narrows anything), and `tag_children` over the 3 219 roots was **281 ms**. With
+/// these indexes and the correlated count they permit, the same two are **49 ms** and
+/// **26 ms**, and a narrow needle is **7.7 ms**. That is a type-ahead firing on every
+/// keystroke, so the difference is the feature working or not.
+///
+/// **Deleting one of these is not a slowdown, it is a hang.** `tags::query` counts
+/// per row now, so without the index a wide needle is 11 531 candidates x a 951 499-row scan
+/// each: **531 seconds**, measured. The two `the_tag_indexes_survive_a_*_tag_swap` tests are
+/// what stand between that and a weekly refresh.
+///
+/// The cost is one slug-ordered copy of each closure — ~380 ms to build at swap time, on a
+/// weekly background refresh.
 const TAG_INDEXES_SQL: &str = "
     CREATE INDEX IF NOT EXISTS idx_art_tags_norm ON art_tags(slug_norm);
-    CREATE INDEX IF NOT EXISTS idx_oracle_tags_norm ON oracle_tags(slug_norm);";
+    CREATE INDEX IF NOT EXISTS idx_oracle_tags_norm ON oracle_tags(slug_norm);
+    CREATE INDEX IF NOT EXISTS idx_art_tag_illustrations_slug
+        ON art_tag_illustrations(slug);
+    CREATE INDEX IF NOT EXISTS idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);";
 
 /// (Re)create the external-content FTS5 index over `cards` and populate it.
 ///
@@ -4975,16 +5004,21 @@ pub(crate) mod tests {
     /// Newest-first is the order every rewind always meant — the ascending lists below worked
     /// only because no rung had ever touched a table a lower rung deletes.
     ///
-    /// Two indexes come down by hand and one rides along. `idx_oracle_tags_norm` names
+    /// Three indexes come down by hand and two ride along. `idx_oracle_tags_norm` names
     /// `slug_norm`, and SQLite refuses `DROP COLUMN` on a column an index references — the trap
-    /// [`UNDO_V19`] documents one table over. `idx_cards_illustration` is dropped for
-    /// [`UNDO_V14`]'s quieter reason: `IF NOT EXISTS` means a fixture that kept it would migrate
-    /// perfectly happily while claiming a version that never had it. The art indexes need no
-    /// line, because `DROP TABLE` takes a table's own indexes with it.
+    /// [`UNDO_V19`] documents one table over. `idx_cards_illustration` and
+    /// `idx_oracle_tag_cards_slug` are dropped for [`UNDO_V14`]'s quieter reason: `IF NOT
+    /// EXISTS` means a fixture that kept one would migrate perfectly happily while claiming a
+    /// version that never had it. **Which index needs a line is decided by whether this fixture
+    /// drops its table**, not by which rung created it — the two art indexes need none because
+    /// `DROP TABLE art_tags` and `DROP TABLE art_tag_illustrations` take their own indexes with
+    /// them, while `oracle_tag_cards` survives to be dropped by [`UNDO_V14`] and so leaves its
+    /// index standing.
     const UNDO_V20: &str = "DROP INDEX idx_oracle_tags_norm;
          ALTER TABLE oracle_tags DROP COLUMN slug_norm;
          ALTER TABLE oracle_tags DROP COLUMN id;
          DROP INDEX idx_cards_illustration;
+         DROP INDEX idx_oracle_tag_cards_slug;
          DROP TABLE art_tags;
          DROP TABLE art_tag_parents;
          DROP TABLE art_taggings;
@@ -6373,7 +6407,12 @@ pub(crate) mod tests {
         for table in ["art_tags", "oracle_tags"] {
             assert_eq!(has_column(&conn, table, "slug_norm"), 1, "{table}");
         }
-        for index in ["idx_art_tags_norm", "idx_oracle_tags_norm"] {
+        for index in [
+            "idx_art_tags_norm",
+            "idx_oracle_tags_norm",
+            "idx_art_tag_illustrations_slug",
+            "idx_oracle_tag_cards_slug",
+        ] {
             conn.query_row(
                 "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
                 [index],
@@ -6387,36 +6426,46 @@ pub(crate) mod tests {
     /// carries the *staging* table's indexes rather than the live one's. So the tag swap owes
     /// the replay [`swap_staging`] owes [`CARDS_INDEXES`], and without it the index is gone
     /// after the first weekly refresh with nothing anywhere saying so.
+    ///
+    /// **Both of the family's indexes, because both tables are renamed over.** The closure's
+    /// is the one that would hurt, and it would not hurt gently: `tags::query` counts a tag's
+    /// reach per row, so losing `idx_oracle_tag_cards_slug` takes a wide `tag_search` from
+    /// 49 ms to **531 seconds** (measured 2026-08-20) — a frozen window one weekly refresh
+    /// after this test stopped being true.
     #[test]
-    fn the_normalised_slug_index_survives_an_oracle_tag_swap() {
+    fn the_tag_indexes_survive_an_oracle_tag_swap() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         create_oracle_tag_staging(&conn).unwrap();
         swap_oracle_tag_staging(&conn).unwrap();
-        conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_oracle_tags_norm'",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .expect("the index did not survive the tag swap");
+        for index in ["idx_oracle_tags_norm", "idx_oracle_tag_cards_slug"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} did not survive the tag swap"));
+        }
     }
 
     /// [`swap_art_tag_staging`] goes through the same replay [`swap_oracle_tag_staging`]
     /// does, and a shared helper is only as good as its least-tested caller. Without this the
-    /// art index would vanish at the first refresh of the art taxonomy alone, which is the
+    /// art indexes would vanish at the first refresh of the art taxonomy alone, which is the
     /// half of the failure the oracle test cannot see.
     #[test]
-    fn the_normalised_slug_index_survives_an_art_tag_swap() {
+    fn the_tag_indexes_survive_an_art_tag_swap() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         create_art_tag_staging(&conn).unwrap();
         swap_art_tag_staging(&conn).unwrap();
-        conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_art_tags_norm'",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .expect("the index did not survive the art tag swap");
+        for index in ["idx_art_tags_norm", "idx_art_tag_illustrations_slug"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} did not survive the art tag swap"));
+        }
     }
 
     /// The step over the version below it: both columns arrive on `oracle_tags`, and a row
@@ -6456,7 +6505,12 @@ pub(crate) mod tests {
         // `oracle_tags`. That is this rung's own thesis turned on itself — an index declared
         // where only a fresh install reaches it is an index every existing reader lacks, with
         // nothing wrong and only the tag search slow.
-        for index in ["idx_art_tags_norm", "idx_oracle_tags_norm"] {
+        for index in [
+            "idx_art_tags_norm",
+            "idx_oracle_tags_norm",
+            "idx_art_tag_illustrations_slug",
+            "idx_oracle_tag_cards_slug",
+        ] {
             conn.query_row(
                 "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
                 [index],

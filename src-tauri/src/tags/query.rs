@@ -115,11 +115,15 @@ fn namespaces_for(namespace: &str) -> Result<Vec<(&'static str, &'static Dataset
 /// `true` where the tag under `alias` has not been muted, with the namespace bound at
 /// `ns_param`.
 ///
-/// **`{alias}.id <> ''` is not defensive noise.** `oracle_tags.id` is `NOT NULL DEFAULT ''`,
-/// so every row a pre-Task-2 build ingested carries an empty id; without this clause a single
-/// `muted_tags` row with an empty `tag_id` would match every one of them and the whole
-/// taxonomy would vanish from the page with no error anywhere. An unidentifiable tag is
-/// unmutable instead, which is visible and recoverable.
+/// **`{alias}.id <> ''` prevents one mute from hiding an entire taxonomy, silently.**
+/// `oracle_tags.id` is `NOT NULL DEFAULT ''` — the v20 rung adds it with `ALTER TABLE`, which
+/// cannot add a `NOT NULL` column without a default — so every `oracle_tags` row that predates
+/// a refresh by a build new enough to write ids still carries `''`. Without this clause, one
+/// `muted_tags` row whose `tag_id` happened to be empty would equal every one of those rows,
+/// and the whole oracle taxonomy would disappear from the search box and the rail with no
+/// error raised, nothing in `error_log`, and a page that simply looks like it has no data.
+/// With it, a tag whose id was never written is *unmutable* — visible, wrong in a way the
+/// reader can see and report, and repaired by the next refresh.
 fn not_muted(alias: &str, ns_param: &str) -> String {
     format!(
         "NOT EXISTS (SELECT 1 FROM muted_tags m
@@ -127,34 +131,43 @@ fn not_muted(alias: &str, ns_param: &str) -> String {
     )
 }
 
-/// The seven columns and two joins both commands answer with, for one taxonomy.
+/// The seven columns both commands answer with, for one taxonomy.
 ///
 /// **Only names are interpolated** — every one of them a `&'static str` from
 /// [`Dataset`], which is a `const` in this crate. The band expression is built by the two
 /// callers out of literals and bound-parameter names for the same reason. Values are bound.
 ///
-/// Both counts are grouped subqueries rather than correlated `count(*)`s, because **no index
-/// reaches either column**: `art_tag_illustrations` is `WITHOUT ROWID` on
-/// `(illustration_id, slug)` and `art_tag_parents` on `(child_slug, parent_slug)`, so counting
-/// *by* slug and *by* parent has no path but a scan. Grouped, that scan happens once per
-/// statement; correlated, it would happen once per candidate row — 951 499 rows each, up to
-/// 11 531 times.
+/// **`card_count` is correlated and `child_count` is grouped, and the difference is which
+/// index exists.** Both closures are `WITHOUT ROWID` on `(subject_id, slug)` and both parents
+/// tables on `(child_slug, parent_slug)`, so neither the count-by-slug nor the count-by-parent
+/// has a path of its own — until `schema::TAG_INDEXES_SQL`'s `idx_{family}_..._slug`, which
+/// covers the closure and nothing else. So the closure count is a per-row index range scan and
+/// the parent count is one grouped pass over ~18 500 edges.
 ///
-/// **The measured cost of that is 289 ms per call and it is a constant**, not a function of
-/// how many tags matched: SQLite materialises the whole grouped subquery before the `WHERE`
-/// narrows anything, so a needle answering 11 hits costs the same as one answering 11 531
-/// (291 ms vs 289 ms; release build, in-memory database at the 2026-08-20 file's size — 11 531
-/// art tags, 951 499 closure rows, ~18 000 parent edges). The parents half is not the problem:
-/// `run_tag_children` over the roots, which pays the same `kids` join and no closure scan,
-/// answers in 4.9 ms.
+/// Measured 2026-08-20, release build, in-memory database at that day's file size (11 531 art
+/// tags, 951 499 closure rows, 3 219 roots, ~18 500 parent edges):
 ///
-/// **The fix is one index and it is not this task's to add**: `CREATE INDEX IF NOT EXISTS
-/// idx_art_tag_illustrations_slug ON art_tag_illustrations(slug)` and its oracle twin, in
-/// `schema::TAG_INDEXES_SQL` (which every tag swap already replays), take the same statement to
-/// **65 ms** and allow the correlated form, which is **31 ms**. A two-phase shape that counts
-/// only the matched slugs was measured too and is *worse* without the index — 741 ms on a wide
-/// needle — so it is not an alternative. Until that index lands this is the fastest shape
-/// available here, and a caller must debounce.
+/// | shape | `tag_search "dog"` (11 531 candidates) | `tag_search "tag-500-"` (11) | `tag_children` roots |
+/// | --- | --- | --- | --- |
+/// | grouped, no index | 271 ms | 271 ms | 281 ms |
+/// | grouped, indexed | 61 ms | 52 ms | 60 ms |
+/// | **correlated, indexed** | **49 ms** | **7.7 ms** | **26 ms** |
+/// | correlated, no index | **531 s** | 475 ms | — |
+///
+/// Three things that row of numbers is the only record of:
+///
+/// * **The grouped form's cost is flat.** SQLite materialises the whole grouped subquery before
+///   the `WHERE` narrows anything, so a needle answering 11 tags cost the same as one answering
+///   11 531 — 271 ms either way. The correlated form only counts what it is about to sort, which
+///   is why the narrow needle collapses to 7.7 ms.
+/// * **This module and that index ship together and must never be separated.** Deleting
+///   `idx_art_tag_illustrations_slug` does not make the search 4× slower, it makes it **531
+///   seconds** — 11 531 candidates × a 951 499-row scan each. That is a hang, not a slowdown,
+///   and it would arrive as "the app freezes when I type in the tag box" rather than as anything
+///   pointing here. `the_tag_indexes_survive_an_art_tag_swap` and its oracle twin are the fence.
+/// * **A two-phase shape** — match the tags first, then count only those slugs — was measured
+///   and is *worse*, 741 ms on a wide needle, because it still scans the closure and adds an
+///   11 531-hole `IN`. It looks like the obvious simplification and is not one.
 fn hit_select(ds: &Dataset, band: &str) -> String {
     let tags = ds.tags_table;
     let closure = ds.closure_table;
@@ -162,12 +175,10 @@ fn hit_select(ds: &Dataset, band: &str) -> String {
     let child_visible = not_muted("ct", ":ns");
     format!(
         "SELECT t.slug, t.id, t.label, t.description,
-                COALESCE(reach.n, 0) AS card_count,
+                (SELECT count(*) FROM {closure} c WHERE c.slug = t.slug) AS card_count,
                 COALESCE(kids.n, 0)  AS child_count,
                 {band}               AS band
            FROM {tags} t
-           LEFT JOIN (SELECT slug, count(*) AS n FROM {closure} GROUP BY slug) reach
-                  ON reach.slug = t.slug
            LEFT JOIN (SELECT p.parent_slug AS slug, count(*) AS n
                         FROM {parents} p
                         JOIN {tags} ct ON ct.slug = p.child_slug
