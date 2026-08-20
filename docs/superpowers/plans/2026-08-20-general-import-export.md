@@ -498,7 +498,7 @@ export function fromWishRow(row: WishRow): TransferCard {
 }
 ```
 
-If `DeckCard` has no `rarity`/`typeLine`/`unitPrice`, drop those three lines from `fromDeckCard` and remove them from `deck`'s row in Task 5's `SURFACE_FIELDS`. Check `src/lib/ipc.ts` rather than assuming.
+`DeckCard` carries `rarity`, `typeLine` and `unitPrice` — verified in `src/lib/ipc.ts`. Keep all three; `SURFACE_FIELDS.deck` in Task 5 lists them for this reason.
 
 - [ ] **Step 4: Run the test**
 
@@ -1368,9 +1368,12 @@ export function formatExport(
   fields: readonly TransferFieldId[],
 ): string {
   const set = new Set(fields);
-  // Fold first, filter second: what a format leaves out is decided on rows, and folding two
-  // rows the file cannot tell apart is a fact about the file rather than about the format.
-  const rows = written(foldForFields(cards, fields), format);
+  // **Filter first, fold second, and the order is load-bearing.** Folding first can merge a
+  // switched-off row into a switched-on one — the folded row inherits the FIRST card's
+  // `categoryActive` — so an Arena export would carry copies that `omittedCount` reports as
+  // omitted in the same breath. Filtering first means nothing inactive survives to be folded,
+  // and the sentence beside the format stays true of the file under it.
+  const rows = foldForFields(written(cards, format), fields);
   if (rows.length === 0) return "";
   const spec = LINE_SPEC[format];
   const line = (card: TransferCard) => writeLine(card, set, spec);
@@ -1807,6 +1810,13 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
 
     const setCode = cell("setCode");
     const finish = cell("finish").toLowerCase();
+    const categoryCell = cell("category") === "" ? null : cell("category");
+    // **A Category cell goes through the same section vocabulary a bracket does** — parse.ts
+    // already does exactly this for a bracket's first entry. `Sideboard` names one of the four
+    // seeded zones, so it must set the SECTION rather than becoming a category called
+    // "Sideboard" that `category_for_name` would then find-or-create by name anyway.
+    const knownSection =
+      categoryCell === null ? null : (SECTIONS.get(categoryCell.toLowerCase()) ?? null);
     lines.push({
       lineNumber,
       raw,
@@ -1814,8 +1824,11 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       name,
       setCode: setCode === "" ? null : setCode.toUpperCase(),
       collectorNumber: cell("collectorNumber") === "" ? null : cell("collectorNumber"),
-      section: "deck",
-      categoryName: cell("category") === "" ? null : cell("category"),
+      section: knownSection ?? "deck",
+      // Null whenever the section is not `deck` — `ParsedLine`'s stated invariant, and what
+      // keeps plan.ts's precedence chain three rungs rather than four. Only a word the section
+      // vocabulary has never heard of lands here.
+      categoryName: knownSection === null ? categoryCell : null,
       finish: finish === "foil" ? "foil" : finish === "etched" ? "etched" : null,
       excluded: false,
       extra,
@@ -2091,13 +2104,15 @@ Add to `src/features/collection/CollectionPage.test.tsx`:
 
 ```ts
 it("exports every row the filter matches, not the page that happens to be loaded", async () => {
-  // 250 rows, a 100-row list page, a 500-row sweep page: one call, 250 rows in the file.
+  // 250 rows, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
   const list = vi.mocked(ipc.collectionList);
   render(<CollectionPage />);
   await user.click(await screen.findByRole("button", { name: "Export" }));
   await waitFor(() => expect(list).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })));
   await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
-  expect(screen.getByText(/250 lines/)).toBeInTheDocument();
+  // **251, not 250.** A collection opens on CSV (see the store's defaults) and CSV writes a
+  // header row. Asserting the row count here is how a correct implementation reads as red.
+  expect(screen.getByText(/251 lines/)).toBeInTheDocument();
 });
 ```
 
@@ -2213,7 +2228,10 @@ git mv src/features/transfer/import/plan.ts src/features/transfer/import/destina
 git mv src/features/transfer/import/plan.test.ts src/features/transfer/import/destinations/deck.test.ts
 ```
 
-Fix the relative imports (`./parse` → `../parse`, `./fixtures` → `../fixtures`). `buildImportPlan`, `tallyOf`, `toImportItems`, `SECTION_CATEGORY` and the `ImportPlan` interface are **unchanged** — `ImportPlan` keeps its own field names (`cards: PlannedCard[]`, `unmatched`, `hintMisses`, `parseIssues`, `commander`, `totalCards`), and `toImportItems(plan, commanderIds)` is still what turns a plan into `ImportItem[]`.
+Fix the relative imports (`./parse` → `../parse`, `./fixtures` → `../fixtures`) **and
+`decklists.test.ts`'s `./import/plan`, which becomes `./import/destinations/deck`** — it is the
+one importer outside this folder and the round-trip suite will not resolve without it.
+`buildImportPlan`, `tallyOf`, `toImportItems`, `SECTION_CATEGORY` and the `ImportPlan` interface are **unchanged** — `ImportPlan` keeps its own field names (`cards: PlannedCard[]`, `unmatched`, `hintMisses`, `parseIssues`, `commander`, `totalCards`), and `toImportItems(plan, commanderIds)` is still what turns a plan into `ImportItem[]`.
 
 Create `src/features/transfer/import/destinations/DeckPreview.tsx` by lifting the preview half of today's `ImportDeckDialog.tsx` out whole — `Headline`, `Tally`, `Commander`, `CandidateButton`, `Problems`, `ProblemList`, `Mode` — and give it the state that used to live in `ImportBody`: the chosen variant, the chosen commander, the mode, and the `commit` mutation. Its props are `DestinationPreviewProps` plus the two facts only the deck editor knows:
 
@@ -2260,7 +2278,9 @@ Prefer the wrapper at the call site and drop the cast from `deck.ts` entirely �
 
 - [ ] **Step 4: Write `newDeck.ts`**
 
-The same planner, a different commit. Move `importIntoNewDeck`'s body across from `useImport.ts` unchanged, rollback included:
+The same planner, a different commit. **`importIntoNewDeck` stays in `useImport.ts`** — it is a
+write that invalidates `["decks"]` on both success and failure, and its create-then-roll-back
+logic belongs inside the mutation that does that invalidating. The preview calls it:
 
 ```tsx
 export function NewDeckPreview({ list, resolved, tags, onDone, onBack }: DestinationPreviewProps) {
