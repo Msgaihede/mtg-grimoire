@@ -25,6 +25,7 @@ import { CARDS, type FakeCard } from "./cards";
 import type {
   CardSummary,
   CategoryKind,
+  CollectionImportItem,
   CollectionPage,
   CollectionSortKey,
   DeckDetail,
@@ -34,9 +35,12 @@ import type {
   ImportResolveLine,
   SearchRequest,
   SearchSortKey,
+  TransferImportMode,
+  WishlistImportItem,
   WishlistPage,
   WishlistSortKey,
 } from "@/lib/ipc";
+import type { Finish } from "@/lib/finish";
 import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 import type { MarketplaceId } from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
@@ -2169,6 +2173,117 @@ describe("the wishlist write", () => {
       /either a card or an oracle id/,
     );
     expect(db.wishlistEntries).toHaveLength(0);
+  });
+});
+
+describe("collection_import_commit", () => {
+  it("accumulates a repeated grain and counts added versus updated", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2 },
+      // Two lines, one grain: the file named the same printing twice and the copies add up.
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 3 },
+    ];
+    const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
+    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(db.collectionEntries).toHaveLength(1);
+    expect(db.collectionEntries[0].quantity).toBe(5);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the collection as it was", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      // A finish no CHECK will take. A half-imported collection is worse than a refused one.
+      { cardId: BOLT.id, finish: "glitter" as Finish, quantity: 1 },
+    ];
+    expect(() => writeHandlers(db).collection_import_commit({ items, mode: "add" })).toThrow(
+      /not a finish/,
+    );
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  it("refuses an unknown mode rather than defaulting it, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).collection_import_commit({
+        items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 1 }],
+        mode: "replace" as TransferImportMode,
+      }),
+    ).toThrow(/not an import mode/);
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+});
+
+describe("wishlist_import_commit", () => {
+  it("accumulates a repeated grain and counts added versus updated", () => {
+    const db = makeDb();
+    const items: WishlistImportItem[] = [
+      { oracleId: BOLT.oracleId!, quantity: 2 },
+      { oracleId: BOLT.oracleId!, quantity: 1 },
+    ];
+    const out = writeHandlers(db).wishlist_import_commit({ items, mode: "add" });
+    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0].quantity).toBe(3);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the wishlist as it was", () => {
+    const db = makeDb();
+    const items: WishlistImportItem[] = [
+      { oracleId: BOLT.oracleId!, quantity: 1 },
+      { oracleId: BOLT.oracleId!, quantity: 1, preferredFinish: "glitter" as Finish },
+    ];
+    expect(() => writeHandlers(db).wishlist_import_commit({ items, mode: "add" })).toThrow(
+      /not a finish/,
+    );
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  it("refuses an unknown mode rather than defaulting it, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).wishlist_import_commit({
+        items: [{ oracleId: BOLT.oracleId!, quantity: 1 }],
+        mode: "replace" as TransferImportMode,
+      }),
+    ).toThrow(/not an import mode/);
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  /**
+   * The trap `removed` being counted explicitly (rather than derived from a row-count delta)
+   * exists for: one line creates a row and another zeroes an existing one, in the same `set`
+   * call. A before/after row count alone would cancel these two events out and report neither.
+   *
+   * Expected by hand: before the import, 1 wish exists (the any-printing one seeded via
+   * `wishlist_add`). The first item names that exact grain (`oracleId`, no `cardId`) at
+   * quantity `0` — `add_wish`'s own fold (which never subtracts) leaves the row momentarily
+   * higher, and the immediate `set` to `0` deletes it: `removed` becomes `1`, row count drops by
+   * one. The second item names a different grain (pinned to `BOLT.id`) that does not exist yet,
+   * so it is created and then `set` to `5` — a real net-new row, row count rises by one. Net row
+   * count is therefore unchanged (1 → 1), which is exactly the case that would read as "nothing
+   * happened" without the explicit counter: `added = (after - before) + removed = (1 - 1) + 1 =
+   * 1`, `removed = 1`, `updated = items.length - added - removed = 2 - 1 - 1 = 0`.
+   */
+  it("counts a mixed set import: one new row, one deleted, none merely updated", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 2 } });
+    const out = w.wishlist_import_commit({
+      items: [
+        // Same grain as the seeded wish (any printing): zeroed by this line.
+        { oracleId: BOLT.oracleId!, quantity: 0 },
+        // A different grain (pinned to a printing): a genuinely new row.
+        { oracleId: BOLT.oracleId!, cardId: BOLT.id, quantity: 5 },
+      ],
+      mode: "set",
+    });
+    expect(out).toEqual({ added: 1, updated: 0, removed: 1 });
+    // The any-printing wish is gone and only the pinned one remains — not an id check, because
+    // `nextId` derives from the array's current contents and reuses the id the delete freed.
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0]).toMatchObject({ cardId: BOLT.id, quantity: 5 });
   });
 });
 

@@ -2083,4 +2083,39 @@ mod tests {
         let conn = seeded();
         assert!(commit_import(&conn, &[wish("oracle-1", 1)], "replace").is_err());
     }
+
+    /// The trap `removed` being counted explicitly (rather than derived from a before/after row
+    /// count) exists for: one line creates a row and another zeroes an existing one, in the
+    /// *same* `set` call. A row-count delta alone would cancel these two events out and report
+    /// neither — this is the one path where that would still hide.
+    ///
+    /// Worked by hand: before the import, one wish exists (`oracle-1`, any printing, seeded via
+    /// `add`). The first item names that exact grain at quantity `0` — `add_wish`'s own fold
+    /// (which never subtracts) briefly raises it, and the immediate `set_wish_quantity` to `0`
+    /// deletes it: `removed` becomes 1, the row count drops by one. The second item names a
+    /// different grain (pinned to `card-1`) that does not exist yet, so it is created and then
+    /// set to 5 — a genuinely new row, the row count rises by one. Net row count is therefore
+    /// unchanged (1 → 1), which is exactly the case that would read as "nothing happened"
+    /// without the explicit counter: `added = (after - before) + removed = (1 - 1) + 1 = 1`,
+    /// `removed = 1`, `updated = items.len() - added - removed = 2 - 1 - 1 = 0`.
+    #[test]
+    fn a_mixed_set_import_creates_one_row_and_removes_another_without_losing_either_count() {
+        let conn = seeded();
+        commit_import(&conn, &[wish("oracle-1", 2)], "add").unwrap();
+        let out = commit_import(
+            &conn,
+            &[
+                // Same grain as the seeded wish: zeroed by this line.
+                wish("oracle-1", 0),
+                // A different grain (pinned to a printing): a genuinely new row.
+                pinned_wish("oracle-1", "card-1", 5),
+            ],
+            "set",
+        )
+        .unwrap();
+        assert_eq!(out.added, 1, "only the pinned row is genuinely new");
+        assert_eq!(out.removed, 1, "the any-printing wish was zeroed away");
+        assert_eq!(out.updated, 0);
+        assert_eq!(wish_count(&conn), 1);
+    }
 }
