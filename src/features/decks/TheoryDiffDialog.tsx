@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CardImage } from "@/components/CardImage";
 import { Figure } from "@/components/Figure";
+import { FinishMark } from "@/components/FinishMark";
+import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
@@ -14,6 +16,18 @@ import { DeckDialog } from "./DeckDialog";
 /** Stable identity for "not read yet", so the totals below are not recomputed over a new empty
  *  array on every render of a dialog that is still waiting. */
 const NO_ROWS: readonly TheoryDiffRow[] = [];
+
+/**
+ * What makes one line of this list itself — the printing **and** the object played, which is
+ * `deck_theory::group_key` read from this end.
+ *
+ * **`cardId` alone is not unique here and must not be used as a key.** The backend tells a foil
+ * copy from the regular one (2026-08-20), so a plan calling for both is two rows carrying the
+ * same `cardId` — two React children under one key, and one `sent` mark that would light both.
+ */
+function rowKey(row: TheoryDiffRow): string {
+  return `${row.cardId}|${row.finish ?? ""}`;
+}
 
 /**
  * The sentence this dialog exists to say out loud.
@@ -34,7 +48,7 @@ const ONE_DIRECTION =
  * below touches `deck_cards` — a shopping list is not an edit. That is why the only cache keys
  * they take are the wishlist's and the search's.
  *
- * `deck_theory_diff` is grouped and subtracted **by the backend, by printing**, and this hook
+ * `deck_theory_diff` is grouped and subtracted **by the backend, on the exact card**, and this hook
  * deliberately re-derives none of it. A second grouping here would be a second place for that
  * rule to live — which is not hypothetical: `DeckEditor` kept one until 2026-08-20, to count the
  * "N cards differ" readout the `Compare` button replaced, and it disagreed with this command in
@@ -46,7 +60,7 @@ const ONE_DIRECTION =
  * **No `enabled` gate and no nullable deck**, unlike every other hook in this folder — and that is
  * the whole benefit of {@link DeckDialog} mounting nothing while it is closed. A closed dialog
  * does not mount {@link TheoryDiffBody}, so this hook does not exist, so nothing is read. The
- * query is a full pass over both of a deck's lists plus an allocation roll-up per printing; a
+ * query is a full pass over both of a deck's lists plus an allocation roll-up per line; a
  * button nobody has pressed should not pay for it, and unmounting says that more plainly than a
  * flag does.
  */
@@ -161,9 +175,9 @@ interface Totals {
  * `ipc.ts` exists to prevent. A reader may well own five spare Sol Rings while needing one; the
  * figure says so, and says nothing else.
  *
- * **A plain sum is only honest because `ownedSpare` is per printing**, which it has been since
- * 2026-08-20. While it answered per oracle card, a plan holding two printings of one card put
- * the same binder copies on two rows and this line added them up twice.
+ * **A plain sum is only honest because `ownedSpare` answers on a row's whole identity** —
+ * printing and finish — which it has since 2026-08-20. Any wider answer puts the same binder
+ * copies on two rows and this line adds them up twice.
  */
 export function diffTotals(rows: readonly TheoryDiffRow[]): Totals {
   let copies = 0;
@@ -194,7 +208,8 @@ export interface TheoryDiffDialogProps {
  *
  * **One direction, and the footer says so in words.** The other direction — what Live holds and
  * Theory dropped — is a cut the reader already made and needs no row. What *is* here is every
- * printing the plan holds that the deck has not got, with the piles they sit in ignored. That is a product decision
+ * exact card the plan holds that the deck has not got — printing **and** finish — with the piles
+ * they sit in ignored. That is a product decision
  * taken in `deck_theory.rs`; drawing it silently would make a correct list read as a broken one,
  * which is why {@link ONE_DIRECTION} is copy rather than a comment.
  *
@@ -287,11 +302,11 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
   /**
    * The rows a press has already put on the wishlist, so the button can say so.
    *
-   * By `cardId`, which is unique per row — the backend groups by printing, so one printing is
-   * one row. Kept here rather than read off the mutation, because a mutation remembers only its
-   * last variables and a reader presses several. **Two rows of one oracle card therefore mark
-   * separately while writing one folded wish**, which is right: the reader pressed two buttons
-   * and each says what that press did.
+   * By {@link rowKey}, never by `cardId` — the backend tells a foil line from the regular one,
+   * so `cardId` is shared by up to three rows. Kept here rather than read off the mutation,
+   * because a mutation remembers only its last variables and a reader presses several. **Rows
+   * sharing an oracle card therefore mark separately while writing one folded wish**, which is
+   * right: the reader pressed two buttons and each says what that press did.
    */
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
 
@@ -328,14 +343,20 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
           <ul>
             {rows.map((row) => (
               <Row
-                key={row.cardId}
+                key={rowKey(row)}
                 row={row}
                 currency={marketplace.currency}
-                sent={sent.has(row.cardId)}
-                pending={wishRow.isPending && wishRow.variables?.cardId === row.cardId}
+                sent={sent.has(rowKey(row))}
+                // The **whole** identity, for the reason the key is: comparing `cardId` alone
+                // would put the spinner on the regular line while the foil one was in flight.
+                pending={
+                  wishRow.isPending &&
+                  wishRow.variables !== undefined &&
+                  rowKey(wishRow.variables) === rowKey(row)
+                }
                 onWishlist={() =>
                   wishRow.mutate(row, {
-                    onSuccess: () => setSent((was) => new Set(was).add(row.cardId)),
+                    onSuccess: () => setSent((was) => new Set(was).add(rowKey(row))),
                   })
                 }
               />
@@ -439,7 +460,7 @@ function FigureStrip({
         // not "how many of these you have covered". It is a count of loose copies, and it is
         // deliberately not subtracted from anything above.
         title={
-          "Copies of these exact printings in your collection that no built deck has claimed. " +
+          "Copies of these exact cards in your collection that no built deck has claimed. " +
           "Not subtracted from what the plan needs."
         }
       />
@@ -490,7 +511,15 @@ function Row({
         <span className="sr-only">{row.quantity} more</span>
       </span>
 
-      <span className="min-w-0 flex-1 truncate text-sm">{row.name}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="min-w-0 truncate text-sm">{row.name}</span>
+        {/* **The line's whole reason for being a separate line, where a name alone would make
+            two rows read as a duplicate.** `FinishMark` draws nothing for the regular copy,
+            which is right: the plain card is the unmarked case everywhere else in the app, and
+            a mark on every row says nothing. The glyph carries its own `role="img"` and label,
+            so a screen reader hears "Foil" beside the name rather than reading a shape. */}
+        <FinishMark finish={row.finish ?? "nonfoil"} />
+      </span>
 
       {/* The pile it is wanted *for*, which is what makes a shopping list readable. */}
       <span className="hidden shrink-0 truncate text-[0.7rem] text-dim sm:block">
@@ -514,9 +543,14 @@ function Row({
         onClick={onWishlist}
         disabled={sent || pending}
         // Named for the card, because a list of twelve buttons all called "Wishlist" is twelve
-        // controls a screen reader cannot tell apart — and the quantity, because that is what the
-        // press actually writes.
-        aria-label={`Wishlist ${row.quantity} more ${row.name}`}
+        // controls a screen reader cannot tell apart — the quantity, because that is what the
+        // press actually writes, and **the finish, because two lines can otherwise carry the
+        // same name**: a plan wanting both objects would give a reader two identical controls.
+        aria-label={
+          row.finish === null
+            ? `Wishlist ${row.quantity} more ${row.name}`
+            : `Wishlist ${row.quantity} more ${FINISH_LABEL[row.finish]} ${row.name}`
+        }
         className={cn(
           "shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-dim",
           "transition-colors duration-150 hover:border-accent hover:text-accent",

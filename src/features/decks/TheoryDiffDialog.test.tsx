@@ -20,11 +20,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { diffTotals, TheoryDiffDialog } from "./TheoryDiffDialog";
 
 /**
- * A row as `deck_theory_diff` answers one: one **printing**, already grouped and already
- * subtracted, naming the printing the theory row named.
+ * A row as `deck_theory_diff` answers one: one **exact card** — a printing in a finish — already
+ * grouped and already subtracted, naming the printing the theory row named.
  *
  * The three cards below are deliberately different shapes — priced, unpriced, and one the
  * collection has loose copies of — because every claim in this file is about one of those three.
+ * `finish: null` is the regular copy, which is what a row is unless a test says otherwise.
  */
 function row(over: Partial<TheoryDiffRow> = {}): TheoryDiffRow {
   return {
@@ -35,6 +36,7 @@ function row(over: Partial<TheoryDiffRow> = {}): TheoryDiffRow {
     unitPrice: 400,
     setCode: "lea",
     collectorNumber: "161",
+    finish: null,
     ownedSpare: 0,
     ...over,
   };
@@ -114,8 +116,8 @@ const rowFor = async (name: string) => (await screen.findByText(name)).closest("
 describe("the theory difference dialog", () => {
   /**
    * A closed dialog is not a hidden dialog. It renders nothing *and* asks nothing — the diff is
-   * a full pass over both of a deck's lists plus an allocation roll-up per oracle card, and a
-   * button nobody has pressed should not pay for it.
+   * a full pass over both of a deck's lists plus an allocation roll-up per line, and a button
+   * nobody has pressed should not pay for it.
    */
   it("draws nothing and reads nothing while it is closed", () => {
     const { container } = wrap(<TheoryDiffDialog {...props} open={false} />);
@@ -316,6 +318,48 @@ describe("the theory difference dialog", () => {
 
     await screen.findByText("the theory list could not be read");
     expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Two objects of one printing are two lines, and everything that addresses a line has to
+   * carry the finish.** A plan calling for the foil Bolt as well as the plain one gets a row
+   * each, sharing a `cardId` and a name — so `cardId` alone as a React key is two children
+   * under one key, and `cardId` alone in the sent/pending tests lights the wrong row. All three
+   * are `rowKey`'s job, and this drives the press to prove it.
+   *
+   * The finish is drawn as well as keyed on: without a mark the two lines read as the list
+   * having listed one card twice, which is the same "correct list that looks broken" the
+   * footer's one-direction sentence exists to prevent.
+   */
+  it("tells a foil line from the regular one, and marks only the one pressed", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue([
+      row({ quantity: 2 }),
+      row({ quantity: 1, finish: "foil", unitPrice: 900 }),
+    ]);
+    wrap(<TheoryDiffDialog {...props} />);
+
+    const lines = await screen.findAllByRole("listitem");
+    expect(lines).toHaveLength(2);
+    // The mark is the only thing on screen telling them apart, and the plain copy is unmarked
+    // — the app's rule everywhere else, and why a mark on every row would say nothing.
+    expect(within(lines[0]).queryByRole("img", { name: "Foil" })).not.toBeInTheDocument();
+    expect(within(lines[1]).getByRole("img", { name: "Foil" })).toBeInTheDocument();
+    // Each is quoted at its own object's rate, which is what makes folding them wrong.
+    expect(lines[0]).toHaveTextContent("$400.00");
+    expect(lines[1]).toHaveTextContent("$900.00");
+
+    // Two buttons a screen reader can tell apart, and the press marks one row only.
+    await user.click(screen.getByRole("button", { name: "Wishlist 1 more Foil Lightning Bolt" }));
+
+    await waitFor(() =>
+      expect(within(lines[1]).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
+        "Wishlisted",
+      ),
+    );
+    expect(within(lines[0]).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
+      "Wishlist",
+    );
   });
 
   /**

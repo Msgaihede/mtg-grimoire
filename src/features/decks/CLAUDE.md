@@ -1061,18 +1061,27 @@ price | type`). An **inactive category stays its own group in all three grouping
   it**: a deck with a plan costs one `deck_get`, not two. `DeckEditor.test.tsx`'s
   "switches between the deck's two lists, and opens the difference on a Compare button" asserts
   that absence, which is the half a re-added readout would fail.
-- **The comparison is `deck_theory_diff`'s, and its grain is the printing** (changed the same
-  day, from the oracle card). What the dialog lists is everything the plan holds that the deck
-  has not got, **different printings included** — a plan naming the retro-frame Sol Ring is a
-  plan for that cardboard, and the precon one in the live list does not answer it. Each side is
-  summed across its piles before they are subtracted, so **which category a card is in is not
-  compared at all**; the row's category is a caption. Not the finish either — a foil and a
-  regular copy of one printing are two `deck_cards` rows and one line, summed, because
-  `TheoryDiffRow.cardId` is what the list is keyed by. `TheoryDiffRow.ownedSpare` moved to the
-  printing with it, and had to: `diffTotals` sums it down the list, so an oracle-wide answer
-  counted one binder twice for a plan holding two printings of a card. Wishes stay
-  **oracle-grained** — a shopping list is not a printing preference — so two lines of one card
-  fold into one wish, on `add_wish`'s upsert.
+- **The comparison is `deck_theory_diff`'s, and its grain is the exact card —
+  `(cardId, finish)`** (changed the same day, from the oracle card). What the dialog lists is
+  everything the plan holds that the deck has not got: a plan naming the foil retro-frame Sol
+  Ring is a plan for that cardboard, and neither the precon printing nor the regular copy in the
+  live list answers it. It is `DECK_CARD_GRAIN` less `deck_id`, `variant` and `category_id`, and
+  each of the three is dropped for its own reason — the deck is the question, the variant is the
+  two sides of the subtraction, and **the category is placement rather than possession**, so each
+  side is summed across its piles before they are subtracted and the row's category is only a
+  caption. `finish` stays because it is *not* placement: the two objects cost different money
+  (`unitPrice` has always been per finish, so folding them would charge one at the other's rate)
+  and are two `deck_cards` rows for that reason.
+- **So `TheoryDiffRow.cardId` is not unique down the list** — a render keys on the pair, which is
+  `rowKey` in `TheoryDiffDialog.tsx`, and so do the sent and pending marks. `ownedSpare` answers
+  on the whole key too, and has to: `diffTotals` **sums** it down the list, so any answer wider
+  than a row's own identity counts one binder copy once per row that could have used it. Its SQL
+  carries the one translation in the pair — `coalesce(?2, 'nonfoil')` — because `deck_cards`
+  spells the regular copy NULL and `collection_entries` spells it `nonfoil`.
+- **Wishes stay oracle-grained and finish-blind**, deliberately: a shopping list is not a
+  printing preference, so two lines of one card fold into one wish on `add_wish`'s upsert, and a
+  foil line does not write a foil wish. That is the one place the diff's grain and the wishlist's
+  do not agree, and it is the wishlist's own rule rather than an oversight here.
 - **The editor reopens on the view the reader left, and the deck row is where that is kept.**
   `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
   `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
