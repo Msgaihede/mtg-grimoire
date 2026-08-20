@@ -654,8 +654,13 @@ describe("SetCombobox", () => {
 
       await userEvent.click(screen.getByRole("button", { name: "Set" }));
 
-      expect(await screen.findByRole("option", { name: /Alpha/ })).toBeVisible();
-      expect(screen.getByRole("option", { name: /Revised/ })).toBeVisible();
+      // **`toBeInTheDocument` and not `toBeVisible`, inside a `motion` surface.** The popup's
+      // first painted frame carries `PopupPanel`'s `initial`, so everything in it is
+      // `opacity: 0` until the next one — an opacity assertion here is a race that won on this
+      // machine and lost in CI. What this test is about is which rows are *offered*, which is
+      // what presence says.
+      expect(await screen.findByRole("option", { name: /Alpha/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /Revised/ })).toBeInTheDocument();
       // The corpus fixture's own sets are not offered — this list is the card's, not the app's.
       expect(screen.queryByRole("option", { name: /Kamigawa/ })).toBeNull();
       expect(listSets).not.toHaveBeenCalled();
@@ -674,7 +679,7 @@ describe("SetCombobox", () => {
       await userEvent.click(screen.getByRole("button", { name: "Set" }));
       await userEvent.type(screen.getByRole("combobox", { name: /search sets/i }), "zzz");
 
-      expect(await screen.findByText("No sets match that.")).toBeVisible();
+      expect(await screen.findByText("No sets match that.")).toBeInTheDocument();
       expect(screen.queryByText(/Loading sets/)).toBeNull();
     });
 

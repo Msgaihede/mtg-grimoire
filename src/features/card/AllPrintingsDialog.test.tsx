@@ -292,7 +292,10 @@ describe("AllPrintingsDialog", () => {
     // unscoped count answers 6 here and reads as a picker offering the corpus.
     const listbox = within(await screen.findByRole("listbox"));
     const alpha = listbox.getByRole("option", { name: /Alpha/ });
-    expect(listbox.getByRole("option", { name: /Beta/ })).toBeVisible();
+    // Presence rather than visibility: the popup is a `motion` surface, so its first painted
+    // frame carries `initial`'s `opacity: 0` and everything inside it fails `toBeVisible` for
+    // one frame. Which rows are *offered* is the fact under test.
+    expect(listbox.getByRole("option", { name: /Beta/ })).toBeInTheDocument();
     expect(listbox.getAllByRole("option")).toHaveLength(2);
 
     await user.click(alpha);
