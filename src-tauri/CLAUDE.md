@@ -116,10 +116,11 @@ shared_cell` walks both into two databases and compares them column by column.
   and it holds real cards.
 - **Scryfall's Oracle Tags live in four tables plus a watermark** (schema v14), keyed on the
   tag **slug** and on `cards.oracle_id` — both soft, no foreign key anywhere.
-  `src/oracle_tags.rs` is the only writer: it streams the `oracle_tags` bulk file, flattens
-  the hierarchy **once** into `oracle_tag_cards` (every tag a card holds *and* every ancestor
-  of those tags), and swaps four staging tables into place with the watermark in the same
-  transaction. **Rust stores slugs and nothing else** — no category names, no priority order,
+  `src/tags/` is the only writer — the shared `tags::ingest_gz`, bound to `tags::oracle::ORACLE`,
+  which is the one place this taxonomy's tables, columns and weekly schedule are named. It
+  streams the `oracle_tags` bulk file, flattens the hierarchy **once** into `oracle_tag_cards`
+  (every tag a card holds *and* every ancestor of those tags), and swaps four staging tables
+  into place with the watermark in the same transaction. **Rust stores slugs and nothing else** — no category names, no priority order,
   no whitelist; that is TS's half. Two read commands answer a whole decklist in one round
   trip: `oracle_tags_for_cards` keyed on `oracle_id`, and **`oracle_tags_for_printings` keyed
   on `cards.id`**, which is the one most call sites want — a quick add, every drag source and
@@ -128,7 +129,7 @@ shared_cell` walks both into two databases and compares them column by column.
   for an unknown id, a NULL `oracle_id` and an untagged card alike: all three mean "fall back
   to the type line", and **nothing about categorising a card may fail a deck add**.
   **684 of 4 521 tags have more than one parent**, so
-  `oracle_tags::ancestor_closures` follows *every* `parent_ids` entry and is the one place
+  `tags::ancestor_closures` follows *every* `parent_ids` entry and is the one place
   that decision is written down.
 - **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
   is dropped on every sync, so a price column would be destroyed by the next refresh —

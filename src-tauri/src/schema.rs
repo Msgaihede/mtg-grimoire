@@ -2242,21 +2242,20 @@ const ORACLE_TAG_STAGING_SQL: &str = "
         -- `oracle_tags` reads `slug, label, description, id, slug_norm` and this twin has to
         -- read the same, or the fence test fails at the rename rather than here.
         --
-        -- **The two DEFAULTs are a temporary bridge and not a decision.** `art_tags_staging`
-        -- declares both columns NOT NULL with no default, so an art ingest that forgets one
-        -- fails loudly at the insert. The oracle ingest predates both columns, and without a
-        -- default v20 would break a tag refresh that works today — so the bridge is what
-        -- stops a schema step taking the oracle sync down mid-flight, and nothing more.
+        -- **NOT NULL with no default, which `art_tags_staging` has been from the start.**
+        -- Both carried `DEFAULT ''` for exactly one commit: v20 added them while the ingest
+        -- still wrote three columns, and without the bridge a schema step would have taken a
+        -- working tag refresh down mid-flight. `tags::ingest_gz` fills both on every insert
+        -- now, so the bridge came off with it.
         --
-        -- What it costs while it stands is exactly the silent failure the comments around it
-        -- exist to prevent: every `oracle_tags.slug_norm` stays empty, `idx_oracle_tags_norm`
-        -- indexes one value, and the tag search matches nothing in this namespace with no
-        -- error anywhere. **Task 2, the engine extraction, owes the fill of `id` and
-        -- `slug_norm` on every tag insert, and these two defaults come off in the commit that
-        -- lands it** — which is what makes a forgotten column loud on both sides.
+        -- What a default costs once nothing needs it is the silent failure the comments
+        -- around here exist to prevent: every `oracle_tags.slug_norm` empty,
+        -- `idx_oracle_tags_norm` indexing one value, and the tag search matching nothing in
+        -- this namespace with no error anywhere. Without one, a forgotten column is a
+        -- `NOT NULL constraint failed` at the refresh's first insert.
         -- See [`ART_TAG_TABLES_SQL`] for what each column holds.
-        id TEXT NOT NULL DEFAULT '',
-        slug_norm TEXT NOT NULL DEFAULT ''
+        id TEXT NOT NULL,
+        slug_norm TEXT NOT NULL
     ) WITHOUT ROWID;
     CREATE TABLE oracle_tag_parents_staging (
         child_slug TEXT NOT NULL,
@@ -2376,23 +2375,17 @@ pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&batch)
 }
 
-/// Promote the four staging tables over the live ones.
+/// Promote one tag family's four staging tables over its live ones.
 ///
-/// **The caller supplies the transaction**, which is the difference between this and
-/// [`swap_staging`]: the watermark row that says which file these rows came from has to
-/// commit with them, and a swap that landed without its `oracle_tag_meta` update would make
-/// the next run re-download and re-ingest a file it already holds — or, worse the other way
-/// round, a meta row that landed without its rows would make it 304 past an empty closure
-/// forever.
-///
-/// **The index replay is [`swap_staging`]'s, and this owes it from v20 on.** Three of these
-/// four tables carry no index but their own primary key, which the rename brings with it — but
-/// `oracle_tags` has `idx_oracle_tags_norm`, and a rename carries the *staging* table's
-/// indexes rather than the live table's. Without [`TAG_INDEXES_SQL`] here the index would be
-/// gone after the first weekly refresh, with nothing wrong and only the tag search slow. The
-/// replay ran nowhere until v20, which is why this doc used to say the opposite.
-pub fn swap_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
-    let batch: String = ORACLE_TAG_TABLES
+/// **The index replay is [`swap_staging`]'s, and it is why both families come through one
+/// function.** Three of the four tables carry no index but their own primary key, which the
+/// rename brings with it — but the taxonomy table has `idx_{family}_tags_norm`, and a rename
+/// carries the *staging* table's indexes rather than the live table's. Without
+/// [`TAG_INDEXES_SQL`] here that index is gone after the first weekly refresh, with nothing
+/// wrong and only the tag search slow, which is the kind of failure nobody reports. A second
+/// hand-written swap is exactly where it would be forgotten.
+fn swap_tag_staging(conn: &Connection, tables: &[(&str, &str)]) -> rusqlite::Result<()> {
+    let batch: String = tables
         .iter()
         .map(|(live, staging)| {
             format!("DROP TABLE IF EXISTS {live}; ALTER TABLE {staging} RENAME TO {live};")
@@ -2400,6 +2393,24 @@ pub fn swap_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
         .collect();
     conn.execute_batch(&batch)?;
     conn.execute_batch(TAG_INDEXES_SQL)
+}
+
+/// Promote the four `oracle_tag_*_staging` tables over the live ones.
+///
+/// **The caller supplies the transaction**, which is the difference between this and
+/// [`swap_staging`]: the watermark row that says which file these rows came from has to
+/// commit with them, and a swap that landed without its `oracle_tag_meta` update would make
+/// the next run re-download and re-ingest a file it already holds — or, worse the other way
+/// round, a meta row that landed without its rows would make it 304 past an empty closure
+/// forever.
+pub fn swap_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    swap_tag_staging(conn, &ORACLE_TAG_TABLES)
+}
+
+/// Promote the four `art_tag_*_staging` tables over the live ones.
+/// [`swap_oracle_tag_staging`]'s contract, one taxonomy over.
+pub fn swap_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    swap_tag_staging(conn, &ART_TAG_TABLES)
 }
 
 /// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
@@ -5873,8 +5884,8 @@ pub(crate) mod tests {
 
         create_oracle_tag_staging(&conn).unwrap();
         conn.execute_batch(
-            "INSERT INTO oracle_tags_staging (slug,label,description)
-                VALUES ('ramp','ramp','Cards that ramp.');
+            "INSERT INTO oracle_tags_staging (slug,id,label,description,slug_norm)
+                VALUES ('ramp','uuid-ramp','ramp','Cards that ramp.','ramp');
              INSERT INTO oracle_tag_cards_staging (oracle_id,slug) VALUES ('oid-1','ramp');",
         )
         .unwrap();
@@ -6387,6 +6398,24 @@ pub(crate) mod tests {
             |r| r.get::<_, i64>(0),
         )
         .expect("the index did not survive the tag swap");
+    }
+
+    /// [`swap_art_tag_staging`] goes through the same replay [`swap_oracle_tag_staging`]
+    /// does, and a shared helper is only as good as its least-tested caller. Without this the
+    /// art index would vanish at the first refresh of the art taxonomy alone, which is the
+    /// half of the failure the oracle test cannot see.
+    #[test]
+    fn the_normalised_slug_index_survives_an_art_tag_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+        swap_art_tag_staging(&conn).unwrap();
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_art_tags_norm'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .expect("the index did not survive the art tag swap");
     }
 
     /// The step over the version below it: both columns arrive on `oracle_tags`, and a row
