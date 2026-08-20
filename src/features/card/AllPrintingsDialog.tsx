@@ -46,26 +46,35 @@
  *   the modal, which is the "go and look at this one" the reader who is not building a deck
  *   asked for.
  *
- * ## Stepping along the deck
+ * ## Stepping along the list
  *
- * Opened from a deck row, the modal is a **window onto the deck rather than onto one card**: the
- * chevrons and the arrow keys move it to the previous and next card in deck order, which is
- * `store.deckWalk` — the open editor's own cards, in the order the desk is drawing them, published
- * by `DeckEditor` because that order depends on its grouping, its sorting and its filter and this
- * component is mounted at `App` level with no way to ask. A reader checking which printing of each
- * card they have sleeved up walks the whole list without closing anything.
+ * The modal is a **window onto the list the reader is standing in rather than onto one card**:
+ * the chevrons and the arrow keys move it to the previous and next card in that list's own drawn
+ * order, which is `store.cardWalk` — the open deck's cards as the desk is drawing them, or the
+ * search results, or the collection, or the wishlist. It is published by whichever surface is
+ * drawing the list, because the order depends on that surface's grouping, sorting and filter and
+ * this component is mounted at `App` level with no way to ask. A reader checking which printing
+ * of each card they have sleeved up walks the whole list without closing anything.
  *
- * **Everything hangs off one index**: where `request.deck` sits on that walk. It is `-1` from a
- * search tile, from the collection, from a wishlist row and from a deck that is not the one the
- * walk belongs to — and in every one of those there is no walk to step along, so there are no
- * chevrons and the arrow keys are not ours. That single test is deliberately the whole fence:
- * a separate "is this the same deck" check would be a second thing to keep true.
+ * **Everything hangs off one index**: where `printingsRequest` sits on that walk. Finding it is
+ * the one place the two kinds of stop are told apart — a deck row by `sameDeckSlot`, because a
+ * deck can hold one printing in two piles and all five parts of `DECK_CARD_GRAIN` are what tell
+ * those rows apart, and everything else by `cardId`, because a plain list has no address finer
+ * than the cardboard and `listWalkStops` has already made that unique. It is `-1` from a card
+ * pane opened on something the list does not contain, from the deck editor's docked search panel
+ * (which publishes nothing, so the desk's own walk stands), and from a deck that is not the one
+ * the walk belongs to — and in every one of those there is no walk to step along, so there are no
+ * chevrons and the arrow keys are not ours.
+ *
+ * **A step moves the selection behind the scrim, and that is the feature rather than a
+ * courtesy** — see `step`. Closing the modal after walking six cards must leave the reader on the
+ * sixth, with the wall's ring, the card pane and this modal all naming one card.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { sameDeckSlot, type DeckWalkStop } from "@/features/decks/deckWalk";
+import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { DeckDialog, type DeckDialogFlanks } from "@/features/decks/DeckDialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
@@ -76,7 +85,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
-import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useAppStore, type CardWalkStop, type PrintingsRequest } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { buildCardMenu, type CardMenuDeps } from "./cardMenu";
@@ -228,23 +237,29 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
  * moment a second control appeared under the reader's pointer, which is exactly where they are
  * pointing.
  *
- * The name says what the press does **and what it will land on**, because a chevron says neither:
- * `Next card in the deck, Lightning Bolt`. It is the `title` as well — a glyph is silent to a
- * pointer too — and the app's own `Move <name>, <n> of <total>` shape, where the comma is what
- * keeps a card's name out of the verb.
+ * The name says what the press does, **which list it does it in, and what it will land on**,
+ * because a chevron says none of the three: `Next card in the deck, Lightning Bolt`. The list is
+ * the walk's own `label` rather than a constant here, which is the whole of what that field is
+ * for — this same control is drawn over the collection and the wishlist, and "in the deck" there
+ * would be the one part of the feature that lies. It is the `title` as well — a glyph is silent
+ * to a pointer too — and the app's own `Move <name>, <n> of <total>` shape, where the comma is
+ * what keeps a card's name out of the verb.
  */
 function StepChevron({
   direction,
+  listLabel,
   stop,
   onStep,
 }: {
   direction: "previous" | "next";
+  /** What to call the list being walked, as a noun phrase — `the deck`, `your collection`. */
+  listLabel: string;
   /** The card that press lands on, or `null` at that end of the walk. */
-  stop: DeckWalkStop | null;
-  onStep: (stop: DeckWalkStop) => void;
+  stop: CardWalkStop | null;
+  onStep: (stop: CardWalkStop) => void;
 }) {
   const Glyph = direction === "previous" ? ChevronLeft : ChevronRight;
-  const label = direction === "previous" ? "Previous card in the deck" : "Next card in the deck";
+  const label = `${direction === "previous" ? "Previous" : "Next"} card in ${listLabel}`;
   const name = stop === null ? label : `${label}, ${stop.name}`;
 
   return (
@@ -277,59 +292,80 @@ function StepChevron({
 export function AllPrintingsDialog() {
   const request = useAppStore((s) => s.printingsRequest);
   const close = useAppStore((s) => s.closeAllPrintings);
-  const walk = useAppStore((s) => s.deckWalk);
+  const walk = useAppStore((s) => s.cardWalk);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  const selectCard = useAppStore((s) => s.setSelectedCardId);
 
   /**
-   * Where the open modal sits on the deck's walk, or `-1` — see this file's doc for everything
-   * that hangs off it.
+   * Where the open modal sits on the walk, or `-1` — see this file's doc for everything that
+   * hangs off it.
    *
-   * `sameDeckSlot` rather than a `cardId` comparison, because a deck can hold one printing in two
-   * piles and in two finishes: all five parts of `DECK_CARD_GRAIN` are what tell those rows apart,
-   * and matching on fewer would land the walk on whichever one came first in the list.
+   * **The one place the two kinds of stop are told apart**, and each side is matched the only way
+   * its own list can be addressed.
+   *
+   * A deck row goes through `sameDeckSlot`, because a deck can hold one printing in two piles and
+   * in two finishes: all five parts of `DECK_CARD_GRAIN` are what tell those rows apart, and
+   * matching on fewer would land the walk on whichever one came first in the list.
+   *
+   * Everything else goes through `cardId`, and the `stop.deck === null` half of that test is not
+   * decoration: without it a modal opened from the deck editor's docked search panel — which has
+   * no slot, and so no address — would find *the deck's* row for the same printing and start
+   * arrow-stepping the desk from a surface that is not the desk.
    */
-  const slot = request?.deck ?? null;
-  const at = useMemo(
-    () => (slot === null ? -1 : walk.findIndex((stop) => sameDeckSlot(stop.deck, slot))),
-    [walk, slot],
-  );
-  const previous = at > 0 ? walk[at - 1] : null;
-  const next = at >= 0 && at + 1 < walk.length ? walk[at + 1] : null;
+  const stops = walk.stops;
+  const at = useMemo(() => {
+    if (request === null) return -1;
+    const slot = request.deck;
+    return slot === null
+      ? stops.findIndex((stop) => stop.deck === null && stop.cardId === request.cardId)
+      : stops.findIndex((stop) => stop.deck !== null && sameDeckSlot(stop.deck, slot));
+  }, [stops, request]);
+  const previous = at > 0 ? stops[at - 1] : null;
+  const next = at >= 0 && at + 1 < stops.length ? stops[at + 1] : null;
 
   /**
    * A step: **two writes, and the second one is the point of the feature rather than a courtesy.**
    *
-   * `openAllPrintings` alone would leave the desk behind the scrim marking the card the reader
+   * `openAllPrintings` alone would leave the list behind the scrim marking the card the reader
    * started from — so closing the modal after walking six cards would drop them back at the first,
-   * with the gold ring and the card pane both about a row they had left. `openCardFromDeck` is the
-   * store's one way to say "this card, out of *this* row", so the ring, the pane and this modal's
-   * own `request.deck` stay one answer; it is also what keeps a press on a tile writing the row
-   * the desk is pointing at.
+   * with the wall's ring and the card pane both about a row they had left. The second write is
+   * what makes the selection *actually follow*, and it is the store's own way of saying where the
+   * card was opened from rather than a third one invented here:
+   *
+   * * **A deck row** — `openCardFromDeck`, which is "this card, out of *this* row", so the desk's
+   *   gold ring, the pane and this modal's own `request.deck` stay one answer; it is also what
+   *   keeps a press on a tile swapping the row the desk is pointing at.
+   * * **Anything else** — `setSelectedCardId`, which is what every non-deck surface in this app
+   *   opens a card with and which *clears* `paneDeckContext`. That clearing is load-bearing here:
+   *   a reader who had a deck card open, walked away to the Collection and stepped along it would
+   *   otherwise be sat in a pane still anchored to the deck row they left, offering to swap it
+   *   onto whatever they had walked to. It is also what moves the ring on the wall behind the
+   *   scrim, since all three lists draw their selection from that one field.
    *
    * They are two `set` calls and therefore two renders. Folding them into one store action was the
-   * alternative and is refused: `openAllPrintings` and `openCardFromDeck` are each one field's
-   * single writer, and a third action writing both would be a second definition of what opening a
-   * card from a deck row means.
+   * alternative and is refused: each of these is one field's single writer, and an action writing
+   * both would be a second definition of what opening a card from a list means.
    */
   const step = useCallback(
-    (stop: DeckWalkStop) => {
+    (stop: CardWalkStop) => {
       /**
        * **Said before either write, and this surface is where it matters most.**
        *
-       * `openCardFromDeck` re-keys the card pane behind the scrim, and that pane's body focuses
-       * itself as it mounts — so a step used to move the caret *out of an `aria-modal` dialog*
-       * and into the view behind it. Not merely "the walk stops after one press", which is what
-       * it costs the two walls: `trapTab` cannot reach a caret that is no longer inside the
-       * panel, so Tab carried on through the page under the scrim and the modal's own keydown
-       * never fired again. Reported by the reader and measured in the shipped window the same
-       * day. See `caretWalk.ts`.
+       * Either write re-keys the card pane behind the scrim, and that pane's body focuses itself
+       * as it mounts — so a step used to move the caret *out of an `aria-modal` dialog* and into
+       * the view behind it. Not merely "the walk stops after one press", which is what it costs
+       * the two walls: `trapTab` cannot reach a caret that is no longer inside the panel, so Tab
+       * carried on through the page under the scrim and the modal's own keydown never fired
+       * again. Reported by the reader and measured in the shipped window the same day. See
+       * `caretWalk.ts`.
        */
-      keepCaretForCard(stop.deck.cardId);
+      keepCaretForCard(stop.cardId);
       openAllPrintings(stop);
-      openCardFromDeck(stop.deck);
+      if (stop.deck === null) selectCard(stop.cardId);
+      else openCardFromDeck(stop.deck);
     },
-    [openAllPrintings, openCardFromDeck],
+    [openAllPrintings, openCardFromDeck, selectCard],
   );
 
   /**
@@ -372,8 +408,17 @@ export function AllPrintingsDialog() {
     at === -1
       ? undefined
       : {
-          left: <StepChevron direction="previous" stop={previous} onStep={step} />,
-          right: <StepChevron direction="next" stop={next} onStep={step} />,
+          left: (
+            <StepChevron
+              direction="previous"
+              listLabel={walk.label}
+              stop={previous}
+              onStep={step}
+            />
+          ),
+          right: (
+            <StepChevron direction="next" listLabel={walk.label} stop={next} onStep={step} />
+          ),
         };
 
   return (
@@ -449,7 +494,7 @@ function Body({
   request,
   onDone,
 }: {
-  request: { oracleId: string; name: string; deck: PaneDeckContext | null };
+  request: PrintingsRequest;
   /** Close the modal — pressed on a successful swap, and on a press that opens the card pane. */
   onDone: () => void;
 }) {
@@ -728,9 +773,16 @@ function Body({
             // and collection walls take it because there the arrows have nothing else to mean.
             // Nothing is passed here on purpose; the absence *is* the decision, and `arrowNav`'s
             // own doc says so from the other end.
-            // The "you are here" mark: the printing the deck slot currently plays. Null where
-            // there is no deck, because then no printing on this wall is special.
-            selectedId={request.deck?.cardId ?? null}
+            //
+            // **The "you are here" mark: the printing the question was asked about.** From a deck
+            // row that is the printing the slot currently plays; from a search tile, a collection
+            // entry or a wishlist row it is the row the menu was opened on, and from a step it is
+            // the card the walk just landed on. It used to be `request.deck?.cardId`, so outside a
+            // deck the wall was unmarked — which was defensible while the modal was about one
+            // card and became wrong the moment the arrow keys could walk a list: two printings of
+            // one card are two stops drawing the same wall, and with nothing ringed a step
+            // between them moved nothing on screen at all.
+            selectedId={request.cardId}
             label={`Printings of ${request.name}`}
             topLeft={tileLanguage}
             finish={tileFinish}

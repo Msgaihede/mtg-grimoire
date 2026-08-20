@@ -7,10 +7,10 @@ import type { DeckFinish, DeckVariant, Printing, PrintingsResponse } from "@/lib
 import type { MarketplaceId } from "@/lib/marketplace";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock, with the component's, where the hoisting order needs it.
-import type { PaneDeckContext } from "@/lib/store";
+import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 // Same reason, one module over: the walk's stop shape is a type and nothing else here needs the
 // module's runtime half.
-import type { DeckWalkStop } from "@/features/decks/deckWalk";
+import type { CardWalkStop } from "@/features/decks/deckWalk";
 
 /**
  * One printing, with every field the wall and the filters read.
@@ -72,10 +72,35 @@ const rowOf = (categoryId: number, categoryName: string, cardId: string): PaneDe
  * the one every step test opens on, so both chevrons have somewhere to go and neither end state is
  * being tested by accident.
  */
-const WALK: DeckWalkStop[] = [
-  { oracleId: "o-bolt", name: "Lightning Bolt", deck: rowOf(9, "Ramp", "bolt-1") },
-  { oracleId: "o1", name: "Sol Ring", deck: slot },
-  { oracleId: "o-forest", name: "Forest", deck: rowOf(11, "Land", "forest-1") },
+const WALK: CardWalkStop[] = [
+  {
+    cardId: "bolt-1",
+    oracleId: "o-bolt",
+    name: "Lightning Bolt",
+    deck: rowOf(9, "Ramp", "bolt-1"),
+  },
+  { cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot },
+  {
+    cardId: "forest-1",
+    oracleId: "o-forest",
+    name: "Forest",
+    deck: rowOf(11, "Land", "forest-1"),
+  },
+];
+
+/**
+ * The same three cards as a **page's** list rather than a deck's: no slot on any of them.
+ *
+ * Published by the Collection, the Wishlist and the search results, all three of which draw a
+ * list of printings that no press inside this modal writes to — so a stop is the cardboard and
+ * nothing else, and the step behind the scrim is `setSelectedCardId` rather than a re-anchoring
+ * of the card pane onto a deck row. The `cardId`s are the ones {@link p} builds printings for, so
+ * a step can be checked against the ring on the wall as well as against the store.
+ */
+const LIST_WALK: CardWalkStop[] = [
+  { cardId: "bolt-1", oracleId: "o-bolt", name: "Lightning Bolt", deck: null },
+  { cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null },
+  { cardId: "forest-1", oracleId: "o-forest", name: "Forest", deck: null },
 ];
 
 const cardPrintings = vi.fn();
@@ -189,7 +214,7 @@ function renderDialog(): ReactElement {
 }
 
 /** What a card surface's menu row does: one store write, and nothing else moves. */
-function open(request: { oracleId: string; name: string; deck: PaneDeckContext | null }): void {
+function open(request: PrintingsRequest): void {
   act(() => useAppStore.getState().openAllPrintings(request));
 }
 
@@ -203,7 +228,12 @@ function open(request: { oracleId: string; name: string; deck: PaneDeckContext |
  * one it was handed.
  */
 function withDeckWalk(): void {
-  act(() => useAppStore.getState().setDeckWalk(WALK));
+  act(() => useAppStore.getState().setCardWalk({ label: "the deck", stops: WALK }));
+}
+
+/** The same, for a surface whose rows are not deck rows — see {@link LIST_WALK}. */
+function withListWalk(): void {
+  act(() => useAppStore.getState().setCardWalk({ label: "your collection", stops: LIST_WALK }));
 }
 
 /**
@@ -229,7 +259,7 @@ describe("AllPrintingsDialog", () => {
   it("names the card and counts its printings", async () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     // `toBeInTheDocument` rather than `toBeVisible`, which is `CategoriesDialog.test.tsx`'s
     // convention and for a reason worth carrying: `DeckDialog`'s panel carries its `initial` —
@@ -243,14 +273,14 @@ describe("AllPrintingsDialog", () => {
   it("says what it is a truncation of when the page is capped", async () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea")], 862));
     renderDialog();
-    open({ oracleId: "o1", name: "Forest", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Forest", deck: null });
 
     expect(await screen.findByText("1 of 862 printings")).toBeVisible();
   });
 
   it("asks the backend for the wide page, because it filters", async () => {
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     await waitFor(() => expect(cardPrintings).toHaveBeenCalledWith("o1", expect.anything(), 1000));
   });
@@ -259,7 +289,7 @@ describe("AllPrintingsDialog", () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea", "Alpha"), p("b", "leb", "Beta")]));
     const user = userEvent.setup();
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     await user.type(await screen.findByRole("searchbox", { name: "Filter printings" }), "beta");
 
@@ -283,7 +313,7 @@ describe("AllPrintingsDialog", () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea", "Alpha"), p("b", "leb", "Beta")]));
     const user = userEvent.setup();
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     await user.click(await screen.findByRole("button", { name: "Set" }));
 
@@ -308,7 +338,7 @@ describe("AllPrintingsDialog", () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea", "Alpha")]));
     const user = userEvent.setup();
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     await user.type(await screen.findByRole("searchbox", { name: "Filter printings" }), "zzz");
     expect(await screen.findByText(/No printings match/)).toBeVisible();
@@ -324,7 +354,7 @@ describe("AllPrintingsDialog", () => {
   it("tells a card with no paper printings apart from a filter that matched none", async () => {
     cardPrintings.mockResolvedValue(page([]));
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     expect(await screen.findByText("This card has no paper printings.")).toBeVisible();
     expect(screen.queryByText(/No printings match/)).toBeNull();
@@ -334,7 +364,7 @@ describe("AllPrintingsDialog", () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
     const user = userEvent.setup();
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: slot });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
 
     await user.click(await screen.findByRole("button", { name: /LEB/ }));
 
@@ -352,7 +382,7 @@ describe("AllPrintingsDialog", () => {
     deckSwapPrinting.mockRejectedValue(new Error("that deck is gone"));
     const user = userEvent.setup();
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: slot });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
 
     await user.click(await screen.findByRole("button", { name: /LEB/ }));
 
@@ -366,7 +396,7 @@ describe("AllPrintingsDialog", () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
     const user = userEvent.setup();
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     await user.click(await screen.findByRole("button", { name: /LEB/ }));
 
@@ -388,7 +418,7 @@ describe("AllPrintingsDialog", () => {
   it("greys its own tiles' View all printings, because you are already looking at them", async () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     rightClick(await screen.findByRole("button", { name: /LEB/ }));
 
@@ -403,7 +433,7 @@ describe("AllPrintingsDialog", () => {
   it("marks the printing the deck currently holds", async () => {
     cardPrintings.mockResolvedValue(page([p("card-1", "lea"), p("b", "leb")]));
     renderDialog();
-    open({ oracleId: "o1", name: "Sol Ring", deck: slot });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
 
     const held = await screen.findByAltText("Sol Ring (LEA 233)");
     const other = screen.getByAltText("Sol Ring (LEB 233)");
@@ -441,7 +471,7 @@ describe("AllPrintingsDialog", () => {
 
     await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(WALK[2]));
     expect(useAppStore.getState().paneDeckContext).toEqual(WALK[2].deck);
-    expect(useAppStore.getState().selectedCardId).toBe(WALK[2].deck.cardId);
+    expect(useAppStore.getState().selectedCardId).toBe(WALK[2].cardId);
     // The modal is a window onto the deck, so it stays open and re-captions itself.
     expect(await screen.findByRole("dialog", { name: /Forest/ })).toBeInTheDocument();
   });
@@ -461,7 +491,7 @@ describe("AllPrintingsDialog", () => {
 
     await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(WALK[0]));
     expect(useAppStore.getState().paneDeckContext).toEqual(WALK[0].deck);
-    expect(useAppStore.getState().selectedCardId).toBe(WALK[0].deck.cardId);
+    expect(useAppStore.getState().selectedCardId).toBe(WALK[0].cardId);
   });
 
   /**
@@ -475,7 +505,7 @@ describe("AllPrintingsDialog", () => {
     const user = userEvent.setup();
     renderDialog();
     withDeckWalk();
-    open({ oracleId: "o-elsewhere", name: "Counterspell", deck: null });
+    open({ cardId: "elsewhere-1", oracleId: "o-elsewhere", name: "Counterspell", deck: null });
     const dialog = await screen.findByRole("dialog", { name: /Counterspell/ });
 
     expect(screen.queryByRole("button", { name: /card in the deck/ })).toBeNull();
@@ -500,7 +530,7 @@ describe("AllPrintingsDialog", () => {
   it("draws no chevrons for a deck row the open editor is not showing", async () => {
     renderDialog();
     withDeckWalk();
-    open({ oracleId: "o1", name: "Sol Ring", deck: { ...slot, deckId: 77 } });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: { ...slot, deckId: 77 } });
     await screen.findByRole("dialog", { name: /Sol Ring/ });
 
     expect(screen.queryByRole("button", { name: /card in the deck/ })).toBeNull();
@@ -615,5 +645,138 @@ describe("AllPrintingsDialog", () => {
     expect(await screen.findByRole("dialog", { name: /Forest/ })).toBeInTheDocument();
     expect(await screen.findByRole("searchbox", { name: "Filter printings" })).toHaveValue("");
     expect(await screen.findByText("2 printings")).toBeVisible();
+  });
+
+  /**
+   * **The same walk from a page's list, where there is no deck row at either end.**
+   *
+   * Reported 2026-08-20 (#128): the arrow keys stepped the modal from a deck row and did nothing
+   * from the search results, the collection or the wishlist, because the only walk that existed
+   * was the desk's. The three lists now publish theirs, and the difference between the two kinds
+   * is exactly one thing — a step re-anchors the card pane to a deck row where there is one, and
+   * opens the card the way every other surface in this app does where there is not.
+   *
+   * `paneDeckContext` is asserted `null` for that reason and not as a formality: a reader who had
+   * a deck card open, left for the Collection and stepped along it would otherwise be sat in a
+   * pane still anchored to the row they left, offering to swap it onto whatever they walked to.
+   */
+  it("steps along a page's list on ArrowRight, and the selection follows", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withListWalk();
+    open(LIST_WALK[1]);
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+
+    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(LIST_WALK[2]));
+    // **The selection really follows** — this is the half a walk is for. Close the modal here and
+    // the reader is standing on the card they walked to, not on the one they started from.
+    expect(useAppStore.getState().selectedCardId).toBe("forest-1");
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+    expect(await screen.findByRole("dialog", { name: /Forest/ })).toBeInTheDocument();
+  });
+
+  /** And back, by the chevron rather than the key — one gesture, the same two writes. */
+  it("steps back along a page's list when the left chevron is pressed", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withListWalk();
+    open(LIST_WALK[1]);
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Previous card in your collection, Lightning Bolt",
+      }),
+    );
+
+    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(LIST_WALK[0]));
+    expect(useAppStore.getState().selectedCardId).toBe("bolt-1");
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * **The chevrons name the list they are walking, and the noun is the walk's own.**
+   *
+   * The same control is drawn over the deck, the collection, the wishlist and the search results;
+   * "in the deck" over a wishlist would be the one part of this feature that lies, and a chevron
+   * is silent about all three of what it does, where, and what it lands on.
+   */
+  it("names the list the chevrons are stepping along", async () => {
+    renderDialog();
+    withListWalk();
+    open(LIST_WALK[0]);
+    await screen.findByRole("dialog", { name: /Lightning Bolt/ });
+
+    expect(screen.getByRole("button", { name: "Previous card in your collection" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Next card in your collection, Sol Ring" }),
+    ).not.toBeDisabled();
+  });
+
+  /**
+   * **The "you are here" ring, on a wall that is not a deck's.**
+   *
+   * It used to be the deck slot's printing and nothing outside a deck, which was defensible while
+   * the modal was about one card and became wrong the moment the arrow keys could walk a list:
+   * two printings of one card are two stops drawing the *same* wall, so with nothing ringed a
+   * step between them moves nothing a reader can see. Here the step is between two different
+   * cards, and the assertion is the ring landing on the one that was walked to.
+   */
+  it("rings the printing the walk has landed on, with no deck anywhere", async () => {
+    cardPrintings.mockResolvedValue(page([p("card-1", "lea"), p("forest-1", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    withListWalk();
+    open(LIST_WALK[1]);
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    // Before: the card the question was asked from.
+    const here = await screen.findByAltText("Sol Ring (LEA 233)");
+    expect(here.parentElement).toHaveClass("ring-accent");
+
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+
+    // After: the card the walk landed on. Same wall — the fixture answers every oracle id with
+    // these two printings — and the ring is what has moved.
+    await screen.findByRole("dialog", { name: /Forest/ });
+    const landed = await screen.findByAltText("Forest (LEB 233)");
+    expect(landed.parentElement).toHaveClass("ring-accent");
+    expect(screen.getByAltText("Forest (LEA 233)").parentElement).not.toHaveClass("ring-accent");
+  });
+
+  /**
+   * A card the page's list does not contain — opened from the card pane, which can be showing
+   * something no row on screen names. The index answers it, exactly as it does for a deck row
+   * belonging to a deck the open editor is not showing.
+   */
+  it("draws no chevrons for a card the published list does not contain", async () => {
+    renderDialog();
+    withListWalk();
+    open({ cardId: "elsewhere-1", oracleId: "o-elsewhere", name: "Counterspell", deck: null });
+    await screen.findByRole("dialog", { name: /Counterspell/ });
+
+    expect(screen.queryByRole("button", { name: /card in your collection/ })).toBeNull();
+  });
+
+  /**
+   * **A modal opened from a surface with no slot must not walk the deck behind it.**
+   *
+   * The deck editor's docked search panel publishes no walk of its own — the desk owns the store's
+   * one walk while the editor is up — and its tiles carry no `printingsDeck`, so a request from
+   * there has `deck: null`. Without the `stop.deck === null` half of the lookup, a printing that
+   * happens to be *in* the deck would be found by card id and the panel would start arrow-stepping
+   * the desk. `card-1` is exactly that printing: {@link slot} names it.
+   */
+  it("does not find a deck row for a request that names no slot", async () => {
+    renderDialog();
+    withDeckWalk();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+    await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    expect(screen.queryByRole("button", { name: /card in the deck/ })).toBeNull();
   });
 });

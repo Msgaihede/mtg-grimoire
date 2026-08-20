@@ -3,7 +3,7 @@ import type { DeckCard } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
 import { card, resetRowIds } from "./validation/fixtures";
 import type { CardGroup } from "./grouping";
-import { deckWalkStops, sameDeckSlot, type DeckWalkStop } from "./deckWalk";
+import { deckWalkStops, sameDeckSlot, type CardWalkStop } from "./deckWalk";
 
 beforeEach(resetRowIds);
 
@@ -38,7 +38,7 @@ function inPile(name: string, categoryId: number, categoryName: string): DeckCar
   return card({ name, categoryId, categoryName });
 }
 
-const names = (stops: readonly DeckWalkStop[]) => stops.map((s) => s.name);
+const names = (stops: readonly CardWalkStop[]) => stops.map((s) => s.name);
 
 describe("deckWalkStops", () => {
   /**
@@ -123,6 +123,7 @@ describe("deckWalkStops", () => {
 
     expect(deckWalkStops([group("Ramp", [foil])], 4)).toEqual([
       {
+        cardId: "c-Sol Ring",
         oracleId: "o-Sol Ring",
         name: "Sol Ring",
         deck: {
@@ -176,8 +177,24 @@ describe("deckWalkStops", () => {
       4,
     );
 
-    expect(stops.map((s) => s.deck.categoryName)).toEqual(["Ramp", "Sideboard"]);
+    expect(stops.map((s) => s.deck?.categoryName)).toEqual(["Ramp", "Sideboard"]);
     expect(new Set(stops.map((s) => s.oracleId))).toEqual(new Set(["o-Sol Ring"]));
+  });
+
+  /**
+   * A stop's own `cardId` is the same printing its address names, and it is written from that one
+   * field so the two cannot drift. It is spelled out on the stop because it is the only part
+   * every kind of walk can answer — the three card lists have no `DECK_CARD_GRAIN` at all — and
+   * the printings modal reads it without asking which kind of stop it is holding.
+   */
+  it("names the same printing on the stop as in its address", () => {
+    const stops = deckWalkStops(
+      [group("Ramp", [inPile("Sol Ring", 1, "Ramp"), inPile("Arcane Signet", 1, "Ramp")])],
+      4,
+    );
+
+    expect(stops.map((s) => s.cardId)).toEqual(["c-Sol Ring", "c-Arcane Signet"]);
+    expect(stops.every((s) => s.cardId === s.deck?.cardId)).toBe(true);
   });
 
   /** A deck nobody has put a card in yet. The piles are still drawn — an empty Sideboard is where
