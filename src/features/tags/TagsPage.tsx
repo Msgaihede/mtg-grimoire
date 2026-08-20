@@ -308,8 +308,16 @@ export function TagsPage() {
       <div className="flex min-h-0 flex-1 gap-4">
         {/* The rail. `border-r` rather than a filled panel: the direction keeps its fills for the
             card art and the mana chips, and a hairline is enough to say that the column left of
-            it asks the question and the one right of it answers. */}
-        <div className="flex min-h-0 w-64 shrink-0 flex-col gap-3 border-r border-border pr-4">
+            it asks the question and the one right of it answers.
+
+            **`w-72` and not `w-64`, and the 32px was measured.** A row is a disclosure, the name,
+            the namespace mark and the reach figure, and the name is the only one of the four that
+            shrinks. Driving the shipped window on 2026-08-20 at 1920×1080 with the real taxonomy
+            in, `w-64` left the name 14–55px of a 199px row and clipped 23 of the 24 widest roots;
+            dropping the unit word off the reach (`tagReachFigure`) fixed 21 of those and `w-72`
+            fixed the rest — measured as a pair, in the window, both wanted. It costs the wall
+            32px of 1660. */}
+        <div className="flex min-h-0 w-72 shrink-0 flex-col gap-3 border-r border-border pr-4">
           <TagSearchBox
             value={text}
             onChange={setText}

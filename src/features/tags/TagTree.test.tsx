@@ -219,12 +219,18 @@ describe("TagTree", () => {
       .mockResolvedValue([hit("landscape", "art"), hit("removal", "oracle", { cardCount: 6686 })]);
     draw({ namespace: "both" });
 
+    // **The rail draws the figure alone**, because the unit word is thirteen characters repeated
+    // down every row of a fixed 288px column and it was taking the name's space — see
+    // `tagReachFigure`, which carries the widths measured in the shipped window. The unit is
+    // still announced, which is the pair of assertions below: nothing a screen reader hears
+    // changed, and the eye gets a name instead of an ellipsis.
+    expect(await screen.findByText("3")).toBeInTheDocument();
+    expect(screen.getByText("6,686")).toBeInTheDocument();
+    expect(screen.queryByText("3 illustrations")).not.toBeInTheDocument();
     // The art side counts illustrations and the oracle side counts cards — the ipc contract says
-    // so in as many words, and a bare number beside a tag name says nothing about either.
-    expect(await screen.findByText("3 illustrations")).toBeInTheDocument();
-    expect(screen.getByText("6,686 cards")).toBeInTheDocument();
-    // …and which taxonomy each row came from, because `both` merges two id spaces that share
-    // slugs.
+    // so in as many words, and a bare number beside a tag name says nothing about either, so the
+    // *name* is where that has to be. …as is which taxonomy each row came from, because `both`
+    // merges two id spaces that share slugs.
     expect(screen.getByRole("button", { name: /^Landscape,/ })).toHaveAccessibleName(
       /art tag, 3 illustrations/,
     );

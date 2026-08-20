@@ -16,7 +16,12 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type TagHit, type TagNamespace } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { TAG_NAMESPACE_LABEL, TagNamespaceMark, tagReachLabel } from "./namespaces";
+import {
+  TAG_NAMESPACE_LABEL,
+  TagNamespaceMark,
+  tagReachFigure,
+  tagReachLabel,
+} from "./namespaces";
 import { chipKey } from "./tagFilters";
 
 /**
@@ -188,8 +193,13 @@ export function TagTree({
             boxes: `overflow` clips at the padding box, `FOCUS` stands 4px proud, and half a focus
             indicator is a WCAG 2.4.7 failure. Same number as `CardGrid`'s `scroll-m-1.5`.
             **Not virtualised** — a recursive graph of disclosures is the wrong shape for
-            `VirtualTable`, and how a 3 219-row level actually feels is a question for the live
-            pass rather than for jsdom, which has no layout engine at all. */}
+            `VirtualTable`, and how a 3 219-row level actually feels was a question for the live
+            pass rather than for jsdom, which has no layout engine at all. **It has been driven
+            and the answer is that it is fine** — 4 142 rows on `Both` painted in 575–673 ms and
+            then scrolled 116 000 px at p50 6.9 ms with not one frame over 33, measured in the
+            shipped window on 2026-08-20 (debug build). What it costs is one 622 ms long task on
+            the navigation; `docs/reference/tags-live-findings.md` has the figures and why a cap
+            plus a "Show all" row was not taken. */}
         <div className="relative min-h-0 flex-1 overflow-y-auto p-1.5">
           {hits === null ? (
             <TagLevel parent={null} namespace={namespace} path="" level={0} />
@@ -216,9 +226,23 @@ export function TagTree({
   );
 }
 
-/** The type-ahead's rows: one flat list, in the backend's own rank order — exact hit first, then
- *  the prefix hits, then the rest. Not through `sortOptions`, because that ranking *is* the
- *  information and alphabetising it would bury the exact match. */
+/**
+ * The type-ahead's rows: one flat list, in the backend's own rank order — exact hit first, then
+ * the prefix hits, then the rest. Not through `sortOptions`, because that ranking *is* the
+ * information and alphabetising it would bury the exact match.
+ *
+ * **Its paths are prefixed, so the tree's disclosures are not also this list's.** `expanded` is
+ * keyed on a path and a hit's path used to be `childPath("", hit)` — byte-identical to the same
+ * tag's path as a *root* of the tree, so a category opened while browsing came back open here.
+ * Measured in the shipped window on 2026-08-20: with `cloud` expanded in the tree, searching
+ * `cloud` drew its five children inline **and then listed three of them again** as hits of their
+ * own, a few rows down, with nothing saying why. In the tree a tag under two parents appears
+ * twice and its headings explain it; in a flat list of hits there is no heading to explain
+ * anything, so the duplicate reads as a rendering fault. The reader can still open a hit here —
+ * they just have to ask.
+ */
+const HIT_LIST_PATH = "hits";
+
 function TagHitList({ hits, pending }: { hits: readonly TagHit[]; pending: boolean }) {
   if (hits.length === 0) {
     return <Aside>{pending ? "Searching…" : "No tags match that."}</Aside>;
@@ -229,7 +253,7 @@ function TagHitList({ hits, pending }: { hits: readonly TagHit[]; pending: boole
         <TagRow
           key={chipKey(hit.namespace, hit.slug)}
           hit={hit}
-          path={childPath("", hit)}
+          path={childPath(HIT_LIST_PATH, hit)}
           level={0}
         />
       ))}
@@ -415,10 +439,10 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
           <span className="truncate">{hit.label}</span>
           {showNamespace && <TagNamespaceMark namespace={hit.namespace} />}
           {/* Mono and tabular, because it is a figure and a column of them has to line up.
-              The unit is written out — see `tagReachLabel` for why a bare number here would be
-              a quantity of nothing in particular. */}
+              **The figure alone, not the phrase** — `tagReachFigure` carries the measurement
+              that decided it, and the unit is still in this button's accessible name above. */}
           <span className="ml-auto flex-none font-mono text-[0.6875rem] tabular-nums text-dim">
-            {reach}
+            {tagReachFigure(hit)}
           </span>
         </button>
       </div>

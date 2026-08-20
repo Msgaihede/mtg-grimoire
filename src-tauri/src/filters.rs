@@ -406,10 +406,33 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // would answer 137 of those 439 dogs and none of the removal, which looks like a data
     // problem rather than a query one.
     //
-    // **`{alias}.illustration_id` is NULLABLE and needs no null branch**: `NULL = NULL` is
-    // not true in SQL, so a printing without one matches no art tag and is kept by every
-    // exclude. 4 977 of 116 712 live printings are in that state, against 0 with a NULL
-    // `oracle_id` (measured 2026-08-20 against the dev database).
+    // **`{alias}.illustration_id` is NULLABLE and needs no null branch**: `NULL IN (…)` over a
+    // list that cannot contain NULL is NULL and never true, so a printing without one matches no
+    // art tag — and `NOT EXISTS` keeps it under every exclude. 4 977 of 116 712 live printings
+    // are in that state, against 0 with a NULL `oracle_id` (measured 2026-08-20 against the dev
+    // database). **That asymmetry is why the two arms are two shapes**: swapping the exclude to
+    // `NOT IN` would turn its NULL into "no" and quietly drop those 4 977 printings from a
+    // result the reader only asked to have no dogs in.
+    //
+    // **An include is `IN (SELECT …)` and not a correlated `EXISTS`, and the difference is two
+    // orders of magnitude.** Both are correct; only one is a plan. `EXISTS` correlates on
+    // `illustration_id`, so the slug is constant and the *card* varies — SQLite scans all 116 700
+    // cards and probes the closure once each, and a floored probe loses
+    // `idx_art_tag_illustrations_slug` (no `weight` in it) and falls back to random seeks into a
+    // 952 729-row `WITHOUT ROWID` primary key. `IN` inverts it: the closure is read **once** for
+    // the slug and `cards` is driven through `idx_cards_illustration`. Measured against the real
+    // taxonomy on 2026-08-20, as the collapsed count `search.rs` really runs:
+    //
+    //     slug     floor   EXISTS      IN
+    //     dog      any     315 ms      8 ms
+    //     dog      strong  ~900 ms     8 ms
+    //     plane    any     725 ms      614 ms
+    //     plane    strong  1 284 ms    752 ms
+    //
+    // The floored column is the point: under `EXISTS` the weight floor cost 1.7–2.9x and looked
+    // like it wanted a `(slug, weight)` index (it does not — forced, that index is *ten times
+    // worse* than the status quo, because it can only seek the slug and must then scan the whole
+    // bucket). Under `IN` the floor is free, and no migration rung is owed.
     //
     // **No `rows` fallback**, unlike the set code above: a tag is a claim only a card row can
     // answer, so an orphaned collection or wishlist entry fails it exactly as it fails the
@@ -418,14 +441,15 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // The subquery aliases are `ati`/`otc` rather than the obvious `a`/`o`, and the
     // `debug_assert` below is what makes that structural rather than a convention. SQLite
     // resolves a qualified name against the innermost `FROM` first, so an inner alias equal to
-    // `{alias}` shadows the outer table: `a.illustration_id = a.illustration_id` is no longer a
-    // correlation at all, and the `EXISTS` degenerates to "does any row with this slug exist" —
-    // every card with any art tag matching every tag, silently, as a plausible superset. All
-    // three production callers pass `"c"` (`search.rs`, `collection.rs`, `wishlist.rs`), so a
-    // fourth one is the only way in and nothing else in the suite would go red for it.
+    // `{alias}` shadows the outer table — which the exclude arm is still correlated by, and
+    // `a.illustration_id = a.illustration_id` is no longer a correlation at all: the
+    // `NOT EXISTS` degenerates to "does no row with this slug exist anywhere", which is false for
+    // every card at once and empties the result silently. All three production callers pass
+    // `"c"` (`search.rs`, `collection.rs`, `wishlist.rs`), so a fourth one is the only way in and
+    // nothing else in the suite would go red for it.
     debug_assert!(
         alias != "ati" && alias != "otc",
-        "a caller alias equal to a subquery alias uncorrelates the EXISTS and matches every tagged card against every tag"
+        "a caller alias equal to a subquery alias uncorrelates the NOT EXISTS and answers about the whole closure instead of about this card"
     );
     if let Some(t) = &f.art_tags {
         // `<> 'weak'` rather than a list of the weights above it, so a fifth weight Scryfall
@@ -447,7 +471,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         };
         for slug in picked_tags(&t.include) {
             p.push(
-                format!("EXISTS (SELECT 1 FROM art_tag_illustrations ati WHERE ati.illustration_id = {alias}.illustration_id AND ati.slug = ?{floor})"),
+                format!("{alias}.illustration_id IN (SELECT ati.illustration_id FROM art_tag_illustrations ati WHERE ati.slug = ?{floor})"),
                 Box::new(slug),
             );
         }
@@ -469,7 +493,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     if let Some(t) = &f.oracle_tags {
         for slug in picked_tags(&t.include) {
             p.push(
-                format!("EXISTS (SELECT 1 FROM oracle_tag_cards otc WHERE otc.oracle_id = {alias}.oracle_id AND otc.slug = ?)"),
+                format!("{alias}.oracle_id IN (SELECT otc.oracle_id FROM oracle_tag_cards otc WHERE otc.slug = ?)"),
                 Box::new(slug),
             );
         }

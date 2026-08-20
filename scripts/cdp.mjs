@@ -155,6 +155,13 @@ const KEYS = {
   ArrowRight: { windowsVirtualKeyCode: 39, key: "ArrowRight", code: "ArrowRight" },
   Home: { windowsVirtualKeyCode: 36, key: "Home", code: "Home" },
   End: { windowsVirtualKeyCode: 35, key: "End", code: "End" },
+  // The two ways into a context menu from the keyboard, which `useContextMenu` answers and
+  // nothing else here could reach: `key ContextMenu` and `key F10 --shift`. Added 2026-08-20
+  // for the Tags page's live pass — a menu only a mouse can open is a menu half the readers do
+  // not have, and a synthetic `dispatchEvent` cannot prove it opens, because the handler reads
+  // `e.shiftKey` off the browser's own modifier state.
+  F10: { windowsVirtualKeyCode: 121, key: "F10", code: "F10" },
+  ContextMenu: { windowsVirtualKeyCode: 93, key: "ContextMenu", code: "ContextMenu" },
 };
 
 /** The two keys that *activate* a control, with the `text` that makes Chromium act on them. */
@@ -173,9 +180,10 @@ const boxOf = (selector) => `(() => {
 
 async function main() {
   const [cmd, ...argv] = process.argv.slice(2);
-  // `--shift` on `click`, `text` and `press`, because a multi-key sort is built with it held
-  // down and there is no other way to say so through this script. Stripped before the
-  // positional arguments are read, so it can be written anywhere after the command.
+  // `--shift` on `click`, `text`, `press` and `key`, because a multi-key sort is built with it
+  // held down and Shift+F10 is one of the two keyboard routes into a context menu — and there is
+  // no other way to say so through this script. Stripped before the positional arguments are
+  // read, so it can be written anywhere after the command.
   const modifiers = argv.includes("--shift") ? SHIFT : 0;
   const args = argv.filter((a) => a !== "--shift");
   const cdp = await connect();
@@ -222,8 +230,8 @@ async function main() {
       case "key": {
         const k = KEYS[args[0]];
         if (!k) throw new Error(`unknown key ${args[0]}; known: ${Object.keys(KEYS).join(", ")}`);
-        await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k });
-        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+        await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k, modifiers });
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k, modifiers });
         console.log("pressed");
         break;
       }
@@ -727,7 +735,8 @@ async function main() {
         console.error(
           "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|size|media|shot|console> " +
             "[args]\n" +
-            "  --shift on click/text/press holds Shift down for that gesture\n" +
+            "  --shift on click/text/press/key holds Shift down for that gesture\n" +
+            `  key takes one of: ${Object.keys(KEYS).join(", ")}\n` +
             "  the app must be running with --remote-debugging-port=9222",
         );
         process.exitCode = 2;

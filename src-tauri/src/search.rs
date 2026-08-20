@@ -4409,22 +4409,29 @@ mod tests {
         );
     }
 
-    /// Each correlated subquery is an **indexed two-column equality probe** — both the slug
-    /// and the subject id, on one index — and neither closure is ever scanned.
+    /// An include reads its closure **once, by slug** and then drives `cards` through an index
+    /// on the subject id — it never scans either closure, and it never scans `cards`.
     ///
-    /// This is the assertion no test about ids can make. A correlation on the wrong column,
-    /// or a subquery alias that shadowed the outer one and compared the table to itself,
-    /// answers a four-row fixture perfectly well and costs a walk of 400 k-plus closure rows
-    /// per card in the field.
+    /// This is the assertion no test about ids can make, and it is the *whole* of why the
+    /// includes are `IN (SELECT …)` rather than a correlated `EXISTS`. Both answer a four-row
+    /// fixture identically. In the field the correlated form scans all 116 700 cards and probes
+    /// the closure once per card, which measured **315 ms unfloored and ~900 ms floored** on
+    /// `dog` against the real taxonomy (2026-08-20); this form measured **8 ms either way**,
+    /// because the floor's extra column costs nothing once the slug is read a single time.
+    /// `filters.rs` carries the full table and the reason the `(slug, weight)` index that shape
+    /// seemed to want is a trap.
     ///
-    /// The planner picks the **`slug` index** over the declared primary key, and that is not
-    /// a second-best: both closures are `WITHOUT ROWID`, so an index on `slug` alone carries
-    /// the primary key's columns with it and covers `(slug, subject_id)` outright. Either
-    /// choice is one seek. `SCAN c` in the plan is the outer driver and is expected — a tag
-    /// filter narrows `cards` the way `owned: true` does, and the facet side's answer to that
-    /// is a bitset rather than this statement.
+    /// So the plan this pins is three steps and each is load-bearing:
+    ///
+    /// - `LIST SUBQUERY` — the closure is materialised once, not per card;
+    /// - `SEARCH ati … (slug=?)` — and it is read by an index while doing so;
+    /// - `SEARCH c USING INDEX idx_cards_illustration` — and `cards` is *driven* by the answer
+    ///   rather than scanned past it. `idx_cards_illustration` is v20's and exists for this.
+    ///
+    /// A regression to the correlated shape shows up here as `SCAN c`, and a lost index as
+    /// `SCAN ati`/`SCAN otc` — the two things asserted against below.
     #[test]
-    fn a_tag_filter_probes_its_closure_on_both_key_columns() {
+    fn a_tag_filter_reads_its_closure_once_and_drives_cards_by_the_answer() {
         let conn = fixture_with_tags();
         let req = SearchRequest {
             art_tags: Some(filters::TagTerms {
@@ -4453,19 +4460,32 @@ mod tests {
             .map(Result::unwrap)
             .collect();
 
-        for (alias, subject) in [("ati", "illustration_id"), ("otc", "oracle_id")] {
+        for alias in ["ati", "otc"] {
             let probe = plan
                 .iter()
                 .find(|step| step.starts_with(&format!("SEARCH {alias} ")))
-                .unwrap_or_else(|| panic!("no indexed probe of {alias}: {plan:#?}\n{sql}"));
+                .unwrap_or_else(|| panic!("no indexed read of {alias}: {plan:#?}\n{sql}"));
             assert!(probe.contains("slug=?"), "{probe}");
-            assert!(probe.contains(&format!("{subject}=?")), "{probe}");
         }
+        assert_eq!(
+            plan.iter()
+                .filter(|step| step.starts_with("LIST SUBQUERY"))
+                .count(),
+            2,
+            "each closure must be read once into a list, not once per card: {plan:#?}\n{sql}"
+        );
         assert!(
             !plan
                 .iter()
                 .any(|step| step.starts_with("SCAN ati") || step.starts_with("SCAN otc")),
-            "neither closure may be scanned per card: {plan:#?}\n{sql}"
+            "neither closure may be scanned: {plan:#?}\n{sql}"
+        );
+        // The other half, and the one a correlated `EXISTS` fails: `cards` is driven by the
+        // list rather than walked past it. A fixture this small can plan either way, so this
+        // asserts the *index* is available and used rather than the absence of a scan alone.
+        assert!(
+            plan.iter().any(|step| step.starts_with("SEARCH c ")),
+            "cards must be driven by a closure's answer, never scanned: {plan:#?}\n{sql}"
         );
     }
 }

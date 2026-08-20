@@ -77,8 +77,11 @@ const meta = {
           "precisely because the datasets are two files on two schedules, and the page has to " +
           "stand in all four.\n\n" +
           "**The rail is not virtualised, and the real taxonomy has 3,219 art roots** against " +
-          "the fake's four — so nothing here can feel that first paint. It is the live pass's " +
-          "to measure; see " +
+          "the fake's four — so nothing here can feel that first paint. The live pass measured " +
+          "it on 2026-08-20 and it stays unvirtualised: 4,142 rows painted in 575–673 ms and " +
+          "then scrolled at full frame rate. See `docs/reference/tags-live-findings.md`, which " +
+          "also carries the two things that pass *did* find in this rail — names rendering one " +
+          "pixel wide, and the hit list inheriting the tree's disclosures — and " +
           "`docs/superpowers/research/2026-08-20-scryfall-art-tags.md` for the corpus figures.",
       },
     },

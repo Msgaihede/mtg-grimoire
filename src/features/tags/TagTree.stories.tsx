@@ -89,9 +89,13 @@ const meta = {
           "that model, and announcing a keyboard contract nothing keeps leaves the reader " +
           "pressing Down at a list that does not move. Nested lists of disclosure buttons say " +
           "exactly what is there.\n\n" +
-          "**Not virtualised.** A recursive graph of disclosures is the wrong shape for " +
-          "`VirtualTable`, and how a 3,219-row level actually feels is a question for the live " +
-          "pass rather than for jsdom, which has no layout engine at all.\n\n" +
+          "**Not virtualised, and driven to confirm it can stay that way.** A recursive graph " +
+          "of disclosures is the wrong shape for `VirtualTable`, and how a 3,219-row level " +
+          "actually feels was a question for the live pass rather than for jsdom, which has no " +
+          "layout engine at all. Answered 2026-08-20 in the shipped window (debug build): 4,142 " +
+          "rows on `Both` painted in 575–673 ms, then scrolled 116,000 px at p50 6.9 ms with " +
+          "**zero** frames over 33 ms. The cost is one 622 ms long task on the navigation — see " +
+          "`docs/reference/tags-live-findings.md`.\n\n" +
           "**There is no `dog` here and there must not be.** Nobody in the fake's 43 " +
           "illustrations is a dog, and its own standard is that every art tag is true of the " +
           "picture it is on — a wall of cats filed under “Dog” would teach a reader that this " +

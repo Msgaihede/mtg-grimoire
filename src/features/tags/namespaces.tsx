@@ -55,6 +55,30 @@ export function tagReachLabel(hit: Pick<TagHit, "namespace" | "cardCount">): str
 }
 
 /**
+ * The same reach as {@link tagReachLabel}, as the **rail** draws it: the figure alone.
+ *
+ * **This is the one place the unit is dropped, and it was measured rather than preferred.**
+ * `illustrations` is thirteen characters repeated identically down every row of an art level,
+ * and the rail is a fixed column: driving the shipped window on 2026-08-20 at 1920×1080, the
+ * phrase took **92–112 px of a 199 px row**, and of the twenty-four widest art and oracle roots
+ * — the list the page opens on, before anybody types — **twenty-three had their name clipped and
+ * five drew it in a 1 px box**. `plane`, `humanoid`, `planar origin` and `location` rendered no
+ * name at all. Between "the figure has no unit" and "the tag has no name", the second is the
+ * worse row, and the unit is not actually lost:
+ *
+ * - the row's **accessible name** still spells it in full ({@link tagReachLabel} builds it), so
+ *   nothing a screen reader hears has changed;
+ * - {@link TagNamespaceMark} sits two boxes to the left whenever the box is on `Both`, and when
+ *   it is on one taxonomy every row in the rail is that taxonomy, chosen one control away.
+ *
+ * A chip, a caption or anything that is not a fixed-width column should keep
+ * {@link tagReachLabel} — the argument above is about a 199 px row and nothing else.
+ */
+export function tagReachFigure(hit: Pick<TagHit, "cardCount">): string {
+  return count(hit.cardCount);
+}
+
+/**
  * Which taxonomy a row came from, drawn small and quiet beside its label.
  *
  * **Body face rather than Geist Mono**: the direction reserves mono for numbers — collector
