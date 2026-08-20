@@ -181,12 +181,16 @@ export const RightAligned: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const button = canvas.getByRole("button");
-    // Appended, never replaced — both sentences are on the one tooltip, in that order. The
-    // `\n` is what the panel's `whitespace-pre-line` exists for.
+    // Appended, never replaced — both sentences are on the one tooltip, in that order, joined
+    // by a literal `\n` rather than a space: this is the one site the brief chose to prove the
+    // panel's `whitespace-pre-line` keeps that break. `normalizeWhitespace: false` is load-bearing
+    // — the default collapses the `\n` to a space, and a binder that joined with `" "` instead
+    // (or a panel that lost `whitespace-pre-line`) would pass the default form identically.
     await userEvent.hover(button);
     const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     await expect(panel).toHaveTextContent(
-      `${PRICES_AS_OF} Sort by Value — Shift-click to add to the sort`,
+      `${PRICES_AS_OF}\nSort by Value — Shift-click to add to the sort`,
+      { normalizeWhitespace: false },
     );
     await expect(button).toHaveAttribute("aria-describedby", panel.id);
     await userEvent.unhover(button);

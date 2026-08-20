@@ -580,13 +580,20 @@ describe("SearchPage", () => {
 
     // On the button, because the button fills the header cell — a tooltip on the cell is one
     // nothing can reach. And beside the sort hint rather than instead of it: a sortable price
-    // column has two things to say and may drop neither.
+    // column has two things to say and may drop neither. The two sentences are joined by a
+    // literal `\n`, which `normalizeWhitespace: false` is what actually pins — the default
+    // collapses it to a space and would pass a binder that joined with `" "` just the same.
     const button = screen.getByRole("button", { name: /^Price/ });
     await userEvent.hover(button);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(
-      `${pricesAsOf(MARKETPLACES.tcgplayer)} Sort by Price — Shift-click to add to the sort`,
+      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price — Shift-click to add to the sort`,
+      { normalizeWhitespace: false },
     );
+    // And bound to the button rather than to the header cell — `aria-describedby` is what
+    // `TooltipProvider` sets on the anchor it actually opened for, so this is what proves the
+    // binding is where the comment above says it is rather than merely open somewhere.
+    expect(button).toHaveAttribute("aria-describedby", panel.id);
     await userEvent.unhover(button);
     // And in the accessible name, because a tooltip is not an answer for anyone who is not
     // holding a mouse over the right four pixels. It still *starts* with "Price", so the

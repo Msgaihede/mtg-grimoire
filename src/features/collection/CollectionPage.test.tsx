@@ -155,9 +155,11 @@ const lastQuery = () =>
 /**
  * The filter bar's sort control.
  *
- * By role and exact name, because every sortable column header carries a `title` reading
- * "Sort by …" — and `getByLabelText` falls back to `title`, so a loose `/sort/i` matches
- * the whole header row as well.
+ * By role and exact name, not a loose label match. Every sortable column header carries a
+ * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
+ * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Value. Prices as of…"),
+ * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
+ * only the control this file means.
  */
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
@@ -668,18 +670,39 @@ describe("CollectionPage", () => {
     // of it is one hover away — and a screen reader reads the text, never the clip (proven by
     // `getByText` above, since a screen reader reads text and not `title`).
     //
-    // The hover affordance itself: jsdom lays nothing out, so `scrollWidth`/`clientWidth` are
-    // faked the way `tooltip.test.tsx` stands in for a real clip. `whenClipped` wins over
-    // `interactive`'s own default, so the open panel is `describes: false` and carries no
-    // `role="tooltip"` (it would double what a screen reader already has from the band's own
-    // text) — found by `TOOLTIP_PANEL_ID` instead, the one stable id the provider ever draws.
+    // `whenClipped` pinned, the direction that stays shut: jsdom lays nothing out, so the
+    // band's `scrollWidth`/`clientWidth` are both `0` here by default — unclipped — and
+    // `TooltipProvider.enter()`'s `whenClipped` guard returns before arming the open timer at
+    // all. Waiting past `TOOLTIP_OPEN_MS` and finding nothing is what actually pins the option:
+    // a plain `tip(row.needsReview, { interactive: true })` with `whenClipped` dropped would
+    // open here identically, just 400ms later, so asserting immediately would not tell the two
+    // apart.
+    fireEvent.pointerEnter(band);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 150));
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull();
+    fireEvent.pointerLeave(band);
+
+    // The hover affordance itself, `whenClipped` pinned the other direction: `scrollWidth`/
+    // `clientWidth` are faked the way `tooltip.test.tsx` stands in for a real clip.
+    // `whenClipped` wins over `interactive`'s own default, so the open panel is
+    // `describes: false` and carries no `role="tooltip"` (it would double what a screen reader
+    // already has from the band's own text) — found by `TOOLTIP_PANEL_ID` instead, the one
+    // stable id the provider ever draws.
     Object.defineProperty(band, "scrollWidth", { value: 200, configurable: true });
     Object.defineProperty(band, "clientWidth", { value: 100, configurable: true });
     fireEvent.pointerEnter(band);
     await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(REVIEW_NOTE);
+    const panel = document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
+    expect(panel).toHaveTextContent(REVIEW_NOTE);
+    // `interactive` pinned: the panel takes its own pointer events and its text can be
+    // selected, which a bare `whenClipped` tooltip does not — without this option a
+    // `pointer-events-none` panel would still pass every assertion above unchanged.
+    expect(panel).toHaveClass("select-text");
+    expect(panel).not.toHaveClass("pointer-events-none");
+    fireEvent.pointerLeave(band);
+
     // A price the data does not have is a dash, never an invented `$0.00`.
     expect(within(row).queryByText(/\$/)).not.toBeInTheDocument();
     expect(within(row).getAllByText("—").length).toBeGreaterThanOrEqual(2);
