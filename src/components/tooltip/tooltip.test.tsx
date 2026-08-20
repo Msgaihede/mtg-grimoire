@@ -70,6 +70,31 @@ function Trigger({
   );
 }
 
+/**
+ * The one shape three call sites still use — `AllPrintingsDialog`'s walk chevron, `FolderTree`'s
+ * confirm, the search table's sort-direction button — and each for the same reason: the inner
+ * button is genuinely `disabled` some of the time, a real `disabled` attribute fires no pointer
+ * events at all, and the `<span>` around it is what a hover can still land on.
+ */
+function WrappedTrigger({
+  words,
+  disabled,
+  label = "Send",
+}: {
+  words: React.ReactNode;
+  disabled: boolean;
+  label?: string;
+}) {
+  const tip = useTooltip();
+  return (
+    <span {...tip(words)}>
+      <button type="button" disabled={disabled} aria-label={label}>
+        {label}
+      </button>
+    </span>
+  );
+}
+
 const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
 const tooltip = () => screen.queryByRole("tooltip");
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
@@ -528,5 +553,40 @@ describe("the tooltip", () => {
     fireEvent.pointerEnter(screen.getByRole("button"));
     advance(TOOLTIP_OPEN_MS);
     expect(tooltip()).toBeNull();
+  });
+
+  describe("a wrapper around a sometimes-disabled button", () => {
+    /**
+     * The reason the wrapper exists at all. jsdom does not hit-test, so a real browser's own
+     * behaviour — skip the disabled descendant, deliver the hover to the ancestor that still
+     * takes pointer events — is reproduced by firing on the span directly rather than on the
+     * button inside it. **This is the test that fails if the wrapper is removed and `tip()`
+     * moves to the button**: with no span in the tree there is nothing here for the event to
+     * land on, and a `fireEvent.pointerEnter` aimed at the disabled button itself would not open
+     * anything either, because `useTooltip.ts`'s pointer handlers are bound to whichever element
+     * they were spread onto and a disabled button never receives a real one of these in the app.
+     */
+    it("still opens on hover when the button inside it is disabled", () => {
+      mount(<WrappedTrigger words="Next card in the deck" disabled />);
+      const wrapper = screen.getByRole("button").parentElement as HTMLElement;
+      fireEvent.pointerEnter(wrapper);
+      advance(TOOLTIP_OPEN_MS);
+      expect(tooltip()).toHaveTextContent("Next card in the deck");
+    });
+
+    // The Tab-focus half of Important 3's fix — `onFocus` bubbles from the button to this span
+    // (React re-implements it on `focusin`, unlike the pointer enter/leave pair above), so the
+    // old `e.currentTarget` anchor was the span, which Tab never focuses, and
+    // `TooltipProvider.focus()`'s `:focus-visible` guard was false every time — is proven at the
+    // app's own wrapped sites instead of here: `FilterBar.test.tsx`'s "opens the direction
+    // tooltip on Tab once an order is picked" drives a real `userEvent.tab()` through
+    // `FilterBar.tsx`'s sort-direction button, and `DeckStats.test.tsx`'s "opens the shortfall
+    // hint on Tab once the button is spent" covers the unwrapped case this same binder change had
+    // to leave working. A synthetic `fireEvent.keyDown` + `.focus()` version lived here briefly
+    // and was flaky — passing alone, failing once ~30 earlier tests in this file had run and left
+    // jsdom's `:focus-visible` engine (`@asamuzakjp/dom-selector`, a stateful heuristic keyed off
+    // its own window-level event listeners) in a state a fresh keydown could not reliably reset —
+    // which is a jsdom cross-test artifact rather than a fact about the binder, and the two tests
+    // above are the real evidence.
   });
 });

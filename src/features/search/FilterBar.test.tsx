@@ -1,7 +1,8 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import type { SortSpec } from "@/lib/sort";
 import { FilterBar } from "./FilterBar";
@@ -815,6 +816,67 @@ describe("FilterBar, its sort picker", () => {
     const button = dirButton();
     expect(button).toBeDisabled();
     expect(button).toHaveAccessibleName("Sort direction — no order picked");
+  });
+
+  /**
+   * The wrapper's whole reason to exist, and the one state nothing else covers: this suite has
+   * no `TooltipProvider` above it anywhere else, and `FilterBar.stories.tsx`'s `SortedDescending`
+   * — the only other wrapper coverage in the app — hovers only the *enabled* button. A real
+   * `disabled` attribute fires no pointer events at all, so `FilterBar.tsx` binds the tooltip to
+   * the `<span>` around the button rather than to the button itself; a browser then delivers the
+   * hover to that span, which is what this fires on. **This is the test that fails if the
+   * wrapper is ever removed and the binding moves onto the button directly** — nothing would be
+   * listening on the span any more, and firing on the disabled button itself proves nothing (a
+   * real browser never delivers a hover there, and jsdom does not hit-test to tell the two cases
+   * apart).
+   */
+  it("still opens the direction tooltip by hover while the button is disabled", async () => {
+    render(
+      <TooltipProvider>
+        <FilterBar search={search()} />
+      </TooltipProvider>,
+    );
+    const button = dirButton();
+    expect(button).toBeDisabled();
+
+    fireEvent.pointerEnter(button.parentElement as HTMLElement);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction — no order picked",
+    );
+  });
+
+  /**
+   * Important 3's fix, evidenced live rather than through the shared component's own unit
+   * tests: `useTooltip.ts`'s `onFocus` used to hand the wrapping `<span>` above to
+   * `TooltipProvider.focus()`, which tests `:focus-visible` on whatever anchor it is given — and
+   * a `<span>` with no `tabIndex` is never itself the focused element, so Tab landing on this
+   * *enabled* button opened nothing at all. `e.target`, the button React reports as actually
+   * focused, is what fixes it — proven here with a real `userEvent.tab()` from the control just
+   * before it in the row, the same path a keyboard reader takes.
+   */
+  it("opens the direction tooltip on Tab once an order is picked", async () => {
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <FilterBar
+          search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })}
+        />
+      </TooltipProvider>,
+    );
+    const button = dirButton();
+    expect(button).not.toBeDisabled();
+
+    screen.getByLabelText("Sort results").focus();
+    await user.tab();
+    expect(button).toHaveFocus();
+
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull());
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction: ascending — press for descending",
+    );
   });
 
   /** The name says the state **and** what pressing does, because an arrow is the whole of what

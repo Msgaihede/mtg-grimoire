@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -908,6 +908,44 @@ describe("DeckStats", () => {
     await userEvent.click(button);
 
     expect(settled.mutate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The final-review fix, evidenced: `useTooltip.ts`'s `onFocus` used to hand the wrapping
+   * `<span>` to `TooltipProvider.focus()`, which tests `:focus-visible` on it — and a `<span>`
+   * with no `tabIndex` is never itself focused, so Tab landing on this button opened nothing at
+   * all. Unwrapped now, with the binder testing `e.target` (the button, which really was
+   * focused) rather than `e.currentTarget`, Tab opens the hint exactly like every other
+   * converted control's — and `aria-describedby` lands on the button holding the caret.
+   */
+  it("opens the shortfall hint on Tab once the button is spent", async () => {
+    const settled = sender({ isSuccess: true, data: 1 });
+    const view = render(
+      <TooltipProvider>
+        <DeckStats cards={short()} marketplace={MARKETPLACES.tcgplayer} send={sender()} />
+      </TooltipProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+    view.rerender(
+      <TooltipProvider>
+        <DeckStats cards={short()} marketplace={MARKETPLACES.tcgplayer} send={settled} />
+      </TooltipProvider>,
+    );
+
+    const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+
+    // The click above already focused this button (a real browser focuses whatever it presses),
+    // so it is already `document.activeElement` — a second `.focus()` on an element that is
+    // already focused fires no event at all, jsdom included, and would prove nothing. Blur it
+    // first, the way the caret-restore test below this one does for the same reason.
+    act(() => button.blur());
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => button.focus());
+
+    const panel = screen.getByRole("tooltip");
+    expect(panel).toHaveTextContent("This shortfall is already on your wishlist.");
+    expect(button).toHaveAttribute("aria-describedby", panel.id);
   });
 
   it("offers it again once the shortfall is a different one", async () => {
