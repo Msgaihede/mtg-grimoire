@@ -47,7 +47,7 @@ import { marketplaceSearchUrl, openExternal, scryfallCardUrl } from "@/lib/exter
 import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
 import { ipc, ipcError, type DeckFolder, type DeckRow, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
-import type { PaneDeckContext } from "@/lib/store";
+import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 import { sortOptions } from "@/lib/options";
 
 /**
@@ -105,7 +105,7 @@ export interface CardMenuDeps {
    * about; the second spent 384px of a 602px desk on a list. The modal is drawn over wherever the
    * reader already is, so there is one destination and no surface has to say which one it wants.
    */
-  openAllPrintings: (t: { oracleId: string; name: string; deck: PaneDeckContext | null }) => void;
+  openAllPrintings: (t: PrintingsRequest) => void;
   /**
    * The deck slot this surface's rows belong to, or absent.
    *
@@ -283,7 +283,16 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
     // nothing about a deck is saying there is no slot to write to, and a press in the modal then
     // opens the card pane on the printing instead of swapping anything.
     onSelect: () =>
-      deps.openAllPrintings({ oracleId, name: target.name, deck: deps.printingsDeck ?? null }),
+      deps.openAllPrintings({
+        // The printing the menu was opened on: the modal's "you are here" mark, and — where the
+        // surface is one of the app's card lists rather than a deck row — how it finds the
+        // reader's place on `store.cardWalk`. Every target carries one; a row that names no
+        // cardboard names no card menu either.
+        cardId: target.cardId,
+        oracleId,
+        name: target.name,
+        deck: deps.printingsDeck ?? null,
+      }),
   };
 }
 
