@@ -64,7 +64,11 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
   // every view in the window.
   const open = useStore(store, (s) => s.open);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const timers = useRef({ open: 0, close: 0, lastHiddenAt: 0 });
+  // `openFor` is the anchor a pending *open* timer was armed for — tracked separately from the
+  // store's `open`, because the whole point of the delay is that nothing is open yet while it is
+  // ticking. `leave(anchor)` needs to know whether *this* anchor is the one waiting, and the
+  // store can't answer that; see the comment on `leave` below.
+  const timers = useRef({ open: 0, openFor: null as HTMLElement | null, close: 0, lastHiddenAt: 0 });
 
   const api = useMemo(() => {
     const clearOpenTimer = () => {
@@ -72,6 +76,7 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
         clearTimeout(timers.current.open);
         timers.current.open = 0;
       }
+      timers.current.openFor = null;
     };
     const clearCloseTimer = () => {
       if (timers.current.close) {
@@ -101,29 +106,54 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
       enter(anchor: HTMLElement, content: ReactNode, options: TooltipOptions) {
         if (options.whenClipped && !clipped(anchor)) return;
         clearOpenTimer();
-        clearCloseTimer();
+        const current = store.getState().open;
+        // A *different* control's tooltip is showing — this pointer has moved on from it, so it
+        // closes now rather than riding out a bridge timer that was armed for somewhere else.
+        // Left alone, an interactive panel's close timer just got cancelled with nothing to
+        // re-arm it: the anchor guard in `leave` below only fires `hideNow` for the anchor that
+        // is actually open, and by the time this pointer leaves *this* control, the store still
+        // names the old one — so `leave` here would return early and strand it on screen with no
+        // timer pending. The same anchor reopening (the pointer back on its own trigger from an
+        // interactive panel) is not that case: it just cancels the pending close and keeps
+        // showing, which is `clearCloseTimer` alone.
+        if (current !== null && current.anchor !== anchor) {
+          hideNow();
+        } else {
+          clearCloseTimer();
+        }
         if (Date.now() - timers.current.lastHiddenAt < TOOLTIP_WARM_MS) {
           show(anchor, content, options);
           return;
         }
+        timers.current.openFor = anchor;
         timers.current.open = window.setTimeout(() => {
           timers.current.open = 0;
+          timers.current.openFor = null;
           show(anchor, content, options);
         }, TOOLTIP_OPEN_MS);
       },
       focus(anchor: HTMLElement, content: ReactNode, options: TooltipOptions) {
         if (options.whenClipped && !clipped(anchor)) return;
         // A press should not pop a hint at a pointer user; a Tab onto the control should show one
-        // at once. **jsdom answers `true` here for any focused element**, so the suite can prove
-        // the focus path opens and not that a mouse press is excluded from it — that half is a
-        // live pass.
+        // at once. **jsdom 30 implements a real focus-visible modality**, not a blanket "true for
+        // any focused element": a bare `.focus()` with nothing else in the window's history
+        // answers `true`, but a `pointerenter` or a `mousedown` anywhere in the window turns it
+        // `false` for every focus after it, until a `keydown` restores it. That is a real enough
+        // signal for the suite to prove the mouse-press exclusion directly, not just the open
+        // path — see `tooltip.test.tsx`.
         if (!anchor.matches(":focus-visible")) return;
         clearOpenTimer();
         clearCloseTimer();
         show(anchor, content, options);
       },
       leave(anchor: HTMLElement) {
-        clearOpenTimer();
+        // Only clears a pending *open* if it was armed for **this** anchor. The store has no
+        // opinion yet — nothing is open while the delay is ticking — so the guard below (which
+        // reads the store) cannot stand in for this one: a leave that arrives before the delay
+        // elapses would otherwise find `store.getState().open` still `null`, fail that guard, and
+        // return having left the timer armed, which is exactly the bug an earlier version of this
+        // fix had ("does not open at all when the pointer only passes over" caught it).
+        if (timers.current.openFor === anchor) clearOpenTimer();
         const current = store.getState().open;
         if (current?.anchor !== anchor) return;
         if (current.interactive) {

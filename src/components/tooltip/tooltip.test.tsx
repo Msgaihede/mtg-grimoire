@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { TooltipProvider, TOOLTIP_BRIDGE_MS, TOOLTIP_OPEN_MS, TOOLTIP_WARM_MS } from "./TooltipProvider";
+import {
+  TooltipProvider,
+  TOOLTIP_BRIDGE_MS,
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TOOLTIP_WARM_MS,
+} from "./TooltipProvider";
 import { useTooltip, type TooltipOptions } from "./useTooltip";
 
 /**
- * Captured before any test's `vi.useFakeTimers()` ever runs, while `setTimeout` is still real.
+ * Captured before any test's `vi.useFakeTimers()` ever runs, while `setTimeout` and `Date.now`
+ * are still real.
  *
  * `motion`'s frame scheduler (`motion-dom`'s `createRenderBatcher`) closes over
  * `requestAnimationFrame` once, at module load — which happens when this file's imports resolve,
@@ -13,12 +20,29 @@ import { useTooltip, type TooltipOptions } from "./useTooltip";
  * panel from the document — never fires on the fake clock alone, even with
  * `MotionGlobalConfig.skipAnimations` (verified with a two-line `AnimatePresence` reproduction
  * with no tooltip code involved: the exiting node lands on its exit target's styles and then just
- * sits there). One real wait, using the reference captured here rather than the one
+ * sits there). One real wait, using the references captured here rather than the ones
  * `vi.useFakeTimers()` later replaces, gives that stale closure the actual clock tick it is
  * waiting on — without moving the *fake* `Date.now()` the warm-period logic reads.
  */
 const realSetTimeout = globalThis.setTimeout;
-const flushExit = () => new Promise<void>((resolve) => realSetTimeout(resolve, 50));
+const realNow = Date.now;
+
+/**
+ * Polls for the exiting panel's real removal rather than sleeping a fixed span. A single fixed
+ * wait is exactly the shape of flake this repo's own history warns about — a wait sized for an
+ * idle machine is a wait that is too short under `npm run verify`'s load — so this checks every
+ * 20ms and returns as soon as the node is gone, spending the full ~400ms budget only when it
+ * never disappears (a real failure, which the assertion after this call is what catches it).
+ * Wrapped in `act()`: the removal is a React commit driven by `motion`'s real callback, which
+ * lands outside any `act` scope of this test's own otherwise.
+ */
+const flushExit = () =>
+  act(async () => {
+    const deadline = realNow() + 400;
+    while (document.getElementById(TOOLTIP_PANEL_ID) !== null && realNow() < deadline) {
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 20));
+    }
+  });
 
 /**
  * Fake timers throughout: everything this component decides is a schedule — a delay, a warm
@@ -137,6 +161,37 @@ describe("the tooltip", () => {
     expect(tooltip()).toBeNull();
   });
 
+  it("does not strand an interactive tooltip when the pointer crosses straight to another control", async () => {
+    // Regression: `enter` used to only ever clear the close timer, never re-arm anything. The
+    // interactive tooltip on "one" would have its bridge-close cancelled by entering "two", but
+    // the store still named "one" as open — so leaving "two" (never the open anchor) hit the
+    // guard in `leave` and returned, and "one"'s panel was left on screen with no timer pending
+    // at all, dismissible only by a scroll, a resize, a press or Escape.
+    mount(
+      <>
+        <Trigger words="Check the printing and re-add it" options={{ interactive: true }} label="one" />
+        <Trigger words="Archive" label="two" />
+      </>,
+    );
+    const one = screen.getByRole("button", { name: "one" });
+    const two = screen.getByRole("button", { name: "two" });
+
+    fireEvent.pointerEnter(one);
+    advance(TOOLTIP_OPEN_MS);
+    expect(tooltip()).toHaveTextContent("Check the printing and re-add it");
+
+    fireEvent.pointerLeave(one);
+    // Still inside the bridge window "one" armed for itself — but the pointer went straight to a
+    // different control, not into the panel.
+    advance(TOOLTIP_BRIDGE_MS - 20);
+    fireEvent.pointerEnter(two);
+    expect(tooltip()).toHaveTextContent("Archive");
+
+    fireEvent.pointerLeave(two);
+    await flushExit();
+    expect(tooltip()).toBeNull();
+  });
+
   it("takes the pointer's events only when it is interactive", () => {
     mount(<Trigger words="Game changer" />);
     fireEvent.pointerEnter(screen.getByRole("button"));
@@ -169,6 +224,68 @@ describe("the tooltip", () => {
     act(() => void window.dispatchEvent(new Event("scroll")));
     await flushExit();
     expect(tooltip()).toBeNull();
+  });
+
+  it("closes when the window resizes", async () => {
+    mount(<Trigger words="Newest first" />);
+    fireEvent.pointerEnter(screen.getByRole("button"));
+    advance(TOOLTIP_OPEN_MS);
+    act(() => void window.dispatchEvent(new Event("resize")));
+    await flushExit();
+    expect(tooltip()).toBeNull();
+  });
+
+  it("closes when a drag starts", async () => {
+    mount(<Trigger words="Newest first" />);
+    fireEvent.pointerEnter(screen.getByRole("button"));
+    advance(TOOLTIP_OPEN_MS);
+    act(() => void window.dispatchEvent(new Event("dragstart")));
+    await flushExit();
+    expect(tooltip()).toBeNull();
+  });
+
+  it("closes on blur", async () => {
+    mount(<Trigger words="Newest first" />);
+    const button = screen.getByRole("button");
+    fireEvent.pointerEnter(button);
+    advance(TOOLTIP_OPEN_MS);
+    expect(tooltip()).not.toBeNull();
+
+    fireEvent.blur(button);
+    await flushExit();
+    expect(tooltip()).toBeNull();
+  });
+
+  it("closes on a pointer press outside it", async () => {
+    mount(<Trigger words="Newest first" />);
+    fireEvent.pointerEnter(screen.getByRole("button"));
+    advance(TOOLTIP_OPEN_MS);
+    fireEvent.pointerDown(document.body);
+    await flushExit();
+    expect(tooltip()).toBeNull();
+  });
+
+  it("does not close on a pointer press inside an interactive panel", () => {
+    // The carve-out that makes `interactive` a place a reader can actually select text from: a
+    // press *inside* the panel is the start of a selection, not a dismissal — the one path that
+    // treats the panel's own subtree differently from everywhere else a press can land.
+    //
+    // Checked through `aria-describedby` rather than the panel's own presence: `hideAny` and the
+    // effect that clears that attribute both run synchronously off the store, while the panel's
+    // DOM node lingers through its exit animation regardless of whether a close actually fired —
+    // so a `tooltip()`/`queryByRole` check here would read "still there" for an *incorrectly*
+    // dismissed panel too, in the instant right after the press, and prove nothing. Confirmed
+    // against a deliberately broken build with the carve-out removed: that failed here and passed
+    // a `queryByRole` version of this same assertion.
+    mount(<Trigger words="Check the printing and re-add it" options={{ interactive: true }} />);
+    const button = screen.getByRole("button");
+    fireEvent.pointerEnter(button);
+    advance(TOOLTIP_OPEN_MS);
+    const panel = screen.getByRole("tooltip");
+    expect(button).toHaveAttribute("aria-describedby", panel.id);
+
+    fireEvent.pointerDown(panel);
+    expect(button).toHaveAttribute("aria-describedby", panel.id);
   });
 
   it("says nothing when the text it would show is not actually cut off", () => {
@@ -208,6 +325,22 @@ describe("the tooltip", () => {
     expect(button).not.toHaveAttribute("aria-describedby");
   });
 
+  it("restores a describedby the anchor already carried, rather than deleting it", () => {
+    // "Leaves it as it found it" covers the absent case above; a control can already point at
+    // some other description (a form field's own error text, say), and closing the tooltip must
+    // hand that back rather than erasing it.
+    mount(<Trigger words="The cards a format's size rule counts" />);
+    const button = screen.getByRole("button");
+    button.setAttribute("aria-describedby", "existing-hint");
+
+    fireEvent.pointerEnter(button);
+    advance(TOOLTIP_OPEN_MS);
+    expect(button.getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
+
+    fireEvent.pointerLeave(button);
+    expect(button).toHaveAttribute("aria-describedby", "existing-hint");
+  });
+
   it("does not describe a control whose words are already its name", () => {
     mount(<Trigger words="Duplicate" options={{ describes: false }} />);
     const button = screen.getByRole("button");
@@ -237,6 +370,18 @@ describe("the tooltip", () => {
     fireEvent.keyDown(document.body, { key: "Tab" });
     act(() => screen.getByRole("button").focus());
     expect(tooltip()).not.toBeNull();
+  });
+
+  it("does not open on a mouse press", () => {
+    // jsdom 30's `:focus-visible` modality turns on a `mousedown` too, not only a `pointerenter`
+    // — so unlike the pointer-hover tests elsewhere in this file (which jsdom cannot discriminate
+    // by input device, per the brief), this one *can* prove the guard directly rather than
+    // deferring it to Task 8's live pass.
+    mount(<Trigger words="Newest first" />);
+    const button = screen.getByRole("button");
+    fireEvent.mouseDown(button);
+    act(() => button.focus());
+    expect(tooltip()).toBeNull();
   });
 
   it("is a no-op with no provider above it, rather than a crash", () => {
