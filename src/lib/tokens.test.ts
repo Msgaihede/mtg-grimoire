@@ -5,6 +5,15 @@ import { describe, expect, it } from "vitest";
  * and `?raw` is how `iconFont.test.ts` already reads the files it asserts against.
  */
 import css from "@/index.css?raw";
+/**
+ * The same trick, for the two files the mount sweep at the bottom of this file reads.
+ * `App.tsx` is under `SOURCES`' glob already, but `.storybook/preview.tsx` is not — the glob
+ * below is scoped to `/src/**`, on purpose, so the stylesheet's Tailwind scan does not also
+ * sweep the workbench's own source — and a second `?raw` import is what the top of this file
+ * already reaches for rather than `node:fs`.
+ */
+import appSource from "@/App.tsx?raw";
+import previewSource from "../../.storybook/preview.tsx?raw";
 
 /**
  * Every source file in the app, as text, for the sweep below.
@@ -186,5 +195,24 @@ describe("motion vocabulary", () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * **The two mounts that make `useTooltip` do anything.**
+ *
+ * The hook falls back to a no-op API when no provider is above it — deliberately, because after
+ * the sweep most surfaces bind a tooltip and every one of them is also a story and a test that
+ * renders it alone, so a throw would be `stories.test.tsx` red for everybody. The cost of that
+ * choice is that a dropped provider is *silent*: every hint in the app, or every hint in the
+ * workbench, simply stops appearing. This is what makes it loud.
+ */
+describe("the tooltip provider is mounted where it has to be", () => {
+  it("wraps the app", () => {
+    expect(appSource).toContain("<TooltipProvider>");
+  });
+
+  it("wraps every story too", () => {
+    expect(previewSource).toContain("<TooltipProvider>");
   });
 });
