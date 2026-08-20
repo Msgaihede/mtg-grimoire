@@ -7,6 +7,7 @@ import {
   TOOLTIP_PANEL_ID,
   TOOLTIP_WARM_MS,
 } from "./TooltipProvider";
+import { TooltipPanel } from "./TooltipPanel";
 import { useTooltip, type TooltipOptions } from "./useTooltip";
 
 /**
@@ -95,6 +96,65 @@ describe("the tooltip", () => {
     expect(tooltip()).toBeNull();
   });
 
+  it("does not treat a delayed open on a vanished anchor as a tooltip that just closed", () => {
+    // `TooltipPanel`'s own guard (below) is a backstop that would also keep this hidden, so it
+    // cannot tell the two apart — both leave `tooltip()` null. What only *this* guard prevents is
+    // `show()` running at all: without it, the vanished anchor's open-then-immediately-closed
+    // trip through the store still stamps `lastHiddenAt`, and the *next* control hovered inside
+    // `TOOLTIP_WARM_MS` reads as "reading along a row" and opens with no delay of its own — a
+    // warm period nothing actually closed. Unmounted through React (a `rerender`), not a raw
+    // `.remove()` — React still believes it owns that node, and pulling it out from under the
+    // reconciler throws on the next commit.
+    const { rerender } = mount(
+      <>
+        <Trigger words="Duplicate" label="one" />
+        <Trigger words="Archive" label="two" />
+      </>,
+    );
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "one" }));
+    rerender(
+      <TooltipProvider>
+        <Trigger words="Archive" label="two" />
+      </TooltipProvider>,
+    );
+    advance(TOOLTIP_OPEN_MS);
+    expect(tooltip()).toBeNull();
+
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "two" }));
+    expect(tooltip()).toBeNull();
+    advance(TOOLTIP_OPEN_MS - 1);
+    expect(tooltip()).toBeNull();
+    advance(1);
+    expect(tooltip()).toHaveTextContent("Archive");
+  });
+
+  it("closes instead of measuring a panel whose anchor is not in the document", () => {
+    // `TooltipPanel` in isolation: the store can write `show()` for a still-connected anchor and
+    // have it leave the DOM before this panel's own layout effect runs — a race the delayed-open
+    // guard above cannot see, since it has already handed off to the store by then. `onAnchorGone`
+    // is what the panel calls instead of computing a placement from a zeroed rect.
+    const anchor = document.createElement("button");
+    // Deliberately never appended to `document` — `isConnected` is `false` either way.
+    const onAnchorGone = vi.fn();
+    render(
+      <TooltipPanel
+        open={{
+          openId: 1,
+          anchor,
+          content: "Newest first",
+          side: "top",
+          interactive: false,
+          describes: true,
+        }}
+        panelRef={{ current: null }}
+        onPointerEnter={() => {}}
+        onPointerLeave={() => {}}
+        onAnchorGone={onAnchorGone}
+      />,
+    );
+    expect(onAnchorGone).toHaveBeenCalledTimes(1);
+  });
+
   it("closes when the pointer leaves", async () => {
     mount(<Trigger words="Newest first" />);
     const button = screen.getByRole("button");
@@ -137,6 +197,32 @@ describe("the tooltip", () => {
     expect(tooltip()).toBeNull();
     advance(TOOLTIP_OPEN_MS);
     expect(tooltip()).not.toBeNull();
+  });
+
+  it("ignores a leave that arrives after a different control has already taken over", () => {
+    // Two controls a pixel apart in a table row produce `enter(B)` before `leave(A)` — the
+    // pointer has already moved on by the time A's own leave arrives, and it must not take B's
+    // tooltip away the instant it appeared. `enter` closes A itself (by anchor identity) the
+    // moment B is entered, so this is `leave`'s own guard — `tooltipStore` used to carry a second,
+    // anchor-guarded `hide` for the same rule; it was dead code, since `leave` already checks
+    // before it ever calls down to the store's unconditional `hideAny`.
+    mount(
+      <>
+        <Trigger words="Newest first" label="one" />
+        <Trigger words="Duplicate" label="two" />
+      </>,
+    );
+    const one = screen.getByRole("button", { name: "one" });
+    const two = screen.getByRole("button", { name: "two" });
+    fireEvent.pointerEnter(one);
+    advance(TOOLTIP_OPEN_MS);
+    expect(tooltip()).toHaveTextContent("Newest first");
+
+    fireEvent.pointerEnter(two);
+    expect(tooltip()).toHaveTextContent("Duplicate");
+
+    fireEvent.pointerLeave(one);
+    expect(tooltip()).toHaveTextContent("Duplicate");
   });
 
   it("survives the pointer crossing the gap into an interactive panel", async () => {
@@ -217,11 +303,20 @@ describe("the tooltip", () => {
     expect(press.defaultPrevented).toBe(false);
   });
 
-  it("closes when the page scrolls under it", async () => {
-    mount(<Trigger words="Newest first" />);
+  it("closes when a nested scroller scrolls under it", async () => {
+    // A native `scroll` event does not bubble, so only a **capture**-phase listener on `window`
+    // ever sees one dispatched on a descendant scroller — a bubble-phase listener would not
+    // receive it at all, since propagation stops at the target with nothing left to bubble
+    // through. Dispatching directly on `window` (as this test used to) cannot tell the two apart:
+    // window is the target either way, capture or bubble.
+    mount(
+      <div data-testid="scroller">
+        <Trigger words="Newest first" />
+      </div>,
+    );
     fireEvent.pointerEnter(screen.getByRole("button"));
     advance(TOOLTIP_OPEN_MS);
-    act(() => void window.dispatchEvent(new Event("scroll")));
+    act(() => void screen.getByTestId("scroller").dispatchEvent(new Event("scroll")));
     await flushExit();
     expect(tooltip()).toBeNull();
   });
@@ -354,6 +449,16 @@ describe("the tooltip", () => {
 
   it("binds nothing at all when there are no words", () => {
     mount(<Trigger words={null} />);
+    fireEvent.pointerEnter(screen.getByRole("button"));
+    advance(TOOLTIP_OPEN_MS);
+    expect(tooltip()).toBeNull();
+  });
+
+  it("binds nothing for a bare 0, the same as the other falsy shapes", () => {
+    // `cond && "words"` is the documented shape a call site uses to skip a tooltip, and a
+    // numeric `cond` of `0` reaching here almost always means the call site meant `cond > 0` —
+    // a tooltip that reads the single digit "0" is a bug, not an intent.
+    mount(<Trigger words={0} />);
     fireEvent.pointerEnter(screen.getByRole("button"));
     advance(TOOLTIP_OPEN_MS);
     expect(tooltip()).toBeNull();

@@ -23,12 +23,20 @@ export function TooltipPanel({
   panelRef,
   onPointerEnter,
   onPointerLeave,
+  onAnchorGone,
 }: {
   open: OpenTooltip;
   /** Handed up to the provider, whose `pointerdown` listener must not dismiss a press *inside* it. */
   panelRef: RefObject<HTMLDivElement | null>;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
+  /**
+   * The anchor is no longer in the document by the time this panel goes to measure it — a race
+   * `TooltipProvider`'s own delayed-open guard cannot close by itself, since `show()` can write
+   * the store in the same tick an unrelated unmount takes the anchor out from under it. Called
+   * instead of computing a placement; the caller closes the tooltip.
+   */
+  onAnchorGone: () => void;
 }) {
   const measured = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<TooltipPlacement | null>(null);
@@ -41,6 +49,14 @@ export function TooltipPanel({
   useLayoutEffect(() => {
     const el = measured.current;
     if (!el) return;
+    // `getBoundingClientRect()` on a detached node answers all zeros, which `placeTooltip` reads
+    // as "does not fit either way": it flips to the opposite side and clamps to the window's
+    // corner — a hint pinned at (8, 8), attached to nothing. This is the one place every open
+    // measures, so it is the one place that can catch a doomed anchor before painting there.
+    if (!open.anchor.isConnected) {
+      onAnchorGone();
+      return;
+    }
     panelRef.current = el;
     setPlacement(
       placeTooltip(
@@ -56,7 +72,7 @@ export function TooltipPanel({
     return () => {
       panelRef.current = null;
     };
-  }, [open.openId, open.anchor, open.side, panelRef]);
+  }, [open.openId, open.anchor, open.side, panelRef, onAnchorGone]);
 
   return (
     <motion.div

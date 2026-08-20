@@ -58,7 +58,7 @@ const NO_TOOLTIP_API: TooltipApi = { enter: () => {}, focus: () => {}, leave: ()
 export const TooltipContext = createContext<TooltipApi>(NO_TOOLTIP_API);
 
 /** Nothing bound, as one frozen object, so a re-render is not a new prop identity. */
-const NO_BINDING: TooltipBinding = {};
+const NO_BINDING: TooltipBinding = Object.freeze({});
 
 export type TooltipBinder = (content: ReactNode, options?: TooltipOptions) => TooltipBinding;
 
@@ -70,14 +70,26 @@ export type TooltipBinder = (content: ReactNode, options?: TooltipOptions) => To
  * `min-w-0` chain in a truncating flex cell or displace an absolutely positioned card corner, and
  * the edit at a call site is the one line the `title` attribute occupied.
  *
- * `content` of `null`, `undefined`, `false` or `""` binds nothing — the same shape as the
+ * `content` of `null`, `undefined`, `false`, `""` or `0` binds nothing — the same shape as the
  * `title={… ?? undefined}` that nine sites in this app already used, and as `cond && "words"`.
+ * **`0` is falsy on purpose, and it is the one departure from "whatever survives a truthiness
+ * check binds."** `cond && "words"` is the documented shape above, and a numeric `cond` — a
+ * count, a length — reaching this hook un-coerced is a call site that meant `cond > 0`, not one
+ * that meant the tooltip to read the single digit "0". A tooltip whose entire content is "0" is
+ * a bug at the call site far more often than it is an intent, so this hook refuses to bind it
+ * rather than faithfully show something almost nobody wanted.
  */
 export function useTooltip(): TooltipBinder {
   const api = useContext(TooltipContext);
   return useMemo<TooltipBinder>(
     () => (content, options = {}) => {
-      if (content === null || content === undefined || content === false || content === "") {
+      if (
+        content === null ||
+        content === undefined ||
+        content === false ||
+        content === "" ||
+        content === 0
+      ) {
         return NO_BINDING;
       }
       return {

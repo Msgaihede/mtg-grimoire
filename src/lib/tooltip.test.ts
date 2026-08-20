@@ -40,11 +40,16 @@ describe("placeTooltip", () => {
     });
   });
 
-  it("keeps the preferred side when neither direction fits", () => {
+  it("keeps the preferred side when neither direction fits, clamped against the edge it opens on", () => {
     const tall = { width: 200, height: 780 };
     const high: AnchorRect = { left: 600, right: 640, top: 10, bottom: 30, width: 40, height: 20 };
-    // Flipping a panel that does not fit either way only moves it; it opens where it was asked to.
-    expect(placeTooltip(high, tall, "top", VIEW).origin).toBe("origin-bottom");
+    // Flipping a panel that does not fit either way only moves it; it opens where it was asked
+    // to. `origin` alone does not exercise the main-axis clamp — the one branch this case exists
+    // for — so `top` is asserted too: without it, `top: 10 − 8 − 780 = −778` would place the
+    // panel off the top of the window rather than against its edge.
+    const placed = placeTooltip(high, tall, "top", VIEW);
+    expect(placed.origin).toBe("origin-bottom");
+    expect(placed.top).toBe(TOOLTIP_EDGE_GUTTER);
   });
 
   it("clamps a panel that would hang off the left of the window", () => {

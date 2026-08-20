@@ -23,14 +23,16 @@ export interface TooltipState {
   open: OpenTooltip | null;
   show: (next: Omit<OpenTooltip, "openId">) => void;
   /**
-   * Close, but only if `anchor` is the control currently showing.
+   * Close whatever is open — a scroll, a resize, a press, Escape, or the pointer leaving the
+   * control that is actually showing.
    *
-   * **The guard is the whole point.** Two controls a pixel apart in a table row produce
-   * `enter(B)` before `leave(A)`, and an unguarded close would take B's tooltip away the instant
-   * it appeared.
+   * **There is deliberately no anchor-guarded `hide(anchor)`.** Two controls a pixel apart in a
+   * table row produce `enter(B)` before `leave(A)`, and a `leave` that closed unconditionally
+   * would take B's tooltip away the instant it appeared — but `TooltipProvider.leave` already
+   * guards against exactly that, by anchor, before it ever calls down to the store
+   * (`if (current?.anchor !== anchor) return;`). A second guard here would be a second place
+   * carrying the same rule, one of them unreachable.
    */
-  hide: (anchor: HTMLElement) => void;
-  /** Close whatever is open — a scroll, a resize, a press, Escape. */
   hideAny: () => void;
 }
 
@@ -59,9 +61,6 @@ export const createTooltipStore = (): StoreApi<TooltipState> =>
       show: (next) => {
         opens += 1;
         set({ open: { ...next, openId: opens } });
-      },
-      hide: (anchor) => {
-        if (get().open?.anchor === anchor) set({ open: null });
       },
       // The `!== null` check is not a micro-optimisation: `hideAny` is called from a capture-phase
       // `scroll` listener, i.e. on every frame of every scroll in the app. Writing `null` over

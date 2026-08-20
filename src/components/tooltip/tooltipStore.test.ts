@@ -32,26 +32,6 @@ describe("the tooltip store", () => {
     expect(store.getState().open?.openId).toBe((first ?? 0) + 1);
   });
 
-  it("ignores a close aimed at a control that is not the one showing", () => {
-    // The pointer left A, but the tooltip on screen is B's: A's leave arriving late must not
-    // close it. Two controls a pixel apart in a table row produce exactly this order.
-    const store = createTooltipStore();
-    const a = anchorOf("a");
-    const b = anchorOf("b");
-    store.getState().show(shown(a));
-    store.getState().show(shown(b));
-    store.getState().hide(a);
-    expect(store.getState().open?.anchor).toBe(b);
-  });
-
-  it("closes when the control that is showing asks", () => {
-    const store = createTooltipStore();
-    const a = anchorOf("a");
-    store.getState().show(shown(a));
-    store.getState().hide(a);
-    expect(store.getState().open).toBeNull();
-  });
-
   it("closes whatever is open when the window asks", () => {
     const store = createTooltipStore();
     store.getState().show(shown(anchorOf("a")));
@@ -66,7 +46,6 @@ describe("the tooltip store", () => {
       writes += 1;
     });
     store.getState().hideAny();
-    store.getState().hide(anchorOf("a"));
     expect(writes).toBe(0);
   });
 
@@ -74,7 +53,7 @@ describe("the tooltip store", () => {
     const store = createTooltipStore();
     const a = anchorOf("a");
     store.getState().show(shown(a));
-    store.getState().hide(a);
+    store.getState().hideAny();
     store.getState().show(shown(a));
     expect(store.getState().open?.openId).toBe(2);
   });
