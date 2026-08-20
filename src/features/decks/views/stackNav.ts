@@ -10,8 +10,8 @@
  * needs a document.
  *
  * **The order it walks is the order the view draws**, which `StackView` derives from
- * `splitRail(groups)` as `flow` then `rail`, each group's `cards` in the order it already holds
- * them. Nothing here re-derives it: this takes the pile sizes already in that order, so the two
+ * `splitRail(groups)` as `command`, then `flow`, then `rail` — the command zones being the pinned
+ * pair at the head of the desk — each group's `cards` in the order it already holds them. Nothing here re-derives it: this takes the pile sizes already in that order, so the two
  * cannot disagree about what "the next pile" is. `deckWalk.ts` builds that same order for the
  * printings modal to step through, and the agreement is deliberate — a reader pressing
  * ArrowRight and a reader pressing "next printing" are walking one deck.
@@ -19,7 +19,8 @@
 
 /** Where the caret is, or where it is going: a pile in drawn order, and a card in that pile. */
 export interface StackPosition {
-  /** Which pile, in the order the view draws them — the flow, then the rail. */
+  /** Which pile, in the order the view draws them — the command zone, then the flow, then the
+   *  rail. */
   pile: number;
   /** Which card of that pile, in the order the pile already holds them. */
   card: number;

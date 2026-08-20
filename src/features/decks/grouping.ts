@@ -14,6 +14,25 @@
  * derived groups are built from the **active** cards only, and every **inactive category**
  * holding cards is then appended as itself, unchanged, in `sortOrder`.
  *
+ * **The command zones are the one exception, and they are the second half of that same
+ * sentence** — {@link COMMAND_ZONE_KINDS}. A commander is not a card in the curve; it is the card
+ * the curve was built *around*, played from a zone of its own before the deck is drawn from, and
+ * a companion is that same claim made from outside the deck. So under `manaValue` and `type` the
+ * `commander` and `companion` piles are never bucketed either: they are appended as themselves,
+ * exactly as {@link categoryGroup} builds them, and everything else buckets around them.
+ *
+ * **And they head the list in all three modes — `category` included — commander first and
+ * companion second.** Where a pile sits is otherwise the reader's own `sortOrder`, and this is
+ * the one place that is overruled, because these two are what the rest of the deck is read
+ * *against* rather than another pile of it. The order is the game's, not the seed's: the reader
+ * asked for commander above companion explicitly, and it is stated once — by
+ * {@link COMMAND_ZONE_KINDS}' own order — rather than spelled again in a comparator that could
+ * come to disagree with it. **A switched-off command zone is not in that run at all**: it counts
+ * toward nothing, so it is not what anything is read against, and it stays exactly where it is
+ * today — in the inactive tail under a derived grouping, in `sortOrder` under `category`. **An
+ * empty one is {@link drawsWhenEmpty}'s question and nobody else's**; the head run reorders the
+ * piles that are drawn and never decides which those are.
+ *
  * **A pile holding cards always draws; an empty one is a question about who made it** —
  * {@link drawsWhenEmpty}, which is the whole of that rule. It reads two facts the pile carries,
  * its `kind` and its `isAuto`, plus the one fact a pile cannot know about itself: whether the
@@ -359,6 +378,90 @@ export function drawsWhenEmpty(
 }
 
 /**
+ * The two zones a card is played **from** rather than **in**, in the order they are read.
+ *
+ * A commander is not a card in the curve — it is the card the curve was built around, on the
+ * table before the first draw — and a companion is the same claim made from outside the deck
+ * (CR 100.4a; EDH's companion is "effectively a 101st card"). So neither belongs in a heading
+ * derived from what the deck *contains*: a commander counted into `Mana value 4` is one more
+ * four-drop in the number the reader is using to decide whether they have too many, and it is
+ * the one card of the ninety-nine that is never drawn. Under `manaValue` and `type` these two
+ * piles are therefore appended as themselves, and under all three groupings they head the list.
+ *
+ * **The array's own order is the rule** — commander, then companion — and it is written here and
+ * nowhere else. {@link commandZoneRank} reads it by index, so the two facts this file needs
+ * about a kind (whether it is a command zone at all, and which of the two is read first) come
+ * out of one list rather than out of a set standing beside a comparator that could quietly stop
+ * agreeing with it.
+ *
+ * **It is deliberately not what {@link drawsWhenEmpty} branches on**, which is the near-miss
+ * worth naming: that function treats these same two kinds specially and gives them *opposite*
+ * answers — an empty commander pile draws where the format has a command zone, an empty
+ * companion pile never draws in any format — so a membership test there would fold two rules
+ * into one and lose the half that is about the format. Being played from a zone of its own is
+ * what these two share; what an *empty* one of them means is not.
+ */
+export const COMMAND_ZONE_KINDS: readonly CategoryKind[] = ["commander", "companion"];
+
+/**
+ * Whether a pile is played from a zone of its own — {@link COMMAND_ZONE_KINDS} membership,
+ * derived from that array rather than spelled a second time.
+ *
+ * It takes `CategoryKind | null` because both of the shapes this file asks about can be `null`:
+ * a derived group's `kind` (it has no rules role at all) and, in principle, nothing else — a
+ * `DeckCard` always carries its category's kind. `false` for `null` is the honest answer for
+ * both, since a heading over a mana value is not a zone anything is played from.
+ */
+export function isCommandZone(kind: CategoryKind | null): boolean {
+  return commandZoneRank(kind) >= 0;
+}
+
+/** Where a command zone sits among the command zones, and `-1` for a kind that is not one. It
+ *  is the index into {@link COMMAND_ZONE_KINDS}, which is the whole of why that array's order
+ *  *is* the commander-before-companion rule and there is no second place to correct. */
+function commandZoneRank(kind: CategoryKind | null): number {
+  return kind === null ? -1 : COMMAND_ZONE_KINDS.indexOf(kind);
+}
+
+/**
+ * The drawn piles, split into the run that heads the list and everything else.
+ *
+ * **Both of {@link buildGroups}' returns go through this**, which is the entire reason it is a
+ * function: the head rule is one rule in three grouping modes, and a second copy of it under
+ * `category` would be the mode that stopped agreeing the first time somebody adjusted the other.
+ *
+ * **Active only, and that is a rule rather than a convenience.** A switched-off command zone
+ * counts toward nothing — not size, not copy limits, not legality, not the allocator — so it is
+ * not what the rest of the deck is read against either, and it stays exactly where it was: in
+ * `sortOrder` under `category`, in the inactive tail under a derived grouping. That second half
+ * is worth stating at the tail's own site as well, and it is: the derived return filters its
+ * tail by `!isActive`, and nothing this function lifts out is inactive, so **the tail is
+ * unchanged by construction** rather than by two filters that happen to agree.
+ *
+ * **Stable, so `sortOrder` still breaks a tie.** The groups arrive in `sortOrder` and
+ * `Array.prototype.sort` has been stable since ES2019, so two piles of one kind would keep the
+ * reader's own order between them. Nothing can currently make a second one —
+ * `deck_category_create` takes `(deck_id, name)` and no kind, so `commander` and `companion` are
+ * only ever the two seeded zones — and the sort is written to survive the day that changes
+ * rather than to rely on it not having.
+ */
+function splitCommandZones(groups: readonly CardGroup[]): {
+  command: CardGroup[];
+  rest: CardGroup[];
+} {
+  const command: CardGroup[] = [];
+  const rest: CardGroup[] = [];
+  for (const group of groups) {
+    if (group.isActive && isCommandZone(group.kind)) command.push(group);
+    else rest.push(group);
+  }
+  return {
+    command: command.sort((a, b) => commandZoneRank(a.kind) - commandZoneRank(b.kind)),
+    rest,
+  };
+}
+
+/**
  * The deck, as headings and rows.
  *
  * @param cards every row of the variant on screen, in the read's own order
@@ -390,6 +493,14 @@ export function drawsWhenEmpty(
  * these headings counts copies and sums prices per group — the editor's column captions, the
  * curve, the stats strip — so a card counted twice makes the headings add up to more than the
  * deck, and the reader has no way to see which pile lied.
+ *
+ * **The command zones head every one of the three returns, and under a derived grouping their
+ * cards are in no bucket** — {@link COMMAND_ZONE_KINDS} and {@link splitCommandZones}. The same
+ * counting argument runs the other way there: a commander bucketed into the curve is a four-drop
+ * in a number the reader is reading to decide how many four-drops they have, and it is the one
+ * card that is on the table before the deck is drawn from. Skipping it costs nothing, because
+ * its pile is appended whole — the card moves to a different heading rather than off the screen,
+ * which is the thing the inactive-card skip beside it must never do.
  */
 export function buildGroups(
   cards: readonly DeckCard[],
@@ -429,7 +540,14 @@ export function buildGroups(
     .filter(([id]) => !known.has(id))
     .map(([, rows]) => strayGroup(sortCards(rows, sortBy)));
 
-  if (groupBy === "category") return [...categoryGroups, ...strays];
+  // The whole drawn list, with the active command zones lifted out of it and put in front in
+  // commander-then-companion order. Computed here rather than inside either arm because both
+  // returns below want it: under `category` the piles *are* the headings and this is the only
+  // thing that moves them; under a derived grouping it is also what keeps their cards out of
+  // the buckets, since a pile in `command` is a pile drawn whole.
+  const { command, rest } = splitCommandZones([...categoryGroups, ...strays]);
+
+  if (groupBy === "category") return [...command, ...rest];
 
   // Derived: the active cards are bucketed, and every switched-off pile is appended as
   // itself. Both halves are the rule. Bucketing an inactive card would count a Maybeboard
@@ -438,6 +556,13 @@ export function buildGroups(
   const derived = new Map<string, { order: number; group: CardGroup }>();
   for (const card of cards) {
     if (!card.categoryActive) continue;
+    // The second skip, and it is not the first one's reason. That one is about *counting* — an
+    // inactive card counts toward nothing, so bucketing it would put a Maybeboard card in the
+    // reader's curve. This one is about what a command zone *is*: a commander is not a card in
+    // the curve, it is the card the curve was built around. Both are safe for the same reason —
+    // the pile itself is appended whole, in `command` above for this one and in the `!isActive`
+    // tail below for that one — so neither skip can take a card off the screen.
+    if (isCommandZone(card.categoryKind)) continue;
     const bucket =
       groupBy === "manaValue"
         ? manaValueBucket(card, separateX)
@@ -481,5 +606,10 @@ export function buildGroups(
       ...totals(group.cards),
     }));
 
-  return [...derivedGroups, ...[...categoryGroups, ...strays].filter((group) => !group.isActive)];
+  // The command zones, the buckets, then every switched-off pile as itself. **The tail is
+  // unchanged by construction rather than by agreement**: it is `!isActive`, and
+  // `splitCommandZones` lifts out only *active* piles, so nothing that reached `command` could
+  // ever have been in it — a switched-off Commander is in `rest`, is inactive, and is appended
+  // here exactly where it was before the head run existed.
+  return [...command, ...derivedGroups, ...rest.filter((group) => !group.isActive)];
 }
