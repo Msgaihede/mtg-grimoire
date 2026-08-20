@@ -376,6 +376,8 @@ pub fn run() {
             tags::oracle::oracle_tags_for_printings,
             tags::art::art_tags_refresh,
             tags::art::art_tags_status,
+            tags::query::tag_search,
+            tags::query::tag_children,
             export::export_write_file,
             reset::collection_clear,
             reset::wishlist_clear,

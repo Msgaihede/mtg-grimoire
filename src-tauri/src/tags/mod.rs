@@ -42,6 +42,7 @@
 
 pub mod art;
 pub mod oracle;
+pub mod query;
 
 use crate::sync::AppState;
 use flate2::read::GzDecoder;
