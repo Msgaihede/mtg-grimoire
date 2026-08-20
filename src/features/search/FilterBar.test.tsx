@@ -283,7 +283,6 @@ describe("FilterBar, greyed by its facets", () => {
     const counted = screen.getByRole("button", {
       name: "Cards with X in their mana cost — 812 printings",
     });
-    expect(counted).toHaveAttribute("title", "Cards with X in their mana cost — 812 printings");
     expect(counted).toHaveTextContent("X");
 
     rerender(<FilterBar search={search({ facets: facets({ manaX: 0 }) })} />);
@@ -390,7 +389,6 @@ describe("FilterBar, greyed by its facets", () => {
     );
 
     const white = screen.getByRole("button", { name: "White — 12,481 printings" });
-    expect(white).toHaveAttribute("title", "White — 12,481 printings");
     expect(white.textContent).toBe("");
 
     const seven = screen.getByRole("button", { name: "Mana value 7 — nothing in this search" });
@@ -817,12 +815,12 @@ describe("FilterBar, its sort picker", () => {
     const button = dirButton();
     expect(button).toBeDisabled();
     expect(button).toHaveAccessibleName("Sort direction — no order picked");
-    expect(button).toHaveAttribute("title", "Sort direction — no order picked");
   });
 
   /** The name says the state **and** what pressing does, because an arrow is the whole of what
    *  is drawn on the button — an arrow pointing up reads as "this is ascending" to one reader
-   *  and "press to go up" to the next. One string, spent as the name and as the `title`. */
+   *  and "press to go up" to the next. One string, spent as the name and — since the tooltip
+   *  sweep — as the hover tooltip too (`FilterBar.tsx`'s wrapped `useTooltip` binding). */
   it("enables the direction button once an order is picked, and says which way it runs", () => {
     render(
       <FilterBar search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })} />,
@@ -831,7 +829,6 @@ describe("FilterBar, its sort picker", () => {
     const button = dirButton();
     expect(button).not.toBeDisabled();
     expect(button).toHaveAccessibleName("Sort direction: ascending — press for descending");
-    expect(button).toHaveAttribute("title", "Sort direction: ascending — press for descending");
   });
 
   it("says the other sentence when the list runs the other way", () => {

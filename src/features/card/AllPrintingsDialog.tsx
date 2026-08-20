@@ -74,6 +74,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { DeckDialog, type DeckDialogFlanks } from "@/features/decks/DeckDialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
@@ -261,31 +262,43 @@ function StepChevron({
   const Glyph = direction === "previous" ? ChevronLeft : ChevronRight;
   const label = `${direction === "previous" ? "Previous" : "Next"} card in ${listLabel}`;
   const name = stop === null ? label : `${label}, ${stop.name}`;
+  const tip = useTooltip();
 
   return (
-    <button
-      type="button"
-      disabled={stop === null}
-      aria-label={name}
-      title={name}
-      onClick={() => {
-        // The `disabled` attribute above already refuses this press from both hands; the test is
-        // what narrows `stop` for the type checker, and it costs nothing to have both.
-        if (stop !== null) onStep(stop);
-      }}
-      // A filled disc rather than a bare glyph: it is drawn on the scrim, which is the app at 75%
-      // — a 1px outline with a card wall showing through it is `QuantityStepper`'s own
-      // "disappears over art of any brightness", one layer up. `bg-bg` is the app's own ground, so
-      // the disc reads as part of the dialog rather than as part of the view behind it.
-      className={cn(
-        "grid size-9 place-items-center rounded-full border border-border bg-bg text-dim",
-        "hover:text-text disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100",
-        PRESS,
-        FOCUS,
-      )}
-    >
-      <Glyph className="size-4" aria-hidden="true" />
-    </button>
+    // **Wrapped, where nothing else here is.** `aria-label` already carries the whole of what
+    // this button says, so the tooltip is `describes: false` — pure redundancy for a pointer that
+    // cannot read the name. At the end of the walk the button is `disabled`, and a `disabled`
+    // element fires no pointer events at all: `{...tip()}` bound to the button directly would be
+    // silently inert exactly there, which is a real loss (Chromium still draws a native `title`
+    // on a disabled control today) rather than a no-op. The wrapper has no box of its own beyond
+    // the button's, so hovering the disc still hits *something* — the disabled button is skipped
+    // by hit-testing and the span underneath it answers instead — while an enabled button keeps
+    // working exactly as before, because entering the span's rect (which the button fills) fires
+    // the span's handlers too.
+    <span {...tip(name, { describes: false })}>
+      <button
+        type="button"
+        disabled={stop === null}
+        aria-label={name}
+        onClick={() => {
+          // The `disabled` attribute above already refuses this press from both hands; the test is
+          // what narrows `stop` for the type checker, and it costs nothing to have both.
+          if (stop !== null) onStep(stop);
+        }}
+        // A filled disc rather than a bare glyph: it is drawn on the scrim, which is the app at 75%
+        // — a 1px outline with a card wall showing through it is `QuantityStepper`'s own
+        // "disappears over art of any brightness", one layer up. `bg-bg` is the app's own ground, so
+        // the disc reads as part of the dialog rather than as part of the view behind it.
+        className={cn(
+          "grid size-9 place-items-center rounded-full border border-border bg-bg text-dim",
+          "hover:text-text disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100",
+          PRESS,
+          FOCUS,
+        )}
+      >
+        <Glyph className="size-4" aria-hidden="true" />
+      </button>
+    </span>
   );
 }
 
@@ -512,6 +525,7 @@ function Body({
   // read in this app, so switching refetches rather than re-labelling numbers from another feed.
   const { marketplace } = useMarketplace();
   const viewCard = useAppStore((s) => s.setSelectedCardId);
+  const tip = useTooltip();
 
   const query = useQuery({
     // The page size is part of the key, and deliberately: the card pane reads the same card's
@@ -660,12 +674,12 @@ function Body({
     (row: PrintingRow) => (
       <span
         className="shrink-0 font-mono tabular-nums"
-        title={`Cheapest finish at ${marketplace.label}`}
+        {...tip(`Cheapest finish at ${marketplace.label}`)}
       >
         {formatPrice(cheapestPrice(row.finishPrices), marketplace.currency)}
       </span>
     ),
-    [marketplace.label, marketplace.currency],
+    [marketplace.label, marketplace.currency, tip],
   );
 
   /**
