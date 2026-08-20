@@ -56,6 +56,19 @@
  * plugin is a real Tauri command, not a browser API guaranteed to succeed), so `handleCopy`
  * reports a rejection through the same `role="alert"` line `handleSaveAs`'s refusal uses, rather
  * than swallowing it — the "reported, not fatal" rule above is not just the save button's.
+ *
+ * **The field row is `availableFields(format, surface)`, and the choice is remembered per
+ * `surface`** (Task 9). Two independent declarations — what the format has a channel for, what
+ * the surface has a fact about — and the dialog draws only their intersection, so a wishlist's
+ * row never offers `Category` and an Arena export's never offers `Condition`. `ALWAYS`
+ * (`quantity`, `name`) is never drawn: a checkbox that can never move is furniture. Switching
+ * format re-derives the field set from that format's own defaults rather than carrying the old
+ * selection across — a set chosen for CSV means nothing to Arena — and both the format radios and
+ * a field checkbox clear `copied` for the Copied-status reason above: the preview redraws on
+ * either change, the clipboard does not. `useAppStore`'s `exportPrefs` is keyed by `surface`
+ * rather than held as local state, which is what lets a reader who always exports the collection
+ * as a condition-bearing CSV find it that way again without a deck export dragging its own
+ * Moxfield habit onto it.
  */
 import { useCallback, useId, useMemo, useState, type JSX } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -65,9 +78,17 @@ import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
-import { defaultFields } from "../fields";
+import {
+  ALWAYS,
+  availableFields,
+  defaultFields,
+  TRANSFER_FIELDS,
+  type TransferFieldId,
+} from "../fields";
+import type { TransferSurface } from "../fields";
 import type { TransferCard } from "../TransferCard";
 import {
   EXPORT_FORMATS,
@@ -82,6 +103,11 @@ export interface ExportDialogProps {
   open: boolean;
   /** What is being exported — "Removal", "Atraxa". The dialog's title reads `Export "<title>"`. */
   subject: string;
+  /** Which surface this is exporting from — the deck editor, the collection, the wishlist.
+   *  Narrows the field row to what that surface can say (`availableFields`) and keys the
+   *  remembered format and field choice (`useAppStore`'s `exportPrefs`) so a deck export is
+   *  never dragged into a collection export's own setting. */
+  surface: TransferSurface;
   /** The cards. **An argument, never something this dialog fetches** — which is what lets a
    *  later deck-level export reuse it whole. */
   cards: readonly TransferCard[];
@@ -105,6 +131,7 @@ export interface ExportDialogProps {
 export function ExportDialog({
   open,
   subject,
+  surface,
   cards,
   suggestedFileName,
   onDismiss,
@@ -119,7 +146,7 @@ export function ExportDialog({
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <Body cards={cards} suggestedFileName={suggestedFileName} />
+      <Body surface={surface} cards={cards} suggestedFileName={suggestedFileName} />
     </Dialog>
   );
 }
@@ -127,13 +154,14 @@ export function ExportDialog({
 /** The body proper — mounted only while the dialog is open, which is what makes the chosen
  *  format and the copy/save status a session rather than something an effect has to reset. */
 function Body({
+  surface,
   cards,
   suggestedFileName,
 }: {
+  surface: TransferSurface;
   cards: readonly TransferCard[];
   suggestedFileName: string;
 }) {
-  const [format, setFormat] = useState<ExportFormat>("plain");
   /**
    * The preview's disclosure, **shut on every open**.
    *
@@ -155,11 +183,38 @@ function Body({
    *  control failed decides the wording. */
   const [error, setError] = useState<string | null>(null);
 
-  // **Task 9's field-picker state arrives later** — for now every format opens on its own deck
-  // defaults, which is what makes this dialog compile against `formatExport`'s new signature
-  // without changing what a reader sees: `defaultFields(format, "deck")` is the same set that
-  // reproduced today's fixed-shape output in `format.test.ts`.
-  const fields = useMemo(() => defaultFields(format, "deck"), [format]);
+  /** The format and field set this surface was last exported with — `useAppStore`'s
+   *  `exportPrefs`, keyed by `surface` so a deck export is never dragged into the collection's. */
+  const prefs = useAppStore((s) => s.exportPrefs[surface]);
+  const setPrefs = useAppStore((s) => s.setExportPrefs);
+  const { format, fields } = prefs;
+  /** The fields this format and this surface share — the whole of what decides which checkboxes
+   *  draw, `ALWAYS` excluded (see the row below). */
+  const available = useMemo(() => availableFields(format, surface), [format, surface]);
+
+  /** Switching format re-derives the field set from that format's defaults rather than carrying
+   *  the old selection across: a set chosen for CSV means nothing to Arena, and the intersection
+   *  would silently drop most of it anyway. */
+  const chooseFormat = useCallback(
+    (next: ExportFormat) => {
+      setPrefs(surface, { format: next, fields: defaultFields(next, surface) });
+      // The preview redraws for the new format; the clipboard does not. Left standing,
+      // "Copied." would sit beside text it is no longer an honest claim about.
+      setCopied(false);
+    },
+    [setPrefs, surface],
+  );
+
+  const toggleField = useCallback(
+    (id: TransferFieldId) => {
+      const on = fields.includes(id);
+      setPrefs(surface, { format, fields: on ? fields.filter((f) => f !== id) : [...fields, id] });
+      // The preview redraws; the clipboard does not — same claim, same reason as the format row.
+      setCopied(false);
+    },
+    [fields, format, setPrefs, surface],
+  );
+
   const text = useMemo(() => formatExport(cards, format, fields), [cards, format, fields]);
   /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
    *  it is a claim about the text on screen and goes stale the moment that changes. */
@@ -223,12 +278,7 @@ function Body({
             type="button"
             role="radio"
             aria-checked={format === f}
-            onClick={() => {
-              setFormat(f);
-              // The preview redraws for the new format; the clipboard does not. Left standing,
-              // "Copied." would sit beside text it is no longer an honest claim about.
-              setCopied(false);
-            }}
+            onClick={() => chooseFormat(f)}
             className={cn(
               "h-8 shrink-0 rounded-md border px-3 text-sm",
               "transition-colors duration-150 motion-reduce:transition-none",
@@ -242,6 +292,29 @@ function Body({
           </button>
         ))}
       </div>
+
+      {/* Only the fields this format and this surface share — `availableFields` is the whole of
+          the rule, so nothing here is a list to remember to grow. `ALWAYS` is not drawn: a line
+          with no count and no name is not a card, and a disabled checkbox that can never move is
+          furniture rather than a control. */}
+      {available.filter((id) => !ALWAYS.includes(id)).length > 0 && (
+        <fieldset className="flex flex-wrap gap-x-4 gap-y-2">
+          <legend className="mb-1 text-sm text-dim">Fields</legend>
+          {available
+            .filter((id) => !ALWAYS.includes(id))
+            .map((id) => (
+              <label key={id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={fields.includes(id)}
+                  onChange={() => toggleField(id)}
+                  className={cn("size-4 accent-accent", FOCUS)}
+                />
+                {TRANSFER_FIELDS[id].label}
+              </label>
+            ))}
+        </fieldset>
+      )}
 
       {/* Not a `role="alert"`: nothing failed. It is a fact about the format the reader just
           chose, and it has to be on screen before they press Copy rather than after — a

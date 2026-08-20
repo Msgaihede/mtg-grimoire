@@ -3394,6 +3394,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <ExportDialog
         open={layer?.kind === "export"}
         subject={exported.subject}
+        surface="deck"
         cards={exported.cards}
         suggestedFileName={exported.fileName}
         onDismiss={dismiss}

@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
+import { defaultFields } from "@/features/transfer/fields";
+import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
+import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
 /** The five top-level destinations in the sidebar. */
@@ -276,6 +279,18 @@ interface AppState {
   /** Publish the walk. One field, like {@link openAllPrintings} — nothing about the open card,
    *  the open deck or the view is this write's business. */
   setCardWalk: (walk: CardWalk) => void;
+  /**
+   * The format and field set each surface was last exported with.
+   *
+   * **Per surface rather than globally**: a deck export wants Moxfield's printing line and a
+   * collection export wants a CSV with a condition column, and one remembered setting would
+   * make each of them wrong half the time.
+   */
+  exportPrefs: Record<TransferSurface, { format: ExportFormat; fields: TransferFieldId[] }>;
+  setExportPrefs: (
+    surface: TransferSurface,
+    prefs: { format: ExportFormat; fields: TransferFieldId[] },
+  ) => void;
 }
 
 /**
@@ -464,4 +479,13 @@ export const useAppStore = create<AppState>((set) => ({
   // those two are *navigations*, and this is a fact about what is drawn, which only the surface
   // drawing it knows. A second writer would be a second place for the two to disagree.
   setCardWalk: (walk) => set({ cardWalk: walk.stops.length === 0 ? NO_WALK : walk }),
+  // A collection opens on CSV because that is the only format that can carry a condition, and a
+  // collection without conditions is a card list rather than a record of what the reader owns.
+  exportPrefs: {
+    deck: { format: "plain", fields: defaultFields("plain", "deck") },
+    collection: { format: "csv", fields: defaultFields("csv", "collection") },
+    wishlist: { format: "plain", fields: defaultFields("plain", "wishlist") },
+  },
+  setExportPrefs: (surface, prefs) =>
+    set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
 }));

@@ -20,6 +20,7 @@ vi.mock("@/lib/clipboard", () => ({ copyText }));
 import { ipc } from "@/lib/ipc";
 import { save as saveMock } from "@tauri-apps/plugin-dialog";
 import { copyText as copyTextMock } from "@/lib/clipboard";
+import { useAppStore } from "@/lib/store";
 import { ExportDialog } from "./ExportDialog";
 
 /**
@@ -52,6 +53,22 @@ const BOLT = exportCard({
 const noop = () => {};
 
 /**
+ * The props every test in this file starts from, `render`ed with `{...props}` and whatever a
+ * given test overrides. `surface` is `"deck"` — every card here is shaped like a deck row
+ * through `exportCard`'s own defaults (a category name, a kind, a switch) — so a test that wants
+ * a different surface passes one of its own, cards included.
+ */
+const props = {
+  open: true,
+  subject: "Removal",
+  cards: [BOLT] as readonly TransferCard[],
+  suggestedFileName: "Removal",
+  onDismiss: noop,
+  onClose: noop,
+  surface: "deck" as const,
+};
+
+/**
  * Open the preview, which starts shut.
  *
  * Every assertion about the *text* of an export goes through this rather than through a `<pre>`
@@ -69,20 +86,17 @@ beforeEach(() => {
   save.mockResolvedValue(null);
   copyText.mockReset();
   copyText.mockResolvedValue(undefined);
+  // The chosen format and fields now live in `useAppStore`'s `exportPrefs` rather than in this
+  // component's own `useState`, so — unlike before — they survive from one test to the next
+  // unless this file resets the store itself.
+  useAppStore.setState(useAppStore.getInitialState());
 });
 
 describe("ExportDialog", () => {
   it("previews the plain format by default", async () => {
     const user = userEvent.setup();
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await showList(user);
     expect(await screen.findByText("2 Lightning Bolt")).toBeInTheDocument();
@@ -91,14 +105,7 @@ describe("ExportDialog", () => {
   it("opens with the decklist shut, and draws none of it until it is asked for", async () => {
     const user = userEvent.setup();
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     // Shut is **unmounted**, not hidden: a `<pre>` still holding the text would let every
     // assertion below pass over a preview no reader can see.
@@ -120,14 +127,7 @@ describe("ExportDialog", () => {
 
   it("counts the lines of the file rather than the cards in the pile", async () => {
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     // Moxfield writes a `Deck` heading over the one card, so the file is two lines and the pile
     // is one — and the trailing newline every export ends with is not a third.
@@ -140,14 +140,7 @@ describe("ExportDialog", () => {
   it("redraws the preview when the format changes", async () => {
     const user = userEvent.setup();
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await showList(user);
     await user.click(await screen.findByRole("radio", { name: "Moxfield" }));
@@ -159,14 +152,7 @@ describe("ExportDialog", () => {
 
   it("offers every format format.ts writes, in that file's own order", async () => {
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     // The row maps `EXPORT_FORMATS`, so this reads the array rather than a list drawn by hand —
     // an eighth writer reaches the reader without an edit here. Compared against the array
@@ -180,7 +166,7 @@ describe("ExportDialog", () => {
     const user = userEvent.setup();
     render(
       <ExportDialog
-        open
+        {...props}
         subject="Atraxa"
         cards={[
           exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
@@ -192,8 +178,6 @@ describe("ExportDialog", () => {
           }),
         ]}
         suggestedFileName="Atraxa"
-        onDismiss={noop}
-        onClose={noop}
       />,
     );
     // Copies, not rows: six basic lands on one row are six cards missing from the file.
@@ -210,15 +194,13 @@ describe("ExportDialog", () => {
     const user = userEvent.setup();
     render(
       <ExportDialog
-        open
+        {...props}
         subject="Atraxa"
         cards={[
           exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
           exportCard({ name: "Mox Amber", categoryName: "Cuts", categoryActive: false }),
         ]}
         suggestedFileName="Atraxa"
-        onDismiss={noop}
-        onClose={noop}
       />,
     );
     await user.click(await screen.findByRole("radio", { name: "MTGO" }));
@@ -231,14 +213,7 @@ describe("ExportDialog", () => {
     const user = userEvent.setup();
     const copy = vi.mocked(copyTextMock);
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await user.click(await screen.findByRole("radio", { name: "CSV" }));
     await user.click(screen.getByRole("button", { name: /Copy/ }));
@@ -250,14 +225,7 @@ describe("ExportDialog", () => {
   it("clears the Copied status when the format changes, since it would misrepresent what's on the clipboard", async () => {
     const user = userEvent.setup();
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await user.click(screen.getByRole("button", { name: /Copy/ }));
     expect(await screen.findByRole("status")).toHaveTextContent("Copied.");
@@ -272,14 +240,7 @@ describe("ExportDialog", () => {
     const user = userEvent.setup();
     vi.mocked(copyTextMock).mockRejectedValueOnce(new Error("clipboard access denied"));
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await user.click(screen.getByRole("button", { name: /Copy/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/clipboard access denied/);
@@ -291,14 +252,7 @@ describe("ExportDialog", () => {
     const user = userEvent.setup();
     vi.mocked(saveMock).mockResolvedValue("D:\\decks\\Removal.txt");
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await user.click(screen.getByRole("button", { name: /Save as/ }));
     expect(vi.mocked(ipc.exportWriteFile)).toHaveBeenCalledWith(
@@ -312,14 +266,7 @@ describe("ExportDialog", () => {
     // The picker answers null on cancel. Writing to "null" is the bug this pins.
     vi.mocked(saveMock).mockResolvedValue(null);
     render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
+      <ExportDialog {...props} />,
     );
     await user.click(screen.getByRole("button", { name: /Save as/ }));
     expect(vi.mocked(ipc.exportWriteFile)).not.toHaveBeenCalled();
@@ -330,32 +277,46 @@ describe("ExportDialog", () => {
     vi.mocked(saveMock).mockResolvedValue("D:\\decks\\Removal.txt");
     vi.mocked(ipc.exportWriteFile).mockRejectedValue("could not write: access denied");
     const onDismiss = vi.fn();
-    render(
-      <ExportDialog
-        open
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={onDismiss}
-        onClose={noop}
-      />,
-    );
+    render(<ExportDialog {...props} onDismiss={onDismiss} />);
     await user.click(screen.getByRole("button", { name: /Save as/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/access denied/);
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("mounts nothing while closed", () => {
-    render(
-      <ExportDialog
-        open={false}
-        subject="Removal"
-        cards={[BOLT]}
-        suggestedFileName="Removal"
-        onDismiss={noop}
-        onClose={noop}
-      />,
-    );
+    render(<ExportDialog {...props} open={false} />);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers only the fields this format and this surface share", async () => {
+    const user = userEvent.setup();
+    render(<ExportDialog {...props} surface="wishlist" />);
+    await user.click(screen.getByRole("radio", { name: "Archidekt" }));
+    // A wishlist has no piles, so the format's bracket has nothing to put in it.
+    expect(screen.queryByRole("checkbox", { name: "Category" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Collector number" })).toBeInTheDocument();
+  });
+
+  it("redraws the preview when a field is switched off", async () => {
+    const user = userEvent.setup();
+    // `exportCard()`'s own defaults are Sol Ring, LTC, 285 — the base `props.cards` is `[BOLT]`
+    // (Lightning Bolt) instead, which the exact-string CSV and plain-text assertions above pin,
+    // so this test names the card its own assertions are about.
+    render(<ExportDialog {...props} cards={[exportCard()]} surface="deck" />);
+    await user.click(screen.getByRole("radio", { name: "Moxfield" }));
+    await user.click(screen.getByRole("button", { name: /Show decklist/ }));
+    expect(screen.getByText(/Sol Ring \(LTC\) 285/)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Set code" }));
+    expect(screen.queryByText(/\(LTC\)/)).not.toBeInTheDocument();
+  });
+
+  it("clears the Copied claim when a field moves, not only when the format does", async () => {
+    // The clipboard still holds the old text; the sentence beside it would stop being true.
+    const user = userEvent.setup();
+    render(<ExportDialog {...props} surface="deck" />);
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await screen.findByText("Copied.")).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Finish" }));
+    expect(screen.queryByText("Copied.")).not.toBeInTheDocument();
   });
 });

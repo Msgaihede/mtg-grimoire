@@ -158,6 +158,7 @@ const meta = {
   args: {
     open: true,
     subject: "Ramp",
+    surface: "deck",
     cards: CARDS,
     suggestedFileName: "Ramp",
     onDismiss: fn(),
