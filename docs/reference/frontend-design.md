@@ -2064,11 +2064,30 @@ that will retire the rest of `title` has to read every site rather than pattern-
 | a **description** of something already named | the default: `aria-describedby` while the panel is open |
 | **redundant** — `whenClipped`, or a mark whose words are already visible text | `describes: false`; the panel is `aria-hidden` |
 
-`CollectionTable.tsx`'s remove button is the shipped example of the first row: it carried
-`title="Remove from your collection"` with no `aria-label` of its own, so simply deleting the
-attribute would have left an icon-only button with no accessible name at all. It now carries
-`aria-label="Remove {name} ({finish}, {condition}) from your collection"` and binds
-`{...tip("Remove from your collection", { describes: false })}`.
+**No shipped site is an example of the first row yet** — every converted site that carried an
+`aria-label` already had one before this task touched it. `CollectionTable.tsx`'s remove button
+is the shipped example of the *third* row instead: `title="Remove from your collection"` sat
+beside `aria-label="Remove {name} ({finish}, {condition}) from your collection"` from the day the
+file was written (`3a66119`, 2026-08-05, confirmed by `git show`) — never the button's only name,
+always redundant with a longer one it already had. It now binds
+`{...tip("Remove from your collection", { describes: false })}` and keeps the `aria-label`
+untouched. (This corrects an earlier version of this paragraph, which claimed the button had no
+`aria-label` before this task and would have lost its name outright — checked against source
+history and found false; the design doc's own §4 carried the same error and is corrected there.)
+
+**What the remaining sites *do* have three of, all in the second row, is a title that is only
+ever a conditional description of a control already named some other way** —
+`AppShell.tsx:378`, `DeckSearchPanel.tsx:412` and `DeckStats.tsx:779`, each a `<button>` with its
+own visible text (a nav label, "Search cards", "Send missing to wishlist") whose `title` appears
+in exactly one state: a card in the air over a nav entry that cannot take it, a docked panel with
+no room, a shortfall already on the wishlist. None is icon-only, so none risks losing its name —
+but `AppShell.tsx`'s is a sharper trap than a missing `aria-label` would have been: its own
+comment records that the sentence is never actually *shown* as a native tooltip at all, because
+Chromium freezes `:hover` at a drag's origin for the whole gesture, so mid-drag a reader gets the
+words only through the accname spec's description fallback. `useTooltip()` opens on a hover the
+reader is equally not producing during that same gesture, so this site is not the mechanical
+`title` → `tip()` swap the other four proof sites were, and converting it is deliberately left
+for whoever does that one rather than folded into this task.
 
 **`whenClipped` never describes, on principle rather than as a default that happens to be set.**
 The text a `whenClipped` tooltip repeats is already complete in the DOM, and therefore in the
@@ -2103,10 +2122,19 @@ count.** Five call sites were converted as proof — a truncated table cell, an 
 icon-only button, a shared header's description (`SortableHeader`, so the change reached every
 sortable table at once), and one drawn inside a `DeckDialog` to prove `z-46` actually clears a
 real `z-45` scrim rather than only a Storybook decorator — and the rest of the app's hints are
-still native `title` attributes and SVG `<title>` elements, left for a later PR. Measured at
-`2cbccbb` (`grep -rn "\btitle=\|<title>" src --include=*.tsx | grep -v "\.test\.tsx\|\.stories\.tsx"`):
-**108** `title=` occurrences across **53** files and **8** SVG `<title>` elements remain — *more*
-`title=` sites than the design doc's own count at `06572dc` (102 across 48), despite five having
-been converted away, because the two commits are days and several unrelated merges apart and
-this app's chrome keeps growing. That is this file's own rule about counts, caught in the act:
-a count is a fact about a tree, re-measure before repeating either number.
+still native `title` attributes and SVG `<title>` elements, left for a later PR.
+
+Measured at `e4fcf59` with a scan that tracks string/bracket depth rather than one that slices an
+element's source at its first `>` — the bug that produced this section's first, wrong draft (see
+above) — **108** `title=` occurrences across **53** files, **28** of those on a `<button>` and
+**3** with no `aria-label` on the same element (all three named above, none icon-only), and **2**
+real SVG `<title>` elements (not 8 — the other six matches are prose in doc comments quoting
+`` `<title>` `` in backticks, which a plain-text grep cannot tell from a rendered element). The
+`title=` figure is still *more* `title=` sites than the design doc's own count at `06572dc` (102
+across 48), despite five having been converted away, because the two commits are days and several
+unrelated merges apart and this app's chrome keeps growing — that half of this paragraph was
+re-checked and holds. The button/aria-label and SVG-`<title>` figures did not: both were wrong in
+the first commit of this section, for two different reasons, and both are corrected here and in
+`docs/superpowers/specs/2026-08-20-tooltip-component-design.md` §4/§7, which carried the same two
+bugs first. A count is a fact about a tree — and, this time, also a fact about the script that
+produced it; re-measure before repeating any of these four numbers.

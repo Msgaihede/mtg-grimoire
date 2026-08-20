@@ -153,11 +153,38 @@ height comparison and there are none.)
 
 ## 4. What a tooltip means to a screen reader
 
-`title` does two jobs at once, and deleting it deletes both. Measured at `06572dc`: **27 of the
-102 sit on a `<button>`, and 12 of those carry no `aria-label` on the same element.** Most of the
-twelve have visible text, but `CollectionTable.tsx:230` (`"Remove from your collection"`) and
-`WishlistTable.tsx:212` are icon-only — delete the attribute and those buttons have no accessible
-name at all, and **nothing in the suite goes red for it.**
+`title` does two jobs at once, and deleting it deletes both — but the first cut at measuring how
+often the naming job would break was itself wrong, and the corrected figure tells a smaller,
+different story than this section originally told.
+
+**Corrected at `e4fcf59`.** The original count above sliced each element's source at its first
+`>` to find its attributes, which truncates before `aria-label` on any button whose `onClick`
+(or any other attribute) is written as an arrow function — an arrow's `=>` *is* a `>`. A
+brace/string-aware scan instead of a text slice finds: of **108** `title=` sites, **28** sit on a
+`<button>`, and **3** of those carry no `aria-label` on the same element — not 12. All three are
+`AppShell.tsx:378`, `DeckSearchPanel.tsx:412` and `DeckStats.tsx:779`, and **none is icon-only**:
+each button already has its own visible text (a nav label, "Search cards", "Send missing to
+wishlist"), and the `title` is a *conditional* extra description — "cannot drop a card here", "not
+enough room", "already on your wishlist" — present only in one state. **The two sites this
+section originally named are not examples of the failure it described at all**:
+`CollectionTable.tsx:230` and `WishlistTable.tsx:212` both already carried their own `aria-label`,
+distinct from `title`, since before this file's own measurement commit `06572dc` — confirmed by
+reading `git show 39051c5:src/features/collection/CollectionTable.tsx` and today's
+`WishlistTable.tsx` directly. So "delete the attribute and those buttons have no accessible name
+at all" was never true of either. The classification step below is still the right one — a
+`title` can still be an only name somewhere this app hasn't been read yet — but no shipped site
+demonstrates the icon-only-button failure this section used to illustrate it with, and none
+should be invented to stand in for one.
+
+What the three real sites show instead is a different and more interesting trap: a `title` that
+is only ever a *description* of an already-named control, present in exactly one state.
+`AppShell.tsx`'s is the sharpest case, and its own comment already records why: the sentence is
+never actually shown as a native tooltip at all, because Chromium freezes `:hover` at the drag's
+origin for the whole gesture — so mid-drag, a reader gets the words only through the accname
+spec's description fallback, never through a hover. A pointer-driven `useTooltip()` binding needs
+a hover the reader is equally not producing during that same gesture, so converting this site is
+not the mechanical `title` → `tip()` swap the other proof sites were; it needs its own look, not
+a place in this task's sweep.
 
 So the sweep classifies each site, and the option it picks is the classification:
 
@@ -177,7 +204,14 @@ on these elements, so it will not fight over it.
 text in the DOM is complete and the accessibility tree already has all of it. Only the *paint* is
 cut off. A tooltip repeating it would make a screen reader say the set name twice.
 
-### The eight SVG `<title>` elements
+### The two SVG `<title>` elements
+
+**Also corrected at `e4fcf59`**: the "eight" this heading used to say counted every occurrence of
+the literal text `<title>` in production `.tsx`, and six of the eight are prose — `CardArt.tsx`,
+`FinishMark.tsx`, `GameChangerMark.tsx` and `ExportDialog.tsx` each explain the mechanism in a
+comment that quotes `` `<title>` `` in backticks, and a plain-text grep cannot tell a backtick
+quotation from a rendered element. There are exactly **two** real ones, which is what this
+section's own next sentence already said without anyone noticing the heading disagreed with it.
 
 `FinishMark` and `GameChangerMark` draw the glyph; the words move to whoever draws the glyph,
 because that is also where `pointer-events` is decided. **`pointer-events` inherits, so a `<title>`
@@ -251,17 +285,21 @@ the panel grows from the corner nearest its trigger. No arrow — neither `Conte
 
 ## 7. What the sweep touches
 
-Measured at `06572dc`, production `.tsx` only:
+Measured at `06572dc` when this section was written; **the middle three rows were wrong and are
+corrected below at `e4fcf59`, for §4's reason** — the original script sliced each element at its
+first `>` (undercounting `aria-label` on a button whenever an earlier attribute held an arrow
+function) and counted every prose mention of `<title>` alongside the real elements. Production
+`.tsx` only:
 
-| | count |
-| --- | --- |
-| `title=` occurrences | 102, across 48 files |
-| …of those, on a `<button>` | 27 |
-| …of those, with no `aria-label` on the same element | 12 |
-| SVG `<title>` elements | 8 |
-| `*ByTitle` queries in tests and stories | 17 |
+| | original (`06572dc`) | corrected (`e4fcf59`) |
+| --- | --- | --- |
+| `title=` occurrences | 102, across 48 files | 108, across 53 files |
+| …of those, on a `<button>` | 27 | 28 |
+| …of those, with no `aria-label` on the same element | 12 | **3** |
+| SVG `<title>` elements | 8 | **2** |
+| `*ByTitle` queries in tests and stories | 17 | not re-measured — neither bug above touches a test/story grep |
 
-Not all 102 are tooltips: `DeckDialog`, `Notice`, `Figure`, `AppShell`, `ExportDialog` and
+Not all 108 are tooltips: `DeckDialog`, `Notice`, `Figure`, `AppShell`, `ExportDialog` and
 `CountTag` each take a `title` **prop**, and some of those pass it on to a `title` attribute while
 others draw it as a heading. The sweep reads each one; a regex cannot tell the two apart, and the
 `aria-label` classification in §4 could not be automated even if it could.
