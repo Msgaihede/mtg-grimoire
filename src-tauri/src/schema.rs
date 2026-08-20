@@ -2377,8 +2377,9 @@ pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Promote one tag family's four staging tables over its live ones.
 ///
-/// **The index replay is [`swap_staging`]'s, and it is why both families come through one
-/// function.** Three of the four tables carry no index but their own primary key, which the
+/// **The index replay below is this function's own, borrowed from [`swap_staging`] one family
+/// over, and it is why both taxonomies come through one function rather than two hand-written
+/// swaps.** Three of the four tables carry no index but their own primary key, which the
 /// rename brings with it — but the taxonomy table has `idx_{family}_tags_norm`, and a rename
 /// carries the *staging* table's indexes rather than the live table's. Without
 /// [`TAG_INDEXES_SQL`] here that index is gone after the first weekly refresh, with nothing
@@ -6471,13 +6472,12 @@ pub(crate) mod tests {
     }
 
     /// A mute is the reader's, and everything around it is rebuilt on a schedule: the card
-    /// corpus daily, the two taxonomies weekly. Losing one would read as the app forgetting
-    /// what the reader hid, so both rebuilds are driven over it here.
+    /// corpus daily, both taxonomies weekly. Losing one would read as the app forgetting what
+    /// the reader hid, so all three rebuilds are driven over it here.
     ///
-    /// The art swap does not exist yet — it is written over [`ART_TAG_TABLES`] — so the second
-    /// half asserts the list instead of driving it: **everything named on either list is
-    /// dropped by its own swap**, which is exactly why `muted_tags` is on neither and must
-    /// stay off both.
+    /// The assertion at the end is the same rule in its general form — **everything named on
+    /// either swap list is dropped by that swap** — which is exactly why `muted_tags` is on
+    /// neither and must stay off both.
     #[test]
     fn a_mute_survives_a_card_sync_and_a_taxonomy_rebuild() {
         let conn = Connection::open_in_memory().unwrap();
@@ -6491,6 +6491,8 @@ pub(crate) mod tests {
 
         create_oracle_tag_staging(&conn).unwrap();
         swap_oracle_tag_staging(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+        swap_art_tag_staging(&conn).unwrap();
         create_staging(&conn).unwrap();
         swap_staging(&conn).unwrap();
 

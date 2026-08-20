@@ -218,6 +218,14 @@ pub const BULK_DEFAULT_CARDS: &str = "default_cards";
 /// `download_uri`/`size` fields — which is why one [`BulkInfo`] describes both.
 pub const BULK_ORACLE_TAGS: &str = "oracle_tags";
 
+/// Scryfall's Art Tags: 11 531 tag objects, ~12.5 MB gzipped, each carrying its own
+/// `taggings` array of `illustration_id`s. [`crate::tags::art`] reads it.
+///
+/// [`BULK_ORACLE_TAGS`]'s document shape exactly — measured live 2026-08-20, entry id
+/// `48da5752-eeb6-4126-bf97-8829e20ad14f`, `compressed_size` 12 544 874 and no
+/// `download_uri`/`size`.
+pub const BULK_ART_TAGS: &str = "art_tags";
+
 /// The bits of a `bulk_data` object this app needs. Note `jsonl_download_uri` and
 /// `compressed_size`: the pre-2026-07-20 `download_uri`/`size` fields are gone and
 /// the legacy `.json` URLs return 404.
@@ -473,10 +481,11 @@ impl Client {
     /// caller that only wants one of them means a 200 (and a re-download decision) every
     /// time any of the others is regenerated.
     ///
-    /// `dataset` is one of the [`BULK_DEFAULT_CARDS`]/[`BULK_ORACLE_TAGS`] constants. It goes
-    /// through [`api_send`](Client::api_send) like every other API call, so a second dataset
-    /// shares the one pacing gate and the one 429 lockout: two datasets are still one
-    /// application as far as Scryfall is concerned, and a second client would be two.
+    /// `dataset` is one of the [`BULK_DEFAULT_CARDS`]/[`BULK_ORACLE_TAGS`]/[`BULK_ART_TAGS`]
+    /// constants. It goes through [`api_send`](Client::api_send) like every other API call,
+    /// so a further dataset shares the one pacing gate and the one 429 lockout: three
+    /// datasets are still one application as far as Scryfall is concerned, and a second
+    /// client would be two.
     pub async fn check_bulk_dataset(
         &self,
         dataset: &str,

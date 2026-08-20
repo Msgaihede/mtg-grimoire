@@ -3,12 +3,14 @@
 //!
 //! Scryfall publishes two of these, and they are the same file in two dialects. Both are
 //! gzipped JSONL, one `tag` object per line, each with a slug, a uuid, a list of parent
-//! uuids and a list of taggings; the only thing that differs is what a tagging names —
-//! `oracle_id` for [`oracle`], the card's rules text, and `illustration_id` for the art
-//! taxonomy, the specific piece of art. So the fetch, the parse, the graph walk, the staged
-//! write and the swap live here once, parameterised over a [`Dataset`], and each namespace's
-//! module is a binding: a `const Dataset`, its Tauri commands, and whatever read path is
-//! specific to the ids it deals in.
+//! uuids and a list of taggings; what a tagging *names* is nearly all that differs —
+//! `oracle_id` for [`oracle`], the card's rules text, and `illustration_id` for [`art`], the
+//! specific piece of art. The one other difference is whether a tagging's `weight` survives
+//! into the closure, which [`Dataset::carries_weight`] declares and [`write_closure`] is the
+//! only reader of. So the fetch, the parse, the graph walk, the staged write and the swap
+//! live here once, parameterised over a [`Dataset`], and each namespace's module is a
+//! binding: a `const Dataset`, its Tauri commands, and whatever read path is specific to the
+//! ids it deals in.
 //!
 //! Five rules shape this module. They were written for the oracle taxonomy and hold for
 //! every one:
@@ -38,6 +40,7 @@
 //! The one exception is a file that yields *no* tags — a gzipped error page, the wrong
 //! dataset, a truncated download — which is refused outright and swaps nothing.
 
+pub mod art;
 pub mod oracle;
 
 use crate::sync::AppState;
@@ -106,12 +109,16 @@ pub struct Dataset {
     /// False for the oracle taxonomy, and the reason is in the data: 99.74 % of oracle
     /// taggings are `median` and `strong` occurs exactly once in the whole file, so there is
     /// no cluster to rank against and nothing may branch on one. An art tagging's weight is
-    /// genuinely informative, and folding it over the taggings a closure row descends from is
-    /// the one step of [`write_closure`] that is not the same for both taxonomies.
+    /// genuinely informative — the 2026-08-20 file uses the full scale (median 462 008,
+    /// strong 5 980, weak 4 495, very_strong 2 680) — and folding it over the taggings a
+    /// closure row descends from is the one step of [`write_closure`] that is not the same
+    /// for both taxonomies.
     ///
-    /// **No shipped dataset sets it yet**, so nothing reads it: the field is here because the
-    /// closure's shape is the dataset's to declare, and a taxonomy that wants the column
-    /// should say so where the rest of its tables are named rather than in the writer.
+    /// **It is also what picks the `INSERT`**: [`flush_closure`] writes three columns where
+    /// this is set and two where it is not, because `art_tag_illustrations.weight` is
+    /// `NOT NULL` with no default and `oracle_tag_cards` has no such column at all. Setting
+    /// it on a dataset whose closure table has no `weight` is `no such column` at the first
+    /// insert of a refresh, which is loud rather than silent — deliberately.
     pub carries_weight: bool,
     /// Create this family's four empty staging tables, dropping any an interrupted run left.
     pub create_staging: fn(&Connection) -> rusqlite::Result<()>,
@@ -149,6 +156,55 @@ pub fn normalize(s: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
         .collect()
+}
+
+/// Scryfall's four tagging weights, **weakest first**. Their definitions, from `docs/api/tags`:
+/// `weak` "a minor detail or background element", `median` "a normal tagging", `strong` "a
+/// primary focus", `very_strong` "exemplary".
+///
+/// Bulk data is lowercase snake; Tagger's GraphQL returns the same values uppercase. This app
+/// only ever reads bulk data, so lowercase is the whole vocabulary.
+///
+/// **Here rather than in a binding**, even though only the art taxonomy spends them
+/// ([`Dataset::carries_weight`]): `weight` is a field of every tagging in every one of these
+/// files, [`write_closure`] is the only caller, and an engine reaching into one namespace's
+/// module for a scale that is Scryfall's would be the wrong way round the moment a third
+/// dataset carried one.
+pub const WEIGHTS: [&str; 4] = ["weak", "median", "strong", "very_strong"];
+
+/// What a tagging that states no weight is read as in the closure.
+///
+/// Scryfall's own word for "a normal tagging", and the honest reading of a file that did not
+/// single this tagging out. **Nothing in the 2026-08-20 art file needs it** — all 475 163
+/// taggings carry a weight (median 462 008 · strong 5 980 · weak 4 495 · very_strong 2 680) —
+/// so this is the answer for a shape that does not occur today rather than a common path.
+///
+/// The alternative, an empty string, would be an unrecognised value that [`stronger`] ranks
+/// *below* `weak`: a tagging Scryfall bothered to make would become the weakest signal in the
+/// database, and `art_tag_illustrations.weight` is `NOT NULL`, so it would be a blank in a
+/// column every read path selects. The raw absence is still kept verbatim — the taggings
+/// table's `weight` is nullable and stores what the file said, or nothing.
+const DEFAULT_WEIGHT: &str = "median";
+
+/// The stronger of two weights. **An unrecognised value ranks below every known one** — a
+/// weight this build has not heard of must never silently outrank `very_strong`, which is the
+/// direction that would quietly promote junk into a filtered result.
+///
+/// Ties keep `a`, so folding this over a subject's taggings is stable: the answer does not
+/// depend on which equally-strong tagging the walk happened to reach first.
+pub fn stronger<'a>(a: &'a str, b: &'a str) -> &'a str {
+    let rank = |w: &str| {
+        WEIGHTS
+            .iter()
+            .position(|x| *x == w)
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    };
+    if rank(b) > rank(a) {
+        b
+    } else {
+        a
+    }
 }
 
 /// Every value [`TagProgress::phase`] takes, in the order one refresh produces them.
@@ -328,9 +384,19 @@ struct Graph {
     /// over 35 969 oracle ids, so the ids are held once each and referred to by index —
     /// 4 bytes per tagging instead of a string apiece.
     subjects: Vec<String>,
-    /// Per subject, the tags it holds **directly**, as indices into `tags`. The ancestors are
-    /// added by [`write_closure`], from the walk.
-    held: Vec<Vec<u32>>,
+    /// Per subject, the tags it holds **directly**, as `(tag, weight)` pairs of indices into
+    /// [`Graph::tags`] and [`Graph::weights`]. The ancestors are added by [`write_closure`],
+    /// from the walk — and the weight rides along because a closure row's weight is folded
+    /// over exactly these taggings, long after the line that carried it has been written to
+    /// staging and dropped.
+    held: Vec<Vec<(u32, u32)>>,
+    /// Every distinct `weight` string the file used, interned.
+    ///
+    /// Four values over 475 163 art taggings (measured 2026-08-20), so an index is 4 bytes a
+    /// tagging where a `String` would be twenty-odd plus an allocation. Interned rather than
+    /// mapped to a rank because an unrecognised weight is stored **verbatim**: Rust supplies
+    /// the fact, and a value this build has not heard of is still what Scryfall said.
+    weights: Vec<String>,
 }
 
 /// For every tag, the tags a subject inherits by holding it: **the tag itself, plus every
@@ -496,6 +562,11 @@ pub fn ingest_gz(
     let mut parent_ids: Vec<Vec<String>> = Vec::new();
     let mut by_id: HashMap<String, u32> = HashMap::new();
     let mut subject_of: HashMap<String, u32> = HashMap::new();
+    // …and the third, which interns `Graph::weights`. A map rather than a linear scan of a
+    // four-entry list: the vocabulary is small in every file measured, but a file that had
+    // gone wrong in that particular way would turn the scan quadratic over 475 163 taggings
+    // on a background thread with no window to say so in.
+    let mut weight_of: HashMap<String, u32> = HashMap::new();
 
     // `weight` and `annotation` are never held whole: they go straight to staging with the
     // row that carries them.
@@ -543,7 +614,23 @@ pub fn ingest_gz(
                     s
                 }
             };
-            g.held[subject as usize].push(index);
+            // The weight the closure will fold, interned. **A tagging that states none is
+            // read as [`DEFAULT_WEIGHT`] here and stored as NULL below** — the closure's
+            // column is `NOT NULL` and the taggings table's is not, so the two disagree on
+            // purpose: one records what the file said, the other what the search must rank.
+            let weight = {
+                let w = tagging.weight.as_deref().unwrap_or(DEFAULT_WEIGHT);
+                match weight_of.get(w) {
+                    Some(&i) => i,
+                    None => {
+                        let i = g.weights.len() as u32;
+                        weight_of.insert(w.to_owned(), i);
+                        g.weights.push(w.to_owned());
+                        i
+                    }
+                }
+            };
+            g.held[subject as usize].push((index, weight));
             batch.push((subject, index, tagging.weight, tagging.annotation));
             if batch.len() >= BATCH {
                 stats.taggings += batch.len() as u64;
@@ -748,8 +835,18 @@ fn flush_edges(
 
 /// The closure itself: for each subject, every tag it holds and every ancestor of those tags.
 ///
-/// Returns the number of rows written. The per-subject `HashSet` is what makes two tags
-/// sharing an ancestor one row rather than a primary-key collision.
+/// Returns the number of rows written. The per-subject map is what makes two tags sharing an
+/// ancestor one row rather than a primary-key collision.
+///
+/// # The weight
+///
+/// Where [`Dataset::carries_weight`] is set, each row also carries **the strongest weight
+/// among the direct taggings it descends from** — [`stronger`] folded over them, not the last
+/// one seen. A row reached only through ancestry inherits the weight of the tagging that
+/// produced it, and a row two taggings both reach resolves rather than races: an illustration
+/// whose `dog` tagging is weak but whose `hound` tagging is strong is not a weak `dog`, and
+/// `hound`'s ancestor *is* `dog`, so both land on the one row. Deciding this per row at read
+/// time would instead be work on every keystroke of a tag search.
 fn write_closure(
     ds: &Dataset,
     db: &Mutex<Connection>,
@@ -759,21 +856,31 @@ fn write_closure(
     progress: &mut dyn FnMut(u64),
 ) -> Result<u64, TagError> {
     let mut rows = 0u64;
-    let mut pending: Vec<(&str, &str)> = Vec::with_capacity(BATCH);
-    let mut inherited: HashSet<u32> = HashSet::new();
+    let mut pending: Vec<(&str, &str, &str)> = Vec::with_capacity(BATCH);
+    // Tag index → the strongest weight of the taggings that reach it. A map rather than a set
+    // for both datasets: the value is simply never written for one that carries no weight,
+    // and one code path is one place for the union to be right.
+    let mut inherited: HashMap<u32, &str> = HashMap::new();
     for (subject, held) in g.held.iter().enumerate() {
         inherited.clear();
-        for &tag in held {
-            inherited.extend(closures[tag as usize].iter().copied());
+        for &(tag, weight_index) in held {
+            let weight = g.weights[weight_index as usize].as_str();
+            for &ancestor in &closures[tag as usize] {
+                inherited
+                    .entry(ancestor)
+                    .and_modify(|best| *best = stronger(best, weight))
+                    .or_insert(weight);
+            }
         }
         // Sorted for the same reason `ancestor_closures` sorts: a run's rows should not
         // depend on a hash seed.
-        let mut slugs: Vec<u32> = inherited.iter().copied().collect();
+        let mut slugs: Vec<u32> = inherited.keys().copied().collect();
         slugs.sort_unstable();
         for tag in slugs {
             pending.push((
                 g.subjects[subject].as_str(),
                 g.tags[tag as usize].slug.as_str(),
+                inherited[&tag],
             ));
             rows += 1;
         }
@@ -795,22 +902,34 @@ fn write_closure(
     Ok(rows)
 }
 
+/// One batch of closure rows, in the two- or three-column shape
+/// [`Dataset::carries_weight`] declares.
+///
+/// Two statements rather than one that always binds a weight, because the column genuinely is
+/// not there on the oracle side: `oracle_tag_cards` is `(oracle_id, slug)` and always has
+/// been.
 fn flush_closure(
     ds: &Dataset,
     db: &Mutex<Connection>,
-    pending: &mut Vec<(&str, &str)>,
+    pending: &mut Vec<(&str, &str, &str)>,
 ) -> Result<(), TagError> {
-    let sql = format!(
-        "INSERT OR IGNORE INTO {staging} ({subject}, slug) VALUES (?1, ?2)",
-        staging = staging(ds.closure_table),
-        subject = ds.subject_column
-    );
+    let table = staging(ds.closure_table);
+    let subject = ds.subject_column;
+    let sql = if ds.carries_weight {
+        format!("INSERT OR IGNORE INTO {table} ({subject}, slug, weight) VALUES (?1, ?2, ?3)")
+    } else {
+        format!("INSERT OR IGNORE INTO {table} ({subject}, slug) VALUES (?1, ?2)")
+    };
     let mut conn = crate::db::lock_blocking(db);
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare_cached(&sql)?;
-        for (subject, slug) in pending.iter() {
-            stmt.execute(params![subject, slug])?;
+        for (subject, slug, weight) in pending.iter() {
+            if ds.carries_weight {
+                stmt.execute(params![subject, slug, weight])?;
+            } else {
+                stmt.execute(params![subject, slug])?;
+            }
         }
     }
     tx.commit()?;
@@ -1312,6 +1431,90 @@ fn emit(ds: &Dataset, app: &tauri::AppHandle, phase: &str, done: u64, total: u64
     );
 }
 
+/// What both bindings' test modules build their input out of.
+///
+/// Here rather than in one of them because a sibling module cannot reach into another's
+/// `mod tests`, and the alternative is a second copy of [`testing::gz_fixture`] — which
+/// carries a race fix subtle enough that two copies would be two chances to lose it.
+#[cfg(test)]
+pub(crate) mod testing {
+    use rusqlite::Connection;
+    use std::sync::Mutex;
+
+    /// A migrated in-memory database behind the write mutex, which is how the ingest is
+    /// handed one.
+    pub(crate) fn mem_db() -> Mutex<Connection> {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        Mutex::new(conn)
+    }
+
+    /// Tests run in parallel and share the temp directory, so the file name is keyed on the
+    /// content — [`crate::ingest`]'s `gz_fixture`, for its reason.
+    ///
+    /// **Nothing ever opens that path for writing, and that is the whole point** (2026-08-20).
+    /// Keying the name on the content stops two *different* fixtures colliding and guarantees
+    /// that two **identical** ones collide — which is common here, not rare: the oracle-keyed
+    /// read test and the printing-keyed one build the same three lines, so they hash to one
+    /// path. `File::create` truncates, so whichever ran second emptied the file the first was
+    /// still streaming, and that test failed with `Io(Kind(UnexpectedEof))` on its
+    /// `ingest(…).unwrap()` — a panic naming neither the race nor the other test. It went red
+    /// on `rust (windows-latest)` while Linux passed, which is what a timing race looks like.
+    ///
+    /// So: write a private file and move it into place. Losing the move is fine — the bytes
+    /// are keyed on the content, so whoever won wrote the same file — and a reader with the
+    /// fixture open is what makes the move fail rather than something to avoid.
+    pub(crate) fn gz_fixture(lines: &[&str]) -> std::path::PathBuf {
+        use flate2::{write::GzEncoder, Compression};
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        use std::io::Write;
+        let mut h = DefaultHasher::new();
+        lines.hash(&mut h);
+        let p = std::env::temp_dir().join(format!(
+            "mtgtest-tags-{}-{:016x}.jsonl.gz",
+            lines.len(),
+            h.finish()
+        ));
+        if !p.exists() {
+            let tmp = p.with_extension(format!("{}.tmp", next_fixture_id()));
+            let mut enc = GzEncoder::new(std::fs::File::create(&tmp).unwrap(), Compression::fast());
+            for l in lines {
+                enc.write_all(l.as_bytes()).unwrap();
+                enc.write_all(b"\n").unwrap();
+            }
+            enc.finish().unwrap();
+            if std::fs::rename(&tmp, &p).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        p
+    }
+
+    /// A number no other fixture write in this process is using, so the private file a
+    /// [`gz_fixture`] builds cannot be the private file another one is building.
+    fn next_fixture_id() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// One line of `src-tauri/tests/fixtures/{name}` per element, ready for [`gz_fixture`].
+    ///
+    /// A file rather than a `format!` for the art fixture, because the things it has to
+    /// exercise are things a formatter cannot say: an `annotation` key that is **absent**
+    /// rather than null, a `"description": null`, and a line that is not JSON at all.
+    pub(crate) fn fixture_lines(name: &str) -> Vec<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} must be readable: {e}", path.display()))
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,5 +1544,19 @@ mod tests {
         // And a name with nothing alphanumeric in it normalises to nothing, which is a needle
         // that matches no row rather than one that matches every row.
         assert_eq!(normalize("---"), "");
+    }
+
+    /// A closure row reachable from two taggings of different weights resolves to the
+    /// stronger. A printing whose `dog` tagging is weak but whose `hound` tagging is strong
+    /// is not a weak match — and `hound`'s ancestor is `dog`, so both land on one row.
+    #[test]
+    fn the_closure_keeps_the_strongest_weight_of_the_taggings_it_descends_from() {
+        assert_eq!(stronger("weak", "strong"), "strong");
+        assert_eq!(stronger("strong", "weak"), "strong");
+        assert_eq!(stronger("median", "very_strong"), "very_strong");
+        assert_eq!(stronger("median", "median"), "median");
+        // An unknown weight sorts below every known one rather than above: a value this build
+        // has not heard of must never silently outrank `very_strong`.
+        assert_eq!(stronger("median", "zzz"), "median");
     }
 }

@@ -269,67 +269,13 @@ mod tests {
     // The engine these bindings drive. The parser, the walk, the staged write and the swap
     // all live one module up, and the tests below reach them through `ORACLE` — which is
     // also the only way a caller ever should.
+    use crate::tags::testing::{gz_fixture, mem_db};
     use crate::tags::*;
     use flate2::{write::GzEncoder, Compression};
     use rusqlite::{params, Connection};
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
-
-    /// A migrated in-memory database behind the write mutex, which is how the ingest is
-    /// handed one.
-    fn mem_db() -> Mutex<Connection> {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        Mutex::new(conn)
-    }
-
-    /// Tests run in parallel and share the temp directory, so the file name is keyed on the
-    /// content — [`crate::ingest`]'s `gz_fixture`, for its reason.
-    ///
-    /// **Nothing ever opens that path for writing, and that is the whole point** (2026-08-20).
-    /// Keying the name on the content stops two *different* fixtures colliding and guarantees
-    /// that two **identical** ones collide — which is common here, not rare: the oracle-keyed
-    /// read test and the printing-keyed one below build the same three lines, so they hash to
-    /// one path. `File::create` truncates, so whichever ran second emptied the file the first
-    /// was still streaming, and that test failed with `Io(Kind(UnexpectedEof))` on its
-    /// `ingest(…).unwrap()` — a panic naming neither the race nor the other test. It went red on
-    /// `rust (windows-latest)` while Linux passed, which is what a timing race looks like.
-    ///
-    /// So: write a private file and move it into place. Losing the move is fine — the bytes are
-    /// keyed on the content, so whoever won wrote the same file — and a reader with the fixture
-    /// open is what makes the move fail rather than something to avoid.
-    fn gz_fixture(lines: &[&str]) -> std::path::PathBuf {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        lines.hash(&mut h);
-        let p = std::env::temp_dir().join(format!(
-            "mtgtest-tags-{}-{:016x}.jsonl.gz",
-            lines.len(),
-            h.finish()
-        ));
-        if !p.exists() {
-            let tmp = p.with_extension(format!("{}.tmp", next_fixture_id()));
-            let mut enc = GzEncoder::new(std::fs::File::create(&tmp).unwrap(), Compression::fast());
-            for l in lines {
-                enc.write_all(l.as_bytes()).unwrap();
-                enc.write_all(b"\n").unwrap();
-            }
-            enc.finish().unwrap();
-            if std::fs::rename(&tmp, &p).is_err() {
-                let _ = std::fs::remove_file(&tmp);
-            }
-        }
-        p
-    }
-
-    /// A number no other fixture write in this process is using, so the private file a
-    /// `gz_fixture` builds cannot be the private file another one is building.
-    fn next_fixture_id() -> u64 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    }
 
     /// One tag line. `parents` are uuids; `cards` are oracle ids.
     fn tag(id: &str, slug: &str, parents: &[&str], cards: &[&str]) -> String {

@@ -374,6 +374,8 @@ pub fn run() {
             tags::oracle::oracle_tags_status,
             tags::oracle::oracle_tags_for_cards,
             tags::oracle::oracle_tags_for_printings,
+            tags::art::art_tags_refresh,
+            tags::art::art_tags_status,
             export::export_write_file,
             reset::collection_clear,
             reset::wishlist_clear,
@@ -463,6 +465,20 @@ pub fn run() {
             let tags_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
+            });
+
+            // Scryfall's Art Tags, on a fifth task rather than chained onto the oracle one
+            // above. **They are the same shape of job and that is exactly why they must not
+            // share a task**: the art file is 12.5 MB against the oracle file's 5.85 MB, so
+            // awaiting one before the other would make the bigger download the reason the
+            // smaller taxonomy is late — and on a first run, the reason a deck add is still
+            // categorising by card type minutes after launch. They contend for the write
+            // connection a batch at a time, which is the engine's job and not the launch's.
+            // Silent and best-effort, like every one of its siblings.
+            let art_state = state.clone();
+            let art_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tags::art::refresh_if_due(&art_state, &art_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:
