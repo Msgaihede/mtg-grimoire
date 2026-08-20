@@ -546,7 +546,11 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
     ('limited',         'Limited',              1, 40,  NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 25, 'paper,arena,mtgo');";
 
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
-/// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
+/// `PRAGMA user_version`, so a rerun on an up-to-date database changes nothing.
+///
+/// **A rerun is not quite a no-op, and that is deliberate**: the tail of this function replays
+/// [`TAG_INDEXES_SQL`] unconditionally, outside the ladder. The comment there says why, and it
+/// is a hang rather than a slow page that it prevents.
 ///
 /// **Adding a column later:** leave [`CARDS_COLUMNS`] alone and add a new `if v < N`
 /// block with an `ALTER TABLE cards ADD COLUMN`, the way `v < 2` and `v < 3` below do.
@@ -1859,6 +1863,30 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA user_version = 20;")?;
         tx.commit()?;
     }
+
+    // **Outside the ladder, on purpose: the tag indexes are replayed on every launch, from
+    // every version.** Not belt and braces — the thing this prevents is a hung window, and the
+    // number was measured rather than guessed.
+    //
+    // [`crate::tags::query`] counts a tag's reach with a correlated `count(*)` over the
+    // closure, which is 49 ms with `idx_art_tag_illustrations_slug` and **531 seconds**
+    // without it: 11 531 candidate tags x a 951 499-row scan each, measured 2026-08-20 on a
+    // release build at that day's file size. So a database missing these indexes does not get
+    // a slow Tags page, it gets an app that stops responding when the reader types in the
+    // search box — and nothing about that symptom points here.
+    //
+    // **A rung cannot reach the databases that need it.** The v20 step ran on real databases
+    // *before* the two closure indexes joined [`TAG_INDEXES_SQL`]; those databases have `20`
+    // recorded, so `v < 20` is false forever and the rung's own replay above will never fire
+    // for them again. Bumping to v21 would only help databases that pass through v21 once,
+    // where the coupling above wants the index set to be self-healing. Every statement is
+    // `CREATE INDEX IF NOT EXISTS`, so on the overwhelming majority of launches this is four
+    // catalog lookups and a few microseconds.
+    //
+    // The copy inside the v20 rung is **not** a duplicate to delete: that one belongs to the
+    // step's transaction, where it lands with the tables it indexes. This one is the only
+    // thing that reaches a database the ladder is already done with.
+    conn.execute_batch(TAG_INDEXES_SQL)?;
     Ok(())
 }
 
@@ -6445,6 +6473,53 @@ pub(crate) mod tests {
                 |r| r.get::<_, i64>(0),
             )
             .unwrap_or_else(|_| panic!("{index} did not survive the tag swap"));
+        }
+    }
+
+    /// A database that is **already at v20** and lacks the closure indexes gains them on the
+    /// next `migrate`.
+    ///
+    /// **This is the one reachable state no other test covers**, and it is not hypothetical:
+    /// every database that ran the v20 rung before `idx_art_tag_illustrations_slug` and
+    /// `idx_oracle_tag_cards_slug` joined [`TAG_INDEXES_SQL`] is in it right now. `user_version`
+    /// reads 20, so the rung never fires again; the swap tests below prove the *refresh* path,
+    /// which is up to a week away and only runs if the reader has ever fetched a tag file. The
+    /// unconditional replay at the tail of [`migrate`] is the only thing that reaches these,
+    /// and without it [`crate::tags::query`]'s correlated count is 531 seconds rather than
+    /// 49 ms - a frozen window, measured 2026-08-20.
+    ///
+    /// Dropping the indexes by hand is exactly what that history looks like from here: there is
+    /// no way to build a real pre-change database in a test, and the state is defined by which
+    /// indexes exist, not by how they came to be missing.
+    #[test]
+    fn a_v20_database_missing_the_closure_indexes_gains_them_on_the_next_migrate() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_art_tag_illustrations_slug;
+             DROP INDEX idx_oracle_tag_cards_slug;",
+        )
+        .unwrap();
+
+        // The ladder is spent: `v < 20` is false, so nothing inside `migrate`'s blocks can run
+        // and only the unconditional tail is left to do this.
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION, "the rung must already be spent");
+
+        migrate(&conn).unwrap();
+
+        for index in [
+            "idx_art_tag_illustrations_slug",
+            "idx_oracle_tag_cards_slug",
+        ] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} must be restored by a plain re-migrate"));
         }
     }
 
