@@ -904,10 +904,26 @@ export const Legalities: Story = {
   args: { cardId: printingId("lea", "232") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const pane = await canvas.findByRole("complementary", { name: "Card details" });
+    // **The section is re-read inside a `waitFor`, and that is not defensive padding** (added
+    // 2026-08-20). This pane renders its body keyed on the open card, so the body a play first
+    // sees is *replaced* the moment the card query resolves — and how long that takes is a fact
+    // about the machine rather than about the pane. Run alone this story settled first and the
+    // reads below were safe; run inside the whole of `stories.test.tsx` the resolve lands
+    // **during** the play, and a node read before it is a node that has since been detached.
+    // `toBeVisible` is false for a node that is no longer in the document, so the failure reads
+    // as *"the Formats heading is invisible"* — a sentence about the one thing this story exists
+    // to check — while the heading is on screen and perfectly correct. Retrying the read is what
+    // tells those two apart. **It still fails for a section that is genuinely absent**, which is
+    // the whole assertion: `NoLegalities` below is the story that pins that answer, and this one
+    // would have to wait out the full timeout before agreeing with it.
+    //
     // The section names the chips; the list inside it keeps its own, more exact name.
-    const formats = within(pane).getByRole("region", { name: "Formats" });
-    await expect(within(formats).getByRole("heading", { name: "Formats" })).toBeVisible();
+    const formats = await waitFor(() => {
+      const pane = canvas.getByRole("complementary", { name: "Card details" });
+      const region = within(pane).getByRole("region", { name: "Formats" });
+      expect(within(region).getByRole("heading", { name: "Formats" })).toBeVisible();
+      return region;
+    });
     await expect(within(formats).getByText("Formats not listed are not legal.")).toBeVisible();
     const chips = within(formats).getByRole("list", { name: "Format legality" });
     // Exact, and in order: the format then its status, with "legal" present in the accessibility
@@ -926,8 +942,10 @@ export const Legalities: Story = {
       "predhbanned",
       "tlrlegal",
     ]);
-    // No USD for any finish of this printing, and no invented zero.
-    await expect(within(pane).getByText("Nonfoil").closest("div")).toHaveTextContent("Nonfoil—");
+    // No USD for any finish of this printing, and no invented zero. The pane is re-read for the
+    // reason above: the one held from before the `waitFor` may be a body that has been replaced.
+    const settled = canvas.getByRole("complementary", { name: "Card details" });
+    await expect(within(settled).getByText("Nonfoil").closest("div")).toHaveTextContent("Nonfoil—");
   },
 };
 
