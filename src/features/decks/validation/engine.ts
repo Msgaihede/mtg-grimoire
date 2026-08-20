@@ -105,6 +105,69 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
 }
 
 /**
+ * Everything a **card mark** may draw: {@link validateDeck}'s findings, and beside them what is
+ * wrong with each card the reader has switched off.
+ *
+ * **This is a second answer on purpose, and it is not the deck's.** `validateDeck` is what the
+ * deck *is* — the header's check chip, the validation panel's list, the sentence a reader acts
+ * on — and a card in an inactive pile counts toward none of it. A red frame on that card is not
+ * a claim about the deck, though; it is the answer to the question the reader asked by putting
+ * the card there, which is whether it could ever come in. A switched-off Maybeboard holding a
+ * card that is banned in the format, or outside the commander's identity, said nothing at all
+ * until now (issue #134) — and on a surface where a mark is the only way a card speaks,
+ * "nothing" reads as "fine".
+ *
+ * So the two answers never merge: `ValidationPanel` calls `validateDeck` and hears only the
+ * deck, `DeckEditor` calls this and marks every card it can answer for. Nothing here adds a
+ * finding about the deck — {@link inactiveCardIssues} is what an inactive row is and is not
+ * judged on, and that list is the whole of the difference.
+ */
+export function validateForMarks(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
+  return [...validateDeck(cards, spec), ...inactiveCardIssues(cards, spec)];
+}
+
+/**
+ * What is wrong with the cards in the piles the reader switched off — **the card's own facts
+ * under this format, and never a fact about a pile.**
+ *
+ * That sentence is the whole rule, and it is where the two halves of issue #134 meet. Judged
+ * here: legality against the format's pool, the mana-value ceiling, and colour identity against
+ * the commander. Each of those is answerable from one row and one seeded spec, so asking it of a
+ * parked card changes no number anywhere and no other card's mark. Not judged here, and not to
+ * be added: deck size, sideboard size, copy limits, the commander zone's own eligibility. Every
+ * one of those is arithmetic over a pile — a second Sol Ring in a switched-off Maybeboard is a
+ * singleton break only once the pile is switched on — so counting it would put the inactive card
+ * back inside the validation that {@link validateDeck}'s first line takes it out of, and would
+ * do it by moving marks onto the *active* cards it was counted against.
+ *
+ * The identity comes from the **active** command zone, because that is the deck being built.
+ * Inactive `commander` rows are left out of the pass for the same reason they are left out of
+ * that union: a card parked as an alternative commander is not a card being held to the current
+ * one, and accusing it would be exactly the false alarm this function exists to avoid.
+ *
+ * Collapsed on its own rather than together with the deck's findings, so one banned card sitting
+ * in both an active pile and a parked one keeps two marks — two cards on the screen, each of
+ * which has to draw its own frame.
+ */
+function inactiveCardIssues(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
+  const parked = cards.filter((card) => !card.categoryActive);
+  if (parked.length === 0) return [];
+
+  const issues = cardIssues(parked, spec, readLegalities(parked));
+  const zone = cards.filter((card) => card.categoryActive && card.categoryKind === "commander");
+  const identity = spec.commanderRule === null ? null : commanderIdentity(zone, spec);
+  if (identity !== null) {
+    issues.push(
+      ...colorIdentityIssues(
+        parked.filter((card) => card.categoryKind !== "commander"),
+        identity,
+      ),
+    );
+  }
+  return collapse(issues);
+}
+
+/**
  * One sentence, one finding.
  *
  * The per-card pass runs over **rows**, and one card is usually several: the same printing in

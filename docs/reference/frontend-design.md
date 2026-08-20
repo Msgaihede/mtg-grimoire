@@ -51,8 +51,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **A trap this pass walked into**: `setDeviceMetricsOverride` survives the socket that set it,
   so a `size 1024 768` earlier in the run had the _next_ check reading a railed panel at what
   looked like 1280 — a regression that was not one. Read `innerWidth` in the same expression as
-  anything width-dependent; the harness contract says to end a run with an explicit `size 1280 800`
-  and this is the failure that rule is about.
+  anything width-dependent; the harness contract says to end a run by restoring the
+  `innerWidth`/`innerHeight` you read before the first override — the window's own size, which
+  since 2026-08-20 depends on the monitor — and this is the failure that rule is about.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats

@@ -488,6 +488,16 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
   load-bearing; re-enabling it kills all in-app drag-and-drop on Windows.
+- **The window's opening size is decided in Rust, not by the config** (`window.rs`, first call in
+  `setup`). The config's 1920×1080 is the top rung and the fallback; `open_sized_to_monitor` takes
+  the largest of 1920×1080 and 1280×720 that the monitor's **work area** holds, then centres and
+  shows. A 1920×1080 desk takes the lower rung — Windows leaves 1920×**1032** after its taskbar,
+  and a window sized to the whole screen puts the deck editor's action row behind it. **The
+  window is created hidden (`"visible": false`) and `open_sized_to_monitor` is the only thing
+  that shows it**, so it runs before anything in `setup` that can fail — an early `?` above it
+  would leave a running app with no window, which is exactly what the single-instance guard
+  looks like. Nothing is remembered between launches: no window-state plugin is registered, so
+  a size the reader chose is theirs until they close it.
 
 ## Further reading
 

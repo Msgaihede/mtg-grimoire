@@ -654,8 +654,12 @@ stayed showing under a box plainly meant to stand in for it.
 | 1600 · 1700 · 1800 · 1920 · 2560 | **48px** (one line) |
 
 92 is `py-1.5` either side of two 36px lines with `gap-y-2` between them (6 + 36 + 8 + 36 + 6);
-48 is the same padding around one. The app ships **1280×800** and registers no window-state
-plugin, so every first run is in the wrapping half of that table.
+48 is the same padding around one. The app shipped **1280×800** when this was measured and
+registers no window-state plugin, so every first run was in the wrapping half of that table.
+**Since 2026-08-20 the opening size is decided per monitor** (`src-tauri/src/window.rs`):
+**1920×1080** where the work area holds it, **1280×720** where it does not — which is every
+1080p desk, because Windows takes its taskbar out of that 1080. So a 1080p reader is still in
+the wrapping half at the same 1280 width; a larger desk is now in the one-line half.
 
 ### What changed
 
