@@ -16,12 +16,12 @@
  * `src/CLAUDE.md` already states the rule both broke: *a surface opened from a view is a centred
  * modal over a scrim, not a docked column — unless the reader works out of it while editing
  * beside it.* Printings are **consulted**, exactly like deck history, categories and settings,
- * all three of which are {@link DeckDialog}s. So this is one too, and the store field behind it
+ * all three of which are {@link Dialog}s. So this is one too, and the store field behind it
  * writes one thing and moves nothing.
  *
  * ## The shape
  *
- * Two components, and the split is the shell's rule rather than tidiness. {@link DeckDialog}
+ * Two components, and the split is the shell's rule rather than tidiness. {@link Dialog}
  * renders `children` **only while open**, so everything that costs something — the query, the
  * filter, the sort observer, the scroll position — lives in {@link Body} and therefore exists
  * only while the modal does. A closed modal costs a handful of store reads and nothing else, and
@@ -66,7 +66,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { sameDeckSlot, type DeckWalkStop } from "@/features/decks/deckWalk";
-import { DeckDialog, type DeckDialogFlanks } from "@/features/decks/DeckDialog";
+import { Dialog, type DialogFlanks } from "@/components/Dialog";
 import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
 import { keepCaretForCard } from "@/lib/caretWalk";
@@ -211,7 +211,7 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
 }
 
 /**
- * One step control, drawn in the room {@link DeckDialog}'s `flanks` reserved beside the panel.
+ * One step control, drawn in the room {@link Dialog}'s `flanks` reserved beside the panel.
  *
  * **`disabled` and not `aria-disabled`, which is the reverse of this app's usual rule** and is
  * `QuantityStepper`'s exception rather than a new one: that rule is for a control that greys as
@@ -333,7 +333,7 @@ export function AllPrintingsDialog() {
   );
 
   /**
-   * ArrowLeft and ArrowRight, on the **panel** — `DeckDialog` composes this with `trapTab`.
+   * ArrowLeft and ArrowRight, on the **panel** — `Dialog` composes this with `trapTab`.
    *
    * On the panel rather than on `window`, which is the whole shape of the thing: an open modal
    * must not arrow-drive the deck editor behind its scrim, and the editor must not reach into the
@@ -368,7 +368,7 @@ export function AllPrintingsDialog() {
 
   // No walk, no flanks — and `undefined` rather than a pair of nulls, because that is what tells
   // the shell to leave its scrim exactly as every other dialog draws it.
-  const flanks: DeckDialogFlanks | undefined =
+  const flanks: DialogFlanks | undefined =
     at === -1
       ? undefined
       : {
@@ -377,14 +377,14 @@ export function AllPrintingsDialog() {
         };
 
   return (
-    <DeckDialog
+    <Dialog
       open={request !== null}
       // The card, in the display face. The count line is the body's rather than this shell's
       // `subtitle`, and that is a consequence of the shell's best guarantee: the count depends on
       // the filter, the filter lives in the body, and the body is the only thing here that exists
       // only while the modal is open. Lifting either one out to reach the header would mean a
       // filter that survives a close, and then an effect out here to clear it — which is exactly
-      // what `DeckDialog`'s doc says a host must not need.
+      // what `Dialog`'s doc says a host must not need.
       title={request?.name ?? ""}
       closeLabel="Close printings"
       // Written out whole, never interpolated: Tailwind scans source text for class names.
@@ -395,12 +395,12 @@ export function AllPrintingsDialog() {
       onDismiss={close}
       onClose={close}
     >
-      {/* The `request &&` is not redundant with `open` above: `DeckDialog` keeps the panel mounted
+      {/* The `request &&` is not redundant with `open` above: `Dialog` keeps the panel mounted
           for the length of its fade, and the flag is already false on the render that starts it —
           so without this the body would re-render for a frame against a `null` request.
 
           **The `key` is how a step clears the filter, and it is one word rather than an effect.**
-          `DeckDialog` renders `children` only while open, which is what makes every piece of
+          `Dialog` renders `children` only while open, which is what makes every piece of
           {@link Body}'s state a *session* with nothing anywhere resetting it — so a step to the
           next card asks for the same thing an open asks for, a new session, and `key` is what says
           that to React. An effect watching the oracle id would be a second description of the same
@@ -418,14 +418,14 @@ export function AllPrintingsDialog() {
           re-reads a resolved query, which is a read of the cache and not a round trip — the card
           pane's body is keyed on its card id for the same reason and gets the same answer. */}
       {request && <Body key={request.oracleId} request={request} onDone={close} />}
-    </DeckDialog>
+    </Dialog>
   );
 }
 
 /**
  * Everything that costs something: the query, the filter, the wall and what a press means.
  *
- * Mounted only while the modal is open ({@link DeckDialog} renders `children` on the flag), so
+ * Mounted only while the modal is open ({@link Dialog} renders `children` on the flag), so
  * every piece of state below is a *session* rather than something an effect has to clear.
  */
 function Body({

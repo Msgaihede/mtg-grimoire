@@ -13,16 +13,16 @@ import { cn } from "@/lib/utils";
  *
  * The one shape on this shell that is neither chrome nor body: `AllPrintingsDialog`'s step
  * chevrons, which walk the modal along the open deck. They are the shell's problem rather than
- * the host's because of where the room has to come from — see {@link DeckDialogProps.flanks}.
+ * the host's because of where the room has to come from — see {@link DialogProps.flanks}.
  */
-export interface DeckDialogFlanks {
+export interface DialogFlanks {
   /** Drawn off the panel's left edge. */
   left: ReactNode;
   /** Drawn off its right edge. */
   right: ReactNode;
 }
 
-export interface DeckDialogProps {
+export interface DialogProps {
   open: boolean;
   /**
    * The `<h2>` in the header. The panel is `aria-labelledby` this, unless {@link ariaLabel}
@@ -104,7 +104,7 @@ export interface DeckDialogProps {
    * out over the reserved columns, which is legal because **this panel does not clip its content**
    * — the guarantee stated at the panel's own site, and this is the first caller to depend on it.
    */
-  flanks?: DeckDialogFlanks;
+  flanks?: DialogFlanks;
   /**
    * A second keydown handler on the **panel**, composed with `trapTab` rather than replacing it.
    *
@@ -171,7 +171,7 @@ export interface DeckDialogProps {
  *   keeps a stack of capture-phase registrations now, where only the token on top acts, so peers
  *   *are* ordered, by mount depth. Registering on the flag is what decides when this dialog joins
  *   and leaves that stack, which makes the flag more load-bearing than it was rather than less.
- * * **{@link DeckDialogProps.onDismiss} is worth keeping stable, and no longer for correctness.**
+ * * **{@link DialogProps.onDismiss} is worth keeping stable, and no longer for correctness.**
  *   See the prop.
  * * **The body owns its own scroller.** The header is this file's and everything under it is the
  *   host's, because the bodies differ — one keeps a sticky roll-up inside its scroller — and a
@@ -180,11 +180,11 @@ export interface DeckDialogProps {
  *   A body is expected to be, or to contain, `min-h-0 flex-1 overflow-y-auto` with its own
  *   padding; the panel is the `flex flex-col` that makes that work.
  * * **A host that asks for nothing gets exactly the dialog it got before the last prop landed.**
- *   {@link DeckDialogProps.flanks} and {@link DeckDialogProps.onPanelKeyDown} are both absent for
+ *   {@link DialogProps.flanks} and {@link DialogProps.onPanelKeyDown} are both absent for
  *   every host but one, and both are written so that absent leaves the scrim's and the panel's
  *   class strings character for character what they were. That is the price of one shell under
  *   every dialog in the builder: a prop added for one surface may not move the rest of them (how
- *   many that is, is a number the imports answer), and `DeckDialog.test.tsx` pins the untouched
+ *   many that is, is a number the imports answer), and `Dialog.test.tsx` pins the untouched
  *   shape rather than trusting the reading.
  * * **The presence subtree reaches the body.** `children` render inside the same
  *   `AnimatePresence` child the panel does, so a `useIsPresent()` in a host's body is false from
@@ -194,7 +194,7 @@ export interface DeckDialogProps {
  * Not portalled, like every other overlay in this app: the shipped CSP is `style-src 'self'` and
  * the libraries that portal reliably also want a runtime `<style>`.
  */
-export function DeckDialog({
+export function Dialog({
   open,
   title,
   ariaLabel,
@@ -206,7 +206,7 @@ export function DeckDialog({
   onDismiss,
   onClose,
   children,
-}: DeckDialogProps): JSX.Element {
+}: DialogProps): JSX.Element {
   // The `"inner"` rung, **registered out here on the flag** rather than one floor down on the
   // panel's mount. One press closes this and the card pane behind the view keeps its own — and
   // because an inner layer listens in the **capture** phase, it beats any handler a field
@@ -276,7 +276,7 @@ function Panel({
   onDismiss,
   onClose,
   children,
-}: Omit<DeckDialogProps, "open">) {
+}: Omit<DialogProps, "open">) {
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   /** False from the render that starts the fade out — the panel goes inert on it, and a host's
@@ -333,7 +333,7 @@ function Panel({
         // **Only when a host asked for flanks**, and the `undefined` test is doing real work: with
         // no flanks this string has to be what it was before the prop existed, because every other
         // dialog in the builder is drawn by this line and a third column would narrow all of them
-        // to buy room nobody uses. See {@link DeckDialogProps.flanks} for why the room is bought
+        // to buy room nobody uses. See {@link DialogProps.flanks} for why the room is bought
         // here rather than off the panel's edge.
         flanks !== undefined && FLANK_COLUMNS,
         !present && "pointer-events-none",
@@ -405,13 +405,13 @@ function Panel({
         // of their own and lost nothing by dropping it, because no body here paints a background
         // out to the rounded corners — the first one that does will square them off on every
         // dialog at once rather than on its own. What has changed is that the absence stopped
-        // being merely free: {@link DeckDialogProps.flanks} positions its controls *outside* this
+        // being merely free: {@link DialogProps.flanks} positions its controls *outside* this
         // box, so an `overflow-hidden` added here would not square a corner, it would delete the
         // printings modal's only pointer affordance for walking the deck. Anything that needs a
         // clip needs it on a box inside the panel.
         //
         // `relative` and `col-start-2` are the flanked case's and are absent otherwise, for
-        // {@link DeckDialogProps.flanks}' reason — every other dialog's panel keeps exactly the
+        // {@link DialogProps.flanks}' reason — every other dialog's panel keeps exactly the
         // class string it had. `relative` because the flanks are positioned against *this* box
         // rather than against the scrim, so the pair travels with the panel at every width; the
         // scale tween happens to establish a containing block too, and relying on that would tie
@@ -456,7 +456,7 @@ function Panel({
 
         {/* The flanks, out over the columns the scrim reserved — **inside the panel's DOM and
             outside its box**, which is the arrangement `trapTab` forces and which
-            {@link DeckDialogProps.flanks} spells out. `right-full`/`left-full` rather than a
+            {@link DialogProps.flanks} spells out. `right-full`/`left-full` rather than a
             negative offset, so the pair is placed by the panel's own edges and follows it as it
             narrows; `top-1/2 -translate-y-1/2` centres each against the panel's height, whatever
             the body inside it turned out to be.

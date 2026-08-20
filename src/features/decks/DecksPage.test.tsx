@@ -927,7 +927,7 @@ describe("DecksPage", () => {
    *
    * The menu focuses that tile as it closes — and that is *not* enough, which is the whole reason
    * these three cases exist. Every layer on this screen moves the caret into itself on mount
-   * (`DeleteConfirm`'s effect, `RenameField`'s, `DeckDialog`'s panel), so the menu's hand-back is
+   * (`DeleteConfirm`'s effect, `RenameField`'s, `Dialog`'s panel), so the menu's hand-back is
    * overwritten a moment later. `dismiss()` is then the only thing that can put it back, and it
    * puts it back on `openerRef` — so a menu that passed no opener leaves the caret on the panel
    * it is about to unmount, and this codebase's own rule says what happens next: an element that
@@ -979,7 +979,7 @@ describe("DecksPage", () => {
     expect(document.activeElement).toBe(tile);
   });
 
-  /** Closed is nothing mounted — `DeckDialog`'s guarantee, and what makes hosting this on a
+  /** Closed is nothing mounted — `Dialog`'s guarantee, and what makes hosting this on a
    *  wall of forty tiles free. */
   it("reads no deck at all until the settings dialog is opened", async () => {
     wrap(<DecksPage />);
@@ -1676,7 +1676,7 @@ describe("the folder row's menu", () => {
    *
    * The menu focuses that row as it closes and that is *not* enough — the same fact the tile's
    * three cases are here for. Every layer on this screen moves the caret into itself on mount
-   * (`FolderNameField`'s effect, `DeleteFolderConfirm`'s, `DeckDialog`'s panel), so the menu's
+   * (`FolderNameField`'s effect, `DeleteFolderConfirm`'s, `Dialog`'s panel), so the menu's
    * hand-back is overwritten a moment later and `dismiss()` is the only thing that can put it
    * right. It puts it on `openerRef` — so a menu row that passed no opener leaves the caret on a
    * panel about to unmount, and this codebase's own rule says what follows: focus drops to

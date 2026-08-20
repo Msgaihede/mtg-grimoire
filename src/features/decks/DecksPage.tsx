@@ -102,7 +102,7 @@ export function DecksPage() {
   /**
    * Which deck the settings dialog is about — **kept after it closes, and that is the point**.
    *
-   * `DeckDialog` renders its panel inside an `AnimatePresence`, so an `{open && …}` around the
+   * `Dialog` renders its panel inside an `AnimatePresence`, so an `{open && …}` around the
    * dialog would unmount the surface on the render that closes it and take its exit tween with
    * it (the rule `ImportDeckDialog` is mounted by, one control along). The dialog therefore has
    * to keep a deck id for the length of the fade, while `panel` — which is what says *open* —
@@ -129,7 +129,7 @@ export function DecksPage() {
    * private to its own closures, so a row cannot pass an opener down and {@link deckMenuDeps}
    * used to send `null`. That reads as safe — the panel focuses the tile as it closes — and is
    * not, because **every layer on this screen then moves the caret into itself on mount**
-   * (`DeleteConfirm`'s effect, `RenameField`'s, `DeckDialog`'s panel). So the panel's hand-back
+   * (`DeleteConfirm`'s effect, `RenameField`'s, `Dialog`'s panel). So the panel's hand-back
    * is overwritten a moment later, and `dismiss`'s `openerRef.current?.focus()` — the one thing
    * that puts the caret back on Escape or Cancel — did nothing at all. The panel then unmounted
    * with the caret inside it, which by this file's own rule drops focus to `<body>` and makes the
@@ -968,7 +968,7 @@ export function DecksPage() {
       {/* **The third host of `DeckSettingsDialog`**, and the shape that file was built for:
           `DeckSettingsForm` owns no mutation and imports no hook that reaches the backend, so
           every value and every write arrives as a prop and a host is free to be anywhere. It
-          costs this screen nothing while it is shut — `DeckDialog` renders `children` only
+          costs this screen nothing while it is shut — `Dialog` renders `children` only
           while `open`, so a closed dialog is no `deck_get`, no folder read and no format read —
           which is why it is mounted once out here rather than once per tile.
           Mounted only once a deck has been named, and then for good: see {@link settingsDeckId}

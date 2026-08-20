@@ -222,7 +222,7 @@ describe("AllPrintingsDialog", () => {
     renderDialog();
     expect(screen.queryByRole("dialog")).toBeNull();
     // And asks nothing: a closed modal costs no query, which is the whole point of the body
-    // living inside `DeckDialog`'s children.
+    // living inside `Dialog`'s children.
     expect(cardPrintings).not.toHaveBeenCalled();
   });
 
@@ -232,7 +232,7 @@ describe("AllPrintingsDialog", () => {
     open({ oracleId: "o1", name: "Sol Ring", deck: null });
 
     // `toBeInTheDocument` rather than `toBeVisible`, which is `CategoriesDialog.test.tsx`'s
-    // convention and for a reason worth carrying: `DeckDialog`'s panel carries its `initial` —
+    // convention and for a reason worth carrying: `Dialog`'s panel carries its `initial` —
     // `opacity: 0` — on the frame it mounts, so a visibility assertion on the first render is a
     // race against a fade that `MotionGlobalConfig.skipAnimations` shortens but does not skip.
     expect(await screen.findByRole("dialog", { name: /Sol Ring/ })).toBeInTheDocument();
@@ -397,7 +397,7 @@ describe("AllPrintingsDialog", () => {
     open(WALK[1]);
     const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
 
-    // The caret is on the panel — `DeckDialog` puts it there on open — so the press bubbles to
+    // The caret is on the panel — `Dialog` puts it there on open — so the press bubbles to
     // the panel's own handler, which is the only thing entitled to it. Waited for rather than
     // assumed: a press made while the caret is still on `<body>` reaches no handler at all, and
     // would read as the step being broken.

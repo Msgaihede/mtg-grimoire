@@ -9,7 +9,7 @@
  * rewrite, and this file did not change for it. `DeckEditor`'s `exportSubject` is where the two
  * scopes are resolved, and `layerMatches` is why one layer can carry both.
  *
- * **Built on `DeckDialog`**, the deck surface's shared modal shell (`src/CLAUDE.md`), rather
+ * **Built on `Dialog`**, the deck surface's shared modal shell (`src/CLAUDE.md`), rather
  * than carrying its own copy of the chrome — `ImportDeckDialog`, `TheoryDiffDialog` and
  * `CreateDeckDialog` are the three still doing that, named as the ones to move onto the shell,
  * and this file must not become a fourth. The body lives in {@link Body}, one floor down, so a
@@ -29,7 +29,7 @@
  * shut rather than hidden: the `<pre>` is unmounted, because a hidden block of text is the shape
  * that lets a test assert a line no reader can see. The reported bug that arrived with it was
  * *not* this file's, though, and the two are worth keeping apart — the panel itself grew past
- * the window and took the buttons off screen with it, which is `DeckDialog`'s scrim and is fixed
+ * the window and took the buttons off screen with it, which is `Dialog`'s scrim and is fixed
  * there for every dialog on the shell.
  *
  * **A cancelled save answers `null`, and that is the one bug worth naming in prose.** `save()`
@@ -66,7 +66,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { DeckDialog } from "../DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import {
   EXPORT_FORMATS,
   EXPORT_FORMAT_EXTENSION,
@@ -110,7 +110,7 @@ export function ExportDialog({
   onClose,
 }: ExportDialogProps): JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title={`Export "${subject}"`}
       closeLabel="Close export"
@@ -119,7 +119,7 @@ export function ExportDialog({
       onClose={onClose}
     >
       <Body cards={cards} suggestedFileName={suggestedFileName} />
-    </DeckDialog>
+    </Dialog>
   );
 }
 

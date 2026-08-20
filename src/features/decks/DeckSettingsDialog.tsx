@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { deckCoverUrl } from "@/lib/images";
 import { ipc, ipcError } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { useDeck } from "./useDeck";
 import { useDeckField } from "./useDeckField";
@@ -16,7 +16,7 @@ export interface DeckSettingsDialogProps {
   /**
    * Escape, and the close control: hand focus back to whatever opened the dialog, then close.
    *
-   * Stable, please — {@link DeckDialog} passes it to `useDismissOnEscape`, which takes it as a
+   * Stable, please — {@link Dialog} passes it to `useDismissOnEscape`, which takes it as a
    * dependency, so a function rebuilt on every render of the opener re-registers the window
    * listener just as often.
    */
@@ -31,7 +31,7 @@ export interface DeckSettingsDialogProps {
  *
  * **Three files, and the split is by what each one knows.** {@link DeckSettingsForm} asks the
  * questions and is presentational — it mounts no query and no mutation, because
- * `CreateDeckDialog` asks the same ones about a deck that does not exist yet. {@link DeckDialog}
+ * `CreateDeckDialog` asks the same ones about a deck that does not exist yet. {@link Dialog}
  * is the chrome: the scrim, the panel, the trap, the Escape rung, the header and the ✕, shared
  * with every other modal the deck builder opens. What is left here is {@link Settings}, and it
  * is everything that is about *this deck existing*: reading it, the three commands that write
@@ -74,7 +74,7 @@ export function DeckSettingsDialog({
   // folder read and no format read — the property that makes the editor's unconditional mount
   // of its dialogs free, and the one `DeckSettingsDialog.test.tsx`'s first case pins.
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="Deck settings"
       closeLabel="Close deck settings"
@@ -83,7 +83,7 @@ export function DeckSettingsDialog({
       onClose={onClose}
     >
       <Settings deckId={deckId} />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
@@ -151,7 +151,7 @@ function Settings({ deckId }: { deckId: number }) {
    * `commit` writes nothing at all while `ref.current` is null.
    *
    * Each of them holds its own `useIsPresent()`, which is the shell's presence rather than this
-   * component's: `Settings` is rendered as `DeckDialog`'s `children`, inside the same
+   * component's: `Settings` is rendered as `Dialog`'s `children`, inside the same
    * `AnimatePresence` child as the panel, so "the dialog is closing" reaches these three hooks
    * and the half-typed paragraph is written on the *close* rather than on the unmount a fifth of
    * a second later.

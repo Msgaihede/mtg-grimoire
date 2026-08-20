@@ -15,7 +15,7 @@ import {
 import { statusLine } from "@/lib/motion";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
-import { DeckDialog } from "../DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { DEFAULT_FORMAT, FormatSelect, GameSelect } from "../FormatSelect";
 import { DEFAULT_VARIANT, useDeck } from "../useDeck";
 import { ANY_GAME, useFormatSpecs } from "../useFormatSpecs";
@@ -100,7 +100,7 @@ export interface ImportDeckDialogProps {
    */
   forcedCategoryName?: string;
   /**
-   * **A mount, not a class**, and it is {@link DeckDialog}'s guarantee rather than this file's:
+   * **A mount, not a class**, and it is {@link Dialog}'s guarantee rather than this file's:
    * everything with state — the pasted text, the step, the commander picked, the caret — lives
    * in {@link ImportBody}, which the shell renders only while this is true. Closing unmounts all
    * of it and reopening starts a genuinely new question rather than one somebody has to remember
@@ -149,7 +149,7 @@ type Step = "source" | "preview";
  * `buildImportPlan`, whose trailing argument is where a named pile beats the filer. This file
  * draws the difference (the header line says which pile) and decides none of it.
  *
- * **The chrome is {@link DeckDialog}'s and no longer this file's** (2026-08-16). The scrim, the
+ * **The chrome is {@link Dialog}'s and no longer this file's** (2026-08-16). The scrim, the
  * `LAYER.overlay` rung, `aria-modal`, `trapTab`, the Escape registration on the *flag* and the
  * titled header with its ✕ were a hand-copy of that shell — a copy that had drifted to a second
  * scrim darkness over the same editor and a third `max-h`. What is left here is the two steps
@@ -176,7 +176,7 @@ export function ImportDeckDialog({
   onImported,
 }: ImportDeckDialogProps): JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="Import a decklist"
       // An *element*, not a call, for {@link ImportSubtitle}'s reason: it reads the deck, and a
@@ -196,7 +196,7 @@ export function ImportDeckDialog({
         forcedCategoryName={forcedCategoryName}
         onImported={onImported}
       />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
@@ -206,7 +206,7 @@ export function ImportDeckDialog({
  *
  * **A component and not a string, because it reads the deck.** The name comes from `useDeck`, and
  * a subtitle computed in the wrapper above would mount that read for a dialog nobody has opened —
- * the exact property {@link DeckDialog} exists to give. Rendered as an element, the shell mounts
+ * the exact property {@link Dialog} exists to give. Rendered as an element, the shell mounts
  * it inside its own `open &&` and it costs a `deck_get` only while the dialog is up; with the
  * editor open behind it that is no round trip at all, since TanStack shares a query's cache
  * between observers and {@link ImportBody} is already reading the same key.
@@ -237,7 +237,7 @@ function ImportSubtitle({
 
 /**
  * The two steps and everything that decides them — mounted only while the dialog is open, which
- * is {@link DeckDialog}'s guarantee and what makes the step, the pasted text and the commander
+ * is {@link Dialog}'s guarantee and what makes the step, the pasted text and the commander
  * choice a session rather than something an effect has to clear.
  *
  * It is the shell's `children` and a flex item of the panel, so the `<form>` it returns brings

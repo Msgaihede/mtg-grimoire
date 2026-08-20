@@ -1,7 +1,7 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "./Dialog";
 
 /**
  * How long a `waitFor` will wait for this shell's first frame — **the constant every dialog
@@ -89,7 +89,7 @@ function Flank({ children, label }: { children: React.ReactNode; label: string }
  */
 const meta = {
   title: "Decks/Dialog shell",
-  component: DeckDialog,
+  component: Dialog,
   tags: ["autodocs"],
   args: {
     open: true,
@@ -107,7 +107,7 @@ const meta = {
     // each story an iframe, which is the viewport the fixed positioning is then relative to.
     docs: { story: { inline: false, height: "600px" } },
   },
-} satisfies Meta<typeof DeckDialog>;
+} satisfies Meta<typeof Dialog>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -207,7 +207,7 @@ export const PressingTheScrim: Story = {
  *
  * **The play can only show the weaker half of that**, and says so rather than implying more: a
  * `queryByRole` finding nothing is equally true of a panel that is merely hidden. What pins the
- * real claim is `DeckDialog.test.tsx`'s first case, which renders a body that reports its own
+ * real claim is `Dialog.test.tsx`'s first case, which renders a body that reports its own
  * mount through a spy and asserts the spy was never called.
  */
 export const Closed: Story = {

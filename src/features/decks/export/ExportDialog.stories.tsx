@@ -4,7 +4,7 @@ import { ExportDialog } from "./ExportDialog";
 import type { ExportCard } from "./format";
 import { printing } from "../../../../.storybook/fake/fixtures";
 
-/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+/** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial`, so nothing inside it is visible yet. `Decks/Dialog shell` has the whole reason and
  *  why the number is seconds; each file keeps its own copy because CSF would index an exported
  *  one as a story. */
@@ -130,7 +130,7 @@ const DECK_CARDS: ExportCard[] = [
  * Taking the cards as a **prop** is what made the second control a caller rather than a rewrite.
  * Nothing on this page reaches the deck at all.
  *
- * **Built on `DeckDialog`**, the deck surface's shared modal shell, rather than carrying its own
+ * **Built on `Dialog`**, the deck surface's shared modal shell, rather than carrying its own
  * copy of the chrome; the body lives one floor down, so `open={false}` mounts nothing at all —
  * no format state, no memoized preview text. See {@link Closed}.
  *
@@ -615,7 +615,7 @@ export const ShutByDefault: Story = {
 /**
  * Closed draws **no dialog at all** — not a scrim, not a panel, not an off-screen one.
  *
- * The body is passed to `DeckDialog` as an *element*, and an element React never puts in the tree
+ * The body is passed to `Dialog` as an *element*, and an element React never puts in the tree
  * is a component that never ran — so the chosen format, the memoized preview and the copy status
  * all begin at the open, and every reopen starts on Plain text.
  *

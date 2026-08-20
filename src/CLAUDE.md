@@ -116,7 +116,7 @@ Every one of these has its measurement and its story in
   docked, so a 384px docked column leaves the deck **202px** — one stack column — and it is
   subtracted from the work whether or not it is being used. A surface that is _consulted_
   (history, categories, tags, deck settings) is therefore a
-  **`src/features/decks/DeckDialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
+  **`src/components/Dialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
   the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
   because the panel outlives the flag by the length of its fade. **A new modal in the deck
   surface is built _on_ that file rather than beside it, and since 2026-08-16 it is the only
@@ -127,7 +127,7 @@ Every one of these has its measurement and its story in
   it that way**: between them one editor drew two scrim darknesses, the ✕ at two geometries and
   two speeds, and the panel at three `max-h` values, none of which anybody had decided — a
   resemblance is N independent decisions that happen to agree today. Each of those is settled
-  once in `DeckDialog.tsx` with the reason at its own site, and the shell's three optional
+  once in `Dialog.tsx` with the reason at its own site, and the shell's three optional
   header props (`title: ReactNode`, `ariaLabel`, `subtitle`) exist because folding the last
   three in needed exactly that much and no more. **Clamping the panel to the window takes two
   classes and they only work together** (2026-08-18): the panel's `max-h-full` is a percentage
@@ -138,7 +138,7 @@ Every one of these has its measurement and its story in
   asked for, and the dialog's buttons sat at y≈2930 — off the window, reachable by neither pointer
   nor wheel. `minmax(0,` is load-bearing: a bare `1fr` is `minmax(auto, 1fr)`, whose `auto` floor
   is the content again. **jsdom has no layout engine, so nothing in the suite can see any of it** —
-  `DeckDialog.test.tsx` pins the two classes and the numbers come from a browser. `DeckEditor.test.tsx`'s Tab sweep is still
+  `Dialog.test.tsx` pins the two classes and the numbers come from a browser. `DeckEditor.test.tsx`'s Tab sweep is still
   driven per surface rather than pointed at the shell, and it is what would go red if a modality
   fix reached one dialog and stopped there. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
@@ -153,8 +153,8 @@ Every one of these has its measurement and its story in
   ugly, because the way out of a modal is a control it has just scrolled away. A body carries
   `min-h-0 flex-1 overflow-y-auto`, and **that is inert on its own**: it scrolls nothing until
   the panel above it is bounded, which takes the two classes and the reason given in the
-  `DeckDialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
-  for this** — build a modal on `DeckDialog` rather than beside it, and check a new one in the
+  `Dialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
+  for this** — build a modal on `Dialog` rather than beside it, and check a new one in the
   running window at a short viewport with more content than fits.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
@@ -430,7 +430,7 @@ markup of its own. Every rule below has a failure behind it that shipped or near
   is `z-30` and `overlay` is `z-45`: the panel is invisible and unreachable, and **nothing goes
   red**, because jsdom has no opinion about a z-index. That is why the deck editor's category menu
   is wired onto **the view's own group element and never onto `GroupHeader`** — `CategoriesDialog`
-  draws that same header inside a `DeckDialog`. `layers.ts` names this overlap as the one that must
+  draws that same header inside a `Dialog`. `layers.ts` names this overlap as the one that must
   not exist; keeping it non-existent is a placement decision at each call site, not something the
   primitive can enforce. Do not tidy a menu handler onto a shared row component.
 - **A menu opener has to be able to take focus, and `focus()` on a node with no `tabIndex` is a

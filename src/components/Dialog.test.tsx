@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useIsPresent } from "motion/react";
 import { describe, expect, it, vi } from "vitest";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "./Dialog";
 
 /**
  * The shell's own contract, tested away from any host.
@@ -16,11 +16,11 @@ import { DeckDialog } from "./DeckDialog";
  */
 
 /** The dialog with the two callbacks a caller owns, and a body that is only a body. */
-function open(props: Partial<React.ComponentProps<typeof DeckDialog>> = {}) {
+function open(props: Partial<React.ComponentProps<typeof Dialog>> = {}) {
   const onDismiss = vi.fn();
   const onClose = vi.fn();
   const view = render(
-    <DeckDialog
+    <Dialog
       open
       title="Deck settings"
       closeLabel="Close deck settings"
@@ -32,7 +32,7 @@ function open(props: Partial<React.ComponentProps<typeof DeckDialog>> = {}) {
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <button type="button">A control inside the body</button>
       </div>
-    </DeckDialog>,
+    </Dialog>,
   );
   return { onDismiss, onClose, ...view };
 }
@@ -49,7 +49,7 @@ async function panel() {
   return dialog;
 }
 
-describe("DeckDialog", () => {
+describe("Dialog", () => {
   /**
    * **Closed is nothing mounted**, and the second assertion is the one that matters: the body is
    * passed as an *element*, and an element React never puts in the tree is a component that never
@@ -64,7 +64,7 @@ describe("DeckDialog", () => {
     }
 
     render(
-      <DeckDialog
+      <Dialog
         open={false}
         title="Deck settings"
         closeLabel="Close deck settings"
@@ -73,7 +73,7 @@ describe("DeckDialog", () => {
         onClose={vi.fn()}
       >
         <Body />
-      </DeckDialog>,
+      </Dialog>,
     );
 
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -99,7 +99,7 @@ describe("DeckDialog", () => {
   it("consumes no Escape while it is closed", async () => {
     const onDismiss = vi.fn();
     render(
-      <DeckDialog
+      <Dialog
         open={false}
         title="Deck settings"
         closeLabel="Close deck settings"
@@ -108,7 +108,7 @@ describe("DeckDialog", () => {
         onClose={vi.fn()}
       >
         <p>Reading the deck…</p>
-      </DeckDialog>,
+      </Dialog>,
     );
 
     await userEvent.keyboard("{Escape}");
@@ -271,17 +271,17 @@ describe("DeckDialog", () => {
     };
 
     const { rerender } = render(
-      <DeckDialog open {...props}>
+      <Dialog open {...props}>
         <Body />
-      </DeckDialog>,
+      </Dialog>,
     );
     await panel();
     expect(seen).toContain(true);
 
     rerender(
-      <DeckDialog open={false} {...props}>
+      <Dialog open={false} {...props}>
         <Body />
-      </DeckDialog>,
+      </Dialog>,
     );
 
     // The render that starts the exit, seen from inside the body — the panel is still mounted.

@@ -307,7 +307,7 @@ const meta = {
           "which printings a card had closed the deck it was being asked about; inside the " +
           "editor it opened the 384px card pane, which is the right content at the wrong width. " +
           "Printings are *consulted*, like deck history and categories, so this is a " +
-          "`DeckDialog` like both of them and the store field behind it writes one thing.\n\n" +
+          "`Dialog` like both of them and the store field behind it writes one thing.\n\n" +
           "**What a press means is decided by one field.** With a deck slot the press **is** the " +
           "swap — `deck_swap_printing`, through the same `useSwapFromPane` the card pane presses " +
           "— and the modal closes on success ({@link FromADeckRow}) or stays open and says why " +
@@ -528,7 +528,7 @@ export const FromADeckRow: Story = {
       await expect(canvas.getByText("Main deck · Sol Ring — SLD 913")).toBeInTheDocument();
     });
     // And the modal is gone, which is the other half of "the press was the decision": there is
-    // nothing left to confirm. Waited for, because `DeckDialog` keeps its panel mounted for the
+    // nothing left to confirm. Waited for, because `Dialog` keeps its panel mounted for the
     // length of its fade.
     await waitFor(async () => {
       await expect(canvas.queryByRole("dialog")).toBeNull();

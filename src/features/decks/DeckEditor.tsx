@@ -42,7 +42,7 @@ import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
 import { deckWalkStops } from "./deckWalk";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
@@ -469,7 +469,7 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * it when the header grew `Export deck` — and it is a **behavioural** sweep for a reason worth
  * reading before the next modality edit.
  *
- * **Every overlay here is a `DeckDialog`** — where the scrim, the centring, `aria-modal`, the
+ * **Every overlay here is a `Dialog`** — where the scrim, the centring, `aria-modal`, the
  * trap, the ✕ and the `"inner"` rung are written once, and since 2026-08-16 that shell is the
  * only definition of a modal in this surface. `TheoryDiffDialog` and `ImportDeckDialog` were the
  * last two here carrying their own copy of that chrome, with `CreateDeckDialog` a third copy
@@ -481,7 +481,7 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  * until 2026-08-16, and each of those files was free to answer a shared question its own way:
  * one editor drew two scrim darknesses, the ✕ at two geometries and two speeds, and the panel
  * at three `max-h` values, none of it decided by anybody. A new modal here is built *on*
- * `DeckDialog.tsx` rather than beside it.
+ * `Dialog.tsx` rather than beside it.
  */
 type Layer =
   | { kind: "check" }
@@ -779,7 +779,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * element, and that is the whole point of it.**
    *
    * A toolbar button hands back to itself. A **menu row has no control to return to**, and
-   * `null` there is not "no hand-back needed": `DeckDialog` focuses its own panel on mount and
+   * `null` there is not "no hand-back needed": `Dialog` focuses its own panel on mount and
    * restores nothing, so a `null` opener leaves the caret on a panel that is unmounting and
    * drops it on `<body>` — the next Tab then restarts from the top of the app. That is the
    * failure `DecksPage.test.tsx` already documents in those words, and it is the third time on
@@ -859,7 +859,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * before each of its dialogs, for exactly this reason.
    *
    * This observer is the **editor's**, so it outlives every open of the `deleteCategory` layer —
-   * unlike the meta dialogs', which live in a body `DeckDialog` unmounts and start clean by
+   * unlike the meta dialogs', which live in a body `Dialog` unmounts and start clean by
    * construction. Without this a refused delete left the mutation in `isError`, and the next
    * `Delete…` drew its `role="alert"` on mount: a sentence *announced on insertion*, about a
    * press the reader had not made, naming a pile it was never about.
@@ -3109,7 +3109,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           Each is closed by `open`, and each unmounts everything behind that flag — so a closed
           one costs no query, no window listener and no state. That is what makes it safe to
           mount every one of them unconditionally, and it is why the editor can hold them in one
-          `Layer` union rather than a boolean apiece. For all but two `DeckDialog` guarantees it:
+          `Layer` union rather than a boolean apiece. For all but two `Dialog` guarantees it:
           `open` gates an `AnimatePresence`, so a closed dialog's body is not in the tree at all.
           The theory diff and the import dialog are not on that shell (see the `Layer` union's
           doc) and each guarantees the same thing with an `AnimatePresence` of its own — which
@@ -3181,7 +3181,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
           `others` is every category **but** this one, in the reader's own `sortOrder`: the list
           the move picker offers, which must not include the pile being deleted. */}
-      <DeckDialog
+      <Dialog
         open={layer?.kind === "deleteCategory"}
         title={deletedCategory === null ? "Delete category" : `Delete “${deletedCategory.name}”`}
         // Named for what it closes, like every other dialog here — two controls called "Close"
@@ -3220,19 +3220,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           </div>
         )}
-      </DeckDialog>
+      </Dialog>
 
       {/* The confirmation a `Clear stack…` owes, beside the delete's and deliberately **not**
           folded into it. That dialog asks which of two things should happen to the cards; this
           one has a single outcome and a different scope — one list, not both — so sharing a
           component would mean a picker with nothing to pick and a sentence with a branch for
-          each caller. What they do share is the chrome, which is `DeckDialog`'s.
+          each caller. What they do share is the chrome, which is `Dialog`'s.
 
           A refused clear is said **inside** this dialog for the delete's reason, in full there:
           the editor's own banner draws behind this dialog's `LAYER.overlay` scrim, and a
           refusal leaves the question open with its button still live — so without this the
           reader sees a press that did nothing. */}
-      <DeckDialog
+      <Dialog
         open={layer?.kind === "clearCategory"}
         title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
         closeLabel="Close clear stack"
@@ -3259,7 +3259,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             />
           </div>
         )}
-      </DeckDialog>
+      </Dialog>
 
       {/* **The one overlay two controls open**, and the only one whose scope decides which. The
           header's `Export deck` opens it over the deck; a category heading's right-click opens

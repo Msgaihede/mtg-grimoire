@@ -878,7 +878,7 @@ controls open that dialog** — the editor header's `Export deck` and a category
   every play and test that reads a rendered line presses the toggle first, as a reader would.
   **It is not the fix for the reported bug it arrived with**, and the two are worth keeping apart —
   the panel itself grew past the window and took the buttons off screen with it, which is
-  `DeckDialog`'s scrim and is fixed there for every dialog on the shell.
+  `Dialog`'s scrim and is fixed there for every dialog on the shell.
 - **`save()` resolves `null` on Cancel**, and writing that string to disk is the trap the guard in
   `handleSaveAs` exists to prevent. A refused write is **reported and does not close the dialog**:
   the reader's text is still on screen and still copyable, so the failure costs them nothing they
@@ -1882,7 +1882,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
   one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
   the two of them draw with. Those three and `DeckSettingsDialog` are built on one shell,
-  `DeckDialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
+  `Dialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
   zones' New category, both destructive confirmations. **There are no exceptions left, as of
   2026-08-16**: Import cards and the theory difference were never drawers and carried their own
   copy of that chrome until then, and `CreateDeckDialog` a third copy outside the editor — all

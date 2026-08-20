@@ -141,9 +141,9 @@ beforeEach(() => {
 });
 
 /**
- * **The chrome is `DeckDialog`'s now, and the cases below that touch it are here on purpose.**
+ * **The chrome is `Dialog`'s now, and the cases below that touch it are here on purpose.**
  * The shell's own contract — closed mounts nothing, Escape, the scrim press, the modal role, the
- * ✕'s label — is pinned once in `DeckDialog.test.tsx`, against a body that is only a body. What
+ * ✕'s label — is pinned once in `Dialog.test.tsx`, against a body that is only a body. What
  * is left here is what only this host can say: that it wires `onDismiss` and `onClose` through,
  * that a closed dialog costs no `deck_get`, and that the trap holds over the **real** form, whose
  * selects, switch, textareas and occasionally disabled controls are the list `trapTab` reads on
@@ -163,7 +163,7 @@ describe("DeckSettingsDialog", () => {
 
   /** The `"inner"` rung: one press, one layer, and the caret hand-back is the caller's. Here it
    *  is the *wiring* that is on trial — that this host hands its `onDismiss` to the shell — since
-   *  the rung itself is `DeckDialog`'s. */
+   *  the rung itself is `Dialog`'s. */
   it("dismisses on Escape", async () => {
     const { onDismiss, onClose } = open();
     await loaded();
@@ -189,7 +189,7 @@ describe("DeckSettingsDialog", () => {
    * running against is a real form — a dozen stops, two selects, a switch and a cover grid — and
    * not the one button a shell test can honestly put in a body. Its first line is also the whole
    * of the old "takes the caret when it opens" case, which is why that one is gone from this file
-   * and lives in `DeckDialog.test.tsx` instead.
+   * and lives in `Dialog.test.tsx` instead.
    */
   it("keeps Tab inside itself, both ways round", async () => {
     open();
@@ -502,7 +502,7 @@ describe("DeckSettingsDialog", () => {
    * reaches it only because the shell renders `children` inside its own presence subtree rather
    * than beside it. A shell that mounted the body outside would leave the hook reading the
    * default `true` forever, and this would still pass — off the unmount backstop, a fifth of a
-   * second later and racing the editor's teardown. `DeckDialog.test.tsx`'s presence case is what
+   * second later and racing the editor's teardown. `Dialog.test.tsx`'s presence case is what
    * separates the two; this one is the behaviour that depends on it.
    */
   it("commits a half-typed notes draft when the dialog closes", async () => {

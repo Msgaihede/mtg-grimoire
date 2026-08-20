@@ -252,7 +252,7 @@ export interface DeckSearchPanelProps {
  * It is a docked column rather than one of the editor's dialogs because it is **worked out of**:
  * its tiles are drag sources into the deck's own category columns beside it, and a scrim would
  * end that drag path and cover the card pane a reader flips printings in. `src/CLAUDE.md` carries
- * that rule; everything the reader merely *consults* is a `DeckDialog`.
+ * that rule; everything the reader merely *consults* is a `Dialog`.
  *
  * The tiles stay selectable, so the pane keeps working from inside the editor: clicking the
  * art opens the card exactly as it does on the search view, and the Add button beside it does
@@ -654,7 +654,7 @@ function ResizeHandle({
  *
  * A hook cannot be called conditionally, so `useCardSearch` sitting in the root meant its query
  * ran for every deck the reader opened whether or not they had asked for a wall. Closed is
- * nothing mounted here for the same reason it is in `DeckDialog`: the search, its filter state,
+ * nothing mounted here for the same reason it is in `Dialog`: the search, its filter state,
  * its facets and its scroll position all begin at the press and cost nothing before it. A
  * *reader's* collapse throws that state away rather than hiding it, and that is the intended
  * reading — this is a column you open to do a job and shut when the job is done, and its own
