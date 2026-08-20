@@ -24,11 +24,19 @@
  * `foil` against a live row the reader never said anything about. The address is what the reader
  * wrote; two rows that both say `null` are two regular copies and match each other.
  *
- * **This is not [`../decks/TheoryDiffDialog`]'s rule and must not be conflated with it.** The
- * shopping list groups by *oracle card* and subtracts *quantities*, because it is answering "what
- * would I have to buy". This answers "is the card in front of me the one I planned", which is a
- * question about the row rather than about the pile — a live 2-of against a planned 4-of is still
- * the planned card, half-acquired, and the difference readout in the toolbar is what counts that.
+ * **The backend reached the same grain independently, and that is worth knowing rather than a
+ * coincidence to lean on.** `deck_theory_diff` grouped by *oracle card* until 2026-08-20 and now
+ * groups on the exact card, finish included — `TheoryDiffDialog`'s `rowKey` is
+ * `` `${cardId}|${finish ?? ""}` ``, this is the same pair with a different separator. Two files
+ * deciding that a plan naming the Alpha foil is not satisfied by the M10 regular is agreement
+ * about what a *planned card* is; keep them in step if either ever moves.
+ *
+ * **What is emphatically not shared is the question.** The shopping list subtracts *quantities*
+ * and answers "what would I have to buy"; this answers "is the card in front of me the one I
+ * planned". Neither is derivable from the other, in either direction: a card fully acquired is
+ * **absent** from the diff and is still in the plan, and a card half-acquired is on the diff and
+ * also in the plan. A live 2-of against a planned 4-of is the planned card, half-acquired, and
+ * the `Compare` dialog is what counts the shortfall.
  */
 import type { DeckCard } from "@/lib/ipc";
 

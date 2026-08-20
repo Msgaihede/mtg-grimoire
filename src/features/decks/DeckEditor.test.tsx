@@ -725,7 +725,8 @@ describe("DeckEditor", () => {
    * * the controls beside it were `shrink-0`, which pins a `flex-wrap` container at its
    *   max-content width (**692px at every window size**), so every pixel of the squeeze fell on
    *   the name and the switch beside it spilled 180px over the controls — at 1200 the last
-   *   pixels of "N cards differ" hit-tested to the format select.
+   *   pixels of the control beside it (then a "N cards differ" readout, now Compare) hit-tested
+   *   to the format select.
    *
    * Reverting any one of the three brings the collapse back, so all three are asserted.
    */
@@ -2419,7 +2420,7 @@ describe("DeckEditor", () => {
     ["History", "History", null],
     ["Deck settings", "Deck settings", null],
     [
-      "2 cards differ",
+      "Compare",
       "Theory to Live difference",
       () => {
         const live = detail({ theoryEnabled: true }, [bolt({ quantity: 4 })]);
@@ -2755,13 +2756,19 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The Live/Theory switch, and the readout that is the reason to open the difference dialog.
+   * The Live/Theory switch, and the button that is the way to the difference dialog.
    *
-   * Reading the other list is a **query-key change** rather than a refetch, so both are cached
-   * and flipping back is instant — which is why the editor can afford to read the other one
-   * just to count what differs.
+   * **The button says `Compare` and carries no count** (2026-08-20). It used to read "N cards
+   * differ", computed in `DeckEditor` over a second `deck_get` of the other variant — a second
+   * implementation of a comparison `deck_theory_diff` already owns, and one that disagreed with
+   * it: it keyed rows on `(categoryId, cardId)` and counted both directions, so a card the two
+   * lists file in different piles scored two and a hundred-card deck read as 150-odd
+   * differences. The number a reader wants is the dialog's own figure strip, one press away.
+   *
+   * **The second assertion is the test**, and it is the one that fails if the readout comes
+   * back: nothing may read the deck's *other* list until the reader asks for that list.
    */
-  it("switches between the deck's two lists, and says how many cards differ", async () => {
+  it("switches between the deck's two lists, and opens the difference on a Compare button", async () => {
     const live = detail({ theoryEnabled: true }, [bolt({ quantity: 4 })]);
     const theory = detail({ theoryEnabled: true }, [
       bolt({ quantity: 2, variant: "theory" }),
@@ -2773,8 +2780,9 @@ describe("DeckEditor", () => {
 
     await open();
 
-    // One row at a different count, one row Live has not got at all.
-    expect(await screen.findByRole("button", { name: "2 cards differ" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Compare" })).toBeInTheDocument();
+    expect(screen.queryByText(/cards? differs?/)).not.toBeInTheDocument();
+    expect(deckGet).not.toHaveBeenCalledWith(4, "theory", "tcgplayer");
 
     await userEvent.click(screen.getByRole("button", { name: "Theory" }));
 
@@ -2791,7 +2799,7 @@ describe("DeckEditor", () => {
     await open();
 
     expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/cards differ/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Compare" })).not.toBeInTheDocument();
   });
 
   /**

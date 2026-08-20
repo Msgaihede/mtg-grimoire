@@ -1,5 +1,12 @@
-import { FILTER_CONTROL, FILTER_FOCUS, ResetAll, ToggleChip } from "@/components/FilterChips";
+import {
+  FILTER_CONTROL,
+  FILTER_FOCUS,
+  LayoutToggle,
+  ResetAll,
+  ToggleChip,
+} from "@/components/FilterChips";
 import { sortOptions } from "@/lib/options";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { WISHLIST_SORTS, type Wishlist, type WishlistSort } from "./useWishlist";
 
@@ -13,6 +20,8 @@ import { WISHLIST_SORTS, type Wishlist, type WishlistSort } from "./useWishlist"
  * to order it.
  */
 export function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
+  const view = useAppStore((s) => s.wishlistView);
+  const setWishlistView = useAppStore((s) => s.setWishlistView);
   // Drawn only where it has something to filter. A wishlist is flagged by the reconciler and
   // most never are, so a permanent chip here would be a control that spends its whole life
   // saying nothing — the rule the collection's banner follows, applied to a filter. It stays
@@ -78,18 +87,15 @@ export function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
         id="wishlist-sort"
         value={wishlist.sortSelection}
         onChange={(e) => wishlist.setSortKey(e.target.value as WishlistSort)}
-        // At the far end of the row, where the other two views put their layout toggle: what
-        // is on the left is *what you are looking at*, and what is on the right is *how you
-        // are reading it*. This view has no layout to choose, so the sort is the whole of the
-        // right-hand group.
+        // Left-packed with the filters, where it used to be pushed to the far end of the row on
+        // the grounds that this view had no layout toggle to put there. It has one now, and the
+        // toggle carries its own `ml-auto` — so the row reads the way the other two do: what is
+        // on the left is *what you are looking at*, and the one control on the right is *how you
+        // are looking at it*.
         //
         // Never gold: a sort is always on — there is no "unsorted" — so a state colour here
         // would say "a filter is active" about a control that cannot be inactive.
-        className={cn(
-          FILTER_CONTROL,
-          FILTER_FOCUS,
-          "ml-auto border-border bg-surface px-2 text-dim",
-        )}
+        className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
       >
         {/* Reachable by reading only: picking it would be picking the sort you already
             have. Present because a select showing nothing at all looks broken, and because
@@ -113,6 +119,13 @@ export function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
           </option>
         ))}
       </select>
+
+      {/* The same two buttons the search and the collection carry, in the same corner and
+          reading the same three words — one wall, one table, one place to switch. It writes
+          `wishlistView`, which is its own field: the three lists are looked at for three
+          different reasons, and a reader who put their collection in a table was not saying
+          anything about their shopping list. */}
+      <LayoutToggle view={view} onChange={setWishlistView} />
     </div>
   );
 }

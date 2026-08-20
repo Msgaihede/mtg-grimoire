@@ -327,6 +327,7 @@ const BOLT_WISH: WishRow = {
   rarity: "common",
   manaCost: "{R}",
   typeLine: "Instant",
+  artCardId: "c1",
   quantity: 2,
   preferredFinish: null,
   unitPrice: 400.5,
@@ -678,6 +679,9 @@ it("closes the card on Escape from inside a wishlist row's controls", async () =
   wishlistList.mockResolvedValue({ items: [BOLT_WISH], total: 1 });
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+  // The list view, which this one is about: both guarded cells are a *row's*, and the wishlist
+  // now opens on its wall. The search test above asks for its table for the same reason.
+  await userEvent.click(await screen.findByRole("button", { name: "Table view" }));
 
   await userEvent.click(await screen.findByRole("row", { name: /Lightning Bolt/ }));
   expect(await screen.findByRole("complementary", { name: /card details/i })).toBeInTheDocument();

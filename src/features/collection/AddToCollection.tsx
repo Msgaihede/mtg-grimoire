@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { filterChipState } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
-import { popup, PRESS } from "@/lib/motion";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** The printing a quick-add is about. Every surface that shows a card can build one. */
@@ -76,97 +74,27 @@ export function AddToCollectionButton({
    */
   align?: "start" | "end";
 }) {
-  const [open, setOpen] = useState(false);
-  // Which list is being filled lives out here, above the popup that changes it, because it
-  // is half of what this button's name says — a trigger reading "…to collection" over an
-  // open wishlist form is wrong about what pressing it again would do. It therefore also
-  // outlives a close, which is the right answer for a reader working down a printings list
-  // adding wishes: the destination is their last choice, not a default reasserted each time.
+  // Which list is being filled lives out here, above the panel that changes it, because it is
+  // half of what this button's name says — a trigger reading "…to collection" over an open
+  // wishlist form is wrong about what pressing it again would do. It therefore also outlives a
+  // close, which is the right answer for a reader working down a printings list adding wishes:
+  // the destination is their last choice, not a default reasserted each time.
   const [mode, setMode] = useState<Mode>("collection");
-  const rootRef = useRef<HTMLSpanElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  // Escape hands the caret back before React unmounts the popup — an element that
-  // disappears with focus on it drops the caret to `<body>`, and the next Tab restarts from
-  // the top of the app.
-  const dismiss = useCallback(() => {
-    setOpen(false);
-    buttonRef.current?.focus();
-  }, []);
-
-  // The innermost open layer: capture phase, and the press is consumed so the card detail
-  // pane underneath does not close on the same one. See `useDismissOnEscape` — and note
-  // that two "inner" peers are *not* ordered by it, so this popup and the set picker must
-  // never be open at once. They share the search view, so what keeps them apart is not
-  // where they live: each closes when focus leaves its own root, and opening either moves
-  // focus into it, which closes the other on the way.
-  //
-  // **Registered out here, on the flag, rather than inside the popup on its mount.** The popup
-  // outlives `open` now by the length of its exit, and a rung that came down with the *element*
-  // would still be consuming Escape while the reader is somewhere else — with a second popup
-  // possibly already open, which is exactly the pair this protocol cannot order. Gated on the
-  // flag, it is dead on the render that starts the fade.
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
 
   return (
-    <span
-      ref={rootRef}
-      // **A press in here is a press, never a drag of what this sits on.** Three of the four
-      // surfaces this appears on are drag sources now (a search tile, a printings row), and
-      // Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed —
-      // so without the mark a press on the "+" that travelled five pixels would carry the card
-      // off and never open this popup at all. Marked here rather than at each call site
-      // because it is this control's own fact, which is what `dnd.ts`'s rule asks for: anything
-      // that owns its own press marks itself.
-      data-no-drag=""
-      // `open` last, so an open popup outlives the hover that revealed its button.
-      className={cn("relative inline-flex", className, open && "opacity-100")}
-      // Closing on focus leaving covers the click-outside case as well, and does it without
-      // a window listener that could fight the Escape handshake. The boundary is the whole
-      // control rather than the popup: on `relatedTarget` being this button — a second
-      // click on it, or Escape's hand-back — closing here would race the toggle below and
-      // leave the popup open forever.
-      //
-      // **The `open &&` is doing a second job now.** An exiting popup is still inside this
-      // root, so focus leaving it during the fade fires this handler again — and the flag is
-      // already false by then, which is what makes that press a no-op rather than a second
-      // close racing whatever the reader has moved on to.
-      onBlur={(e) => {
-        if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
-      }}
+    <AnchoredPopup
+      // Named for the card and the printing, not for the control: forty of these in a printings
+      // list are forty different cards, and "Add" is the same word on all of them. The
+      // destination is the panel's current one, not always the collection.
+      label={`Add ${target.name} (${target.setCode.toUpperCase()} ${target.collectorNumber}) to ${mode}`}
+      panelLabel={`Add ${target.name}`}
+      icon={<Plus className="size-[calc(0.875rem*var(--control-scale,1))]" aria-hidden="true" />}
+      align={align}
+      className={className}
+      panelClassName="w-64 space-y-3"
     >
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        // Named for the card and the printing, not for the control: forty of these in a
-        // printings list are forty different cards, and "Add" is the same word on all of
-        // them. The destination is the popup's current one, not always the collection.
-        aria-label={`Add ${target.name} (${target.setCode.toUpperCase()} ${target.collectorNumber}) to ${mode}`}
-        // **24px and 14px are this trigger's size at 100% zoom, on a card.** Three surfaces draw
-        // it and only one of them zooms — the wall tile's caption, where it sits beside a rarity
-        // gem and a set code that now grow with the card, so a button that held still was the one
-        // thing in that strip out of step with the rest. `--control-scale` is the tile's own
-        // factor (`lib/cardZoom.ts`), already reduced by `CONTROL_SHRINK` for being drawn on a
-        // card; the search table's row and the card pane's printings rows set no such variable and
-        // take the `, 1` fallback, so both are exactly the 24px they have always been.
-        className={cn(
-          "grid size-[calc(1.5rem*var(--control-scale,1))] shrink-0 place-items-center",
-          "rounded-md border border-border text-dim",
-          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-          FOCUS,
-        )}
-      >
-        <Plus className="size-[calc(0.875rem*var(--control-scale,1))]" aria-hidden="true" />
-      </button>
-      <AnimatePresence>
-        {open && (
-          <AddPopup key="add" target={target} align={align} mode={mode} onModeChange={setMode} />
-        )}
-      </AnimatePresence>
-    </span>
+      <AddForm target={target} mode={mode} onModeChange={setMode} />
+    </AnchoredPopup>
   );
 }
 
@@ -176,22 +104,24 @@ interface Report {
   seq: number;
 }
 
-function AddPopup({
+/**
+ * What is inside the panel: which list, which finish, what condition, how many.
+ *
+ * Mounted and unmounted with the panel by {@link AnchoredPopup}, which is what resets every
+ * answer below between two openings — `mode` is the exception and lives with the trigger,
+ * because the trigger's own accessible name says it.
+ */
+function AddForm({
   target,
-  align,
   mode,
   onModeChange,
 }: {
   target: AddTarget;
-  align: "start" | "end";
   /** Owned by the trigger, whose accessible name says it. */
   mode: Mode;
   onModeChange: (next: Mode) => void;
 }) {
   const id = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
-  /** False from the render that starts the fade out. */
-  const present = useIsPresent();
   const finishes = target.finishes.length > 0 ? target.finishes : (["nonfoil"] as Finish[]);
   const [finish, setFinish] = useState<Finish>(finishes[0]);
   const [condition, setCondition] = useState<Condition>("NM");
@@ -199,13 +129,6 @@ function AddPopup({
   const [anyPrinting, setAnyPrinting] = useState(false);
   const [done, setDone] = useState<Report | null>(null);
   const queryClient = useQueryClient();
-
-  // The caret moves into the layer, as it does for the card pane and the set picker: the
-  // popup's own controls are then the next thing Tab reaches, focus leaving it is what
-  // closes it, and Escape has something to hand back.
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
 
   const add = useMutation({
     mutationFn: () =>
@@ -268,39 +191,7 @@ function AddPopup({
   });
 
   return (
-    <motion.div
-      {...popup}
-      ref={panelRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-label={`Add ${target.name}`}
-      // On the way out it is a picture and nothing else: not pressable, and not a second copy
-      // of this card's add form in the accessibility tree. The caret has already gone back to
-      // the trigger (Escape) or moved on somewhere else (a click), so nothing focused is being
-      // hidden here.
-      aria-hidden={present ? undefined : true}
-      // Anchored, not portalled: the shipped CSP is `style-src 'self'` and every overlay
-      // primitive in reach injects a runtime <style> the moment it opens (fine under
-      // `tauri dev`, blank in a packaged build). Same decision as `SetCombobox`. Not
-      // `aria-modal` either — the list behind it stays live, and a dialog that claims the
-      // page is inert while it demonstrably is not is worse than no dialog at all.
-      className={cn(
-        "absolute top-7 w-64 space-y-3 rounded-lg border border-border bg-surface p-3",
-        "text-left shadow-lg",
-        // Only ever effective against this popup's *siblings*: on a table row or a grid row
-        // the anchor is inside a transformed element, which caps everything in it at that
-        // row's own layer. See `LAYER`.
-        LAYER.popup,
-        align === "start" ? "left-0" : "right-0",
-        // The corner the popup is pinned by is the corner it grows from — `popup` leaves the
-        // origin to its consumer precisely because only the consumer knows which edge it hung
-        // itself off. Both spellings written out whole: Tailwind scans source text, so a class
-        // built by interpolation emits no rule at all.
-        align === "start" ? "origin-top-left" : "origin-top-right",
-        !present && "pointer-events-none",
-        FOCUS,
-      )}
-    >
+    <>
       <div role="group" aria-label="Add to" className="flex gap-1">
         {MODES.map((m) => (
           <button
@@ -450,6 +341,6 @@ function AddPopup({
           </p>
         )}
       </div>
-    </motion.div>
+    </>
   );
 }

@@ -66,8 +66,9 @@ export const Shopping: Story = {
       timeout: FRAME_WAIT,
     });
 
-    // Five copies over four cards, and the footer offers the four — one wish per oracle card,
-    // which is what the backend answers with.
+    // Five copies over four lines, and the footer offers the four. A line is an **exact card**
+    // — a printing in a finish; the wishes it writes are oracle-grained and fold, which here is
+    // one wish each because no two of these four are the same card.
     const copies = (await canvas.findByText("Copies to find")).closest("div")!;
     await expect(within(copies).getByText("5")).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Send all 4 to wishlist" })).toBeEnabled();
