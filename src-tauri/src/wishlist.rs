@@ -88,6 +88,19 @@ pub struct WishRow {
     /// and only a genuine orphan (no pinned printing, no oracle match) answers `None`. Same
     /// `None` as `rarity` and `mana_cost` beside it, for the same reason.
     pub type_line: Option<String>,
+    /// The printing this wish is **drawn as** — the id of the card the `LEFT JOIN` found.
+    ///
+    /// It is not `card_id` and must never be read as one. `card_id` is what the wish is *for*
+    /// and is `None` for an any-printing wish; this is what there is a picture of, which the
+    /// join answers for both kinds: a pinned wish resolves to its own printing, an unpinned one
+    /// to the newest printing of its oracle card. So the wall can draw every wish while the
+    /// caption goes on saying "Any printing" for the ones that are for the card rather than for
+    /// the cardboard — spec §6's distinction, which a picture must not quietly settle.
+    ///
+    /// `None` exactly where `type_line`, `rarity` and `mana_cost` beside it are: a genuine
+    /// orphan, no pinned printing in `cards` and no oracle match. That tile draws the no-art
+    /// frame with the name, as the deck's Grid view does for the same state.
+    pub art_card_id: Option<String>,
     pub quantity: i64,
     pub preferred_finish: Option<String>,
     /// The cheapest way to satisfy this wish, per copy, at the marketplace the query named:
@@ -469,8 +482,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                 -- Appended rather than placed beside `c.mana_cost` where it belongs in the
                 -- struct: every `r.get(n)` below is a positional index, so inserting a column
                 -- mid-list renumbers eight of them by hand. Last costs one index and nothing
-                -- else.
-                c.type_line
+                -- else. `c.id` arrived the same way and for the same reason.
+                c.type_line, c.id
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, WISH_FINISH)
     );
@@ -493,6 +506,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     rarity: r.get(7)?,
                     mana_cost: r.get(8)?,
                     type_line: r.get(16)?,
+                    art_card_id: r.get(17)?,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
                     unit_price: r.get(11)?,
@@ -624,6 +638,55 @@ mod tests {
         );
         let one = rows.items.iter().find(|r| r.id == specific.id).unwrap();
         assert_eq!(one.set_code.as_deref(), Some("lea"));
+    }
+
+    /// `art_card_id` answers "what is there a picture of", which is a different question from
+    /// "what is this wish for" — and the wall needs both, because it draws one and says the
+    /// other.
+    #[test]
+    fn art_card_id_is_the_printing_a_wish_is_drawn_as() {
+        let conn = seeded();
+        let any = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let pinned = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let any_row = rows.items.iter().find(|r| r.id == any.id).unwrap();
+        // Pinned to nothing, and still drawable: the join reaches the newest printing of the
+        // oracle card, which is `bolt-2ed` here — both seeds have a NULL `released_at`, so the
+        // order falls to its tiebreak, `id ASC`.
+        assert_eq!(any_row.card_id, None);
+        assert_eq!(any_row.art_card_id.as_deref(), Some("bolt-2ed"));
+
+        let pinned_row = rows.items.iter().find(|r| r.id == pinned.id).unwrap();
+        assert_eq!(pinned_row.art_card_id.as_deref(), Some("bolt-lea"));
+
+        // The orphan: the printing leaves `cards` and the wish outlives it. The other printing
+        // of the same oracle card is *not* substituted — `coalesce` takes the pinned id, which
+        // now matches nothing — so the wall draws the no-art frame rather than a picture of a
+        // card this wish was never for.
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-lea'", [])
+            .unwrap();
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let orphan = rows.items.iter().find(|r| r.id == pinned.id).unwrap();
+        assert_eq!(orphan.card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(orphan.art_card_id, None);
+        assert_eq!(orphan.name, "Lightning Bolt", "the wish still names itself");
     }
 
     /// An any-printing wish is not for a printing, so it must not quietly claim one: the
@@ -1105,6 +1168,7 @@ mod tests {
             rarity: Some("common".into()),
             mana_cost: Some("{R}".into()),
             type_line: Some("Instant".into()),
+            art_card_id: Some("bolt-2ed".into()),
             quantity: 4,
             preferred_finish: Some("foil".into()),
             unit_price: Some(40.0),
@@ -1119,7 +1183,8 @@ mod tests {
             serde_json::json!({
                 "id": 3, "oracleId": "o1", "cardId": null, "name": "Lightning Bolt",
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
-                "manaCost": "{R}", "typeLine": "Instant", "quantity": 4, "preferredFinish": "foil",
+                "manaCost": "{R}", "typeLine": "Instant", "artCardId": "bolt-2ed",
+                "quantity": 4, "preferredFinish": "foil",
                 "unitPrice": 40.0, "ownedQuantity": 2, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000
             })
