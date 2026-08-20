@@ -16,6 +16,7 @@ import type {
   SyncStatus,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { fromDeckCard } from "@/features/transfer/TransferCard";
 import { dragOnto, startDrag } from "@/test-drag";
 import {
   CARD_BODY_ATTR,
@@ -3501,14 +3502,15 @@ describe("exportSubject", () => {
    *
    * **Every row of the variant on screen and no filtering at all** — the switched-off piles
    * included, because what a format does with a maybeboard is the *format's* decision and
-   * `omittedCount` is what says so in the dialog. Identity rather than contents, since handing
-   * the deck's own array through untouched is the claim.
+   * `omittedCount` is what says so in the dialog. **Mapped rather than identical** since the
+   * cards it now hands `ExportDialog` are `TransferCard`s, built through `fromDeckCard` — the
+   * claim this pins is that every row survives the conversion, in order, none dropped.
    */
   it("answers the whole deck for a deck scope", () => {
     const exported = exportSubject({ kind: "deck" }, [REMOVAL], CARDS, "Burn");
 
     expect(exported.subject).toBe("Burn");
-    expect(exported.cards).toBe(CARDS);
+    expect(exported.cards).toEqual(CARDS.map(fromDeckCard));
     expect(exported.fileName).toBe("Burn");
   });
 

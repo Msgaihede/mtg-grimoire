@@ -1,7 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { EXPORT_FORMATS, EXPORT_FORMAT_LABEL, type ExportCard } from "./format";
+import { transferCard } from "../fixtures";
+import type { TransferCard } from "../TransferCard";
+import { EXPORT_FORMATS, EXPORT_FORMAT_LABEL } from "./format";
 
 const exportWriteFile = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -24,21 +26,20 @@ import { ExportDialog } from "./ExportDialog";
  * One card, overridden per test.
  *
  * The three category defaults are what a single-pile export always looked like — the main deck,
- * switched on — so every assertion written before `ExportCard` widened still means what it did.
- * `format.test.ts` keeps the same builder for the same reason; the two are deliberately not
+ * switched on — so every assertion written before `TransferCard` existed still means what it
+ * did. `format.test.ts` keeps the same builder for the same reason; the two are deliberately not
  * shared, because a fixture exported from either file would be a second thing to keep in step.
  */
-const exportCard = (over: Partial<ExportCard> = {}): ExportCard => ({
-  name: "Sol Ring",
-  quantity: 1,
-  setCode: "ltc",
-  collectorNumber: "285",
-  finish: null,
-  categoryName: "Main deck",
-  categoryKind: "main",
-  categoryActive: true,
-  ...over,
-});
+const exportCard = (over: Partial<TransferCard> = {}): TransferCard =>
+  transferCard({
+    name: "Sol Ring",
+    setCode: "ltc",
+    collectorNumber: "285",
+    categoryName: "Main deck",
+    categoryKind: "main",
+    categoryActive: true,
+    ...over,
+  });
 
 const BOLT = exportCard({
   name: "Lightning Bolt",

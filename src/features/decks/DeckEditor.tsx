@@ -53,6 +53,7 @@ import { DeckStats } from "./DeckStats";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
+import { fromDeckCard, type TransferCard } from "@/features/transfer/TransferCard";
 import {
   asGroupBy,
   buildGroups,
@@ -243,7 +244,7 @@ const NO_TAGS: readonly number[] = [];
 
 /** The same trick for the closed export dialog, which is mounted at every render and asked for
  *  a card list whether or not it is drawing one. */
-const NO_EXPORT_CARDS: readonly DeckCard[] = [];
+const NO_EXPORT_CARDS: readonly TransferCard[] = [];
 
 /**
  * What the export dialog is titled when the pile it was opened on has gone.
@@ -326,6 +327,13 @@ export type ExportScope = { kind: "deck" } | { kind: "category"; categoryId: num
  * subject is `""` there because nothing draws it, and that is the one case that must **not** read
  * {@link DELETED_CATEGORY}: a closed dialog is not a statement about a deleted pile.
  *
+ * **The cards are `TransferCard`s, built through `fromDeckCard`** — the row shape `ExportDialog`
+ * and `formatExport` speak now, so this function is one of the two places (`categoryMenu.tsx`'s
+ * export row is the other) that adapts a deck's own `DeckCard`s on the way out. That trades away
+ * the old identity guarantee for the deck scope — the returned array is a fresh one, mapped
+ * rather than passed through — but the claim it stood for is untouched: every row of the variant
+ * on screen still arrives, switched-off piles included, with nothing filtered out here.
+ *
  * Pure, and exported for that reason: see {@link exportFileName}.
  */
 export function exportSubject(
@@ -333,14 +341,14 @@ export function exportSubject(
   categories: readonly DeckCategory[],
   cards: readonly DeckCard[],
   deckName: string,
-): { subject: string; cards: readonly DeckCard[]; fileName: string } {
+): { subject: string; cards: readonly TransferCard[]; fileName: string } {
   if (scope === null) {
     return { subject: "", cards: NO_EXPORT_CARDS, fileName: exportFileName(deckName, "") };
   }
   if (scope.kind === "deck") {
     return {
       subject: deckName === "" ? UNNAMED_DECK : deckName,
-      cards,
+      cards: cards.map(fromDeckCard),
       // The deck's own name and no second half, which `exportFileName` already answers for an
       // empty one: a whole-deck export is the deck, so there is no pile to name after it.
       fileName: exportFileName(deckName, ""),
@@ -349,7 +357,7 @@ export function exportSubject(
   const name = categories.find((c) => c.id === scope.categoryId)?.name ?? null;
   return {
     subject: name ?? DELETED_CATEGORY,
-    cards: cards.filter((c) => c.categoryId === scope.categoryId),
+    cards: cards.filter((c) => c.categoryId === scope.categoryId).map(fromDeckCard),
     // The **name**, never the subject: a file called `Burn - a deleted category` is a sentence
     // where a name belongs, and the deck's own name is the honest suggestion for a pile that is
     // not there any more.

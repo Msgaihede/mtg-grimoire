@@ -67,13 +67,14 @@ import { ipc, ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
+import { defaultFields } from "../fields";
+import type { TransferCard } from "../TransferCard";
 import {
   EXPORT_FORMATS,
   EXPORT_FORMAT_EXTENSION,
   EXPORT_FORMAT_LABEL,
   formatExport,
   omittedCount,
-  type ExportCard,
   type ExportFormat,
 } from "./format";
 
@@ -83,7 +84,7 @@ export interface ExportDialogProps {
   subject: string;
   /** The cards. **An argument, never something this dialog fetches** — which is what lets a
    *  later deck-level export reuse it whole. */
-  cards: readonly ExportCard[];
+  cards: readonly TransferCard[];
   /** Seeds the save dialog's file name. */
   suggestedFileName: string;
   /**
@@ -129,7 +130,7 @@ function Body({
   cards,
   suggestedFileName,
 }: {
-  cards: readonly ExportCard[];
+  cards: readonly TransferCard[];
   suggestedFileName: string;
 }) {
   const [format, setFormat] = useState<ExportFormat>("plain");
@@ -154,7 +155,12 @@ function Body({
    *  control failed decides the wording. */
   const [error, setError] = useState<string | null>(null);
 
-  const text = useMemo(() => formatExport(cards, format), [cards, format]);
+  // **Task 9's field-picker state arrives later** — for now every format opens on its own deck
+  // defaults, which is what makes this dialog compile against `formatExport`'s new signature
+  // without changing what a reader sees: `defaultFields(format, "deck")` is the same set that
+  // reproduced today's fixed-shape output in `format.test.ts`.
+  const fields = useMemo(() => defaultFields(format, "deck"), [format]);
+  const text = useMemo(() => formatExport(cards, format, fields), [cards, format, fields]);
   /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
    *  it is a claim about the text on screen and goes stale the moment that changes. */
   const omitted = useMemo(() => omittedCount(cards, format), [cards, format]);

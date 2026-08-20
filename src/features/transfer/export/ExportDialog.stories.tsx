@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { transferCard } from "../fixtures";
+import type { TransferCard } from "../TransferCard";
 import { ExportDialog } from "./ExportDialog";
-import type { ExportCard } from "./format";
 import { printing } from "../../../../.storybook/fake/fixtures";
 
 /** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
@@ -76,27 +77,25 @@ if (BOLT.name !== "Lightning Bolt" || SOL_RING.name !== "Sol Ring" || FOREST.nam
  * switch — so the grouped formats write it as a single section, `Deck` in Arena's and Moxfield's
  * fixed vocabulary and `Ramp` in Archidekt's, which is the reader's own word for it.
  */
-const CARDS: ExportCard[] = [
-  {
+const CARDS: TransferCard[] = [
+  transferCard({
     name: BOLT.name,
     quantity: 2,
     setCode: BOLT.setCode,
     collectorNumber: BOLT.collectorNumber,
-    finish: null,
     categoryName: "Ramp",
     categoryKind: "main",
     categoryActive: true,
-  },
-  {
+  }),
+  transferCard({
     name: SOL_RING.name,
     quantity: 1,
     setCode: SOL_RING.setCode,
     collectorNumber: SOL_RING.collectorNumber,
-    finish: null,
     categoryName: "Ramp",
     categoryKind: "main",
     categoryActive: true,
-  },
+  }),
 ];
 
 /**
@@ -106,18 +105,17 @@ const CARDS: ExportCard[] = [
  * Six copies on one row rather than six rows, deliberately — {@link SwitchedOffPile} is what says
  * the omission line counts *cards* and not rows.
  */
-const DECK_CARDS: ExportCard[] = [
+const DECK_CARDS: TransferCard[] = [
   ...CARDS,
-  {
+  transferCard({
     name: FOREST.name,
     quantity: 6,
     setCode: FOREST.setCode,
     collectorNumber: FOREST.collectorNumber,
-    finish: null,
     categoryName: "Cuts",
     categoryKind: "main",
     categoryActive: false,
-  },
+  }),
 ];
 
 /**

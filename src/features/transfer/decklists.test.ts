@@ -19,12 +19,18 @@ import {
   EXPORT_FORMATS,
   formatExport,
   omittedCount,
-  type ExportCard,
   type ExportFormat,
 } from "./export/format";
+import { defaultFields } from "./fields";
+import { transferCard } from "./fixtures";
+import type { TransferCard } from "./TransferCard";
 import { ARCHIDEKT_FLAT, ARCHIDEKT_SECTIONED, EMPTY_HINT_LIST, match } from "./import/fixtures";
 import { parseDecklist, type ParsedList } from "./import/parse";
 import { buildImportPlan, tallyOf, toImportItems, type ImportPlan } from "./import/plan";
+
+/** The field set every export in this file is written with — a deck's defaults, at each
+ *  format, so this file measures the same file a reader gets from the app today. */
+const DECK_FIELDS = (format: ExportFormat) => defaultFields(format, "deck");
 
 /**
  * The resolver, stubbed — and the stub claims **only that a printing answered this line**.
@@ -99,25 +105,27 @@ const SEEDED_KIND: Record<string, CategoryKind> = {
  * off with every deck. Reading only the file's flag would export a Moxfield maybeboard as part
  * of the deck, which is the round trip this file exists to catch.
  */
-function exportCardsFor(text: string): ExportCard[] {
+function exportCardsFor(text: string): TransferCard[] {
   const plan = planOf(text);
   const inactive = new Set(
     tallyOf(toImportItems(plan, []))
       .filter((pile) => pile.inactive)
       .map((pile) => pile.name),
   );
-  return plan.cards.map((card) => ({
-    name: card.match.name,
-    quantity: card.quantity,
-    setCode: card.match.setCode,
-    collectorNumber: card.match.collectorNumber,
-    // Straight off the parsed line, which is what makes the finish part of the round trip this
-    // file measures rather than a constant it asserts about.
-    finish: card.finish,
-    categoryName: card.categoryName,
-    categoryKind: SEEDED_KIND[card.categoryName] ?? "main",
-    categoryActive: !inactive.has(card.categoryName),
-  }));
+  return plan.cards.map((card) =>
+    transferCard({
+      name: card.match.name,
+      quantity: card.quantity,
+      setCode: card.match.setCode,
+      collectorNumber: card.match.collectorNumber,
+      // Straight off the parsed line, which is what makes the finish part of the round trip this
+      // file measures rather than a constant it asserts about.
+      finish: card.finish,
+      categoryName: card.categoryName,
+      categoryKind: SEEDED_KIND[card.categoryName] ?? "main",
+      categoryActive: !inactive.has(card.categoryName),
+    }),
+  );
 }
 
 /**
@@ -131,7 +139,7 @@ function exportCardsFor(text: string): ExportCard[] {
 const DROPS_INACTIVE: ReadonlySet<ExportFormat> = new Set<ExportFormat>(["arena", "mtgo"]);
 
 /** The cards a format was given to write. */
-function given(cards: readonly ExportCard[], format: ExportFormat): ExportCard[] {
+function given(cards: readonly TransferCard[], format: ExportFormat): TransferCard[] {
   if (!DROPS_INACTIVE.has(format)) return [...cards];
   return cards.filter((card) => card.categoryActive);
 }
@@ -257,7 +265,7 @@ describe("exporting a real deck", () => {
   });
 
   it.each([...EXPORT_FORMATS])("writes every counted card in %s", (format) => {
-    const text = formatExport(cards, format);
+    const text = formatExport(cards, format, DECK_FIELDS(format));
 
     expect(text.endsWith("\n"), format).toBe(true);
     expect(text.startsWith("\n"), format).toBe(false);
@@ -276,10 +284,10 @@ describe("exporting a real deck", () => {
   it("writes nothing at all when a format's own filter empties the list", () => {
     const maybeboard = cards.filter((card) => !card.categoryActive);
 
-    expect(formatExport(maybeboard, "arena")).toBe("");
-    expect(formatExport(maybeboard, "mtgo")).toBe("");
+    expect(formatExport(maybeboard, "arena", DECK_FIELDS("arena"))).toBe("");
+    expect(formatExport(maybeboard, "mtgo", DECK_FIELDS("mtgo"))).toBe("");
     expect(omittedCount(maybeboard, "arena")).toBe(17);
-    expect(formatExport(maybeboard, "archidekt")).not.toBe("");
+    expect(formatExport(maybeboard, "archidekt", DECK_FIELDS("archidekt"))).not.toBe("");
   });
 });
 
@@ -306,7 +314,7 @@ describe("a real decklist round-trips through every format this app can read", (
 
   it.each(READABLE)("keeps every card and copy through %s", (format) => {
     const cards = exportCardsFor(ARCHIDEKT_SECTIONED);
-    const back = parseDecklist(formatExport(cards, format));
+    const back = parseDecklist(formatExport(cards, format, DECK_FIELDS(format)));
     const written = given(cards, format);
 
     expect(back.issues, format).toEqual([]);
@@ -324,12 +332,14 @@ describe("a real decklist round-trips through every format this app can read", (
   it("keeps the reader's own 14 piles through Archidekt, and only through Archidekt", () => {
     const cards = exportCardsFor(ARCHIDEKT_SECTIONED);
 
-    expect(pilesOf(formatExport(cards, "archidekt"))).toEqual(pilesOf(ARCHIDEKT_SECTIONED));
+    expect(pilesOf(formatExport(cards, "archidekt", DECK_FIELDS("archidekt")))).toEqual(
+      pilesOf(ARCHIDEKT_SECTIONED),
+    );
 
     // Moxfield's section vocabulary is fixed, so `Flash Enabler` and the other free-form piles
     // come back as whatever the app makes of the card — a real loss, stated here rather than
     // discovered by a reader whose categories vanished. Every *copy* still arrives.
-    const moxfield = pilesOf(formatExport(cards, "moxfield"));
+    const moxfield = pilesOf(formatExport(cards, "moxfield", DECK_FIELDS("moxfield")));
     expect(Object.keys(moxfield)).not.toContain("Flash Enabler");
     expect(Object.keys(moxfield)).toEqual(expect.arrayContaining(["Commander", "Maybeboard"]));
     expect(Object.values(moxfield).reduce((total, copies) => total + copies, 0)).toBe(117);
@@ -339,7 +349,9 @@ describe("a real decklist round-trips through every format this app can read", (
    *  nothing, which is why Archidekt is the one format that writes an inactive pile *and* leaves
    *  nothing out. */
   it("keeps the switched-off piles through Archidekt's {noDeck}", () => {
-    const back = parseDecklist(formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), "archidekt"));
+    const back = parseDecklist(
+      formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), "archidekt", DECK_FIELDS("archidekt")),
+    );
 
     expect(back.lines.filter((line) => line.excluded)).toHaveLength(17);
   });
@@ -354,8 +366,8 @@ describe("a real decklist round-trips through every format this app can read", (
    * hold for what each one *keeps*.
    */
   it.each(READABLE)("survives a second trip, so %s is a fixed point", (format) => {
-    const once = formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), format);
-    const twice = formatExport(exportCardsFor(once), format);
+    const once = formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), format, DECK_FIELDS(format));
+    const twice = formatExport(exportCardsFor(once), format, DECK_FIELDS(format));
 
     expect(twice, format).toBe(once);
   });
