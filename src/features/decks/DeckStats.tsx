@@ -770,40 +770,47 @@ function Missing({
           <p className="font-mono tabular-nums text-destructive">
             {count(stats.missing)} of {count(stats.copies)} missing
           </p>
-          {/* **A `<span>` wrapper, and it earns its keep**: the button is genuinely `disabled`
-              for the half-second the write is in flight, and a real `disabled` attribute fires
-              no pointer events at all — so a `tip()` bound on the button alone would show
-              nothing at exactly the moment `spent` (set in the same render as the press) makes
-              the hint's words true. A disabled control still lets the pointer's hover reach a
-              plain ancestor, which is the same trick a native `title` relied on without anyone
-              having to ask for it. */}
-          <span {...tip(spent ? "This shortfall is already on your wishlist." : null)}>
-            <button
-              ref={sendRef}
-              type="button"
-              // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
-              // half-second the write is in flight. **Spent is `aria-disabled`**, because it
-              // outlasts the press by as long as the deck stays the same: a real `disabled` there
-              // is a control the browser refuses to focus, so the caret this button lost when it
-              // disabled itself could never come back to it, and a keyboard reader would find the
-              // control simply gone from the tab order with no way to ask why. The rail in the
-              // docked search panel says no the same way, for the same reason.
-              disabled={pending}
-              aria-disabled={spent || undefined}
-              onClick={() => {
-                if (!spent) onSend();
-              }}
-              className={cn(
-                "rounded-md border border-border px-2 py-1 text-dim",
-                "transition-colors duration-150 hover:text-text disabled:opacity-50",
-                "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
-                "motion-reduce:transition-none",
-                FOCUS,
-              )}
-            >
-              Send missing to wishlist
-            </button>
-          </span>
+          {/* **No `<span>` wrapper — bound on the button itself.** A wrapper earns its keep only
+              for a control that is genuinely `disabled` for as long as the hint would need to be
+              read, because a real `disabled` attribute fires no pointer events and drops the tab
+              stop. **This button is not that**: `spent` — the state the hint's words are
+              about — is `aria-disabled`, deliberately never the attribute (see the comment on it
+              below), so it stays exactly as focusable and exactly as hoverable as an ordinary
+              button while the hint is true. A wrapper here bought nothing for that state and
+              cost the keyboard path: `useTooltip.ts`'s `focus()` tests `:focus-visible` on the
+              element `tip()` was spread onto, and a bare `<span>` is never focused, so Tab onto
+              this button used to open nothing at all. The one case a wrapper genuinely helps —
+              the ~500ms `disabled={pending}` window right after the press, when `spent` and
+              `pending` are briefly both true — is not a real loss to leave uncovered: the pointer
+              was already resting on the button before that click fired (nothing opens on a
+              content change alone, only on a fresh `pointerenter`), and a keyboard reader loses
+              nothing a `disabled` button was ever going to offer it either. */}
+          <button
+            ref={sendRef}
+            type="button"
+            // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
+            // half-second the write is in flight. **Spent is `aria-disabled`**, because it
+            // outlasts the press by as long as the deck stays the same: a real `disabled` there
+            // is a control the browser refuses to focus, so the caret this button lost when it
+            // disabled itself could never come back to it, and a keyboard reader would find the
+            // control simply gone from the tab order with no way to ask why. The rail in the
+            // docked search panel says no the same way, for the same reason.
+            disabled={pending}
+            aria-disabled={spent || undefined}
+            onClick={() => {
+              if (!spent) onSend();
+            }}
+            {...tip(spent ? "This shortfall is already on your wishlist." : null)}
+            className={cn(
+              "rounded-md border border-border px-2 py-1 text-dim",
+              "transition-colors duration-150 hover:text-text disabled:opacity-50",
+              "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
+              "motion-reduce:transition-none",
+              FOCUS,
+            )}
+          >
+            Send missing to wishlist
+          </button>
         </>
       ) : (
         stats.copies > 0 && (
