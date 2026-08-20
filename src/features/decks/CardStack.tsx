@@ -1119,19 +1119,28 @@ function StackedCard({
           27px title bar the tag and the banner are in, and the column runs down from there
           rather than across the foot, where it would cover the data line it now sits beside.
 
-          **The offset is the same 36px it has always been and the column under it is twice as
-          tall as of 2026-08-15** — three 48px boxes and two 4px gaps, 152px, so it ends 188px
-          down a 293px face at 1×. That sum is unscaled chrome on a scaled card, which is fine
-          going up and runs out at the bottom of the ladder: 188 needs a face 188 tall, so the
-          column clears at every stop but **0.5×**. Measured in Storybook over CDP (2026-08-15,
-          `decks-editor--commander-deck`, real Chromium layout): at 1× the column clears the
-          face's foot by **105px**, at 0.67× by **8px** — the last stop that fits — and at 0.5×
-          it overruns it by **42px**, which puts the `−` button **17px below the whole card**,
-          over the reveal strip of the card beneath. Judged worth it, because the column is drawn
-          on the **open** card alone and a reader at 50 % is reading a pile rather than pressing
-          on it; it is the first number to check if this column is ever made bigger again, and
-          the fix if it ever matters is to scale the box with the zoom and floor it at the 24px
-          this used to be.
+          **The offset is the same 36px it has always been; the column under it is a quarter
+          shorter as of 2026-08-20** — three 36px boxes and two 4px gaps at 100% zoom, 116px,
+          against the 152px it was between 2026-08-15 and then. It was reported as too big on the
+          shipped window and cut by 25%; the whole of that change is `QuantityStepper`'s `card`
+          size, and the reasoning is on that prop.
+
+          **The column scales with the card and the offset does not**, which is what makes this
+          worth a sum rather than a constant: the boxes and the gap are multiplied by
+          `--control-scale` (the zoom times `CONTROL_SHRINK`, 85%) while `top-9` is 36 flat. So
+          the column ends `36 + 98.6 × zoom` down a face that is `293 × zoom` tall, and it clears
+          at every stop on the ladder — the crossing is at 0.19×, well below `MIN_ZOOM`.
+
+          **The paragraph this replaced is the reason to keep the sum here.** It recorded a
+          measured **42px overrun at 0.5×**, with the `−` button 17px below the whole card, and
+          it was right on the day it was taken and wrong within the week: it was written against
+          an unscaled 152px column (36 + 152 = 188 against a 146px face), and `c445803` gave the
+          controls `--control-scale` the day after without anyone coming back to it. Re-measured
+          in Storybook over CDP (2026-08-20, `decks-editor--commander-deck`, real Chromium
+          layout, this branch): the column clears the face's foot by **158px at 1×**, by **61px
+          at 0.5×** — the stop that used to overrun — and by **352px at 2×**, with the buttons
+          measuring 15.3, 30.6 and 61.2px across those three stops. That clearance is the first
+          number to check if this column is ever made bigger again.
 
           Revealed by **this card being open** rather than by the pointer being on it, which is
           the one thing `group-hover:` could never get right here — see `revealedWhenOpen`.

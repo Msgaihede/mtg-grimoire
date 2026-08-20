@@ -496,6 +496,39 @@ describe("CardDetailPane", () => {
   });
 
   /**
+   * The chips are a section, and the two things that make them one are the heading naming them
+   * and the caption saying what their absence means — `standard` is `not_legal` on this fixture
+   * and is therefore not drawn, which is the fact the caption exists to make readable.
+   */
+  it("heads the legality chips with Formats and says what is missing", async () => {
+    cardDetail.mockResolvedValue(detail);
+    cardPrintings.mockResolvedValue(page(printings));
+
+    wrap("p1");
+
+    const formats = await screen.findByRole("region", { name: "Formats" });
+    expect(within(formats).getByRole("heading", { name: "Formats" })).toBeInTheDocument();
+    expect(within(formats).getByRole("list", { name: "Format legality" })).toBeInTheDocument();
+    expect(within(formats).getByText("Formats not listed are not legal.")).toBeInTheDocument();
+  });
+
+  /**
+   * A card legal in nothing keeps its silence: the heading and the caption go with the chips,
+   * because a caption explaining a total absence explains nothing and a heading over no chips is
+   * a claim the card cannot support.
+   */
+  it("draws no Formats section when every legality filters out", async () => {
+    cardDetail.mockResolvedValue({ ...detail, legalities: '{"modern":"not_legal"}' });
+    cardPrintings.mockResolvedValue(page(printings));
+
+    wrap("p1");
+
+    await screen.findByRole("complementary", { name: "Card details" });
+    expect(screen.queryByRole("region", { name: "Formats" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Formats not listed are not legal.")).not.toBeInTheDocument();
+  });
+
+  /**
    * The grid's rarity gem is `aria-hidden` — it is decoration on a tile whose name says
    * everything. This pane is the one place a rarity is *read*, so here it is a word.
    */

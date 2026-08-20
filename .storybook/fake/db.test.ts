@@ -3772,8 +3772,8 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(rows[0].at).toBeGreaterThanOrEqual(rows[1].at);
   });
 
-  it("compares the two lists by oracle card, one direction, skipping inactive piles", () => {
-    const { r } = testbed();
+  it("compares the two lists by the exact card, one direction, skipping inactive piles", () => {
+    const { db, r } = testbed();
     const diff = r.deck_theory_diff({ deckId: 4 });
 
     expect(diff.map((d) => [d.name, d.quantity])).toEqual([
@@ -3786,11 +3786,47 @@ describe("categories, tags, folders, history and the plan", () => {
       ["Jace, the Mind Sculptor", 1],
     ]);
     expect(diff[0].unitPrice).toBeNull();
-    // The deck holds two Sol Rings and the plan wants one. A cut is not a purchase, so there
-    // is no row for it in either direction.
+    // The deck holds two `c21 263` Sol Rings and the plan wants one of the same printing. A cut
+    // is not a purchase, so there is no row for it in either direction.
     expect(diff.some((d) => d.name === "Sol Ring")).toBe(false);
     // A plan that is a copy of its deck asks for nothing.
     expect(r.deck_theory_diff({ deckId: 3 })).toEqual([]);
+
+    // **And the grain is the printing, not the oracle card** (2026-08-20). Re-print the live
+    // copies as `sld 913` and the plan's `c21 263` is suddenly something to go and find — where
+    // an oracle-grained answer saw a Sol Ring against a Sol Ring and reported nothing. This is
+    // the fixture's own "same card, different printing" pair.
+    const c21 = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "c21")!;
+    const sld = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "sld")!;
+    for (const dc of db.deckCards) {
+      if (dc.deckId === 4 && dc.variant === "live" && dc.name === "Sol Ring") {
+        dc.cardId = sld.id;
+        dc.setCode = sld.setCode;
+        dc.collectorNumber = sld.collectorNumber;
+      }
+    }
+    const swapped = r.deck_theory_diff({ deckId: 4 });
+    expect(swapped.find((d) => d.name === "Sol Ring")).toMatchObject({
+      quantity: 1,
+      finish: null,
+    });
+
+    // **And the finish is in the key too.** Put the live copies back on `c21 263` and make them
+    // foils: the plan's plain `c21 263` is again something to go and find, because a foil and a
+    // regular copy are two objects. `deckCards.finish` is `null` for the regular one.
+    for (const dc of db.deckCards) {
+      if (dc.deckId === 4 && dc.variant === "live" && dc.name === "Sol Ring") {
+        dc.cardId = c21.id;
+        dc.setCode = c21.setCode;
+        dc.collectorNumber = c21.collectorNumber;
+        dc.finish = "foil";
+      }
+    }
+    const foiled = r.deck_theory_diff({ deckId: 4 });
+    expect(foiled.find((d) => d.name === "Sol Ring")).toMatchObject({
+      quantity: 1,
+      finish: null,
+    });
   });
 
   it("seeds the plan from the deck without overwriting what the plan already says", () => {

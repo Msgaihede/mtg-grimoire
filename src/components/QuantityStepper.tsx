@@ -79,14 +79,18 @@ export function QuantityStepper({
    * `xs` is the deck's row scale: a stepper inside a 150px grid tile or a 22px text row, where
    * `sm`'s 28px does not fit.
    *
-   * `card` is the **48px** column drawn over a card face in the deck stack, and it is the one
-   * size larger than the default rather than smaller than `sm` — which is the reverse of what it
-   * was until 2026-08-15, when it was 24px. Everything else in this file sits in a *row* of
-   * controls and is sized by the row; this one stands alone in a 210px card's right margin, over
-   * an illustration, and is the whole of what a reader presses to change how many copies a deck
-   * holds. At 24px it was the smallest control in the app in the place with the most room for
-   * one. Doubled it is 23% of the card's width and half its height — deliberate, and the number
-   * to check first if the column ever overflows the face.
+   * `card` is the **36px** column drawn over a card face in the deck stack, and it is still the
+   * one size larger than the default rather than smaller than `sm`. Everything else in this file
+   * sits in a *row* of controls and is sized by the row; this one stands alone in a 210px card's
+   * right margin, over an illustration, and is the whole of what a reader presses to change how
+   * many copies a deck holds.
+   *
+   * **It was 24px until 2026-08-15 and 48px until 2026-08-20**, and each move was a correction of
+   * the one before. 24 made it the smallest control in the app in the place with the most room
+   * for one; 48 was 23% of the card's width, and read as too big on the shipped window. 36 is a
+   * quarter off the 48 rather than a return to the 24 — 17% of the card's width, and a column
+   * that is 40% of the face's height. That last figure is the one to check first if the column
+   * ever overflows the face.
    *
    * **The buttons are square at every size and the field is square in a column**, and at this
    * one the pairing is load-bearing rather than incidental: `vertical` squares the field to the
@@ -96,15 +100,18 @@ export function QuantityStepper({
    *
    * It carries a larger corner radius with it, which is not decoration either — a small box
    * reads as a chip at `rounded-md` and as a button at `rounded-lg`, and this is the one place
-   * the reader has to tell those apart on top of art. `rounded-lg` did not double with the box:
-   * 8px on 48px still reads as a button, and 16px would read as a pill.
+   * the reader has to tell those apart on top of art. **`rounded-lg` has moved with the box in
+   * neither direction** — it did not double at 48px and it did not take the quarter off at 36 —
+   * because 8px is what separates the two readings at every size this box reaches, and a radius
+   * kept as a fraction of the box would have read as a pill going up and as a chip coming down.
    *
-   * **Both of those figures are now sizes at 100% zoom, and neither is what the app draws at
-   * rest.** `xs` and `card` are the two sizes drawn on a card face, so they follow the reader's
-   * zoom through `--control-scale` and are reduced by `CONTROL_SHRINK` (85%) for being on one —
-   * `card` rests at ~41px and reaches 24 and 82 at the ends of the ladder. The 48 and the 24 it
-   * replaced are still the argument for the *ratio*; what changed is that the ratio is now held
-   * against a card whose size the reader chooses. See the `box` map below and `lib/cardZoom.ts`.
+   * **Both of those figures are sizes at 100% zoom, and neither is what the app draws at rest.**
+   * `xs` and `card` are the two sizes drawn on a card face, so they follow the reader's zoom
+   * through `--control-scale` and are reduced by `CONTROL_SHRINK` (85%) for being on one — so
+   * `card` rests at **~31px** and reaches **~15px** and **~61px** at the ends of the ladder
+   * (36 × zoom × 0.85, over `ZOOM_STEPS`' 0.5 to 2). The figures above are the argument for the
+   * *ratio*; what the ratio is held against is a card whose size the reader chooses. See the
+   * `box` map below and `lib/cardZoom.ts`.
    */
   size?: "xs" | "card" | "sm" | "md";
   /** Which side of the control's own edge the focus outline is drawn on. `inset` for a stepper
@@ -144,7 +151,7 @@ export function QuantityStepper({
     size === "xs"
       ? "size-[calc(1.25rem*var(--control-scale,1))]"
       : size === "card"
-        ? "size-[calc(3rem*var(--control-scale,1))] rounded-lg"
+        ? "size-[calc(2.25rem*var(--control-scale,1))] rounded-lg"
         : size === "sm"
           ? "size-7"
           : "size-9";
@@ -152,7 +159,7 @@ export function QuantityStepper({
     size === "xs"
       ? "text-[calc(0.625rem*var(--control-scale,1))]"
       : size === "card"
-        ? "text-[calc(1.375rem*var(--control-scale,1))]"
+        ? "text-[calc(1.03125rem*var(--control-scale,1))]"
         : size === "sm"
           ? "text-xs"
           : "text-sm";
@@ -163,15 +170,15 @@ export function QuantityStepper({
         ? "h-7 w-12"
         : "h-9 w-14";
   const field = cn(vertical ? box : wide, text);
-  // The glyph is a fixed fraction of its button — 14/24 at `card`, doubled with the box, so a
-  // 48px button is not a 14px sign in the middle of an empty square. That fraction is what makes
-  // the two card sizes scale here too: a glyph left at 12px inside a box the zoom halved is a
-  // sign wider than the button holding it.
+  // The glyph is a fixed fraction of its button — 7/12 at `card`, held through both resizes of
+  // that box, so a button is never a small sign in the middle of an empty square. That fraction
+  // is what makes the two card sizes scale here too: a glyph left at 12px inside a box the zoom
+  // halved is a sign wider than the button holding it.
   const icon =
     size === "xs"
       ? "size-[calc(0.75rem*var(--control-scale,1))]"
       : size === "card"
-        ? "size-[calc(1.75rem*var(--control-scale,1))]"
+        ? "size-[calc(1.3125rem*var(--control-scale,1))]"
         : "size-3.5";
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);

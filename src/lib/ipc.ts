@@ -1025,14 +1025,24 @@ export interface DeckFolder {
  * are excluded from *both* sides, so a card parked in either Maybeboard is neither wanted nor
  * owned for this purpose.
  *
- * The comparison is by **oracle card**, not by printing: needing a second Sol Ring is not
- * answered by the live list holding a different printing of one. An orphan — a row whose
- * printing has left `cards` — has no oracle id and is compared by its own id, which is as far
- * as the data honestly goes.
+ * The comparison is on the **exact card — `(cardId, finish)`**, and it was the oracle card
+ * until 2026-08-20. A plan that names the foil retro-frame Sol Ring is a plan for that piece of
+ * cardboard: neither a different printing of it nor the regular copy in the live list answers
+ * it, and the two objects are separate lines here, priced apart. An orphan needs no special case
+ * under that rule — its `cardId` is its identity like everything else's.
+ *
+ * **Which pile a card is in is not compared at all.** Placement is not possession, so a card the
+ * two lists file differently is no difference, and each side is summed across its categories
+ * before they are subtracted — the row is captioned by the category the editor lists first
+ * purely so the shopping list reads.
+ *
+ * **So neither `cardId` nor `finish` is unique on its own**: a list is keyed by the pair.
  */
 export interface TheoryDiffRow {
   /** The printing **the theory row names**, which is the printing the reader would be buying.
-   *  When the same card is filed in two theory categories this is the first row's printing. */
+   *  When the same card is filed in two theory categories this is the first row's category.
+   *  **Not unique across the list** — pair it with {@link TheoryDiffRow.finish} to key a
+   *  render. */
   cardId: string;
   name: string;
   /** The category the theory row is filed under — the pile this card is wanted *for*, which is
@@ -1049,8 +1059,20 @@ export interface TheoryDiffRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * Copies of this oracle card the collection holds that **no built deck has claimed** — the
-   * number that turns "I need two more Sol Rings" into "and one is in the box already".
+   * Which **object** this line is for — `deck_cards.finish`, so `null` is the regular copy.
+   *
+   * **Half of the row's identity**, with {@link TheoryDiffRow.cardId}: a foil Sol Ring and a
+   * regular one are two pieces of cardboard to go and find, two rows in `deck_cards`, and two
+   * different prices — {@link TheoryDiffRow.unitPrice} is already quoted per finish, so folding
+   * them would be one line charged at whichever of the two came first.
+   */
+  finish: DeckFinish;
+  /**
+   * Copies of **this printing, in this finish**, the collection holds that **no built deck has
+   * claimed** — the number that turns "I need two more of these" into "and one is in the box
+   * already". It answers on the row's whole identity because the comparison above does, which is
+   * also what keeps the strip's plain sum of this field honest: any wider answer counts one
+   * binder copy once per row that could have used it.
    *
    * **A display field, and never a term in an arithmetic.** It is deliberately not netted out
    * of {@link TheoryDiffRow.quantity}, least of all by `deckTheoryMissingToWishlist`:
@@ -2793,8 +2815,9 @@ export const ipc = {
   deckRedoApply: (deckId: number, auditId: number) =>
     invoke<void>("deck_redo_apply", { deckId, auditId }),
   /** What the plan wants and the deck does not have — see {@link TheoryDiffRow}. One
-   *  direction only, inactive categories excluded from both sides. `marketplace` prices the
-   *  shopping list, which is the whole point of drawing one. */
+   *  direction only, on the exact card (printing **and** finish), categories not compared,
+   *  inactive ones excluded from both sides. `marketplace` prices the shopping list, which is
+   *  the whole point of drawing one. */
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
