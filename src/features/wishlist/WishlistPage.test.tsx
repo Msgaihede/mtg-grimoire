@@ -48,6 +48,7 @@ const BOLT: WishRow = {
   rarity: "common",
   manaCost: "{R}",
   typeLine: "Instant",
+  artCardId: "c1",
   quantity: 4,
   preferredFinish: "foil",
   unitPrice: 400.5,
@@ -57,7 +58,12 @@ const BOLT: WishRow = {
   updatedAt: 1_800_000_000,
 };
 
-/** A wish for the *card*, which is what a shopping list usually means. */
+/**
+ * A wish for the *card*, which is what a shopping list usually means.
+ *
+ * `cardId` is null and `artCardId` is not, which is the pair the wall is built on: the wish
+ * names no printing, and the backend's join still hands over one to draw (`wishlist.rs`).
+ */
 const ANY: WishRow = {
   ...BOLT,
   id: 8,
@@ -66,6 +72,7 @@ const ANY: WishRow = {
   collectorNumber: null,
   lang: null,
   rarity: null,
+  artCardId: "c-recall",
   name: "Ancestral Recall",
   manaCost: "{U}",
   preferredFinish: null,
@@ -163,7 +170,11 @@ beforeEach(() => {
   wishlistRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
-  useAppStore.setState({ selectedCardId: null });
+  // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
+  // first block below is about the list view and says so by asking for it; `the wall` block at
+  // the end switches to the grid, and one test there holds the default itself. The same
+  // arrangement `CollectionPage.test.tsx` uses from the other end.
+  useAppStore.setState({ wishlistView: "table", selectedCardId: null });
 });
 
 describe("WishlistPage", () => {
@@ -768,5 +779,168 @@ describe("the card menu", () => {
     // the harness.
     await act(async () => rightClick(screen.getByRole("row", { name: /Lightning Bolt/ })));
     expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The wall — the layout this view opens on.
+ *
+ * One tile per **wish**, never per card: the collection's wall merges two entries for one
+ * printing into one piece of art, and here the opposite is true, because a foil wish and a
+ * nonfoil wish are two wishes with two prices. What these hold is the part a tile cannot copy
+ * from the table — which printing it draws, what it says about it, and the two writes that had
+ * to move into a panel to fit.
+ */
+describe("the wall", () => {
+  /** The default, held where the `beforeEach` above cannot reach it: the store's initial state. */
+  it("is what the wishlist opens on", () => {
+    expect(useAppStore.getInitialState().wishlistView).toBe("grid");
+  });
+
+  it("draws one tile per wish, with what is owned of it over the art", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wrap(<WishlistPage />);
+
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+    // The fraction the table spells out, in the two glyphs a corner mark has room for — and
+    // the sentence beside it, which is what a screen reader and a tooltip get.
+    expect(screen.getByText("1/4")).toBeInTheDocument();
+    expect(screen.getByText("1 of 4 owned")).toBeInTheDocument();
+  });
+
+  /**
+   * The one thing a picture must not settle. An any-printing wish is drawn as *a* printing —
+   * the newest of its oracle card, which is the only way it can have art at all — so the caption
+   * goes on saying what the wish is for rather than what the tile happens to be showing.
+   */
+  it("captions a wish for any printing as one, over the art it is drawn as", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+
+    expect(await screen.findByAltText("Ancestral Recall")).toBeInTheDocument();
+    expect(screen.getByText("Any printing")).toBeInTheDocument();
+    // And a pinned wish's caption is its printing *and* its finish, which together are what
+    // make two wishes for one card two wishes.
+    expect(screen.getByText("LEA · 161 · Foil")).toBeInTheDocument();
+  });
+
+  /**
+   * A wish outlives the printing it was made from, so the wall has to answer for one whose card
+   * has left the database: the name, no picture, and nothing to press. Fetching art for it would
+   * be a request that can only 404.
+   */
+  it("draws an orphaned wish as a frame with its name and no card to open", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockResolvedValue(page([{ ...BOLT, artCardId: null }]));
+    wrap(<WishlistPage />);
+
+    // The no-art fallback prints the name and says which kind of nothing this is — "No card",
+    // not "No image": there is no printing to have a picture of. No `<img>` at all.
+    expect(await screen.findByText("No card")).toBeInTheDocument();
+    expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
+    // `BoltNo` with no space: the accname algorithm puts no separator between two inline boxes,
+    // which is the same quirk `ResetAll`'s own name works around.
+    expect(screen.getByRole("button", { name: /Lightning BoltNo card/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  /** What finishing the wish still costs, in the corner the search spends on its printings
+   *  count — over the copies still *missing*, which is the header's own arithmetic. */
+  it("marks a tile with the cost of the copies still missing", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wrap(<WishlistPage />);
+
+    // Three still to find at $400.50 each, and not the four the wish asks for. Scoped to the
+    // tile: a one-wish list prints the same amount in the header, and an unscoped query cannot
+    // tell the sum from the term it was summed from.
+    const tile = (await screen.findByAltText("Lightning Bolt")).closest(
+      "[data-grid-index]",
+    ) as HTMLElement;
+    expect(within(tile).getByText("$1,201.50")).toBeInTheDocument();
+  });
+
+  /** Nothing left to buy is nothing to say: the corner collapses rather than quoting $0.00. */
+  it("draws no cost on a wish the collection already covers", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 4 }]));
+    wrap(<WishlistPage />);
+
+    const tile = (await screen.findByAltText("Lightning Bolt")).closest(
+      "[data-grid-index]",
+    ) as HTMLElement;
+    expect(within(tile).getByText("4/4")).toBeInTheDocument();
+    expect(within(tile).queryByText(/^\$/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two writes the table does in place. A 170px caption holds one 24px control, so both
+   * moved into a panel behind it — a wall the reader cannot maintain their list from would be
+   * the wrong thing to open on.
+   */
+  it("edits the copies wanted from a tile", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /Edit Lightning Bolt .* on your wishlist/ }),
+    );
+    await user.click(screen.getByRole("button", { name: /Increase Copies wanted of Lightning/i }));
+
+    await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 5));
+  });
+
+  it("removes a wish from a tile", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /Edit Lightning Bolt .* on your wishlist/ }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Remove Lightning Bolt .* from your wishlist/ }),
+    );
+
+    await waitFor(() => expect(wishlistRemove).toHaveBeenCalledWith(7));
+  });
+
+  /**
+   * The same rule the table's rows follow, on the same wishes: a wish for any printing names no
+   * cardboard to ask a question about, so it is offered no menu — and two drawings of one list
+   * must not answer differently.
+   */
+  it("offers a menu on a pinned wish's tile and none on an any-printing one", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+
+    const any = (await screen.findByAltText("Ancestral Recall")).closest(
+      "[data-grid-index]",
+    ) as HTMLElement;
+    await act(async () => rightClick(any));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    const bolt = screen.getByAltText("Lightning Bolt").closest("[data-grid-index]") as HTMLElement;
+    await act(async () => rightClick(bolt));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  /** The toggle is the whole of what changes: one list, two drawings of it. */
+  it("switches to the table and back", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+    await user.click(screen.getByRole("button", { name: "Table view" }));
+    expect(await screen.findByRole("row", { name: /Lightning Bolt/ })).toBeInTheDocument();
+    expect(useAppStore.getState().wishlistView).toBe("table");
+
+    await user.click(screen.getByRole("button", { name: "Card view" }));
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
   });
 });

@@ -34,6 +34,17 @@ import { needsNextPage } from "./useCardSearch";
  * a nonfoil entry for a foil-only printing.
  */
 export interface GridCard {
+  /**
+   * The printing this tile draws — the art fetched, the card opened, and what `selectedId` is
+   * compared against.
+   *
+   * **`""` is a row with no printing at all**, and it is the one value that is not an id: the
+   * wishlist's wall draws a wish whose card has left the database, which the app still lists
+   * and still names. `CardArt` is then handed `null` and draws the no-art frame — exactly what
+   * the deck's Grid view passes for the same state — and the tile's own click is dead, because
+   * there is nothing to open and a tile that looked pressable and did nothing would be worse
+   * than one that does not. Every other caller has an id for every row and never meets it.
+   */
   id: string;
   name: string;
   setCode: string;
@@ -238,6 +249,7 @@ export function CardGrid<T extends GridCard>({
   finish,
   gameChanger,
   action,
+  caption,
   cardMenu,
   cardMenuKey,
   tileRef,
@@ -327,6 +339,23 @@ export function CardGrid<T extends GridCard>({
   /** The one control a tile carries, at the end of its caption. The search's quick-add. */
   action?: (card: T) => ReactNode;
   /**
+   * What the caption says about the printing, replacing the `SET · number` it says by default.
+   *
+   * **The wishlist's wall is why this exists, and it is a correctness slot rather than a
+   * styling one.** A wish for *any* printing is drawn as one of them — the newest printing of
+   * its oracle card, which is the only way it can have art at all — and a caption reading
+   * "DSK · 123" under that picture would say the reader had asked for that piece of cardboard.
+   * They asked for the card. So the wishlist answers "Any printing" there and the tile stops
+   * claiming what the row does not say, which is the same distinction its table draws in its
+   * Printing column (`features/wishlist/wish.ts`).
+   *
+   * The slot is the *text* and not the line: the rarity gem before it and the caller's control
+   * after it are the caption's, as are the `sr-only` finish and game-changer words appended to
+   * whatever this returns — those describe the marks over the art, which are drawn from the
+   * same tile whatever its caption says.
+   */
+  caption?: (card: T) => ReactNode;
+  /**
    * What a tile offers on a right-click — **a ready-made `onContextMenu` handler**, not a list
    * of rows.
    *
@@ -345,8 +374,13 @@ export function CardGrid<T extends GridCard>({
    * Absent means a tile has no menu of its own, and the reader gets the app's plain
    * suppression. Unlike the two slots below this one needs no stable identity: it is read on
    * render rather than registered, so nothing is torn down when it changes.
+   *
+   * **`undefined` for one tile is a tile with no menu**, which the wishlist's wall needs and the
+   * other two never produce: a wish for *any* printing names no cardboard to copy a name from,
+   * link to or record a copy of, so it is offered no menu at all — the rule its table already
+   * applies per row, applied here to the same rows.
    */
-  cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
+  cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
   /**
    * The same menu, from the keyboard — `menuKey`'s handler, for Shift+F10 and the ContextMenu
    * key.
@@ -362,7 +396,7 @@ export function CardGrid<T extends GridCard>({
    * the tile holds the caret. The primitive decides which presses count and leaves a text field
    * alone.
    */
-  cardMenuKey?: (card: T) => (e: ReactKeyboardEvent) => void;
+  cardMenuKey?: (card: T) => ((e: ReactKeyboardEvent) => void) | undefined;
   /**
    * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
    * draggable, since a drag library is handed elements and this wall builds its own.
@@ -401,7 +435,7 @@ export function CardGrid<T extends GridCard>({
    * outright, and a development build logs "You have already registered a `draggable` on the
    * same element" for every tile on the wall.
    */
-  dragPayload?: (card: T) => DragPayload;
+  dragPayload?: (card: T) => DragPayload | null;
   /**
    * Whether the arrow keys walk the wall — left and right one tile, up and down one row — and
    * **move the selection with them**, so the card the detail pane is showing follows the caret.
@@ -576,6 +610,10 @@ export function CardGrid<T extends GridCard>({
    */
   const select = useCallback(
     (cardId: string) => {
+      // A tile with no printing selects nothing — see {@link GridCard.id}. The walk still steps
+      // onto it, because a tile the arrows refuse to enter is a hole in the wall; what it does
+      // not do is empty the pane on the way past, which is what `onSelect("")` would ask for.
+      if (!cardId) return;
       if (arrowNav) keepCaretForCard(cardId);
       onSelect(cardId);
     },
@@ -783,6 +821,7 @@ export function CardGrid<T extends GridCard>({
                 finish={finish}
                 gameChanger={gameChanger}
                 action={action}
+                caption={caption}
                 cardMenu={cardMenu}
                 cardMenuKey={cardMenuKey}
                 tileRef={tileRef}
@@ -815,6 +854,7 @@ function Tile<T extends GridCard>({
   finish,
   gameChanger,
   action,
+  caption,
   cardMenu,
   cardMenuKey,
   tileRef,
@@ -848,16 +888,23 @@ function Tile<T extends GridCard>({
   finish?: (card: T) => Finish | null;
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
-  cardMenu?: (card: T) => (e: ReactMouseEvent) => void;
-  cardMenuKey?: (card: T) => (e: ReactKeyboardEvent) => void;
+  caption?: (card: T) => ReactNode;
+  cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
+  cardMenuKey?: (card: T) => ((e: ReactKeyboardEvent) => void) | undefined;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
-  dragPayload?: (card: T) => DragPayload;
+  dragPayload?: (card: T) => DragPayload | null;
 }) {
   const mark = badge?.(card);
   const corner = topLeft?.(card);
   const tileFinish = finish?.(card) ?? null;
   const finishWord = tileFinish ? FINISH_LABEL[tileFinish] : null;
   const crowned = gameChanger?.(card) ?? false;
+  /**
+   * Opening the card, or nothing at all — see {@link GridCard.id} for the row that has no
+   * printing to open. One binding for all three places a press opens the card (the art and
+   * both corner marks), so a wall cannot end up half-live.
+   */
+  const open = card.id ? () => onSelect(card.id) : undefined;
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -875,7 +922,14 @@ function Tile<T extends GridCard>({
     (element: HTMLElement | null) => {
       const detach = tileRef?.(card, element);
       if (!element || !dragPayload) return detach;
-      const stop = cardDraggable({ element, payload: () => dragPayload(card) });
+      // `null` is a card that cannot be picked up — the wishlist's any-printing wish, which
+      // would otherwise start a drag carrying an empty id, and an empty id addresses every row
+      // and no row (`dnd.ts`). Decided here rather than inside the payload thunk because
+      // `cardDraggable` reads that at `dragstart`, by which point the drag has begun: a source
+      // that is registered is a source, so the answer has to come before the registration.
+      const carried = dragPayload(card);
+      if (carried === null) return detach;
+      const stop = cardDraggable({ element, payload: () => dragPayload(card) ?? carried });
       return () => {
         stop();
         detach?.();
@@ -953,7 +1007,13 @@ function Tile<T extends GridCard>({
       <div className="relative">
         <button
           type="button"
-          onClick={() => onSelect(card.id)}
+          onClick={open}
+          // Said rather than merely dead, on the one row that has no card to open. `aria-disabled`
+          // and never `disabled`, like every other out-of-reach control in this app: the button
+          // keeps its place in the tab order, and it is still what the arrow walk hands the caret
+          // to (see {@link CARET_SELECTOR}) — a wall with an unreachable tile in the middle of it
+          // would be worse than one with a tile that says it opens nothing.
+          aria-disabled={card.id ? undefined : true}
           // The name is the card and nothing else — the quick-add beside it says what it
           // does to the card, and two buttons whose names both start with it would be two
           // buttons a screen reader cannot tell apart in a wall of forty.
@@ -964,7 +1024,9 @@ function Tile<T extends GridCard>({
               that looks like. The button, the focus ring and the caption stay here, because
               they are what makes this frame a *tile* rather than a picture. */}
           <CardArt
-            cardId={card.id}
+            // `null`, not `""`: a row with no printing fetches nothing and gets the no-art
+            // frame with its name, which is what `CardArt` draws for an orphan everywhere else.
+            cardId={card.id || null}
             name={card.name}
             selected={selected}
             finish={tileFinish}
@@ -1005,7 +1067,7 @@ function Tile<T extends GridCard>({
           // of empty 12×4px chips. The guard belongs here, where the corner is decided, and
           // then it holds for every caller instead of for the ones that remembered.
           <span
-            onClick={() => onSelect(card.id)}
+            onClick={open}
             // The inset, the padding and the corner are all sizes on a card at 100% zoom, and
             // scale with it — the mark inside already does, and a chip whose box held still would
             // either burst at 2× or swim in its own padding at 0.5×.
@@ -1030,7 +1092,7 @@ function Tile<T extends GridCard>({
           // rounded corner. 4px is as high on the card as this mark can sit — see where the
           // search passes it for what that costs against the printed name.
           <span
-            onClick={() => onSelect(card.id)}
+            onClick={open}
             // The badge's box, scaled the same way — and here the scaling pays a debt the search
             // page's own comment recorded: this corner is 4px in so that it clears the art's
             // rounded edge and lands on the printed nameplate, and *because it did not scale*, by
@@ -1069,7 +1131,10 @@ function Tile<T extends GridCard>({
       >
         <RarityGem rarity={card.rarity} />
         <span className="min-w-0 flex-1 truncate">
-          {card.setCode.toUpperCase()} · {card.collectorNumber}
+          {/* The printing, in the caller's words where it has any of its own — see
+              {@link CardGrid}'s `caption`, which exists because a wish for *any* printing is
+              drawn as one and must not be captioned as one. */}
+          {caption ? caption(card) : `${card.setCode.toUpperCase()} · ${card.collectorNumber}`}
           {/* The finish in words, because the art's chip is `aria-hidden` — it sits inside
               the tile's button, where any text of its own would join the button's accessible
               name and make a wall of foils forty buttons called "… Foil". Stated here

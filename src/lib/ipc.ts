@@ -774,6 +774,19 @@ export interface WishRow {
    * way `rarity` and `manaCost` beside it do. Nothing on the wishlist draws it.
    */
   typeLine: string | null;
+  /**
+   * The printing this wish is **drawn as** — what the wall puts a picture of on its tile.
+   *
+   * Not {@link WishRow.cardId} and never to be read as one: that is what the wish is *for* and
+   * is `null` for an any-printing wish, while this is answered for both kinds by the same join
+   * `rarity` and `manaCost` come off. A pinned wish resolves to its own printing; an unpinned
+   * one to the newest printing of its oracle card, so the tile has art while its caption goes
+   * on saying "Any printing".
+   *
+   * `null` is a genuine orphan — no printing in `cards`, no oracle match — and draws the
+   * no-art frame with the name.
+   */
+  artCardId: string | null;
   quantity: number;
   preferredFinish: string | null;
   /** The cheapest way to satisfy this wish, per copy, at the marketplace the query named: the
