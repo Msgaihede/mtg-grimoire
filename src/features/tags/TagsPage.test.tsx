@@ -94,6 +94,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
+import { WALL_CARD_VARIANT } from "@/lib/images";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import type { Update } from "@/lib/useUpdate";
@@ -780,11 +781,36 @@ describe("the results wall", () => {
   });
 
   /** A wall of empty frames is what a reader browsing by motif came *not* to see. */
-  it("warms the front faces of the page that just landed, at grid size", async () => {
+  it("warms the front faces of the page that just landed, at the wall's own size", async () => {
     wrap(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["c-bolt-lea"], "grid"));
+    await waitFor(() =>
+      expect(prefetchImages).toHaveBeenCalledWith(["c-bolt-lea"], WALL_CARD_VARIANT),
+    );
+  });
+
+  /**
+   * The assertion above is through the constant, so it cannot see the failure that actually
+   * matters — and this page is the proof that it happens. `TagResults` was written as a copy of
+   * `SearchPage`'s twin with a `"grid"` literal in it, and it kept that literal across the merge
+   * that moved every wall to {@link WALL_CARD_VARIANT}: the pre-warm would have reported every
+   * card warmed and then every tile would have fetched cold, exactly as the deck arm did until
+   * 2026-08-11 (`images::DECK_PREWARM`).
+   *
+   * So this reads the variant back out of a **mounted tile's `src`** and holds the prefetch to
+   * it. Nothing here names a size; the two sites simply have to agree.
+   */
+  it("warms the same size the tiles actually draw", async () => {
+    wrap(<TagsPage />);
+
+    const tile = await screen.findByRole("img", { name: "Lightning Bolt" });
+    // Read against the id and face the URL ends with rather than by parsing it: `mtgimg:` is a
+    // custom scheme, and what this needs is the one segment in front of `/<id>/<face>`.
+    const drawn = /\/([a-z]+)\/c-bolt-lea\/0$/.exec(tile.getAttribute("src") ?? "")?.[1];
+
+    expect(drawn).toBeDefined();
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["c-bolt-lea"], drawn));
   });
 
   it("does not warm anything for the table, which shows no art", async () => {
