@@ -1991,8 +1991,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // **Only while the deck is grouped by category**, and absent is the whole of the off
       // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
       // the desk are buckets the app derived, so there is no order of the reader's on screen to
-      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends,
-      // and every one of those is in the rail anyway.
+      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends
+      // and the command zones it heads the list with, and neither is in the flow — the first is
+      // in the rail, the second in the box `splitRail` answers `command` for, whose piles are
+      // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
+      // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
+      // every grouping has no position for a drag to change, under `category` least of all.
       moveCategory: groupBy === "category" ? moveCategory : undefined,
     }),
     [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField, groupBy, moveCategory],

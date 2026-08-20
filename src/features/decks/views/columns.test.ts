@@ -60,13 +60,18 @@ const group = (name: string, kind: CategoryKind | null, isActive = true) => ({
 const names = (groups: readonly { name: string }[]) => groups.map((g) => g.name);
 
 describe("splitRail", () => {
+  /** Every case in this block destructures all three runs and asserts on all three, including
+   *  the empty ones. The split is a partition — a group is in exactly one run — so a case that
+   *  looked at two of them could not tell a pile that moved to the third from a pile that was
+   *  dropped, and dropping a pile is the one failure this function must never have. */
   it("splits a side group out and leaves the rest in order", () => {
-    const { flow, rail } = splitRail([
+    const { command, flow, rail } = splitRail([
       group("Ramp", "main"),
       group("Sideboard", "side"),
       group("Removal", "main"),
     ]);
 
+    expect(command).toEqual([]);
     expect(names(flow)).toEqual(["Ramp", "Removal"]);
     expect(names(rail)).toEqual(["Sideboard"]);
   });
@@ -81,12 +86,13 @@ describe("splitRail", () => {
    * that reaches the rail only when a Sideboard has already opened one.
    */
   it("splits a maybe group out with no side group in the deck", () => {
-    const { flow, rail } = splitRail([
+    const { command, flow, rail } = splitRail([
       group("Ramp", "main"),
       group("Maybeboard", "maybe"),
       group("Removal", "main"),
     ]);
 
+    expect(command).toEqual([]);
     expect(names(flow)).toEqual(["Ramp", "Removal"]);
     expect(names(rail)).toEqual(["Maybeboard"]);
   });
@@ -97,55 +103,95 @@ describe("splitRail", () => {
    * `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader may head a pile of removal
    * "Sideboard" and rename the real one "Board". A split on the heading passes every other test
    * in this block and gets exactly this deck backwards — the homebrew pinned to the right, the
-   * pile the format knows about buried in the pack. Both names are used, because both kinds are
-   * railed now and a heading-reading split would get a "Maybeboard" of the reader's own wrong the
-   * same way.
+   * pile the format knows about buried in the pack.
+   *
+   * **"Commander" and "Companion" are in the list for the same reason the other two are, and
+   * they are the newest way to get this wrong.** A command zone is now the most prominent place
+   * on the desk, so a split that read the heading would give it to a `main` pile a reader had
+   * named after their commander — which is what somebody who files their deck by its centrepiece
+   * calls that pile — and leave the real zone in the pack. All four homebrews flow, because
+   * `main` is what they are; the two real zones are the two rows below them.
    */
   it("splits on the kind and never on the heading", () => {
-    const { flow, rail } = splitRail([
+    const { command, flow, rail } = splitRail([
       group("Sideboard", "main"),
       group("Maybeboard", "main"),
+      group("Commander", "main"),
+      group("Companion", "main"),
       group("Board", "side"),
       group("Perhaps", "maybe"),
     ]);
 
-    expect(names(flow)).toEqual(["Sideboard", "Maybeboard"]);
+    expect(command).toEqual([]);
+    expect(names(flow)).toEqual(["Sideboard", "Maybeboard", "Commander", "Companion"]);
     expect(names(rail)).toEqual(["Board", "Perhaps"]);
   });
 
   /**
-   * **The three kinds that still flow while they are switched on, said in one place.**
+   * **The command zones come out as a run of their own, and this is the case that says so**
+   * (changed 2026-08-20; they used to flow).
    *
-   * A derived group — "Mana value 3" is a heading and nothing more — has no rules role at all, so
-   * it flows; the `kind` decides and the grouping mode never does. `commander` and `companion`
-   * flow for a reason of their own that `splitRail`'s doc states: one card each, so railing either
-   * would spend a whole column's width on a pile read at a glance. This is the assertion that
-   * fails if "the two beside-the-deck kinds" ever creeps outward into "every kind that is not
-   * `main`". Every group here is switched **on**, which is what makes it about the kind alone —
-   * the switch's own answer for these two is the case below.
+   * A commander is not a card in the curve, it is the card the curve was built *around*, played
+   * from a zone of its own — and the same is true of a companion. Flowing, either sat wherever
+   * `sortOrder` or a derived bucket happened to put it and moved down the desk every time the
+   * reader changed the grouping; handed out separately, the views draw the two stacked in one
+   * column that is always in the same place.
+   *
+   * **The derived bucket and the `main` pile are in the list to keep this about the two kinds
+   * rather than about "not `main`".** "Mana value 3" carries `kind: null` and has no rules role
+   * at all, so it flows; Ramp flows because it is in the deck. This is the assertion that fails
+   * if the first test ever creeps outward.
+   *
+   * Every group here is switched **on**, which is what makes it about the kind alone — the
+   * switch's own answer for these two is the case below.
    */
-  it("keeps a derived, a commander and a companion group in the flow", () => {
-    const { flow, rail } = splitRail([
+  it("hands an active commander and companion out as the command run, in the order given", () => {
+    const { command, flow, rail } = splitRail([
       group("Mana value 3", null),
       group("Commander", "commander"),
       group("Companion", "companion"),
       group("Ramp", "main"),
     ]);
 
-    expect(names(flow)).toEqual(["Mana value 3", "Commander", "Companion", "Ramp"]);
+    expect(names(command)).toEqual(["Commander", "Companion"]);
+    expect(names(flow)).toEqual(["Mana value 3", "Ramp"]);
     expect(rail).toEqual([]);
+  });
+
+  /**
+   * **Nothing here sorts `command`, and the input is deliberately the wrong way round to prove
+   * it.**
+   *
+   * Commander then companion is a *deck* fact: `buildGroups` puts them in that order in all three
+   * grouping modes, and this file preserves the order it is handed rather than re-deriving it. A
+   * two-element swap here would be a second statement of one rule — and the second statement is
+   * the one that gets edited without the first — as well as this file knowing that a commander is
+   * read before a companion, which is precisely the kind of thing its whole discipline is not
+   * knowing.
+   *
+   * So the answer to a list in the wrong order is the same list in the wrong order. **That is
+   * what makes this test able to fail at all**: handed the conventional order, a sorting split
+   * and a preserving split give the same answer, and the assertion checks nothing.
+   */
+  it("preserves the command run's given order rather than re-deriving it", () => {
+    const { command } = splitRail([
+      group("Companion", "companion"),
+      group("Commander", "commander"),
+    ]);
+
+    expect(names(command)).toEqual(["Companion", "Commander"]);
   });
 
   /**
    * A switched-off pile reaches the rail, and this is the case that puts one among the derived
    * buckets.
    *
-   * Under `manaValue` and `type`, `buildGroups` buckets the **active** cards and then appends
-   * every inactive category *unchanged* — that is `grouping.ts`'s own headline rule. So a reader
-   * who flips the Sideboard's switch and then groups by mana value hands this function exactly
-   * the list below: derived headings that flow, and railed piles that do not. The Maybeboard is in
-   * this list too because for that pile it is not a corner case at all — it is seeded switched off,
-   * so this is the shape it arrives in almost every time.
+   * Under `manaValue` and `type`, `buildGroups` buckets the **active** cards that are not in a
+   * command zone and then appends every inactive category *unchanged* — that is `grouping.ts`'s
+   * own headline rule. So a reader who flips the Sideboard's switch and then groups by mana value
+   * hands this function exactly the list below: derived headings that flow, and railed piles that
+   * do not. The Maybeboard is in this list too because for that pile it is not a corner case at
+   * all — it is seeded switched off, so this is the shape it arrives in almost every time.
    *
    * **The derived headings are what make this about more than the switch.** Every bucket
    * `buildGroups` invents is `isActive: true`, so they flow by the second test as well as the
@@ -158,15 +204,44 @@ describe("splitRail", () => {
    * for the one reader least likely to be believed about it.
    */
   it("carries switched-off railed groups to the rail among derived groups", () => {
-    const { flow, rail } = splitRail([
+    const { command, flow, rail } = splitRail([
       group("Mana value 2", null),
       group("Mana value 3", null),
       group("Sideboard", "side", false),
       group("Maybeboard", "maybe", false),
     ]);
 
+    expect(command).toEqual([]);
     expect(names(flow)).toEqual(["Mana value 2", "Mana value 3"]);
     expect(names(rail)).toEqual(["Sideboard", "Maybeboard"]);
+  });
+
+  /**
+   * **A derived grouping hands the command zones through as themselves, and that is the list this
+   * split has to get right for the whole change to be worth anything.**
+   *
+   * Under `manaValue` and `type` there are no categories on the desk at all — every heading is a
+   * bucket `buildGroups` invented — except for the piles it appends as themselves, which are now
+   * two different things: the active command zones and every switched-off pile. So the list below
+   * is what those two modes really produce, and the two zones arrive carrying `kind: "commander"`
+   * / `"companion"` and `isActive: true`, which is exactly what the first test reads. No mode
+   * check anywhere; the same two words answer in all three modes.
+   *
+   * **The order they arrive in is the answer**: `buildGroups` appends the command zones *first*,
+   * ahead of the buckets, and they come out in that order because nothing here re-derives it.
+   */
+  it("takes the command zones out of a derived grouping by their two words alone", () => {
+    const { command, flow, rail } = splitRail([
+      group("Commander", "commander"),
+      group("Companion", "companion"),
+      group("Mana value 1", null),
+      group("Mana value 2", null),
+      group("Maybeboard", "maybe", false),
+    ]);
+
+    expect(names(command)).toEqual(["Commander", "Companion"]);
+    expect(names(flow)).toEqual(["Mana value 1", "Mana value 2"]);
+    expect(names(rail)).toEqual(["Maybeboard"]);
   });
 
   /**
@@ -183,13 +258,14 @@ describe("splitRail", () => {
    * reader's own switched-off piles follow underneath.
    */
   it("rails a switched-off pile of the reader's own, under the two railed kinds", () => {
-    const { flow, rail } = splitRail([
+    const { command, flow, rail } = splitRail([
       group("Sideboard", "side"),
       group("Ramp", "main"),
       group("Cut for now", "main", false),
       group("Maybeboard", "maybe", false),
     ]);
 
+    expect(command).toEqual([]);
     expect(names(flow)).toEqual(["Ramp"]);
     expect(names(rail)).toEqual(["Sideboard", "Maybeboard", "Cut for now"]);
   });
@@ -217,27 +293,37 @@ describe("splitRail", () => {
   });
 
   /**
-   * **A switched-off command zone rails like anything else**, which is the one place the two tests
-   * disagree about the same pile.
+   * **A switched-off command zone rails like anything else, and is in no part of the command
+   * run** — the one place the first two tests disagree about the same pile.
    *
-   * `commander` and `companion` are exempt from the rail while they are on, and the exemption's
-   * reason is an argument about a pile that is *in* the deck: one card each, so a column of desk
-   * spent on either is a column spent permanently. A switched-off command zone is not in the deck
-   * at all, so nothing is left of that argument and the second test answers.
+   * `commander` and `companion` lead the answer while they are on, and the reason is an argument
+   * about a pile that is *in* the deck: it is the card the deck was built around, so it earns the
+   * most prominent place on the desk permanently. A switched-off command zone counts toward
+   * nothing — not size, not copies, not legality — so nothing is left of that argument, and giving
+   * the top of the desk to the one pile the reader has said is not playing would be the worst
+   * possible reading of the switch. The `isActive &&` half of the first test is the whole of what
+   * keeps this true.
+   *
+   * **The Sideboard is in the list to pin where they land**: it arrives *after* both zones and
+   * comes out *in front of* them, because the kind test still runs before the switch test and the
+   * rail's head is the two beside-the-deck piles whatever anyone's switch says.
    */
-  it("rails a switched-off commander or companion", () => {
-    const { flow, rail } = splitRail([
+  it("rails a switched-off commander or companion, under the rail's own head", () => {
+    const { command, flow, rail } = splitRail([
       group("Commander", "commander", false),
       group("Companion", "companion", false),
+      group("Sideboard", "side"),
       group("Ramp", "main"),
     ]);
 
+    expect(command).toEqual([]);
     expect(names(flow)).toEqual(["Ramp"]);
-    expect(names(rail)).toEqual(["Commander", "Companion"]);
+    expect(names(rail)).toEqual(["Sideboard", "Commander", "Companion"]);
   });
 
   /**
-   * **Nothing here sorts the rail**, and this is the case that says so.
+   * **Nothing here sorts anything**, and this is the case that says so about all three runs at
+   * once.
    *
    * Nothing says a deck has one sideboard: piles the reader split themselves all belong on the
    * right, in the order they arranged them in. The Maybeboard is deliberately in the **middle** of
@@ -251,18 +337,26 @@ describe("splitRail", () => {
    * decides. `Cut for now` is in front of the whole railed run in the input and comes out behind
    * all of it, which is the one re-arrangement this function does make — and it is the rule rather
    * than a sort, because nothing inside either run moves.
+   *
+   * **The command zones are the third claim, and they are the two furthest apart in the input**:
+   * Commander sits between Ramp and Wishboard, Companion five rows later behind the Maybeboard,
+   * and they come out adjacent and in that order. Adjacency is the split's; the order inside it is
+   * `buildGroups`', preserved rather than restated.
    */
-  it("carries every railed group in the order it arrived, sorting nothing", () => {
-    const { flow, rail } = splitRail([
+  it("carries every group in the order it arrived, in all three runs, sorting nothing", () => {
+    const { command, flow, rail } = splitRail([
       group("Cut for now", "main", false),
       group("Sideboard", "side"),
       group("Ramp", "main"),
+      group("Commander", "commander"),
       group("Wishboard", "side"),
       group("Maybeboard", "maybe"),
+      group("Companion", "companion"),
       group("Against control", "side"),
       group("Retired", "main", false),
     ]);
 
+    expect(names(command)).toEqual(["Commander", "Companion"]);
     expect(names(flow)).toEqual(["Ramp"]);
     expect(names(rail)).toEqual([
       "Sideboard",
@@ -274,16 +368,22 @@ describe("splitRail", () => {
     ]);
   });
 
-  it("answers two empty arrays for no groups", () => {
-    expect(splitRail([])).toEqual({ flow: [], rail: [] });
+  it("answers three empty runs for no groups", () => {
+    expect(splitRail([])).toEqual({ command: [], flow: [], rail: [] });
   });
 
-  /** The common deck. An empty `rail` is what tells both views to draw no rail at all, so this
-   *  is the answer every reader with neither pile gets. */
-  it("answers an empty rail for a deck with neither pile", () => {
-    const { flow, rail } = splitRail([group("Commander", "commander"), group("Ramp", "main")]);
+  /** The common deck: a commander, some piles, and nothing beside the deck at all. An empty
+   *  `rail` is what tells both views to draw no rail, and a one-pile `command` run is what most
+   *  Commander decks hand them — a companion is the rare second card, not the ordinary case, so
+   *  the stacked column has to read right holding one pile. */
+  it("answers an empty rail, and a command run of one, for a deck with neither pile", () => {
+    const { command, flow, rail } = splitRail([
+      group("Commander", "commander"),
+      group("Ramp", "main"),
+    ]);
 
-    expect(names(flow)).toEqual(["Commander", "Ramp"]);
+    expect(names(command)).toEqual(["Commander"]);
+    expect(names(flow)).toEqual(["Ramp"]);
     expect(rail).toEqual([]);
   });
 });

@@ -112,8 +112,18 @@ export function TextView({
   // usually the far end of a long run, i.e. the piles a reader looks for by position, in the one
   // place they can never be. {@link splitRail} has which piles, why the kind is tested before the
   // switch, and why the rail is not sorted here.
-  const { flow, rail } = splitRail(groups);
-  const columns = packColumns(flow, groupHeight, columnHeight);
+  //
+  // **The command zone is packed at the head of the flow, and this view needs no box of its own
+  // for it.** `StackView` builds one, because its flow is a masonry: two short piles at the head
+  // of a grid are dealt into columns 1 and 2 side by side, so the companion lands *beside* the
+  // commander unless the two are made a single grid item. Here the layout is a greedy in-order
+  // pack, and a greedy in-order pack **is** a stack — it fills a column top-down in the reader's
+  // order, never re-ordering and never splitting a group — so putting the command run at the head
+  // of the packed list is the whole of the arrangement: the commander opens the first column and
+  // the companion is the next thing under it. The pack's own law does the rest, and nothing here
+  // has to know that those two piles are special.
+  const { command, flow, rail } = splitRail(groups);
+  const columns = packColumns([...command, ...flow], groupHeight, columnHeight);
 
   return (
     // Grows **down**, and scrolls sideways only when a single 300px column will not fit the desk
