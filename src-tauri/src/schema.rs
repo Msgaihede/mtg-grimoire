@@ -1875,17 +1875,30 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     // a slow Tags page, it gets an app that stops responding when the reader types in the
     // search box — and nothing about that symptom points here.
     //
-    // **A rung cannot reach the databases that need it.** The v20 step ran on real databases
-    // *before* the two closure indexes joined [`TAG_INDEXES_SQL`]; those databases have `20`
-    // recorded, so `v < 20` is false forever and the rung's own replay above will never fire
-    // for them again. Bumping to v21 would only help databases that pass through v21 once,
-    // where the coupling above wants the index set to be self-healing. Every statement is
+    // **Self-healing, where a rung is one-shot — and the coupling above is what makes the
+    // difference matter.** A v21 rung would in fact reach every database in the state this was
+    // written for: the v20 step ran on real databases *before* the two closure indexes joined
+    // [`TAG_INDEXES_SQL`], so those have `20` recorded and `v < 20` is false for them forever.
+    // The argument for a replay is not that a rung cannot reach them. It is that a rung fires
+    // once, in one direction, and this index set has to be right on *every* launch: an
+    // interrupted swap, a restore of an older data folder, a hand-edited database, a future
+    // rung that renames a table. Any of those loses an index a rung already spent, and the
+    // failure is nine minutes of frozen window rather than a slower page. Every statement is
     // `CREATE INDEX IF NOT EXISTS`, so on the overwhelming majority of launches this is four
     // catalog lookups and a few microseconds.
     //
     // The copy inside the v20 rung is **not** a duplicate to delete: that one belongs to the
     // step's transaction, where it lands with the tables it indexes. This one is the only
     // thing that reaches a database the ladder is already done with.
+    //
+    // **Fatal, where [`prepare_database`] deliberately degrades**, and the coupling is what
+    // inverts the usual argument. Its two post-ladder repair steps `eprintln!` and carry on,
+    // because a stale FTS index costs accuracy and a leftover `cards_staging` costs disk — the
+    // app is still an app. Continuing here would instead hand the reader a launched window that
+    // locks up for nine minutes on the first keystroke in the tag box, which is strictly worse
+    // than a launch that says what is wrong. And a `CREATE INDEX IF NOT EXISTS` that fails at
+    // all means the database is not accepting DDL, so nothing after this point would have
+    // worked either.
     conn.execute_batch(TAG_INDEXES_SQL)?;
     Ok(())
 }
@@ -2436,12 +2449,18 @@ pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
 ///
 /// **The index replay below is this function's own, borrowed from [`swap_staging`] one family
 /// over, and it is why both taxonomies come through one function rather than two hand-written
-/// swaps.** Three of the four tables carry no index but their own primary key, which the
-/// rename brings with it — but the taxonomy table has `idx_{family}_tags_norm`, and a rename
-/// carries the *staging* table's indexes rather than the live table's. Without
-/// [`TAG_INDEXES_SQL`] here that index is gone after the first weekly refresh, with nothing
-/// wrong and only the tag search slow, which is the kind of failure nobody reports. A second
-/// hand-written swap is exactly where it would be forgotten.
+/// swaps.** Two of the four tables carry no index but their own primary key, which the rename
+/// brings with it. The other two do: the taxonomy has `idx_{family}_tags_norm` and the closure
+/// has `idx_{family}_..._slug` — and a rename carries the *staging* table's indexes rather than
+/// the live table's, while no staging DDL creates an index at all.
+///
+/// **So without [`TAG_INDEXES_SQL`] here, the first weekly refresh silently un-indexes the
+/// closure, and that is a hang rather than a slow page.** [`crate::tags::query`] counts a tag's
+/// reach with a correlated `count(*)`, which is 49 ms with the closure index and **531 seconds**
+/// without it (measured 2026-08-20, release build, at that day's file size). The reader's
+/// window stops responding on the first keystroke in the tag box, a week after a refresh nobody
+/// noticed, with nothing anywhere pointing here. A second hand-written swap is exactly where
+/// this would be forgotten, and `the_tag_indexes_survive_a_*_tag_swap` are the fences.
 fn swap_tag_staging(conn: &Connection, tables: &[(&str, &str)]) -> rusqlite::Result<()> {
     let batch: String = tables
         .iter()
@@ -6435,9 +6454,29 @@ pub(crate) mod tests {
         for table in ["art_tags", "oracle_tags"] {
             assert_eq!(has_column(&conn, table, "slug_norm"), 1, "{table}");
         }
+        for index in ["idx_art_tags_norm", "idx_oracle_tags_norm"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} is missing"));
+        }
+    }
+
+    /// Both closures are indexed by `slug`, which is the column the Tags page counts by.
+    ///
+    /// **Its own test rather than a line in the one above, because the failure is a different
+    /// kind.** A missing `slug_norm` index is a slower search; a missing closure index is a
+    /// hang. A closure is `WITHOUT ROWID` on `(subject_id, slug)`, so counting by slug has no
+    /// path but a full scan, and [`crate::tags::query`] counts per row: 49 ms with the index,
+    /// **531 seconds** without it, measured 2026-08-20 on a release build at that day's file
+    /// size. Whoever deletes one of these will be reading this test's name, not that one's.
+    #[test]
+    fn both_tag_closures_are_indexed_by_slug() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
         for index in [
-            "idx_art_tags_norm",
-            "idx_oracle_tags_norm",
             "idx_art_tag_illustrations_slug",
             "idx_oracle_tag_cards_slug",
         ] {
@@ -6482,8 +6521,9 @@ pub(crate) mod tests {
     /// **This is the one reachable state no other test covers**, and it is not hypothetical:
     /// every database that ran the v20 rung before `idx_art_tag_illustrations_slug` and
     /// `idx_oracle_tag_cards_slug` joined [`TAG_INDEXES_SQL`] is in it right now. `user_version`
-    /// reads 20, so the rung never fires again; the swap tests below prove the *refresh* path,
-    /// which is up to a week away and only runs if the reader has ever fetched a tag file. The
+    /// reads 20, so the rung never fires again; the two `..._survive_a_*_tag_swap` tests around
+    /// this one prove the *refresh* path, which is up to a week away and only runs at all if the
+    /// reader has ever fetched a tag file. The
     /// unconditional replay at the tail of [`migrate`] is the only thing that reaches these,
     /// and without it [`crate::tags::query`]'s correlated count is 531 seconds rather than
     /// 49 ms - a frozen window, measured 2026-08-20.
@@ -6574,12 +6614,13 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(row, (String::new(), String::new()));
 
-        // **And on an upgraded database, not only a fresh one.** The sibling test that checks
-        // these two indexes runs over a fresh install, where they could have come from
+        // **And on an upgraded database, not only a fresh one.** The two sibling tests that
+        // check these four indexes run over a fresh install, where they could have come from
         // anywhere in the step; here they have to arrive on a database that already carried
         // `oracle_tags`. That is this rung's own thesis turned on itself — an index declared
-        // where only a fresh install reaches it is an index every existing reader lacks, with
-        // nothing wrong and only the tag search slow.
+        // where only a fresh install reaches it is an index every existing reader lacks. For
+        // the two `slug_norm` indexes that is a slower search; for the two closure indexes it
+        // is a nine-minute freeze, because `tags::query` counts a tag's reach per row.
         for index in [
             "idx_art_tags_norm",
             "idx_oracle_tags_norm",

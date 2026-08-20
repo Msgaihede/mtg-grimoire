@@ -166,8 +166,14 @@ fn not_muted(alias: &str, ns_param: &str) -> String {
 ///   and it would arrive as "the app freezes when I type in the tag box" rather than as anything
 ///   pointing here. `the_tag_indexes_survive_an_art_tag_swap` and its oracle twin are the fence.
 /// * **A two-phase shape** — match the tags first, then count only those slugs — was measured
-///   and is *worse*, 741 ms on a wide needle, because it still scans the closure and adds an
-///   11 531-hole `IN`. It looks like the obvious simplification and is not one.
+///   and loses where it matters. It still scans the closure and adds an up-to-11 531-hole `IN`
+///   on top. **Those figures are from an earlier run on a loaded machine and do not belong in
+///   the table above**, so read them only against each other: in that one run it was 741 ms and
+///   858 ms on the two wide needles where the grouped form was 567 ms and 423 ms (1.3× and 2.0×
+///   slower), and 143 ms against 393 ms on the narrow one — it *wins* there, because it counts
+///   11 slugs instead of all of them. The correlated form with the index beats it on both ends
+///   (49 ms and 7.7 ms), so the narrow-needle win buys nothing. It looks like the obvious
+///   simplification and is not one.
 fn hit_select(ds: &Dataset, band: &str) -> String {
     let tags = ds.tags_table;
     let closure = ds.closure_table;
@@ -185,6 +191,31 @@ fn hit_select(ds: &Dataset, band: &str) -> String {
                        WHERE {child_visible}
                        GROUP BY p.parent_slug) kids
                   ON kids.slug = t.slug"
+    )
+}
+
+/// The whole search statement for one taxonomy, needle bound at `:needle` / `:prefix` /
+/// `:contains`, namespace at `:ns`, cap at `:limit`.
+///
+/// **A function rather than a `format!` inside [`run_tag_search`], so a test can pin the
+/// statement the command actually runs.** The test below named for the closure index reads this
+/// statement's `EXPLAIN QUERY PLAN`; a copy of the SQL in the test file would have gone on
+/// passing while the real one regressed.
+fn search_sql(ds: &Dataset) -> String {
+    // `LIKE :prefix` and `LIKE :contains` need no `ESCAPE`: the needle is [`normalize`]d, so
+    // only `[a-z0-9]` reaches them and no LIKE metacharacter can survive.
+    let select = hit_select(
+        ds,
+        "CASE WHEN t.slug_norm = :needle THEN 0
+              WHEN t.slug_norm LIKE :prefix THEN 1
+              ELSE 2 END",
+    );
+    let visible = not_muted("t", ":ns");
+    format!(
+        "{select}
+          WHERE t.slug_norm LIKE :contains AND {visible}
+          ORDER BY band, card_count DESC, t.label, t.slug
+          LIMIT :limit"
     )
 }
 
@@ -308,28 +339,15 @@ pub fn run_tag_search(
     limit: u32,
 ) -> Result<Vec<TagHit>, String> {
     let needle = normalize(text);
-    // No `ESCAPE` clause, and none is possible to need: `normalize` leaves only `[a-z0-9]`, so
-    // neither `%` nor `_` can survive into the needle.
     let prefix = format!("{needle}%");
     let contains = format!("%{needle}%");
     let limit = i64::from(limit);
-    let band = "CASE WHEN t.slug_norm = :needle THEN 0
-                     WHEN t.slug_norm LIKE :prefix THEN 1
-                     ELSE 2 END";
 
     let mut scored: Vec<Scored> = Vec::new();
     for (ns, ds) in namespaces_for(namespace)? {
-        let visible = not_muted("t", ":ns");
-        let select = hit_select(ds, band);
-        let sql = format!(
-            "{select}
-              WHERE t.slug_norm LIKE :contains AND {visible}
-              ORDER BY band, card_count DESC, t.label, t.slug
-              LIMIT :limit"
-        );
         let mut hits = collect(
             conn,
-            &sql,
+            &search_sql(ds),
             rusqlite::named_params! {
                 ":ns": ns, ":needle": &needle, ":prefix": &prefix,
                 ":contains": &contains, ":limit": limit,
@@ -456,12 +474,17 @@ mod tests {
     /// assertion pass:
     ///
     /// ```text
-    /// dog (root, 0 direct taggings)      oracle: dog (400 oracle ids)
-    ///  └─ hound      ill-0..399  (400)
+    /// dog (root, 0 direct taggings)      oracle: dog     (400 oracle ids)
+    ///  └─ hound      ill-0..399  (400)   oracle: bulldog  (50 oracle ids)
     ///      └─ bulldog ill-0..4     (5)
     /// dogs-of-war (root) ill-0..9 (10)
     ///      └─ bulldog  (the same tag: 43 % of art tags have more than one parent)
     /// ```
+    ///
+    /// **`bulldog` exists in both namespaces with the oracle one reaching ten times as far**,
+    /// and that asymmetry is load-bearing rather than colour. Every other pair here ties at 400,
+    /// so with only those rows the ordering could put the namespace ahead of the reach and
+    /// nothing would fail — see `reach_outranks_the_namespace_inside_a_band`.
     ///
     /// So `dog`'s closure is `hound ∪ bulldog` = ill-0..399 = **400** while its own
     /// `art_taggings` rows number **zero**, which is the shape a category tag really has in the
@@ -518,18 +541,29 @@ mod tests {
                 .unwrap();
             }
         }
-        conn.execute(
-            "INSERT INTO oracle_tags (slug, id, label, description, slug_norm)
-             VALUES ('dog', 'oracle-dog', 'Dog', 'Cares about Dogs.', 'dog')",
-            [],
-        )
-        .unwrap();
-        for i in 0..400 {
+        for (slug, id, label, n) in [
+            ("dog", "oracle-dog", "Dog", 400),
+            ("bulldog", "oracle-bulldog", "Bulldog", 50),
+        ] {
             conn.execute(
-                "INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES (?1, 'dog')",
-                params![format!("oid-{i}")],
+                "INSERT INTO oracle_tags (slug, id, label, description, slug_norm)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    slug,
+                    id,
+                    label,
+                    format!("Cares about {label}s."),
+                    normalize(slug)
+                ],
             )
             .unwrap();
+            for i in 0..n {
+                conn.execute(
+                    "INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES (?1, ?2)",
+                    params![format!("oid-{slug}-{i}"), slug],
+                )
+                .unwrap();
+            }
         }
         conn
     }
@@ -562,10 +596,11 @@ mod tests {
         assert_eq!(
             keys(&hits),
             vec![
-                ("dog", "art"),         // exact, art wins the tie against oracle
+                ("dog", "art"),         // exact, art wins the tie against oracle at 400 each
                 ("dog", "oracle"),      // exact
-                ("dogs-of-war", "art"), // prefix
-                ("bulldog", "art"),     // substring
+                ("dogs-of-war", "art"), // prefix — ahead of both bulldogs despite reaching 10
+                ("bulldog", "oracle"),  // substring, 50
+                ("bulldog", "art"),     // substring, 5
             ]
         );
     }
@@ -653,7 +688,8 @@ mod tests {
             vec![
                 ("dog", "oracle"),
                 ("dogs-of-war", "art"),
-                ("bulldog", "art")
+                ("bulldog", "oracle"),
+                ("bulldog", "art"),
             ]
         );
     }
@@ -703,7 +739,7 @@ mod tests {
         mute(&conn, "oracle", "", "");
         assert_eq!(
             slugs(&run_tag_search(&conn, "dog", "oracle", 10).unwrap()),
-            vec!["dog"]
+            vec!["dog", "bulldog"]
         );
     }
 
@@ -733,6 +769,81 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec![("dogs-of-war", "art"), ("hound", "art")],
                 "{parent}"
+            );
+        }
+    }
+
+    /// **Inside a band, reach decides before the namespace does.** Both `bulldog`s are exact
+    /// matches here, so only the second and third sort keys can separate them — and the oracle
+    /// one reaches 50 where the art one reaches 5.
+    ///
+    /// Swap those two keys and this is the only test that notices, because every other pair in
+    /// the fixture ties at 400. Backwards it puts a 5-illustration art tag above a 6 686-card
+    /// oracle tag, which on the real corpus is `removal` losing to whatever art tag happens to
+    /// share its band. Art still wins a genuine tie — `tag_search_ranks_exact_then_prefix_then_
+    /// substring` pins that half at 400 each.
+    #[test]
+    fn reach_outranks_the_namespace_inside_a_band() {
+        let conn = seeded_tag_db();
+        assert_eq!(
+            keys(&run_tag_search(&conn, "bulldog", "both", 10).unwrap()),
+            vec![("bulldog", "oracle"), ("bulldog", "art")]
+        );
+    }
+
+    /// The search **searches** the closure by slug, rather than scanning it.
+    ///
+    /// **Every other fence on this index is by name, and a name is not the property.** The
+    /// schema tests assert `sqlite_master` holds a row called
+    /// `idx_art_tag_illustrations_slug`; an index kept under that name but redefined on other
+    /// columns passes every one of them while the planner quietly goes back to scanning. That
+    /// is not a slower page — [`hit_select`] counts a tag's reach per row, so it is 531 seconds
+    /// against 49 ms (measured 2026-08-20), a window that stops responding on the first
+    /// keystroke. So this reads the plan of the statement the command actually runs.
+    ///
+    /// **Asserting the index is *named* in the plan is not enough, and that is measured too.**
+    /// Redefining it as `ON art_tag_illustrations(weight)` — same name, wrong column — makes
+    /// SQLite answer `SCAN c USING COVERING INDEX idx_art_tag_illustrations_slug`: the closure
+    /// is `WITHOUT ROWID`, so any index over it carries the primary key and is *covering* for
+    /// this count whatever it indexes, and the planner will happily scan the smaller b-tree.
+    /// The name is right there in the plan while every row is being read. The access method is
+    /// the property, so the assertion is on `SEARCH` and on the constrained column.
+    #[test]
+    fn tag_search_uses_the_closure_index_rather_than_scanning_it() {
+        let conn = seeded_tag_db();
+        for (ds, index, closure) in [
+            (
+                &crate::tags::art::ART,
+                "idx_art_tag_illustrations_slug",
+                "art_tag_illustrations",
+            ),
+            (
+                &crate::tags::oracle::ORACLE,
+                "idx_oracle_tag_cards_slug",
+                "oracle_tag_cards",
+            ),
+        ] {
+            let steps: Vec<String> = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {}", search_sql(ds)))
+                .unwrap()
+                .query_map(
+                    rusqlite::named_params! {
+                        ":ns": "art", ":needle": "dog", ":prefix": "dog%",
+                        ":contains": "%dog%", ":limit": 25i64,
+                    },
+                    |r| r.get::<_, String>(3),
+                )
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            let plan = steps.join("\n");
+            let step = steps
+                .iter()
+                .find(|s| s.contains(index))
+                .unwrap_or_else(|| panic!("{closure}: {index} is not in the plan:\n{plan}"));
+            assert!(
+                step.starts_with("SEARCH") && step.contains("(slug=?)"),
+                "{closure}: the reach count is not a slug lookup — `{step}`\n{plan}"
             );
         }
     }
