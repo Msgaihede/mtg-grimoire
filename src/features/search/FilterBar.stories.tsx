@@ -462,6 +462,63 @@ export const IndexCold: Story = {
 };
 
 /**
+ * The picker mid-sort: **Released, newest first** — an order with no column to press.
+ *
+ * The row this pair exists for. The grid has no headers at all, and `Released` and `Mana value`
+ * have no header even in the table (`SearchSortKey` says why: the search table already reaches
+ * 1280px with the card pane open, and a seventh column would come out of Name). So before this,
+ * a newest-first search was an order the app could not be put in from either layout.
+ *
+ * One press on the select is the whole gesture. `SEARCH_FIRST_DIR` opens `released` **descending**
+ * — "newest first" is what pressing a release date means, the argument `price` carries and the
+ * one behind the collection's `added` — so this is what the reader sees a moment after choosing
+ * it, without touching the arrow.
+ *
+ * **Never gold**, unlike the format select two controls back. A list is always in *some* order,
+ * so a sort cannot be inactive, and accent on this row means "a filter is on" — which is exactly
+ * what the greyed Reset all beside it is here to contradict: the badge reads 0 while the picker
+ * is plainly doing something.
+ *
+ * The arrow is one `ArrowUp` turned half a turn and never `ArrowDown` swapped in — two components
+ * in one slot is an unmount and a mount, so the indicator would teleport and the whole of what
+ * the press means would be lost. Press it in the canvas to watch it turn.
+ */
+export const SortedDescending: Story = {
+  args: { preset: (search) => search.setSortKey("released") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // **On the name, not on the button.** The preset lands in an effect and the pair is drawn
+    // from the first render, so a query for the control itself would resolve against the
+    // untouched row above and every assertion below would read a state this story is not about.
+    // The name is what changes when the sort arrives, so it is what this waits on.
+    const direction = await canvas.findByRole("button", {
+      name: "Sort direction: descending — press for ascending",
+    });
+    await expect(direction).not.toBeDisabled();
+    // The same sentence rides as the `title`: there is no visible text on the button, so a
+    // pointer has nothing else to get.
+    await expect(direction).toHaveAttribute(
+      "title",
+      "Sort direction: descending — press for ascending",
+    );
+
+    // `toHaveValue`, never the text of the selected option. A controlled `<select>` whose value
+    // matches no `<option>` does not draw blank — `react-dom` picks the first row that is not
+    // disabled, which here is `Default order` — so a picker that had lost its selection entirely
+    // would read exactly like one nobody has touched.
+    const sort = canvas.getByLabelText("Sort results") as HTMLSelectElement;
+    await expect(sort).toHaveValue("released");
+    await expect(sort.selectedOptions[0]).toHaveTextContent("Released");
+
+    // A sort is not a filter: the badge does not count it and Reset all does not clear it.
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  },
+};
+
+/**
  * The narrowest window the app can be put in: 1024 wide, leaving this row 776px.
  *
  * This is the story the wrapping exists for. Nothing here is a media query — one `flex-wrap`
@@ -494,6 +551,14 @@ export const DockedPanel: Story = {
     // …and the rest of the row is still there, which is the other half of the claim: this prop
     // drops one control and nothing else.
     await expect(canvas.getByRole("group", { name: "Color identity" })).toBeInTheDocument();
+    // **The sort pair included, and this is the one surface where that is a decision rather than
+    // an inheritance.** `layoutToggle={false}` says "no second layout to switch to", which names
+    // exactly the panel with no table and therefore no header to sort by — so fencing the picker
+    // on this prop would take it away from the only place it is the only control. The button is
+    // matched on a prefix: its name grows a reason when there is no order to flip, which is the
+    // state this untouched row is in.
+    await expect(canvas.getByLabelText("Sort results")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Sort direction/ })).toBeDisabled();
     // On the count, because the button no longer appears with the preset — it is already there.
     await expect(
       await canvas.findByRole("button", { name: "Reset all — 6 filters active" }),
