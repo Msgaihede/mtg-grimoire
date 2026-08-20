@@ -12,6 +12,14 @@ const wishlistList = vi.hoisted(() => vi.fn());
 const deckList = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+// The shell's title bar is the one part of it that does not go through `@/lib/ipc`: it reads
+// the window itself, through `@/lib/window`. Pointed at the workbench's fakes rather than
+// stubbed by hand, so this file and Storybook agree about what a window does. Left off, the
+// real `@tauri-apps/api` reaches for `window.__TAURI_INTERNALS__`, which jsdom does not have —
+// and because both calls are in a mount effect the rejection is unhandled rather than caught,
+// so **every test in this file still passes** while the run prints hundreds of errors.
+vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {

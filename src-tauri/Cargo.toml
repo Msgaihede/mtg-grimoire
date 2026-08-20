@@ -31,6 +31,24 @@ tauri-plugin-dialog = "2"
 # the read, and nothing here reads the clipboard.
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-single-instance = "2"
+# Windows 11 Snap Layouts, and the *only* thing it is here for. `tauri.conf.json` sets
+# `decorations: false` so the app can draw its own caption (`src/components/TitleBar.tsx`),
+# and an undecorated window loses the flyout Windows raises when the pointer rests on a real
+# maximize button — because that flyout is the OS answering `HTMAXBUTTON` to its own
+# `WM_NCHITTEST`, which a `<button>` in a webview is never asked. This plugin parks a
+# transparent Win32 child window over the button's rectangle and answers it.
+#
+# It draws nothing: the caption buttons stay ours, in lucide, and the plugin finds the maximize
+# one by DOM id (`SNAP_BUTTON_ID`, shared with the frontend through `src/lib/window.ts`).
+# `tauri-plugin-decoration` was the other candidate and renders its own HTML controls, which
+# would have replaced those buttons and needed a CSP loosened for its stylesheet.
+#
+# **A plain dependency rather than `[target.'cfg(windows)'.dependencies]`, for the reason the
+# mcp-bridge paragraph above gives**: `tauri-build` discovers a plugin's ACL permissions
+# through the dependency graph, so target-gating it would leave `capabilities/default.json`'s
+# two `snap-layout:` entries unresolvable on the Linux half of the CI matrix. The crate ships a
+# dummy implementation for every non-Windows target and compiles to nothing there.
+tauri-plugin-snap-layout = "1"
 # The other half of the Tauri MCP server in `.mcp.json`. That package is only ever a *client*:
 # it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
 # listens and `driver_session` answers `connected: false` forever. Registered under

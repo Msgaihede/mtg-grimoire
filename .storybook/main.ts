@@ -18,6 +18,7 @@ const config: StorybookConfig = {
     config.resolve.alias = [
       { find: /^@tauri-apps\/api\/core$/, replacement: fake("core.ts") },
       { find: /^@tauri-apps\/api\/event$/, replacement: fake("event.ts") },
+      { find: /^@tauri-apps\/api\/window$/, replacement: fake("window.ts") },
       { find: /^@\/lib\/images$/, replacement: fake("images.ts") },
       { find: /^@\//, replacement: fileURLToPath(new URL("../src/", import.meta.url)) },
     ];
