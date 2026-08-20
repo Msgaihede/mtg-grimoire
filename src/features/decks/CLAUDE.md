@@ -265,8 +265,9 @@ reader to configure the deck they had just made; it now asks all of them.
   `useEffect` would be able to tell "the answer arrived" from "they have not touched it yet".
   Closing unmounts the draft, so every reopen asks again. `defaultFormatKey` is **required** on
   `CreateDeckDialog` (a host that has not thought about it must not quietly get Casual) and
-  **optional** on `ImportDeckDialog`, which draws a format select only for a `new` target — the
-  editor imports into a deck that already has a format and passes nothing. The query key is
+  **optional** on the import dialog's `NewDeckPreview`, which is the only destination that draws
+  a format select at all — the editor imports into a deck that already has a format, so its own
+  destination asks nothing and passes nothing. The query key is
   `["decks", "lastFormat"]`, under the root every `useDecks` mutation invalidates, so a create
   refreshes it for free.
 - **The gallery's no-deck state is the two words `No decks`.** It was a paragraph explaining what

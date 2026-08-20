@@ -309,7 +309,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   **`create_deck` is the only writer**. It records the key `valid_format` produced, so a blank
   input is remembered as `casual` — what the deck actually is — and a refused **create** records
   nothing, because the write is inside that create's own transaction. **That guarantee is about
-  the create and no wider, and the exception is known**: `useDeckImport`'s `importIntoNewDeck` is
+  the create and no wider, and the exception is known**: `useImport`'s `importIntoNewDeck` is
   `deck_create` then `deck_import_commit` — two commands, so two transactions, with a hand-rolled
   rollback — and a refused *commit* deletes the deck while the create's `last_deck_format` stands.
   The next New deck then opens on the format of a deck that never survived. **Left that way
