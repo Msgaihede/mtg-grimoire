@@ -8,6 +8,7 @@
  * accident is four chances to disagree.
  */
 import type { JSX } from "react";
+import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
@@ -98,4 +99,22 @@ export function CommitBar({
       </button>
     </footer>
   );
+}
+
+/**
+ * The write every bulk-import destination makes, once its own plan and mode are ready — the
+ * collection's and the wishlist's own version of `useImport`'s `commit`.
+ *
+ * A `useMutation` around whichever `ipc.*ImportCommit` the caller names, invalidating the `key`
+ * it is handed **on both success and failure** — `useImport`'s rule for `["decks"]`, carried to
+ * the two lists it does not reach: `["collection"]` or `["wishlist"]`. A refused write can still
+ * have been a database another surface has changed. **A `useMutation` with no query key of its
+ * own**, exactly like `useImport`'s `commit`: two previews calling this hook — the collection's
+ * and the wishlist's, each with its own `key` argument — are two independent mutations, which is
+ * what lets one preview's refusal die with it instead of leaking into the other's.
+ */
+export function useImportCommit<T>(key: QueryKey, mutationFn: () => Promise<T>) {
+  const queryClient = useQueryClient();
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: key });
+  return useMutation({ mutationFn, onSuccess: invalidate, onError: invalidate });
 }

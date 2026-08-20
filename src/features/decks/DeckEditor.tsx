@@ -63,6 +63,7 @@ import {
 } from "./grouping";
 import type { ImportDestination } from "@/features/transfer/import/destination";
 import { deckDestination } from "@/features/transfer/import/destinations/deckInto";
+import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { NewTagDialog } from "./NewTagDialog";
@@ -3282,24 +3283,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* One destination — the deck that is open — so no destination radios are drawn: a
-          choice between one thing is not a choice. Everything that used to be spelled out
-          here is `importInto` above, built where the deck's own facts are.
+      {/* Two destinations since Task 14 — the deck that is open, and a fresh one made out of
+          the same paste — so the shell now draws the radio group it has always been able to.
+          `importInto` is built where the deck's own facts are; `newDeckDestination` is the bare
+          value, unwrapped, because this editor has no remembered format and nowhere of its own
+          to send the reader afterwards — both of `NewDeckInto`'s extra props are optional for
+          exactly a host like this one.
 
           `forcedCategoryName` is set only when the dialog was opened from a category heading's
           right-click, and it is the whole of the difference between "import into this deck" and
           "import into this pile" — applied in `buildImportPlan`, not here, because
           `destinations/deck.ts` makes every deck decision. The toolbar's own press carries none
-          and is unchanged.
+          and is unchanged. **It has no equivalent on the new-deck arm**: a right-click names a
+          pile of *this* deck, and a list sent to a deck that does not exist yet has no such pile
+          to aim at.
 
           `dismiss` on the way out, whichever way the import ended: the trigger is one press
-          away in the toolbar and the deck it wrote into is already on screen — the editor
-          re-reads it, because every write in `useImport` takes the `["decks"]` root with
-          it. No `subtitle` prop: the header line names *this deck*, which only the destination
-          can say, so it rides on `importInto` and follows the reader if a second destination
-          ever joins it. */}
+          away in the toolbar, and a deck it wrote into — this one or a new one — is reachable
+          from the gallery either way, because every write in `useImport` takes the `["decks"]`
+          root with it. No `subtitle` prop: the chosen destination says its own header line
+          (`importInto`'s names this deck; the new deck's leaves the fallback in place, since
+          there is no deck yet to name). */}
       <ImportDialog
-        destinations={[importInto]}
+        destinations={[importInto, newDeckDestination]}
         open={layer?.kind === "import"}
         onDismiss={dismiss}
         onClose={close}

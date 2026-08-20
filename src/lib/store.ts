@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
+import type { Condition } from "./conditions";
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
 import type { ExportFormat } from "@/features/transfer/formats";
@@ -291,6 +292,18 @@ interface AppState {
     surface: TransferSurface,
     prefs: { format: ExportFormat; fields: TransferFieldId[] },
   ) => void;
+  /**
+   * What a bulk import line that says nothing becomes — the collection's condition and finish,
+   * and the wishlist's finish alone (it draws the same field and ignores `condition`, which is
+   * this app's collection-only vocabulary).
+   *
+   * **One shared pair rather than one per surface**, unlike {@link exportPrefs}: a reader who has
+   * just told the collection's import "assume Near Mint, foil" is answering a question about
+   * *their box*, not about the collection screen — so a wishlist import opened next re-reads the
+   * same answer rather than asking again. `NM` matches Rust's `DEFAULT_CONDITION`.
+   */
+  importDefaults: { condition: Condition; finish: DeckFinish };
+  setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
 }
 
 /**
@@ -488,4 +501,6 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setExportPrefs: (surface, prefs) =>
     set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
+  importDefaults: { condition: "NM", finish: null },
+  setImportDefaults: (importDefaults) => set({ importDefaults }),
 }));

@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
+import { collectionDestination } from "./destinations/CollectionPreview";
 import { deckDestination } from "./destinations/deckInto";
 import { newDeckDestination } from "./destinations/newDeck";
+import { wishlistDestination } from "./destinations/WishlistPreview";
 
 /**
- * Every destination the dialog can be handed.
- *
- * `collection` and `wishlist` arrive in Task 14; until then this array holds the two that exist
- * and the test is still the contract. The deck's entry is **built**, because that destination
- * closes over the deck it writes into — a bare `deckDestination` value would be one that
- * type-checks and crashes wherever anybody mounted it, which is the whole reason it is a
- * function.
+ * Every destination the dialog can be handed — all four, since Task 14. The deck's entry is
+ * **built**, because that destination closes over the deck it writes into — a bare
+ * `deckDestination` value would be one that type-checks and crashes wherever anybody mounted it
+ * without the wrapper, which is the whole reason it is a function. The other three are values.
  */
-const ALL = [deckDestination({ deckId: 1, variant: "live" }), newDeckDestination];
+const ALL = [
+  deckDestination({ deckId: 1, variant: "live" }),
+  newDeckDestination,
+  collectionDestination,
+  wishlistDestination,
+];
 
 describe("every destination", () => {
   it("has a unique key and a label the radio group can show", () => {

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { readDragData } from "@/features/decks/dnd";
-import type { WishlistQuery, WishRow } from "@/lib/ipc";
+import type { ImportMatch, WishlistQuery, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
@@ -20,6 +20,10 @@ const getMarketplace = vi.hoisted(() => vi.fn());
 // rejection about a missing Tauri runtime rather than a call anything here could read.
 const collectionAdd = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+// The wishlist's own bulk-import entry point (Task 14) — `CollectionPage.test.tsx`'s pair.
+const importResolve = vi.hoisted(() => vi.fn());
+const wishlistImportCommit = vi.hoisted(() => vi.fn());
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -29,12 +33,42 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistAdd,
     collectionAdd,
     getMarketplace,
+    importResolve,
+    wishlistImportCommit,
+    oracleTagsForPrintings,
   },
 }));
 
 import { WishlistPage } from "./WishlistPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useAppStore } from "@/lib/store";
+
+/** The one printing `import_resolve` answers with for the import test below —
+ *  `CollectionPage.test.tsx`'s own `SOL_RING`, copied rather than shared for its reason. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: "o-sol-ring",
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  printingCount: 1,
+  ownedQuantity: 0,
+};
 
 /** A wish pinned to one printing, one copy of four already in the binder. */
 const BOLT: WishRow = {
@@ -170,11 +204,20 @@ beforeEach(() => {
   wishlistRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
+  // One printing, so a one-line paste resolves to something the wishlist's own preview can
+  // plan and commit — `CollectionPage.test.tsx`'s pair.
+  importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
   // first block below is about the list view and says so by asking for it; `the wall` block at
   // the end switches to the grid, and one test there holds the default itself. The same
   // arrangement `CollectionPage.test.tsx` uses from the other end.
-  useAppStore.setState({ wishlistView: "table", selectedCardId: null });
+  useAppStore.setState({
+    wishlistView: "table",
+    selectedCardId: null,
+    importDefaults: { condition: "NM", finish: null },
+  });
 });
 
 describe("WishlistPage", () => {
@@ -694,6 +737,48 @@ describe("WishlistPage", () => {
     );
     await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
     expect(await screen.findByText(/150 lines/)).toBeInTheDocument();
+  });
+
+  /**
+   * **Task 14's entry point: the Import button, over `wishlistDestination`.** A line naming no
+   * printing is a wish for *any* printing — `WISHLIST_GRAIN`'s own distinction — so the round
+   * trip that matters here is that `cardId` reaches `wishlistImportCommit` as `undefined` rather
+   * than the pinned printing `import_resolve` answered with.
+   */
+  it("imports a pasted list into the wishlist", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    await user.click(within(dialog).getByLabelText("Decklist"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+
+    expect(await screen.findByText(/will be added to your wishlist/)).toBeInTheDocument();
+
+    // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
+    // same accessible name.
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(wishlistImportCommit).toHaveBeenCalledWith(
+        [
+          {
+            oracleId: "o-sol-ring",
+            cardId: undefined,
+            quantity: 1,
+            preferredFinish: undefined,
+            notes: undefined,
+          },
+        ],
+        "add",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+    );
   });
 });
 

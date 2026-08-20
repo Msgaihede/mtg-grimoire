@@ -9,6 +9,8 @@ import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { scopeLabel, useExportScope } from "@/features/transfer/export/scope";
+import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { count } from "@/lib/counts";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -89,6 +91,10 @@ export function WishlistPage() {
    */
   const [exporting, setExporting] = useState(false);
   const exportScope = useExportScope("wishlist", wishlist.filters, exporting);
+
+  /** The import dialog. One destination, so no radio group is drawn — a choice between one
+   *  thing is not a choice. */
+  const [importing, setImporting] = useState(false);
 
   /**
    * Rewrite one wish wherever the wishlist is cached.
@@ -330,8 +336,18 @@ export function WishlistPage() {
           <WishlistFilterBar wishlist={wishlist} />
         </div>
         {/* The first export entry point outside the deck editor (Task 11), `CollectionPage`'s
-            twin. No Import beside it — Task 14 brings that, with the destination it opens. */}
+            twin; Import beside it since Task 14, over `wishlistDestination`. */}
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setImporting(true)}
+            className={cn(
+              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            Import
+          </button>
           <button
             type="button"
             onClick={() => setExporting(true)}
@@ -433,6 +449,16 @@ export function WishlistPage() {
           everything: exportScope.everything,
           onEverything: exportScope.setEverything,
         }}
+      />
+
+      {/* One destination — the wishlist itself — so no destination radios are drawn, and
+          `onDone`'s message is discarded, `CollectionPage`'s precedent. */}
+      <ImportDialog
+        destinations={[wishlistDestination]}
+        open={importing}
+        onDismiss={() => setImporting(false)}
+        onClose={() => setImporting(false)}
+        onDone={() => setImporting(false)}
       />
     </section>
   );
