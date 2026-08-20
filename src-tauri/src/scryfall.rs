@@ -211,7 +211,7 @@ pub enum BulkCheck {
 pub const BULK_DEFAULT_CARDS: &str = "default_cards";
 
 /// Scryfall's Oracle Tags: 4 521 tag objects, ~5.85 MB gzipped, each carrying its own
-/// `taggings` array of `oracle_id`s. [`crate::oracle_tags`] reads it.
+/// `taggings` array of `oracle_id`s. [`crate::tags::oracle`] reads it.
 ///
 /// Same document shape as [`BULK_DEFAULT_CARDS`] in the one way that matters here — it
 /// publishes `jsonl_download_uri` and `compressed_size` and neither of the pre-2026-07-20

@@ -18,7 +18,6 @@ pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
-pub mod oracle_tags;
 pub mod paths;
 pub mod reconcile;
 pub mod reset;
@@ -27,6 +26,7 @@ pub mod scryfall;
 pub mod search;
 pub mod sorting;
 pub mod sync;
+pub mod tags;
 pub mod update;
 pub mod window;
 pub mod wishlist;
@@ -370,10 +370,10 @@ pub fn run() {
             marketplace::set_marketplace,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
-            oracle_tags::oracle_tags_refresh,
-            oracle_tags::oracle_tags_status,
-            oracle_tags::oracle_tags_for_cards,
-            oracle_tags::oracle_tags_for_printings,
+            tags::oracle::oracle_tags_refresh,
+            tags::oracle::oracle_tags_status,
+            tags::oracle::oracle_tags_for_cards,
+            tags::oracle::oracle_tags_for_printings,
             export::export_write_file,
             reset::collection_clear,
             reset::wishlist_clear,
@@ -462,7 +462,7 @@ pub fn run() {
             let tags_state = state.clone();
             let tags_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                oracle_tags::refresh_if_due(&tags_state, &tags_app).await;
+                tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:
