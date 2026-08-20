@@ -48,6 +48,7 @@ import {
 import type { FakeScope } from "./scope";
 import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
+import { resetWindow } from "./window";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -203,6 +204,11 @@ export function installWorld(
 
   const scope = createScope(allHandlers(db));
   activateScope(scope);
+
+  // The window is a singleton and therefore not part of `scope` — see `fake/window.ts`. That
+  // makes it the one piece of fake state a story could inherit from the story before it, so it
+  // is cleared here, beside the store reset, for the same reason and at the same moment.
+  resetWindow();
 
   // Replaced *wholesale* (`setState(…, true)`), which works because `store.ts` keeps its
   // actions in the state object: replacing state restores the actions along with the fields.

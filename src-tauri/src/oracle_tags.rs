@@ -1312,6 +1312,19 @@ mod tests {
 
     /// Tests run in parallel and share the temp directory, so the file name is keyed on the
     /// content — [`crate::ingest`]'s `gz_fixture`, for its reason.
+    ///
+    /// **Nothing ever opens that path for writing, and that is the whole point** (2026-08-20).
+    /// Keying the name on the content stops two *different* fixtures colliding and guarantees
+    /// that two **identical** ones collide — which is common here, not rare: the oracle-keyed
+    /// read test and the printing-keyed one below build the same three lines, so they hash to
+    /// one path. `File::create` truncates, so whichever ran second emptied the file the first
+    /// was still streaming, and that test failed with `Io(Kind(UnexpectedEof))` on its
+    /// `ingest(…).unwrap()` — a panic naming neither the race nor the other test. It went red on
+    /// `rust (windows-latest)` while Linux passed, which is what a timing race looks like.
+    ///
+    /// So: write a private file and move it into place. Losing the move is fine — the bytes are
+    /// keyed on the content, so whoever won wrote the same file — and a reader with the fixture
+    /// open is what makes the move fail rather than something to avoid.
     fn gz_fixture(lines: &[&str]) -> std::path::PathBuf {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let mut h = DefaultHasher::new();
@@ -1321,13 +1334,27 @@ mod tests {
             lines.len(),
             h.finish()
         ));
-        let mut enc = GzEncoder::new(std::fs::File::create(&p).unwrap(), Compression::fast());
-        for l in lines {
-            enc.write_all(l.as_bytes()).unwrap();
-            enc.write_all(b"\n").unwrap();
+        if !p.exists() {
+            let tmp = p.with_extension(format!("{}.tmp", next_fixture_id()));
+            let mut enc = GzEncoder::new(std::fs::File::create(&tmp).unwrap(), Compression::fast());
+            for l in lines {
+                enc.write_all(l.as_bytes()).unwrap();
+                enc.write_all(b"\n").unwrap();
+            }
+            enc.finish().unwrap();
+            if std::fs::rename(&tmp, &p).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
         }
-        enc.finish().unwrap();
         p
+    }
+
+    /// A number no other fixture write in this process is using, so the private file a
+    /// `gz_fixture` builds cannot be the private file another one is building.
+    fn next_fixture_id() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        NEXT.fetch_add(1, Ordering::Relaxed)
     }
 
     /// One tag line. `parents` are uuids; `cards` are oracle ids.

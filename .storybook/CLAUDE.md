@@ -10,12 +10,20 @@ deliberately**: no screenshots are stored.
 
 ## Rules for the fake
 
-- **`main.ts` aliases three specifiers** — `@tauri-apps/api/core`, `@tauri-apps/api/event` and
-  `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_ `src/lib/ipc.ts`, not in place
-  of it**, and that is the point: `ipc.ts` is a hand-written mirror of the Rust structs and is
-  exactly the thing that can drift, so a fake beneath it means every story exercises the mirror
-  too. Aliasing `ipc.ts` itself would story the components against a second, agreeing copy of a
-  contract nobody had checked.
+- **`main.ts` aliases four specifiers** — `@tauri-apps/api/core`, `@tauri-apps/api/event`,
+  `@tauri-apps/api/window` and `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_
+  `src/lib/ipc.ts`, not in place of it**, and that is the point: `ipc.ts` is a hand-written mirror
+  of the Rust structs and is exactly the thing that can drift, so a fake beneath it means every
+  story exercises the mirror too. Aliasing `ipc.ts` itself would story the components against a
+  second, agreeing copy of a contract nobody had checked. **`src/lib/window.ts` is the second
+  module that boundary sits under** (added 2026-08-20): it mirrors four Tauri window methods and
+  the four ACL permissions in `capabilities/default.json`, and a fake replacing *it* would prove
+  nothing about the one file that can drift from that capability.
+- **The window fake keeps module state where the other three keep per-world state**, and that is
+  the honest model rather than an oversight: a story's *backend* is its own, and two docs-page
+  stories may hold different databases — but there is one window, on the desk and here. What it
+  costs is exactly what `scope.ts` exists to prevent, so `installWorld` calls `resetWindow()`
+  beside the store reset. A story that maximized the window must not leave the next one maximized.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because `ownedQuantity` means
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
@@ -143,7 +151,7 @@ deliberately**: no screenshots are stored.
 - **`src/stories.test.tsx` runs every story's `play` under Vitest**, which is what puts a story's
   own claim inside `npm run verify` — `build-storybook` compiles stories, it never plays them.
   `setProjectAnnotations` must run at module scope, before `composeStories`.
-- **It `vi.mock`s two of the three aliases, and the third (`@/lib/images`) must never be mocked.**
+- **It `vi.mock`s three of the four aliases, and the fourth (`@/lib/images`) must never be mocked.**
   **The symptom is a silent 300-second hang with no output and no failing test** — if the suite
   goes quiet, this is why.
 - **jsdom lays nothing out, so a virtualised list renders zero rows** without that runner's

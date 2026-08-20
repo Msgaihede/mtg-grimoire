@@ -32,11 +32,21 @@ const MIN: (f64, f64) = (1024.0, 700.0);
 
 /// What Windows draws *around* the size we ask for, and the reason a rung is not compared
 /// against the work area directly. `set_size` sets the **client** area — the webview — and the
-/// border and title bar are added outside it: measured live on 2026-08-20 (Windows 11, `npm run
-/// tauri dev`, a debug build), a window opened at 1920×1080 reported a frame of **1936×1119**.
-/// Ignore that and a work area of exactly 1080 looks like room for a 1080-tall window, when
-/// what it would actually get is 39px of title bar under the taskbar.
-const CHROME: (f64, f64) = (16.0, 39.0);
+/// frame is added outside it.
+///
+/// **It was `(16.0, 39.0)` until the app took its own title bar** (2026-08-20). That 39 was 9px
+/// of border plus the 30px caption Windows drew, measured live at a frame of 1936×1119 around a
+/// 1920×1080 client. `tauri.conf.json` now sets `decorations: false` and
+/// `src/components/TitleBar.tsx` draws the caption *inside* the client area, so the OS adds no
+/// caption and the frame is border only: measured the same way on the same day, a **1280×800**
+/// client reported a window rect of **1296×809** — 8px of invisible grab margin per side and 9px
+/// below, which is also what makes the undecorated window resizable from its edges.
+///
+/// **Nothing went red when this became wrong, and that is worth knowing.** Every test below
+/// still passes at either value, because in each of them it is the *width* that decides and the
+/// width did not change. Left at 39 the app would simply have reserved 30px that no longer
+/// exists and dropped to a lower rung on a desk that could hold the higher one.
+const CHROME: (f64, f64) = (16.0, 9.0);
 
 /// The logical size to open the **client** area at, on a desk whose work area is `work_area`
 /// logical pixels.
@@ -90,8 +100,9 @@ mod tests {
     use super::*;
 
     /// The case this module exists for. A 1920×1080 desk with a 48px taskbar cannot hold a
-    /// 1080-tall window — the frame would want 1119 of the 1032 it has — so the app opens at
-    /// 720p there rather than putting its own bottom edge behind the taskbar.
+    /// 1080-tall window — the frame would want 1089 of the 1032 it has, and 1936 of its 1920
+    /// px of width — so the app opens at 720p there rather than putting its own bottom edge
+    /// behind the taskbar.
     #[test]
     fn a_1080p_desk_opens_at_720p() {
         assert_eq!(opening_size((1920.0, 1032.0)), (1280.0, 720.0));
@@ -103,13 +114,18 @@ mod tests {
     #[test]
     fn a_desk_with_the_room_opens_at_1080p() {
         assert_eq!(opening_size((2560.0, 1392.0)), (1920.0, 1080.0));
-        // The frame, exactly, and nothing spare.
-        assert_eq!(opening_size((1936.0, 1119.0)), (1920.0, 1080.0));
+        // The frame, exactly, and nothing spare — 1920+16 by 1080+9, at the undecorated
+        // `CHROME`. One pixel less in either axis and the rung is out of reach.
+        assert_eq!(opening_size((1936.0, 1089.0)), (1920.0, 1080.0));
+        assert_eq!(opening_size((1935.0, 1089.0)), (1280.0, 720.0));
+        assert_eq!(opening_size((1936.0, 1088.0)), (1280.0, 720.0));
     }
 
-    /// A work area of exactly 1080 is **not** room for a 1080-tall window, and this is the
-    /// case that would be wrong without `CHROME`: what the taskbar would cover is the 39px of
-    /// title bar Windows draws outside the size we asked for.
+    /// A work area of exactly 1920×1080 is **not** room for a 1920×1080 window, and this is
+    /// the case that would be wrong without `CHROME` — without it the rung and the work area
+    /// compare equal and the top one is taken. **Since the app took its own title bar it is
+    /// the width that refuses this**, not the height: the 16px border wants 1936, and the 9px
+    /// left below wants only 1089 where the old caption wanted 1119.
     #[test]
     fn a_work_area_the_size_of_the_rung_is_not_room_for_it() {
         assert_eq!(opening_size((1920.0, 1080.0)), (1280.0, 720.0));
