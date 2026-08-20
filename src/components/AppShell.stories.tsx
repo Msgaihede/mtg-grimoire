@@ -246,7 +246,9 @@ const meta = {
   render: (args) => <Shell key={`${args.view}:${args.deckId}`} {...args} />,
   decorators: [
     // The shell is `h-screen`, and in a docs page that is the *docs* page's screen. A fixed box
-    // gives each story its own window; 1280×800 is what `tauri.conf.json:16-17` opens.
+    // gives each story its own window; 1280 is the app's narrow rung — what it opens at on a
+    // 1080p desk, where a 1920-wide window does not fit (`src-tauri/src/window.rs`). The 800
+    // height is now this box's own choice rather than the config's: the same desk opens 720.
     (Story) => (
       <div className="h-[800px] w-[1280px] overflow-hidden">
         <Story />

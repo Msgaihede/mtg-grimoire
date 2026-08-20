@@ -14,10 +14,11 @@
     "windows": [
       {
         "title": "MTG Grimoire",
-        "width": 1280,
-        "height": 800,
+        "width": 1920,
+        "height": 1080,
         "minWidth": 1024,
         "minHeight": 700,
+        "visible": false,
         "dragDropEnabled": false
       }
     ],
