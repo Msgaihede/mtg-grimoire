@@ -42,10 +42,9 @@ const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TheoryDiffRow {
-    /// The printing **the theory row names**, which is the printing the user would be buying —
-    /// and, since 2026-08-20, the whole of what makes two rows one line. The same printing filed
-    /// in two theory categories is one row named by the category the editor lists first; a
-    /// *different* printing of the same card is a row of its own. See [`Grouped`].
+    /// The printing **the theory row names**, which is the printing the user would be buying.
+    /// The same printing filed in two theory categories is one row, named by the category the
+    /// editor lists first. **Not unique across the list on its own** — see [`Self::finish`].
     pub card_id: String,
     pub name: String,
     /// The category the theory row is filed under — the pile this card is wanted *for*, which
@@ -70,12 +69,27 @@ pub struct TheoryDiffRow {
     pub unit_price: Option<f64>,
     pub set_code: String,
     pub collector_number: String,
-    /// Copies of **this printing** the collection holds and **no built deck has claimed**.
+    /// Which **object** this line is for — `deck_cards.finish`, so `None` is the regular copy
+    /// and the other two are `foil` and `etched` ([`crate::schema::FINISHES`] less `nonfoil`,
+    /// which [`crate::deck::normalise_finish`] stores as NULL).
+    ///
+    /// **Part of the identity, with [`Self::card_id`]**: the pair is what makes two deck rows
+    /// one line here, and either alone is not unique across the list. A foil Sol Ring and a
+    /// regular one are two different pieces of cardboard to go and find, they are two rows in
+    /// `deck_cards` on [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN), and they cost
+    /// different money — [`Self::unit_price`] is already quoted per finish, so folding them
+    /// would have been one line priced at whichever of the two the first theory row happened
+    /// to name.
+    pub finish: Option<String>,
+    /// Copies of **this printing, in this finish**, the collection holds and **no built deck
+    /// has claimed**.
     ///
     /// The number that turns "I need two more of these" into "and one of them is in the box
-    /// already". Per printing because [`Grouped`]'s key is, and the two cannot disagree: a line
-    /// that asks for the retro-frame Sol Ring over a spare-count taken across every printing
-    /// would be describing two different objects, and [`OWNED_SPARE_SQL`] says the rest.
+    /// already". It answers on exactly [`Grouped`]'s key, and the two cannot disagree: a line
+    /// that asks for the foil retro-frame Sol Ring over a spare-count taken across every
+    /// printing and finish would be describing a different object, and the figure strip **sums**
+    /// `owned_spare` across rows — so any answer wider than the row's own identity counts one
+    /// binder copy once per row that could have used it.
     ///
     /// Built is the whole of the second test, and it is [`crate::deck::allocate_deck`]'s own
     /// rule read from the other end: a deck on a table has its cards, a deck being planned is
@@ -92,25 +106,26 @@ pub struct TheoryDiffRow {
 
 /// A diff row and the oracle id its group was built on.
 ///
-/// **The group is keyed on the printing** — [`TheoryDiffRow::card_id`], and nothing else. This
-/// was the oracle card until 2026-08-20 and is deliberately no longer: the rule is "everything
-/// the plan holds that the deck has not got, different printings included". A plan that names
-/// the retro-frame Sol Ring is a plan for *that* object, and answering it with the
-/// Commander-precon one in the live list is the app deciding a substitution on the reader's
-/// behalf — the whole reason a deck keeps two lists is that the reader is tracking which
-/// cardboard they actually hold. Oracle grouping also put this command permanently at odds with
-/// the editor's own readout, which has always keyed on the printing.
+/// **The group is keyed on `(card_id, finish)`** — the exact card, in the exact object the plan
+/// calls for. This was the oracle card until 2026-08-20 and is deliberately no longer: the rule
+/// is "everything the plan holds that the deck has not got", and a plan that names the foil
+/// retro-frame Sol Ring is a plan for *that* piece of cardboard. Answering it with the
+/// Commander-precon one, or with the regular copy, is the app deciding a substitution on the
+/// reader's behalf — the whole reason a deck keeps two lists is that the reader is tracking
+/// which cardboard they actually hold. Oracle grouping also put this command permanently at odds
+/// with the editor's own readout, which never grouped that way.
 ///
-/// **Not the finish**, which *is* part of [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN):
-/// a foil and a regular copy of one printing are two deck rows and one line here, summed. A
-/// finish is a property of the copy rather than of a printing, [`TheoryDiffRow`] has no field
-/// for one, and `cardId` is what the webview keys its list by — two rows sharing it would be two
-/// React children under one key.
+/// **It is [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) less `deck_id`, `variant` and
+/// `category_id`**, and each of those three is dropped for its own reason: the deck is the
+/// question, the variant is the two sides of the subtraction, and the category is *placement*
+/// rather than possession. `finish` stays because it is not placement — a foil copy and a
+/// regular one are two objects, cost different money ([`TheoryDiffRow::unit_price`] is already
+/// quoted per finish), and are two rows in `deck_cards` for exactly that reason.
 ///
-/// An orphan — a row whose printing has left `cards` — needs no special case any more, which is
-/// the one simplification the change bought: its `card_id` is its identity like everything
-/// else's, so the prefix that used to keep oracle ids and card ids apart went with the oracle
-/// key.
+/// [`GROUP_SEPARATOR`] is what keeps the pair a pair. An orphan — a row whose printing has left
+/// `cards` — needs no special case, which is the simplification the change bought: its
+/// `card_id` is its identity like everything else's, so the prefix that used to keep oracle ids
+/// and card ids apart went with the oracle key.
 ///
 /// The oracle id survives on *this* struct and is deliberately **not** on [`TheoryDiffRow`]: the
 /// webview draws a printing and a count and has no use for it, while [`missing_to_wishlist`]
@@ -120,6 +135,19 @@ pub struct TheoryDiffRow {
 struct Grouped {
     oracle_id: Option<String>,
     row: TheoryDiffRow,
+}
+
+/// What joins a printing id to a finish in [`Grouped`]'s key.
+///
+/// A `card_id` is a Scryfall UUID and a finish is one of two words, so no value on either side
+/// can contain this character and no two different pairs can spell the same key. Written down
+/// rather than inlined because a separator that *could* appear in either half is the kind of
+/// collision that shows up as one shopping-list line quietly standing for two cards.
+const GROUP_SEPARATOR: char = '|';
+
+/// [`Grouped`]'s key for one deck row: the exact card, in the exact object the row plays.
+fn group_key(card_id: &str, finish: Option<&str>) -> String {
+    format!("{card_id}{GROUP_SEPARATOR}{}", finish.unwrap_or(""))
 }
 
 /// Every row of one deck, both variants, in the editor's own order — [`theory_diff`]'s input.
@@ -136,7 +164,7 @@ struct Grouped {
 fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
         "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
-            dc.collector_number, dc.quantity, cat.name, c.oracle_id,
+            dc.collector_number, dc.quantity, cat.name, c.oracle_id, dc.finish,
             {price}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
@@ -147,7 +175,8 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     )
 }
 
-/// Copies of one **printing** the collection holds that no **built** deck has spoken for.
+/// Copies of one **printing in one finish** the collection holds that no **built** deck has
+/// spoken for.
 ///
 /// One statement rather than two so the subtraction cannot see two different moments of the
 /// collection. `min(a.quantity, e.quantity)` is [`crate::deck::allocate_deck`]'s clamp, per
@@ -155,12 +184,18 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// stepped to one has one of them, and charging the plan for the other three would be charging
 /// it for copies that do not exist.
 ///
-/// **Per printing, because the diff above is** — and it was per oracle card until 2026-08-20,
-/// which stopped being defensible the moment a different printing became a difference. Two
-/// halves of one row cannot disagree about what a card is: a line that says "buy the retro-frame
-/// one" over "you already have one spare" would be describing two different objects, and the
-/// figure strip sums `owned_spare` across rows, so an oracle-wide answer on a deck holding two
-/// printings of one card counted the binder twice.
+/// **On exactly [`Grouped`]'s key, because the figure strip sums this field down the list.**
+/// It was per oracle card until 2026-08-20 — which stopped being defensible the moment a
+/// different printing became a difference — and any answer *wider* than the row's own identity
+/// counts one binder copy once per row that could have used it. The two halves of a line may
+/// not disagree about what a card is: "buy the foil retro-frame one" over a spare count earned
+/// by regular precon copies is a sentence about two different objects.
+///
+/// **`?2` is `deck_cards.finish`, and the `coalesce` is the translation between two spellings
+/// of the regular copy**: `deck_cards.finish` is NULL for it ([`crate::deck::normalise_finish`],
+/// so the grain's `coalesce(finish, '')` has one thing to compare) while
+/// `collection_entries.finish` is `NOT NULL` and spells it `nonfoil` outright. Binding the
+/// deck's NULL straight through would make every regular line read zero spare.
 ///
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
@@ -169,9 +204,10 @@ const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
                         FROM deck_allocations a
                         JOIN decks d ON d.id = a.deck_id
                         JOIN collection_entries e2 ON e2.id = a.collection_entry_id
-                       WHERE d.is_built = 1 AND e2.card_id = ?1), 0)
+                       WHERE d.is_built = 1 AND e2.card_id = ?1
+                         AND e2.finish = coalesce(?2, 'nonfoil')), 0)
        FROM collection_entries e
-      WHERE e.card_id = ?1";
+      WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')";
 
 /// Cards the **theory** list holds that **live** does not.
 ///
@@ -179,12 +215,12 @@ const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
 /// reconciliation. A card live plays and theory dropped is a cut the user already made and
 /// needs no line; a card theory wants two more of is one line saying two.
 ///
-/// **Compared by printing, not by oracle card** (changed 2026-08-20): a plan that names a
-/// particular Sol Ring is not answered by a different printing of one in the live list. The two
-/// sides are summed per `card_id` and subtracted — see [`Grouped`] for the whole of why, and for
-/// why the finish is not in that key.
+/// **Compared on the exact card — printing *and* finish** (changed 2026-08-20, from the oracle
+/// card): a plan that names the foil retro-frame Sol Ring is not answered by a different
+/// printing of one, nor by the regular copy. The two sides are summed per [`group_key`] and
+/// subtracted — see [`Grouped`] for the whole of why.
 ///
-/// **Categories are not compared at all.** The same printing filed in two theory categories is
+/// **Categories are not compared at all.** The same card filed in two theory categories is
 /// **one line**, for the sum, named by the category the editor lists first — so moving a card
 /// from Ramp to Removal in the plan and not in the deck is not a difference, because it is not a
 /// card the reader has to find. That is the same choice [`crate::deck::missing_to_wishlist`]
@@ -225,7 +261,8 @@ fn grouped_diff(
                 r.get::<_, i64>(5)?,            // quantity
                 r.get::<_, String>(6)?,         // category name
                 r.get::<_, Option<String>>(7)?, // oracle_id
-                r.get::<_, Option<f64>>(8)?,    // unit price
+                r.get::<_, Option<String>>(8)?, // finish
+                r.get::<_, Option<f64>>(9)?,    // unit price
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -245,12 +282,13 @@ fn grouped_diff(
             quantity,
             category,
             oracle,
+            finish,
             unit_price,
         ) = row.map_err(|e| e.to_string())?;
-        // The printing is the key — see [`Grouped`]. `category` is read for the row's caption
-        // and is deliberately *not* in it: where a card sits is placement, not possession, so a
-        // plan that moved a Bolt from Burn to Removal is short of no Bolts.
-        let key = card_id.clone();
+        // The exact card — printing and finish — see [`Grouped`]. `category` is read for the
+        // row's caption and is deliberately *not* in the key: where a card sits is placement,
+        // not possession, so a plan that moved a Bolt from Burn to Removal is short of no Bolts.
+        let key = group_key(&card_id, finish.as_deref());
         if variant == THEORY {
             *wanted.entry(key.clone()).or_insert(0) += quantity;
             if !order.iter().any(|(k, _)| *k == key) {
@@ -267,6 +305,7 @@ fn grouped_diff(
                             unit_price,
                             set_code,
                             collector_number,
+                            finish,
                             owned_spare: 0,
                         },
                     },
@@ -288,7 +327,9 @@ fn grouped_diff(
         // Floored at zero: a collection stepped down under a built deck's stored claim can make
         // the subtraction negative, and "you own −1 of these" is not a thing to tell anyone.
         grouped.row.owned_spare = spare
-            .query_row(params![grouped.row.card_id], |r| r.get::<_, i64>(0))
+            .query_row(params![grouped.row.card_id, grouped.row.finish], |r| {
+                r.get::<_, i64>(0)
+            })
             .map_err(|e| e.to_string())?
             .max(0);
         diff.push(grouped);
@@ -614,6 +655,20 @@ mod tests {
     }
 
     fn add(conn: &Connection, deck_id: i64, card: &str, cat: i64, variant: &str, quantity: i64) {
+        add_finish(conn, deck_id, card, cat, variant, None, quantity);
+    }
+
+    /// The same add, naming the object played — `None` is the regular copy, which
+    /// `deck::normalise_finish` stores as NULL.
+    fn add_finish(
+        conn: &Connection,
+        deck_id: i64,
+        card: &str,
+        cat: i64,
+        variant: &str,
+        finish: Option<&str>,
+        quantity: i64,
+    ) {
         crate::deck::add_card(
             conn,
             deck_id,
@@ -621,7 +676,7 @@ mod tests {
             Some(cat),
             None,
             variant,
-            None,
+            finish,
             quantity,
         )
         .unwrap();
@@ -662,13 +717,19 @@ mod tests {
         .unwrap()
     }
 
-    /// One collection row of one printing.
+    /// One collection row of one printing, in the regular finish.
     fn own(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
+        own_finish(conn, card_id, "nonfoil", quantity)
+    }
+
+    /// The same, in a named finish — `collection_entries.finish` is NOT NULL and spells the
+    /// regular copy `nonfoil`, where `deck_cards` spells it NULL.
+    fn own_finish(conn: &Connection, card_id: &str, finish: &str, quantity: i64) -> i64 {
         crate::collection::add_entry(
             conn,
             &crate::collection::EntryInput {
                 card_id: card_id.to_owned(),
-                finish: "nonfoil".to_owned(),
+                finish: finish.to_owned(),
                 quantity,
                 ..Default::default()
             },
@@ -909,6 +970,79 @@ mod tests {
         assert_eq!(
             (diff[0].card_id.as_str(), diff[0].quantity),
             ("bolt-lea", 1)
+        );
+    }
+
+    /// **The finish is part of the identity too**, which is the other half of "the exact card".
+    /// A plan calling for the foil is a plan for the foil: the regular copy in the live list
+    /// does not answer it, the two are separate lines, and they are priced apart — `unit_price`
+    /// has always been quoted per finish, so folding them would have charged one of them at the
+    /// other's rate.
+    #[test]
+    fn the_diff_tells_a_foil_from_the_regular_copy() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET prices = '{\"usd\":\"400.00\",\"usd_foil\":\"900.00\"}'
+              WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "bolt-lea", main, LIVE, None, 2);
+        add_finish(&conn, id, "bolt-lea", main, THEORY, None, 2);
+        add_finish(&conn, id, "bolt-lea", main, THEORY, Some("foil"), 1);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+
+        assert_eq!(diff.len(), 1, "the regular copies are held: {diff:?}");
+        assert_eq!(diff[0].card_id, "bolt-lea");
+        assert_eq!(diff[0].finish.as_deref(), Some("foil"), "the foil is not");
+        assert_eq!(diff[0].quantity, 1);
+        assert_eq!(
+            diff[0].unit_price,
+            Some(900.0),
+            "and it is quoted at the foil rate, not the plain one"
+        );
+
+        // Both objects wanted and neither held: two lines for one printing, told apart by the
+        // finish and by nothing else. The regular copy's `finish` is `None`, not `\"nonfoil\"`.
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", main, LIVE, None, 0).unwrap();
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.finish.as_deref(), r.quantity, r.unit_price))
+                .collect::<Vec<_>>(),
+            vec![(None, 2, Some(400.0)), (Some("foil"), 1, Some(900.0))],
+            "{diff:?}"
+        );
+    }
+
+    /// `owned_spare` answers on the whole of the row's identity, finish included — the strip
+    /// sums it, so anything wider counts one binder copy once per row that could have used it.
+    ///
+    /// **The `coalesce(?2, 'nonfoil')` in [`OWNED_SPARE_SQL`] is what the first assertion pins**:
+    /// `deck_cards.finish` is NULL for the regular copy and `collection_entries.finish` spells
+    /// it `nonfoil`, so binding the deck's NULL straight through reads every regular line as
+    /// zero spare.
+    #[test]
+    fn owned_spare_answers_for_the_finish_the_line_is_for() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        own_finish(&conn, "bolt-lea", "nonfoil", 3);
+        own_finish(&conn, "bolt-lea", "foil", 1);
+        add_finish(&conn, id, "bolt-lea", main, THEORY, None, 4);
+        add_finish(&conn, id, "bolt-lea", main, THEORY, Some("foil"), 4);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.finish.as_deref(), r.owned_spare))
+                .collect::<Vec<_>>(),
+            vec![(None, 3), (Some("foil"), 1)],
+            "each line answers for its own object, so the strip's sum is 4 and not 8"
         );
     }
 
@@ -1286,6 +1420,7 @@ mod tests {
             unit_price: Some(400.0),
             set_code: "lea".to_owned(),
             collector_number: "161".to_owned(),
+            finish: Some("foil".to_owned()),
             owned_spare: 1,
         })
         .unwrap();
@@ -1294,7 +1429,7 @@ mod tests {
             serde_json::json!({
                 "cardId": "bolt-lea", "name": "Lightning Bolt", "categoryName": "Main deck",
                 "quantity": 2, "unitPrice": 400.0,
-                "setCode": "lea", "collectorNumber": "161", "ownedSpare": 1
+                "setCode": "lea", "collectorNumber": "161", "finish": "foil", "ownedSpare": 1
             })
         );
     }
