@@ -27,6 +27,7 @@ pub mod search;
 pub mod sorting;
 pub mod sync;
 pub mod update;
+pub mod window;
 pub mod wishlist;
 
 use std::path::Path;
@@ -383,6 +384,13 @@ pub fn run() {
             update_open_release_page
         ])
         .setup(|app| {
+            // First, and before anything that can fail: the window is created **hidden**
+            // (`tauri.conf.json`'s `"visible": false`), so until this runs the app has no
+            // window at all. It opens at the largest of 1920×1080 and 1280×720 that the
+            // monitor's *work area* holds — a 1080p desk cannot hold a 1080-tall window once
+            // Windows has taken its taskbar out of it. See `window.rs`.
+            window::open_sized_to_monitor(app.handle());
+
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
             // user as an escaped one-line panic, which turns a multi-line message naming
             // both candidate folders into something unreadable.

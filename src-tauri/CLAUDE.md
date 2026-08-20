@@ -515,6 +515,20 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   lose because nothing breaks without it, the window simply rendering with square corners and no
   drop shadow, flat against the desktop with no border of its own on a dark wallpaper. Both are
   pinned by `the_main_window_is_undecorated_and_keeps_its_shadow`.
+- **The window's opening size is decided in Rust, not by the config** (`window.rs`, first call in
+  `setup`). The config's 1920×1080 is the top rung and the fallback; `open_sized_to_monitor` takes
+  the largest of 1920×1080 and 1280×720 that the monitor's **work area** holds, then centres and
+  shows. A 1920×1080 desk takes the lower rung — Windows leaves 1920×**1032** after its taskbar,
+  and a window sized to the whole screen puts the deck editor's action row behind it. **The
+  window is created hidden (`"visible": false`) and `open_sized_to_monitor` is the only thing
+  that shows it**, so it runs before anything in `setup` that can fail — an early `?` above it
+  would leave a running app with no window, which is exactly what the single-instance guard
+  looks like. Nothing is remembered between launches: no window-state plugin is registered, so
+  a size the reader chose is theirs until they close it. **`decorations: false` does not change
+  that arithmetic**: `open_sized_to_monitor` sizes the *window*, and an undecorated window's
+  outer rect is 16px wider and 9px taller than its client area for the invisible grab margin —
+  which is inside the work-area check either way, since both rungs are chosen against the work
+  area rather than against the screen.
 
 ## Further reading
 

@@ -75,8 +75,11 @@ Three repo files carry sync state. All three look incidental and none is:
   stories choose their backend through `parameters.fake`, which no preview wrapper can see. It
   derives the world from each story's own parameters rather than naming the four, so a story that
   gains or changes a seed is followed automatically.
-- **`AppShell` renders at `viewport: "1280x800"`** — the app's real window size. At the default
-  the shell is cropped mid-ribbon on both panels.
+- **`AppShell` renders at `viewport: "1280x800"`** — the app's narrow rung, near enough. The
+  opening size is decided per monitor since 2026-08-20 (`src-tauri/src/window.rs`): 1280×**720**
+  on a 1080p desk, 1920×1080 on anything with the room. The width is the one that matters to a
+  shell render, and it is unchanged. At the default the shell is cropped mid-ribbon on both
+  panels.
 
 ## Skipped stories, and why
 

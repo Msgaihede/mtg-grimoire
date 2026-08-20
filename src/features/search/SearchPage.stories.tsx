@@ -35,10 +35,11 @@ const meta = {
   render: (args) => <Page key={args.view} {...args} />,
   decorators: [
     // The page is `h-full`, so it needs a parent with a height or the virtualiser is handed a
-    // 0px window. 1032px is exactly the content column at the 1280×800 window
-    // `tauri.conf.json:16-17` opens: 1280 less the sidebar's `w-52` (208px) and less `main`'s
-    // `p-5` on both sides (40px), from `AppShell.tsx:92` and `AppShell.tsx:144`. The height is
-    // chosen rather than derived — the ribbon above it is not a fixed number of pixels.
+    // 0px window. 1032px is exactly the content column at the app's narrow rung — the 1280-wide
+    // window `src-tauri/src/window.rs` opens on a 1080p desk: 1280 less the sidebar's `w-52`
+    // (208px) and less `main`'s `p-5` on both sides (40px), from `AppShell.tsx:92` and
+    // `AppShell.tsx:144`. The height is chosen rather than derived — the ribbon above it is
+    // not a fixed number of pixels.
     (Story) => (
       <div className="h-[640px] w-[1032px]">
         <Story />
