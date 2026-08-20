@@ -123,6 +123,9 @@ pub struct CardFilters {
     /// heard of — keeps them all. An unrecognised value therefore fails **open**, showing
     /// more rather than hiding cards nobody would report missing.
     ///
+    /// Read through [`nonblank`], like every other string on this struct, so a padded
+    /// ` "strong"` still floors rather than silently meaning "no floor".
+    ///
     /// **The art side only, and the include side only.** `oracle_tag_cards` carries no
     /// `weight` column, so the oracle arm could not read a floor if it wanted one; and "not a
     /// dog" means not a dog at all, including weakly, so a floor on an *exclude* would let
@@ -412,11 +415,18 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // answer, so an orphaned collection or wishlist entry fails it exactly as it fails the
     // format, colour, rarity and mana-value arms.
     //
-    // The subquery aliases are `ati`/`otc` rather than the obvious `a`/`o` because a subquery
-    // alias equal to `{alias}` would shadow the outer table: the correlation would collapse
-    // to `a.illustration_id = a.illustration_id`, true for every tagged row, and *every* card
-    // with any art tag would match *every* tag. Both callers pass `"c"` today, so nothing
-    // would have gone red.
+    // The subquery aliases are `ati`/`otc` rather than the obvious `a`/`o`, and the
+    // `debug_assert` below is what makes that structural rather than a convention. SQLite
+    // resolves a qualified name against the innermost `FROM` first, so an inner alias equal to
+    // `{alias}` shadows the outer table: `a.illustration_id = a.illustration_id` is no longer a
+    // correlation at all, and the `EXISTS` degenerates to "does any row with this slug exist" —
+    // every card with any art tag matching every tag, silently, as a plausible superset. All
+    // three production callers pass `"c"` (`search.rs`, `collection.rs`, `wishlist.rs`), so a
+    // fourth one is the only way in and nothing else in the suite would go red for it.
+    debug_assert!(
+        alias != "ati" && alias != "otc",
+        "a caller alias equal to a subquery alias uncorrelates the EXISTS and matches every tagged card against every tag"
+    );
     if let Some(t) = &f.art_tags {
         // `<> 'weak'` rather than a list of the weights above it, so a fifth weight Scryfall
         // adds is kept rather than silently hidden. The bare literal is coupled to
@@ -430,7 +440,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         // under `dog` but strong under `hound` therefore survives under both slugs, because it
         // is genuinely a strong match for the motif; per-tagging weights would put the same
         // card in one view of one hierarchy and out of the other.
-        let floor = if f.art_weight_floor.as_deref() == Some(ART_WEIGHT_FLOOR_STRONG) {
+        let floor = if nonblank(&f.art_weight_floor) == Some(ART_WEIGHT_FLOOR_STRONG) {
             " AND ati.weight <> 'weak'"
         } else {
             ""
@@ -972,6 +982,12 @@ mod tests {
         assert_eq!(
             search_ids(&conn, art_include(&["hound"]).with_floor("strong")),
             owned(&["card-a", "card-promoted"])
+        );
+        // Trimmed like every other string filter here: the only one that was not, until the
+        // review caught it, was this one — and ` "strong"` would have meant no floor at all.
+        assert_eq!(
+            search_ids(&conn, art_include(&["dog"]).with_floor("  strong  ")),
+            owned(&["card-a", "card-b", "card-promoted"])
         );
 
         // Anything that is not `strong` is no floor at all, which is the direction that shows
