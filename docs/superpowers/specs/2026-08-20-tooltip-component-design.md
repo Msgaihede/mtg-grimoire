@@ -285,28 +285,24 @@ the panel grows from the corner nearest its trigger. No arrow — neither `Conte
 
 ## 7. What the sweep touches
 
-Measured at `06572dc` when this section was written; **the middle three rows were wrong and are
-corrected below at `e4fcf59`, for §4's reason** — the original script sliced each element at its
-first `>` (undercounting `aria-label` on a button whenever an earlier attribute held an arrow
-function) and counted every prose mention of `<title>` alongside the real elements. Production
-`.tsx` only:
+**This section will not carry a count of what remains, on a controller ruling: a `title=` total
+was measured wrong four separate times across this file and `docs/reference/frontend-design.md` —
+a script that sliced an element at the wrong `>`, a figure left stale days after the tree it
+counted kept growing, a "five sites converted" note that stopped being current the moment the next
+wave landed — and each wrong number read exactly like a correct one until somebody re-ran the
+scan. The sweep is complete now, which retires the question this table was trying to answer as it
+went; the shape that survives is worth stating precisely because it is not a count**: one native
+`title` remains on purpose (`AppShell.tsx`'s drag-inert sidebar entry — Chromium freezes `:hover`
+at a drag's origin for the whole gesture, so the sentence is never seen mid-drag and is read
+instead through the accname spec's description fallback), and every other `title=` still found in
+the tree is a component **prop** — `DeckDialog`, `Notice`, `SettingsSection` and others draw it as
+a heading; `Figure`, `CountTag`, `ToggleChip`, `Marker` and `SortableHeader` turn it into a
+`useTooltip()` binding internally — never a native attribute a call site wrote for itself. Grep
+`title=` for the number on the tree in front of you rather than trusting one written here.
 
-| | original (`06572dc`) | corrected (`e4fcf59`) |
-| --- | --- | --- |
-| `title=` occurrences | 102, across 48 files | 108, across 53 files |
-| …of those, on a `<button>` | 27 | 28 |
-| …of those, with no `aria-label` on the same element | 12 | **3** |
-| SVG `<title>` elements | 8 | **2** |
-| `*ByTitle` queries in tests and stories | 17 | not re-measured — neither bug above touches a test/story grep |
-
-Not all 108 are tooltips: `DeckDialog`, `Notice`, `Figure`, `AppShell`, `ExportDialog` and
-`CountTag` each take a `title` **prop**, and some of those pass it on to a `title` attribute while
-others draw it as a heading. The sweep reads each one; a regex cannot tell the two apart, and the
-`aria-label` classification in §4 could not be automated even if it could.
-
-The 17 `*ByTitle` queries move with their sites. `getByTitle` matches both the attribute and an
-SVG `<title>` element, so those queries currently pass for two different reasons and will need
-reading rather than replacing.
+`getByTitle` matches both the attribute and an SVG `<title>` element, so a `*ByTitle` query still
+in a test or a story is worth reading rather than assumed to be exercising a tooltip — the same
+ambiguity this section flagged before the count above was deleted.
 
 ---
 

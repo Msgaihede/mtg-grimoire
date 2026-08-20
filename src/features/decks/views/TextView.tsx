@@ -5,11 +5,12 @@
  * this deck" rather than "what does this card do". No art at all — a line is a quantity, a
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
+import { ManaText } from "@/components/ManaText";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
-import { ManaText } from "@/components/ManaText";
 import { cn } from "@/lib/utils";
 import {
   DeckFinishMark,
@@ -340,9 +341,10 @@ function TextGroup({
  *
  * The `RULE BREAK` chip has no room here and would not fit on a 22px row, so the mark is the
  * **stripe** down the left of the name instead — destructive for a break, gold for a game
- * changer, transparent otherwise. The whole sentence is still there: it is the row's `title`
- * and it is read aloud in the button's name, which is what makes the colour a shortcut rather
- * than the only way to know.
+ * changer, transparent otherwise. The whole sentence is still there: it is bound as the row's
+ * tooltip and it is read aloud in the button's name (`describes: false`, since the two would
+ * otherwise say it twice), which is what makes the colour a shortcut rather than the only way
+ * to know.
  */
 function TextRow({
   card,
@@ -366,6 +368,7 @@ function TextRow({
    *  add replays the fade. */
   landedKey: number | undefined;
 }) {
+  const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
 
   return (
@@ -397,7 +400,9 @@ function TextRow({
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
         aria-label={deckCardName(card, ruleBreakText, inTheory)}
-        title={ruleBreakText ?? undefined}
+        // `describes: false` — `deckCardName` already folds the rule-break sentence into the
+        // accessible name above, so a default binding would describe it twice.
+        {...tip(ruleBreakText ?? undefined, { describes: false })}
         {...deckCardProps(card)}
         onClick={onSelect ? () => onSelect(card) : undefined}
         className={cn(

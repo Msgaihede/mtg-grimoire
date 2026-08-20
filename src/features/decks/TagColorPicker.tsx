@@ -36,6 +36,7 @@
  */
 import { useState, type JSX } from "react";
 import { Palette } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { normalizeTagColor, TAG_COLORS, tagColorCss, tagColorHex } from "./tagColors";
@@ -70,13 +71,14 @@ export function TagColorButton({
   open: boolean;
   onToggle: () => void;
 }): JSX.Element {
+  const tip = useTooltip();
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={open}
       aria-label="Choose tag colour"
-      title="Choose tag colour"
+      {...tip("Choose tag colour", { describes: false })}
       className={cn(
         "inline-flex h-8 shrink-0 items-center gap-[0.4375rem] rounded-md border border-border",
         "bg-surface px-2.5 text-dim transition-colors duration-150",
@@ -173,6 +175,7 @@ function PickerControls({
   wheel: string;
 }) {
   const [text, setText] = useState(() => tagColorHex(value));
+  const tip = useTooltip();
 
   /** A colour chosen by anything that is not the hex field: the field follows it. */
   const set = (color: string) => {
@@ -207,7 +210,7 @@ function PickerControls({
             type="button"
             aria-pressed={tagColorCss(value) === c.hex}
             aria-label={c.label}
-            title={c.label}
+            {...tip(c.label, { describes: false })}
             onClick={() => set(c.hex)}
             style={{ backgroundColor: c.hex }}
             className={cn(

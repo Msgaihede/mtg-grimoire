@@ -1,6 +1,10 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardArt } from "./CardArt";
+
+const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
+const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("CardArt", () => {
   it("draws the card's art, named by the card", () => {
@@ -142,18 +146,37 @@ describe("CardArt", () => {
     expect(chip?.parentElement).toHaveClass("pointer-events-none");
   });
 
-  /** The chip's padding is hoverable too, so it says in words whichever facts it is drawing. */
+  /**
+   * The chip's padding is hoverable too, so it says in words whichever facts it is drawing —
+   * through `useTooltip()` now rather than a native `title`, so this hovers the chip and reads
+   * the app's own panel rather than an attribute. `describes: false` because the words are
+   * decoration (see the overlay's own `aria-hidden`, above): no `aria-describedby` is wired.
+   */
   it("names both facts on the chip itself", () => {
-    const { container, rerender } = render(
+    vi.useFakeTimers();
+    const { container, rerender } = mount(
       <CardArt cardId="mp2" name="Consecrated Sphinx" finish="foil" gameChanger />,
     );
-    expect(container.querySelector("[data-card-marks]")).toHaveAttribute(
-      "title",
-      "Game changer · Foil",
-    );
+    const chip = () => container.querySelector<HTMLElement>("[data-card-marks]");
+    fireEvent.pointerEnter(chip()!);
+    advance(TOOLTIP_OPEN_MS);
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Game changer · Foil");
+    expect(chip()).not.toHaveAttribute("aria-describedby");
+    fireEvent.pointerLeave(chip()!);
 
-    rerender(<CardArt cardId="pcy" name="Rhystic Study" gameChanger />);
-    expect(container.querySelector("[data-card-marks]")).toHaveAttribute("title", "Game changer");
+    rerender(
+      <TooltipProvider>
+        <CardArt cardId="pcy" name="Rhystic Study" gameChanger />
+      </TooltipProvider>,
+    );
+    fireEvent.pointerEnter(chip()!);
+    advance(TOOLTIP_OPEN_MS);
+    // Exact, not a substring: this card carries no `finish`, so the panel must read "Game
+    // changer" alone — `toHaveTextContent`'s string form is `.includes()`, and "Game changer" is
+    // a prefix of the foil card's "Game changer · Foil" above, so a stale or wrongly-suffixed
+    // panel here would pass a substring check just as readily as the correct one.
+    expect(document.getElementById(TOOLTIP_PANEL_ID)?.textContent).toBe("Game changer");
+    vi.useRealTimers();
   });
 
   /**

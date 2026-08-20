@@ -1126,7 +1126,12 @@ describe("the result layout toggle", () => {
 
     const mark = screen.getByText("132 printings");
     expect(mark).toBeVisible();
-    expect(mark).toHaveAttribute("title", "132 printings matched these filters");
+    await userEvent.hover(mark);
+    const tooltip = await screen.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(tooltip).toHaveTextContent("132 printings matched these filters");
+    await userEvent.unhover(mark);
     // The wall's own chip, 4px in from the card's top-left corner at 100% zoom. That inset scales
     // with the card: fixed, it climbed out of the printed nameplate it is meant to sit on and into
     // the border strip above it by ~2×, which is what this corner's own comment recorded.

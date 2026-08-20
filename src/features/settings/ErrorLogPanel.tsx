@@ -1,4 +1,5 @@
 import { CircleCheck, Trash2 } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { ErrorEntry, ErrorKind, ErrorSource } from "@/lib/ipc";
 import { ago } from "@/lib/relativeTime";
 import type { ErrorLog } from "@/lib/useErrorLog";
@@ -53,16 +54,21 @@ export function formatWhen(unixSeconds: number, now: number = Date.now()): strin
 
 /** One fault. The count is the number of times it happened, not the number of rows. */
 function Row({ entry }: { entry: ErrorEntry }) {
+  const tip = useTooltip();
   return (
     <li className="space-y-1 border-t border-border py-3 first:border-t-0 first:pt-0">
       <div className="flex items-baseline justify-between gap-3">
         <p className="min-w-0 text-sm text-text">{entry.message}</p>
         {entry.count > 1 && (
           // The whole reason the log folds. A number is data, so it is mono and tabular like
-          // every other number in this window.
+          // every other number in this window. The tooltip says what the glyph means — "×5"
+          // read aloud is not obviously "happened five times" — as a plain description: nothing
+          // here is clipped, and a fold count is not a sentence a reader needs to select or
+          // copy, unlike `entry.detail` below, so the default (non-interactive) binding is
+          // right. `describes` stays at its default `true`.
           <span
             className="shrink-0 font-mono text-xs tabular-nums text-accent"
-            title={`Happened ${entry.count} times`}
+            {...tip(`Happened ${entry.count} times`)}
           >
             ×{entry.count}
           </span>

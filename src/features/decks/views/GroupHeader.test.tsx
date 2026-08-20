@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { TooltipProvider, TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { CategoryKind } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
@@ -76,15 +77,27 @@ describe("GroupHeader markers", () => {
     expect(markers()).toEqual([]);
   });
 
-  it("says what each marker means, rather than leaving two words to be guessed at", () => {
+  it("says what each marker means, rather than leaving two words to be guessed at", async () => {
     render(
-      <GroupHeader
-        group={group({ kind: "commander", isActive: false })}
-        marketplace={MARKETPLACES.tcgplayer}
-      />,
+      <TooltipProvider>
+        <GroupHeader
+          group={group({ kind: "commander", isActive: false })}
+          marketplace={MARKETPLACES.tcgplayer}
+        />
+      </TooltipProvider>,
     );
-    expect(screen.getByText("RULE").getAttribute("title")).toContain("rules read this pile");
-    expect(screen.getByText("INACTIVE").getAttribute("title")).toContain("Switched off");
+    fireEvent.pointerEnter(screen.getByText("RULE"));
+    const ruleTip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(ruleTip).toHaveTextContent("rules read this pile");
+    fireEvent.pointerLeave(screen.getByText("RULE"));
+
+    fireEvent.pointerEnter(screen.getByText("INACTIVE"));
+    const inactiveTip = await screen.findByRole(
+      "tooltip",
+      {},
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    expect(inactiveTip).toHaveTextContent("Switched off");
   });
 });
 
@@ -110,9 +123,15 @@ describe("GroupHeader price", () => {
 
   /** Spec §5, with the marketplace's name in it: five in the picker means "as of the last
    *  sync" alone would leave the reader guessing whose prices these are. */
-  it("names the marketplace in the as-of sentence", () => {
-    render(<GroupHeader group={group({ totalPrice: 1 })} marketplace={MARKETPLACES.cardmarket} />);
-    expect(screen.getByText("€1.00")).toHaveAttribute("title", pricesAsOf(MARKETPLACES.cardmarket));
+  it("names the marketplace in the as-of sentence", async () => {
+    render(
+      <TooltipProvider>
+        <GroupHeader group={group({ totalPrice: 1 })} marketplace={MARKETPLACES.cardmarket} />
+      </TooltipProvider>,
+    );
+    fireEvent.pointerEnter(screen.getByText("€1.00"));
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(tooltip).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
   });
 
   /** A pile nothing in it is priced quotes no number at all — `€0.00` is a price nobody

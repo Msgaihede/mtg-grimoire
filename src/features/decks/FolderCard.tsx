@@ -8,6 +8,7 @@
  */
 import { useRef } from "react";
 import { CardImage } from "@/components/CardImage";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
@@ -67,6 +68,7 @@ export function FolderCard({
   onOpen: (id: number) => void;
 }) {
   const ref = useRef<HTMLLIElement>(null);
+  const tip = useTooltip();
   const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
   const eligible = drag !== null && canDrop(drag);
 
@@ -128,7 +130,7 @@ export function FolderCard({
       {/* The price of the crop, per folder card, exactly as it is per tile: an art crop carries
           no printed frame, so every illustrator whose work is on this card is named. */}
       {artists && (
-        <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={artists}>
+        <p className="mt-0.5 truncate text-[0.7rem] text-dim" {...tip(artists, { whenClipped: true })}>
           Art by {artists}
         </p>
       )}

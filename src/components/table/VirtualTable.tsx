@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { FOCUS_INSET } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -112,6 +113,7 @@ export function VirtualTable<Row>({
   renderRow?: (props: RowRenderProps, row: Row) => ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const tip = useTooltip();
 
   const template = useMemo(() => columns.map((c) => c.width).join(" "), [columns]);
 
@@ -204,7 +206,7 @@ export function VirtualTable<Row>({
             <span
               key={column.key}
               role="columnheader"
-              title={column.headerTitle}
+              {...tip(column.headerTitle)}
               aria-label={column.headerLabel}
               className={cn(
                 // `truncate` on every label, because the flexible tracks collapse to nothing

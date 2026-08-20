@@ -2032,13 +2032,17 @@ straight to the renderer, so it exercises the React `onClick` — a real cursor 
 overlay instead, which swallows the click and sends `SC_MAXIMIZE` itself. Both paths exist on
 purpose, and only the fallback one is drivable from here.
 
-## The app draws its own tooltips, and the sweep off `title` is in progress
+## The app draws its own tooltips, and the sweep off `title` is done
 
 Full design: `docs/superpowers/specs/2026-08-20-tooltip-component-design.md`. `useTooltip()`
 (`src/components/tooltip/useTooltip.ts`) is the one door: `{...tip(words, options)}` on the
 element that already carries the hint. **A hint is that spread, never a `title` attribute and
-never an SVG `<title>` element** — both still work today (see below), which is exactly the
-problem: neither goes red when new or changed code reaches for the old one instead.
+never an SVG `<title>` element.** Every real tooltip in the app is `useTooltip()`'s now; one
+native `title` survives on purpose (below), and everything else `title=` still matches in the
+tree is a component prop — a heading or a prop a component turns into a `useTooltip()` binding
+itself — never a native attribute a call site wrote. `title` and an SVG `<title>` still *work* in
+the sense the browser still honours either if one is ever written back in, which is exactly why
+this rule has to be stated rather than left to a linter: neither would go red.
 
 **One panel, `fixed`, mounted at the app root — because a virtualised row is both
 `position: absolute` and transformed, which caps every `z-index` inside it *and* makes that row
@@ -2056,7 +2060,7 @@ the menu's own rows.
 
 **Each site is classified by what its words *are*, not run through a regex** — a regex cannot
 tell an icon-only button's only name from a description of an already-named one, and the sweep
-that will retire the rest of `title` has to read every site rather than pattern-match it:
+had to read every site rather than pattern-match it:
 
 | The words are… | What the site does |
 | --- | --- |
@@ -2075,19 +2079,19 @@ untouched. (This corrects an earlier version of this paragraph, which claimed th
 `aria-label` before this task and would have lost its name outright — checked against source
 history and found false; the design doc's own §4 carried the same error and is corrected there.)
 
-**What the remaining sites *do* have three of, all in the second row, is a title that is only
-ever a conditional description of a control already named some other way** —
-`AppShell.tsx:378`, `DeckSearchPanel.tsx:412` and `DeckStats.tsx:779`, each a `<button>` with its
-own visible text (a nav label, "Search cards", "Send missing to wishlist") whose `title` appears
-in exactly one state: a card in the air over a nav entry that cannot take it, a docked panel with
-no room, a shortfall already on the wishlist. None is icon-only, so none risks losing its name —
-but `AppShell.tsx`'s is a sharper trap than a missing `aria-label` would have been: its own
-comment records that the sentence is never actually *shown* as a native tooltip at all, because
-Chromium freezes `:hover` at a drag's origin for the whole gesture, so mid-drag a reader gets the
-words only through the accname spec's description fallback. `useTooltip()` opens on a hover the
-reader is equally not producing during that same gesture, so this site is not the mechanical
-`title` → `tip()` swap the other four proof sites were, and converting it is deliberately left
-for whoever does that one rather than folded into this task.
+**One second-row site was left native on purpose, and it is the only one left at all:
+`AppShell.tsx`'s drag-inert sidebar entry.** `DeckSearchPanel.tsx`'s "no room to search" hint and
+`DeckStats.tsx`'s "already on your wishlist" hint were both later converted like every other
+conditional description in the app — plain `useTooltip()` swaps, nothing left to say about
+either. `AppShell.tsx`'s is a sharper case than a missing `aria-label` would have been, which is
+why it stayed `title`: its own comment records that the sentence is never actually *shown* as a
+native tooltip at all, because Chromium freezes `:hover` at a drag's origin for the whole gesture,
+so mid-drag a reader gets the words only through the accname spec's description fallback rather
+than through the tooltip mechanism either API offers. `useTooltip()` opens on a hover the reader
+is equally not producing during that same gesture, so converting it would trade one hint that is
+never *seen* mid-drag (but is still read, through the fallback) for one that is never seen and
+never read either — a native `title` is strictly the better of the two here, not merely the one
+nobody got round to.
 
 **`whenClipped` never describes, on principle rather than as a default that happens to be set.**
 The text a `whenClipped` tooltip repeats is already complete in the DOM, and therefore in the
@@ -2117,24 +2121,51 @@ the one thing a source sweep can catch here — the same no-op trade `NO_MENU` m
 tooltip and each is also a story rendered on its own, so throwing on a missing provider would fail
 every one of them rather than the one call site that forgot.
 
-**The sweep off `title` is in progress, not finished, and this file will not carry its running
-count.** Five call sites were converted as proof — a truncated table cell, an interactive band, an
-icon-only button, a shared header's description (`SortableHeader`, so the change reached every
-sortable table at once), and one drawn inside a `DeckDialog` to prove `z-46` actually clears a
-real `z-45` scrim rather than only a Storybook decorator — and the rest of the app's hints are
-still native `title` attributes and SVG `<title>` elements, left for a later PR.
+**The sweep off `title` is done, and this file will still not carry a running count of it.** It
+went in waves — a first proof slice (a truncated table cell, an interactive band, an icon-only
+button, `SortableHeader`'s shared description so the change reached every sortable table at once,
+one drawn inside a `DeckDialog` to prove `z-46` actually clears a real `z-45` scrim), then the
+rest of the app's surfaces, then a final whole-branch review's own fix wave (dropping four
+wrongly-`whenClipped` sites, unwrapping a `<span>` that had cost a control its keyboard path, and
+fixing the binder those wrapped sites still need). **The shape that survives all of that, rather
+than a count of it**: one native `title` left on purpose (`AppShell.tsx`'s drag-inert sidebar
+entry, stated above), and every other `title=` in the tree a component prop rather than a native
+attribute. A count here was wrong four separate times across this section and the design doc's
+own — a scan that sliced source at the wrong `>`, a stale figure days out from a moving chrome, a
+five-sites number that stopped being current the moment the next wave landed — and each wrongness
+looked exactly like every other line in this file until someone re-ran the scan. Grep `title=` for
+the actual number on the tree in front of you; do not write it down here a fifth time.
 
-Measured at `e4fcf59` with a scan that tracks string/bracket depth rather than one that slices an
-element's source at its first `>` — the bug that produced this section's first, wrong draft (see
-above) — **108** `title=` occurrences across **53** files, **28** of those on a `<button>` and
-**3** with no `aria-label` on the same element (all three named above, none icon-only), and **2**
-real SVG `<title>` elements (not 8 — the other six matches are prose in doc comments quoting
-`` `<title>` `` in backticks, which a plain-text grep cannot tell from a rendered element). The
-`title=` figure is still *more* `title=` sites than the design doc's own count at `06572dc` (102
-across 48), despite five having been converted away, because the two commits are days and several
-unrelated merges apart and this app's chrome keeps growing — that half of this paragraph was
-re-checked and holds. The button/aria-label and SVG-`<title>` figures did not: both were wrong in
-the first commit of this section, for two different reasons, and both are corrected here and in
-`docs/superpowers/specs/2026-08-20-tooltip-component-design.md` §4/§7, which carried the same two
-bugs first. A count is a fact about a tree — and, this time, also a fact about the script that
-produced it; re-measure before repeating any of these four numbers.
+**`whenClipped` only works on an element with a real layout box.** It measures `scrollWidth`
+against `clientWidth` on `event.currentTarget` — the element `tip()` is spread onto — and a
+`display: inline` span reports both as `0`, so the comparison is always `0 > 0`, the hint never
+opens, and **nothing goes red**: not jsdom, which has no layout engine and could not have caught it
+either way; not CI; not a story. The five-way sweep found this latent in the search table's set
+column (`SearchPage.tsx`): `truncate` sat on the cell wrapper, which is a grid item and blockifies
+for free, while the span carrying `{...tip(card.setName, { whenClipped: true })}` was a bare
+inline element with nothing of its own to clip. The fix is `block` on the bound span itself, not on
+an ancestor — the measurement happens on the anchor, so the box has to belong to the anchor. A
+`<p>`, a flex item and a grid item all have a layout box already; a bare `<span>` inside a
+non-flex, non-grid parent does not, and every `whenClipped` call site is worth checking against
+that question rather than assumed safe because the surrounding markup "looks like" a block. (The
+`block truncate` span survives this call site's own final-review fix, which found a second,
+unrelated defect there and dropped `whenClipped` from it entirely — the words shown are the set's
+*name* while the span's own text is its *code*, so gating the panel on the code's clip was gating
+it on the wrong string, not merely on an unmeasurable one. `block` still earns its keep: `truncate`
+needs the layout box regardless of what decides whether the panel opens.)
+
+**A tooltip bound `describes: false` — including every `whenClipped` one — carries no
+`role="tooltip"` and is `aria-hidden`.** `TooltipPanel.tsx` sets `role={open.describes ? "tooltip"
+: undefined}` and `aria-hidden` the other way, and `whenClipped` forces `describes: false` for the
+reason two paragraphs up — the text it repeats is already in the accessibility tree, so describing
+it too would be a screen reader saying the set name twice. A play or a test that reaches for
+`findByRole("tooltip")` on one of these sites does not fail fast: `findBy*` retries until its
+timeout, so the wrong query burns the full wait and then reports "unable to find", which reads like
+a hang rather than a wrong query — `SearchPage.stories.tsx`'s `GameChangerRow` reported a clean
+5000ms timeout for exactly this reason before it was traced back to `GameChangerMark.tsx`'s own
+`{...tip(GAME_CHANGER_HINT, { describes: false })}`. The correct query for a `describes: false` or
+`whenClipped` panel is by id — `TOOLTIP_PANEL_ID`, exported from `TooltipPanel.tsx` (the element is
+`#app-tooltip`) — the way `CardStack.test.tsx`'s `openTooltip` helper and `CountTag.stories.tsx`
+already do. `findByRole("tooltip")` stays correct, and is the faster failure, for a *describing*
+site (the default `describes: true`), because there the panel really does carry that role once
+open.

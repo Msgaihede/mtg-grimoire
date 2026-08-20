@@ -1,4 +1,5 @@
 import { LayoutGrid, Rows3 } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
@@ -131,6 +132,7 @@ export function ManaChip({
    */
   title?: string;
 }) {
+  const tip = useTooltip();
   const name = title ?? MANA_LABEL[symbol];
   return (
     <button
@@ -141,7 +143,9 @@ export function ManaChip({
       aria-pressed={pressed}
       aria-disabled={disabled || undefined}
       aria-label={name}
-      title={name}
+      // `describes: false`: `name` is this button's own `aria-label` above, so a wired
+      // `aria-describedby` would have a screen reader hear it twice.
+      {...tip(name, { describes: false })}
       style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
       className={cn(
         "grid size-9 place-items-center rounded-full text-lg leading-none text-black",
@@ -196,6 +200,7 @@ function ValueChip({
   disabled: boolean;
   onToggle: () => void;
 }) {
+  const tip = useTooltip();
   return (
     <button
       type="button"
@@ -205,7 +210,9 @@ function ValueChip({
       aria-pressed={pressed}
       aria-disabled={disabled || undefined}
       aria-label={name}
-      title={name}
+      // `describes: false`: identical to the `aria-label` above, so a wired `aria-describedby`
+      // would repeat it.
+      {...tip(name, { describes: false })}
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,
@@ -394,6 +401,7 @@ export function ToggleChip({
    */
   className?: string;
 }) {
+  const tip = useTooltip();
   const name = title ?? (hint ? `${label}, ${hint}` : undefined);
   return (
     <button
@@ -405,7 +413,10 @@ export function ToggleChip({
       onClick={disabled ? undefined : onClick}
       aria-pressed={pressed}
       aria-disabled={disabled || undefined}
-      title={title ?? hint}
+      // `describes: false`: either `title` is given and is `name` verbatim, or `hint` is given
+      // and its words are already folded into `name` (`${label}, ${hint}`) — either way the
+      // tooltip repeats what the `aria-label` already says.
+      {...tip(title ?? hint, { describes: false })}
       aria-label={name}
       className={cn(
         FILTER_CONTROL,
@@ -452,6 +463,7 @@ export function LayoutToggle({
   view: SearchView;
   onChange: (view: SearchView) => void;
 }) {
+  const tip = useTooltip();
   return (
     <div role="group" aria-label="Result layout" className="ml-auto flex gap-1">
       {LAYOUTS.map(({ id, label, Icon }) => (
@@ -461,7 +473,8 @@ export function LayoutToggle({
           onClick={() => onChange(id)}
           aria-pressed={view === id}
           aria-label={label}
-          title={label}
+          // `describes: false`: identical to the `aria-label` above.
+          {...tip(label, { describes: false })}
           className={cn(FILTER_CONTROL, FILTER_FOCUS, "size-9", filterChipState(view === id))}
         >
           <Icon className="mx-auto size-4" aria-hidden="true" />
@@ -497,6 +510,7 @@ export function LayoutToggle({
  * The rule lives here so that every view that offers a reset offers the same one.
  */
 export function ResetAll({ count, onReset }: { count: number; onReset: () => void }) {
+  const tip = useTooltip();
   const empty = count <= 0;
   const name = `Reset all — ${count} filter${count === 1 ? "" : "s"} active`;
   return (
@@ -507,7 +521,8 @@ export function ResetAll({ count, onReset }: { count: number; onReset: () => voi
       }}
       aria-disabled={empty || undefined}
       aria-label={name}
-      title={name}
+      // `describes: false`: identical to the `aria-label` above.
+      {...tip(name, { describes: false })}
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,

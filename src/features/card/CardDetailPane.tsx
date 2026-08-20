@@ -16,6 +16,7 @@ import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable, deckCardSlot, DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { useSwapFromPane } from "@/features/decks/useDeck";
@@ -991,6 +992,7 @@ function Facts({
   face: number;
   marketplace: Marketplace;
 }) {
+  const tip = useTooltip();
   const finishes = parseFinishes(card.finishes);
   const sides = faceCount(card.layout, card.faces.length);
   const faces: CardFace[] =
@@ -1012,10 +1014,19 @@ function Facts({
     <div className="space-y-3">
       {/* Provenance, in the data face: set, collector number, printing language. */}
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-dim">
-        <span className="font-mono" title={card.setName ?? undefined}>
+        <span className="font-mono">
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
-        {card.setName && <span className="min-w-0 truncate">{card.setName}</span>}
+        {/* The `title` used to sit on the code above rather than here — on an element that
+            never truncates, describing a name that was already printed in full right beside
+            it. This is the span that actually clips (`truncate`), so this is where the tooltip
+            belongs: `whenClipped` shows the same text this span already carries, only when the
+            paint has cut it off. */}
+        {card.setName && (
+          <span className="min-w-0 truncate" {...tip(card.setName, { whenClipped: true })}>
+            {card.setName}
+          </span>
+        )}
         {card.lang !== "en" && <LangBadge lang={card.lang} />}
         {/* Tinted text with a gem, never a filled badge — the shared component, which is
             where that judgement now lives for all four surfaces that show a rarity. */}
@@ -1396,6 +1407,7 @@ function PrintingRow({
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
   const viewPrinting = useAppStore((s) => s.viewPrinting);
+  const tip = useTooltip();
 
   // The row is the printing, and it can be carried off the list — spec §1's fourth drag
   // source, and the only one where the reader is choosing a *piece of cardboard* rather than a
@@ -1526,7 +1538,18 @@ function PrintingRow({
       <div className="flex items-center gap-2">
         <RarityGem rarity={printing.rarity} className="shrink-0" />
         {current ? (
-          <span className="min-w-0 flex-1 truncate font-mono" title={printing.setName ?? undefined}>
+          // **No `whenClipped`.** The rule that decides it, stated once here because this row
+          // and the `<button>` row just below it are both a defect this one was fixed beside:
+          // `whenClipped` is only correct when the tooltip's words are the anchor's *own* text —
+          // the span above (`card.setName` shown *and* tipped, `:1026`) qualifies, this one does
+          // not. It shows `printing.setCode` and tips `printing.setName`, a different string, so
+          // gating the panel on whether the *code* happens to be clipped gates it on something
+          // that has nothing to do with the name it is about to say — and at this row's width the
+          // code rarely clips, so the name was unreachable by hover in practice. `whenClipped`
+          // also forces `describes: false`, so dropping it does double duty: it restores the
+          // panel *and* puts the words back in the accessibility tree, which `title` always did
+          // and `whenClipped` quietly had not.
+          <span className="min-w-0 flex-1 truncate font-mono" {...tip(printing.setName)}>
             {printing.setCode.toUpperCase()} · {printing.collectorNumber}
             {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
           </span>
@@ -1573,7 +1596,9 @@ function PrintingRow({
             onKeyDown={menu.onKeyDown}
             // Greyed and refused, never removed from the tab order — see {@link inert}.
             aria-disabled={inert}
-            title={printing.setName ?? undefined}
+            // No `whenClipped` — same defect and the same fix as the `current` row's `<span>`
+            // above.
+            {...tip(printing.setName)}
             className={cn(
               "min-w-0 flex-1 truncate text-left font-mono aria-disabled:opacity-50",
               FOCUS,

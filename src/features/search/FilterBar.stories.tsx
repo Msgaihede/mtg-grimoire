@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { FilterBar } from "./FilterBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -298,11 +299,14 @@ export const SomeUnavailable: Story = {
     // searchable corpus — paper and playable — rather than the red part of it.
     await canvas.findByRole("button", { name: "Red — 38 printings" }, { timeout: 5000 });
 
-    // Empty over a red search, and saying so where a reader can hover it.
+    // Empty over a red search, and saying so where a reader can hover it. The count rides in
+    // the accessible name as well as the tooltip (`ValueChip`'s own rule), so the exact name —
+    // not a prefix — is what proves the sentence rather than only that the row is greyed.
     for (const value of [4, 5, 6, 7]) {
-      const chip = canvas.getByRole("button", { name: new RegExp(`^Mana value ${value}\\b`) });
+      const chip = canvas.getByRole("button", {
+        name: `Mana value ${value} — nothing in this search`,
+      });
       await expect(chip).toHaveAttribute("aria-disabled", "true");
-      await expect(chip).toHaveAttribute("title", `Mana value ${value} — nothing in this search`);
       // **`aria-disabled`, never the attribute.** A `disabled` button leaves the tab order,
       // and a filter row that greys as the reader types would shrink and grow under a
       // keyboard caret. Asserted here because it is invisible in a screenshot and is the
@@ -396,11 +400,11 @@ export const MostlyUnavailable: Story = {
 
     // The subset arm: every colour would return the same single colourless card, so pressing
     // one changes nothing and all six grey. The tooltip says the count rather than "nothing",
-    // because there *is* something there — it just would not move.
+    // because there *is* something there — it just would not move; the exact accessible name
+    // (`ManaChip`'s own `aria-label` and tooltip, one string spent twice) is what proves it.
     for (const colour of ["White", "Blue", "Black", "Red", "Green", "Colorless"]) {
-      const chip = canvas.getByRole("button", { name: new RegExp(`^${colour}\\b`) });
+      const chip = canvas.getByRole("button", { name: `${colour} — 1 printing` });
       await expect(chip).toHaveAttribute("aria-disabled", "true");
-      await expect(chip).toHaveAttribute("title", `${colour} — 1 printing`);
     }
 
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
@@ -495,12 +499,18 @@ export const SortedDescending: Story = {
       name: "Sort direction: descending — press for ascending",
     });
     await expect(direction).not.toBeDisabled();
-    // The same sentence rides as the `title`: there is no visible text on the button, so a
-    // pointer has nothing else to get.
-    await expect(direction).toHaveAttribute(
-      "title",
+    // The same sentence rides as the hover tooltip: there is no visible text on the button, so
+    // a pointer has nothing else to get. Bound `describes: false` (the button's `aria-label`
+    // already carries the sentence), so the panel carries no `role="tooltip"` — found by its
+    // one stable id instead.
+    await userEvent.hover(direction);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
       "Sort direction: descending — press for ascending",
     );
+    await userEvent.unhover(direction);
 
     // `toHaveValue`, never the text of the selected option. A controlled `<select>` whose value
     // matches no `<option>` does not draw blank — `react-dom` picks the first row that is not

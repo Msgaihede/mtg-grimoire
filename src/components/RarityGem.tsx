@@ -1,3 +1,4 @@
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { hasRarityColor, rarityColor } from "@/lib/rarity";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,7 @@ export function RarityGem({
   withLabel?: boolean;
   className?: string;
 }) {
+  const tip = useTooltip();
   const color = rarityColor(rarity);
   const word = rarity ?? "unknown";
   return (
@@ -40,13 +42,16 @@ export function RarityGem({
     >
       <span
         aria-hidden="true"
-        // **A `title` as well as the `sr-only` word below, because they are for two different
+        // **A tooltip as well as the `sr-only` word below, because they are for two different
         // readers.** The span is what a screen reader hears; a sighted pointer user hovering a
         // 6px dot had nothing at all, and on the surfaces that draw the gem *without* the word
         // — the deck stack's data line, the art grid — the colour is the only thing said. Four
         // call sites had grown their own `title` before this component consolidated them, and
         // consolidating meant answering both questions here rather than dropping one.
-        title={word.replace(/^./, (c) => c.toUpperCase())}
+        // `describes: false`: the word is already exposed to assistive tech through the sibling
+        // span below (visible or `sr-only`), so a wired `aria-describedby` on this dot would say
+        // it twice.
+        {...tip(word.replace(/^./, (c) => c.toUpperCase()), { describes: false })}
         className="size-[calc(0.375rem*var(--mark-scale,1))] shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />

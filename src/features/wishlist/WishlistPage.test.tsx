@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import type { WishlistQuery, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -98,9 +99,11 @@ const lastQuery = () =>
 /**
  * The filter bar's sort control.
  *
- * By role and exact name, because every sortable column header carries a `title` reading
- * "Sort by …" — and `getByLabelText` falls back to `title`, so a loose `/sort/i` matches the
- * whole header row as well.
+ * By role and exact name, not a loose label match. Every sortable column header carries a
+ * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
+ * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Cost. Prices as of…"),
+ * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
+ * only the control this file means.
  */
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
@@ -127,6 +130,10 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  * `ContextMenuProvider` and not inside it: the menu panel is drawn as a *sibling* of that
  * provider's children, so a provider around this page is around none of the menu's rows.
  * `CollectionPage.test.tsx` has the wiring, and `App.tsx` uses the same nesting.
+ *
+ * `TooltipProvider` is the same trade as `ContextMenuProvider`, for `useTooltip` — the
+ * needs-review band's and the printing cell's hover assertions below would bind a tooltip that
+ * can never open without it.
  */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -134,7 +141,9 @@ function wrap(ui: ReactElement) {
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <ContextMenuProvider>{ui}</ContextMenuProvider>
+        <TooltipProvider>
+          <ContextMenuProvider>{ui}</ContextMenuProvider>
+        </TooltipProvider>
       </QueryClientProvider>,
     ),
   };
@@ -309,7 +318,13 @@ describe("WishlistPage", () => {
 
     // Three of the four Bolts at $400.50, plus the Recall.
     expect(await within(await total()).findByText("$1,213.50")).toBeInTheDocument();
-    expect(await total()).toHaveAttribute("title", pricesAsOf(MARKETPLACES.tcgplayer));
+    // `Figure`'s own `title` prop, bound through `useTooltip()` since the tooltip sweep
+    // rather than a native attribute.
+    const figure = await total();
+    await userEvent.hover(figure);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
+    await userEvent.unhover(figure);
     // One figure, not the pair this header drew before the marketplace setting existed: two
     // totals over one shopping list is two answers to the question it is open to ask.
     expect(screen.queryByText("Still to buy (EUR)")).not.toBeInTheDocument();
@@ -363,7 +378,10 @@ describe("WishlistPage", () => {
     const eur = await total("EUR");
     expect(await within(eur).findByText("€960.00")).toBeInTheDocument();
     expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
-    expect(eur).toHaveAttribute("title", pricesAsOf(MARKETPLACES.cardmarket));
+    await userEvent.hover(eur);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
+    await userEvent.unhover(eur);
     expect(screen.queryByText("Still to buy (USD)")).not.toBeInTheDocument();
   });
 
@@ -435,17 +453,43 @@ describe("WishlistPage", () => {
   /**
    * The wishlist is flagged by the same reconciler pass as the collection
    * (`reconcile::sweep_orphans` walks both tables), so it renders the sentence the same way:
-   * inside the name's cell, so a screen reader reads it with the row it belongs to, and with
-   * the whole of it on the `title` because one line holds ~110 of its 175 characters and the
-   * half that goes over the edge is the half that says what to do.
+   * inside the name's cell, so a screen reader reads it with the row it belongs to, and one
+   * line holds ~110 of its 175 characters — the half that goes over the edge is the half that
+   * says what to do, so the whole of it rides as a `whenClipped` + `interactive` tooltip
+   * (`CollectionPage.test.tsx`'s needs-review band, converted the same way).
    */
   it("prints what a sync left against a flagged wish, without clipping the instruction", async () => {
     wishlistList.mockResolvedValue(page([{ ...BOLT, needsReview: REVIEW_NOTE }]));
     wrap(<WishlistPage />);
 
     const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]') as HTMLElement;
+    const band = within(row).getByText(REVIEW_NOTE);
     expect(within(row).getByText("Needs review:")).toBeInTheDocument();
-    expect(within(row).getByText(REVIEW_NOTE)).toHaveAttribute("title", REVIEW_NOTE);
+
+    // `whenClipped` pinned shut: jsdom lays nothing out, so the band's `scrollWidth`/
+    // `clientWidth` both read `0` by default — unclipped — and the provider's `whenClipped`
+    // guard returns before arming the open timer.
+    fireEvent.pointerEnter(band);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 150));
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull();
+    fireEvent.pointerLeave(band);
+
+    // The hover affordance, `whenClipped` pinned open: a screen reader already has the text
+    // (asserted above via `getByText`), so the panel is `describes: false` and carries no
+    // `role="tooltip"` — found by `TOOLTIP_PANEL_ID` instead.
+    Object.defineProperty(band, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(band, "clientWidth", { value: 100, configurable: true });
+    fireEvent.pointerEnter(band);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    const panel = document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
+    expect(panel).toHaveTextContent(REVIEW_NOTE);
+    // `interactive` pinned: the panel takes its own pointer events and its text can be
+    // selected.
+    expect(panel).toHaveClass("select-text");
+    expect(panel).not.toHaveClass("pointer-events-none");
+    fireEvent.pointerLeave(band);
   });
 
   /** An empty wishlist is not a failed search: it says how to fill one. */

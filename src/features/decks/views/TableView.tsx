@@ -22,6 +22,7 @@ import {
   type RowRenderProps,
   type TableColumn,
 } from "@/components/table/VirtualTable";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -130,6 +131,7 @@ export function TableView({
   landed?: ReadonlyMap<number, number>;
   className?: string;
 }) {
+  const tip = useTooltip();
   const editable = actions?.setQuantity !== undefined;
   const rows = useMemo<Row[]>(
     () =>
@@ -203,7 +205,10 @@ export function TableView({
               // colours: down a column of eighty rows it is what says where to stop.
               style={{ borderColor: rowMarkColor(row.ruleBreakText, row.card.gameChanger) }}
               className="flex min-w-0 items-center gap-1.5 border-l-2 pl-2"
-              title={row.ruleBreakText ?? undefined}
+              // `describes: false` — the sr-only span below already puts "Rule break: …" in the
+              // accessible tree, since a cell's text is really read here (unlike the other three
+              // views' `aria-label`-ed button). A default binding would describe it twice.
+              {...tip(row.ruleBreakText ?? undefined, { describes: false })}
             >
               <span className="min-w-0 truncate">{row.card.name}</span>
               {/* Which object this row plays, where there is no art to hang a chip on. Unlike
@@ -312,7 +317,7 @@ export function TableView({
             : null,
       },
     ],
-    [editable, actions, marketplace],
+    [editable, actions, marketplace, tip],
   );
 
   // Closed over the column count, because the band's one cell has to say how many columns it

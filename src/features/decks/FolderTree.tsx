@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -164,6 +165,7 @@ export function FolderTree({
   rowMenu,
   menuOpenerRef,
 }: FolderTreeProps) {
+  const tip = useTooltip();
   const flat = flattenFolders(nodes);
   /** Where a "new folder" field is open, or `undefined` when the open field is a rename. */
   const newAt = naming?.kind === "new" ? naming.parentId : undefined;
@@ -179,7 +181,7 @@ export function FolderTree({
           type="button"
           aria-label="New folder at the top level"
           aria-expanded={newAt === null}
-          title="New folder"
+          {...tip("New folder", { describes: false })}
           onClick={(e) => onOpenNew(null, e.currentTarget)}
           className={cn(
             "grid size-6 place-items-center rounded-md border border-border text-dim",
@@ -348,6 +350,7 @@ function FolderRow({
   children?: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const tip = useTooltip();
   const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
   // The ring says "this drawer could take the deck you are holding", the wash says "this is the
   // one it would go into" — `AppShell`'s sidebar vocabulary, because these are the same claim
@@ -431,7 +434,7 @@ function FolderRow({
             type="button"
             aria-label={`New folder in ${label}`}
             aria-expanded={addingChild}
-            title={`New folder in ${label}`}
+            {...tip(`New folder in ${label}`, { describes: false })}
             onClick={(e) => onNewChild(e.currentTarget)}
             className={cn(
               "absolute right-1 top-1 grid size-6 place-items-center rounded-md text-dim",
@@ -497,6 +500,7 @@ function FolderNameField({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const tip = useTooltip();
   const [name, setName] = useState(initial);
 
   useEffect(() => {
@@ -546,21 +550,29 @@ function FolderNameField({
             "focus:border-accent focus:outline-none",
           )}
         />
-        <button
-          type="submit"
-          aria-label={submitLabel}
-          title={submitLabel}
-          disabled={!trimmed || pending}
-          className={cn(
-            "grid size-7 flex-none place-items-center rounded-md border border-accent text-accent",
-            "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-            "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          <Check className="size-3.5" aria-hidden="true" />
-        </button>
+        {/* **A `<span>` wrapper, not a no-op.** The button is genuinely `disabled` — a real
+            attribute, not `aria-disabled` — while the field is empty or the write is in
+            flight, and a real `disabled` control fires no pointer events at all: `tip()` bound
+            on the button alone would show nothing for as long as it is out of reach, which is
+            exactly when a reader is most likely to be hovering it wondering why. A disabled
+            control still lets the hover reach a plain ancestor, so the hint moves one element
+            out rather than being dropped. */}
+        <span {...tip(submitLabel, { describes: false })}>
+          <button
+            type="submit"
+            aria-label={submitLabel}
+            disabled={!trimmed || pending}
+            className={cn(
+              "grid size-7 flex-none place-items-center rounded-md border border-accent text-accent",
+              "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
+              "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
+              "motion-reduce:transition-none",
+              FOCUS,
+            )}
+          >
+            <Check className="size-3.5" aria-hidden="true" />
+          </button>
+        </span>
       </form>
       {where && <p className="mt-1 text-[0.7rem] text-dim">{where}</p>}
     </div>

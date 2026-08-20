@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { GripVertical } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
@@ -1204,6 +1205,7 @@ function CategoryGrip({
   flowIds: readonly number[];
   onMove: (categoryId: number, targetId: number) => void;
 }) {
+  const tip = useTooltip();
   const index = flowIds.indexOf(categoryId);
   const step = (to: number) => {
     const target = flowIds[to];
@@ -1225,7 +1227,7 @@ function CategoryGrip({
         }
       }}
       aria-label={`Move ${name}, ${index + 1} of ${flowIds.length}`}
-      title="Drag to reorder, or press the arrow keys"
+      {...tip("Drag to reorder, or press the arrow keys")}
       className={cn(
         "shrink-0 cursor-grab rounded-sm text-dim",
         "transition-colors duration-150 hover:text-text motion-reduce:transition-none",

@@ -29,6 +29,7 @@
 import { useId, useMemo, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { FILTER_CONTROL, ToggleChip } from "@/components/FilterChips";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
@@ -133,6 +134,7 @@ function CheckList({
   /** The box's width, which its caller knows and it does not. */
   className?: string;
 }) {
+  const tip = useTooltip();
   return (
     <ul
       className={cn(
@@ -156,7 +158,7 @@ function CheckList({
         return (
           <li key={option.key}>
             <label
-              title={name}
+              {...tip(name, { describes: false })}
               className={cn(
                 "flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm",
                 // The two states the chips beside them are told apart by, in the same two

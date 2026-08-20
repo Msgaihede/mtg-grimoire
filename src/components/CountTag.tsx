@@ -1,3 +1,4 @@
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -96,8 +97,9 @@ export const COUNT_TAG_BOX = cn(
  * `FoilOverlay`'s rule, for `FoilOverlay`'s reason. Every surface that draws this draws a card as
  * a **button with its own accessible name**, and an `aria-label` *replaces* the element's content
  * for naming — so an `sr-only` span in here would be announced to nobody, which is worse than no
- * text because it looks accessible. The `title` is what a pointer gets; the words belong to
- * whatever names the card.
+ * text because it looks accessible. The tooltip is what a pointer gets; the words belong to
+ * whatever names the card, so it binds `describes: false` — an `aria-hidden` mark has nothing to
+ * describe.
  */
 export function CountTag({
   count,
@@ -114,10 +116,11 @@ export function CountTag({
   /** Where the caller puts it. The corner is the surface's, never this mark's. */
   className?: string;
 }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={title}
+      {...tip(title, { describes: false })}
       style={{ backgroundColor: paint.css, color: paint.fg, clipPath: COUNT_TAG_SLANT }}
       className={cn(COUNT_TAG_BOX, className)}
     >

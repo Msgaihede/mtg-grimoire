@@ -36,6 +36,7 @@
  * *of this deck* rather than sharing anything.
  */
 import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { type DeckTag, type DeckVariant, type TagColor } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/focus";
@@ -327,6 +328,7 @@ function TagRow({
   onDraft: (color: TagColor) => void;
   onDone: () => void;
 }) {
+  const tip = useTooltip();
   const deleteRef = useRef<HTMLButtonElement>(null);
   const owedFocus = useRef(false);
 
@@ -351,7 +353,7 @@ function TagRow({
           onClick={onPick}
           aria-expanded={picking}
           aria-label={`Change colour of ${tag.name}`}
-          title={`#${tagColorHex(shown)}`}
+          {...tip(`#${tagColorHex(shown)}`)}
           className={cn(
             "grid size-[1.125rem] shrink-0 place-items-center rounded border border-border",
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
