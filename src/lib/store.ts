@@ -78,6 +78,11 @@ interface AppState {
    *  for looking at cards, the collection is usually for counting them. */
   collectionView: SearchView;
   setCollectionView: (view: SearchView) => void;
+  /** How the wishlist is laid out. Its own field beside the other two, not a third reader of
+   *  either — the three lists are looked at for three different reasons, and a reader who put
+   *  their collection in a table was not saying anything about their shopping list. */
+  wishlistView: SearchView;
+  setWishlistView: (view: SearchView) => void;
   /**
    * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
    * own — one of `ZOOM_STEPS` per section, all starting at `DEFAULT_ZOOM`.
@@ -320,6 +325,12 @@ export const useAppStore = create<AppState>((set) => ({
   // in it — counts, conditions, what it is worth — and forty tiles answer none of that.
   collectionView: "table",
   setCollectionView: (collectionView) => set({ collectionView }),
+  // Art by default, with the search rather than with the collection: a wishlist is what the
+  // reader is going shopping for, and the cards on it are ones they have not held — the
+  // picture is how you recognise the thing you are about to buy. The table is a press away
+  // for the trip where the question is what it all costs.
+  wishlistView: "grid",
+  setWishlistView: (wishlistView) => set({ wishlistView }),
   // A copy, not the constant itself. `Readonly<>` is a compile-time fence and nothing more, so an
   // in-place `state.cardZoom.deck = …` would write *through* the initial state into the exported
   // `DEFAULT_SECTION_ZOOMS` — and several suites reset this store from it, so the damage would

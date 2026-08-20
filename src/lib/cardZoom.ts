@@ -74,7 +74,14 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  * throws away its filter and its scroll on every close, and the size the cards are drawn at is
  * the one thing about it a reader would resent re-setting.
  */
-export const ZOOM_SECTIONS = ["search", "collection", "deckSearch", "deck", "printings"] as const;
+export const ZOOM_SECTIONS = [
+  "search",
+  "collection",
+  "wishlist",
+  "deckSearch",
+  "deck",
+  "printings",
+] as const;
 
 export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
 
@@ -89,6 +96,10 @@ export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
 export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   search: DEFAULT_ZOOM,
   collection: DEFAULT_ZOOM,
+  // The shopping list's wall. Its own key rather than the collection's for the reason every
+  // split on this list has: the two are read one after the other — what is wanted, then what
+  // is owned — and a size settled on one is not an answer about the other.
+  wishlist: DEFAULT_ZOOM,
   deckSearch: DEFAULT_ZOOM,
   deck: DEFAULT_ZOOM,
   // The modal's wall. Its own key rather than the search's, for {@link ZOOM_SECTIONS}' own
