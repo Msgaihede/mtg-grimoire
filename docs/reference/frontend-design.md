@@ -359,7 +359,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   **required**, so a new wall cannot default into sharing another wall's number.
 - **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
   obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
-  of a 488px `grid` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
+  of a 672px `display` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
   stops matching the content, and it desynchronises the deck editor's drag-and-drop hit testing from
   what is painted. Rescaling the numbers keeps text crisp, lets the wall reflow to a new column
   count, and keeps `CardGrid`'s existing `virtualizer.measure()` effect — already keyed on

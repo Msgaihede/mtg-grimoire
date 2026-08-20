@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { readDragData } from "@/features/decks/dnd";
-import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS } from "@/lib/images";
+import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS, WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, WishInput } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 
@@ -144,7 +144,7 @@ describe("CardGrid", () => {
     // The alt text is what a screen reader and a failed load both fall back to, so it has
     // to be the card's name rather than "card image".
     expect(bolt).toBeInTheDocument();
-    expect(bolt).toHaveAttribute("src", expect.stringContaining("/grid/aaa/0"));
+    expect(bolt).toHaveAttribute("src", expect.stringContaining(`/${WALL_CARD_VARIANT}/aaa/0`));
     // *Not* `loading="lazy"`. The virtualiser already bounds the wall to the rows on screen
     // plus two, so the browser's own intersection gate has nothing left to save on a 117 k-row
     // browse — it only delays the two dozen images that are about to be looked at.
@@ -606,7 +606,7 @@ describe("CardGrid", () => {
 
     await act(async () => void vi.advanceTimersByTime(PAST_THE_RETRY));
     const retried = screen.getByAltText("Lightning Bolt");
-    expect(retried).toHaveAttribute("src", expect.stringContaining("/grid/aaa/0"));
+    expect(retried).toHaveAttribute("src", expect.stringContaining(`/${WALL_CARD_VARIANT}/aaa/0`));
   });
 
   /**
@@ -639,7 +639,7 @@ describe("CardGrid", () => {
     await act(async () => void vi.advanceTimersByTime(IMAGE_RETRY_SPREAD_MS + 1));
     expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute(
       "src",
-      expect.stringContaining("/grid/aaa/0"),
+      expect.stringContaining(`/${WALL_CARD_VARIANT}/aaa/0`),
     );
   });
 
@@ -721,7 +721,7 @@ describe("CardGrid", () => {
 
     expect(screen.getByAltText("Ancestral Recall")).toHaveAttribute(
       "src",
-      expect.stringContaining("/grid/ccc/0"),
+      expect.stringContaining(`/${WALL_CARD_VARIANT}/ccc/0`),
     );
   });
 

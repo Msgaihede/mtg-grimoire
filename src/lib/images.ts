@@ -12,6 +12,31 @@ export const IMAGE_VARIANTS = ["thumb", "grid", "display", "art"] as const;
 export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
 
 /**
+ * The size every **wall of card faces** draws — the search's, the collection's, the wishlist's
+ * and the deck editor's docked search column, through `CardArt`'s default.
+ *
+ * `display` (672×936) rather than `grid` (488×680) because the walls **zoom** and the variant
+ * does not: a tile is 170px at 1× and 340px at the top of `cardZoom`'s ladder, which on a
+ * display at 200% scaling is **680 device pixels drawn from a 488px source** — a 39% upscale,
+ * and the blur readers reported. 672 covers that worst case almost exactly. It is also the
+ * ceiling worth having rather than merely the next rung: Scryfall's larger `png` is 745×1040
+ * for ~1 MB against ~93 KB, and its own docs mark the whole JPG/PNG family as *replaced* by
+ * these WEBP keys.
+ *
+ * **A named constant because the wall and its pre-warm are two different call sites**, and the
+ * failure when they disagree is silent in the specific way `DECK_CARD_VARIANT`'s comment
+ * records: each variant is its own URL on the CDN and its own directory in the cache, so a
+ * pre-warm fetching the variant no surface asks for reports every card warmed and every tile
+ * then fetches cold anyway. `SearchPage`'s `prefetchImages` call and `CardArt`'s default are
+ * that pair; `images::COLLECTION_PREWARM` is the Rust half and has to agree with this.
+ *
+ * It is what `CardDetailPane` and `PrintingPreview` already draw, which is the part that pays
+ * for the bigger file: a card the reader opens used to cost two cache keys — a `grid` for the
+ * tile and a `display` for the pane — and now costs one.
+ */
+export const WALL_CARD_VARIANT: ImageVariant = "display";
+
+/**
  * The physical proportions of a Magic card, as a CSS `aspect-ratio`.
  *
  * Every frame that holds a card image uses this — a tile that is not 5:7 either letterboxes

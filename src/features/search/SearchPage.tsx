@@ -14,6 +14,7 @@ import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/Ad
 import type { DragPayload } from "@/features/decks/dnd";
 import { count } from "@/lib/counts";
 import { parseFinishes, soleFinish } from "@/lib/finish";
+import { WALL_CARD_VARIANT } from "@/lib/images";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
@@ -274,7 +275,9 @@ export function SearchPage() {
     void ipc
       .prefetchImages(
         latestPage.map((c) => c.id),
-        "grid",
+        // The wall's own variant, never a literal: warming a size the tiles do not ask for
+        // reports success and leaves every tile to fetch cold — see `WALL_CARD_VARIANT`.
+        WALL_CARD_VARIANT,
       )
       .catch(() => {});
     // `latestPage` and `view` are both deliberately out of the dependency list.
