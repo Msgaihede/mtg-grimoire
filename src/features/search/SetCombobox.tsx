@@ -47,6 +47,9 @@ const MORE_STEP = 50;
  * and the results would quietly disagree with the control that produced them. The backend
  * keeps its truncation as the belt; this is the braces, and it is the only one the reader
  * can see.
+ *
+ * **It is a fact about the backend filter and not about this control**, which is why a caller
+ * that supplies its own `options` is not held to it — see that prop on {@link SetCombobox}.
  */
 const MAX_SETS = 64;
 
@@ -72,6 +75,8 @@ export function SetCombobox({
   selected,
   onToggle,
   counts,
+  options,
+  align = "end",
 }: {
   selected: readonly string[];
   onToggle: (code: string) => void;
@@ -85,6 +90,37 @@ export function SetCombobox({
    * under the cursor on every keystroke.
    */
   counts?: Record<string, number>;
+  /**
+   * The sets to offer, when the caller has a shorter list than "every set in the corpus".
+   *
+   * The two search-shaped callers leave this absent and get the session-cached `list_sets()`
+   * below — ~1 050 rows, which is the right answer when the question is *which sets shall I
+   * narrow the whole corpus to*. `AllPrintingsDialog` asks a different question: it holds one
+   * card's printings in memory and wants the sets **that card** was printed in, which
+   * `printingFilters.setOptions` has already counted off those very rows. Greying the other
+   * thousand instead would be `counts`' rule applied where it does not fit — greying says
+   * "empty in this search", and a set this card was never in is not empty, it is not part of
+   * the question.
+   *
+   * Supplying it **turns the query off** rather than racing it, so a caller that has its own
+   * list costs no `list_sets` at all; and it lifts {@link MAX_SETS}, which mirrors a *backend*
+   * truncation that a caller filtering an in-memory list never reaches.
+   */
+  options?: readonly SetSummary[];
+  /**
+   * Which edge of the 288px listbox is pinned to the trigger — `AddToCollectionButton`'s prop,
+   * with the same two values for the same reason, and this app's standing rule about an anchored
+   * popup: it is pinned to, and grows from, the corner nearest its trigger's own edge.
+   *
+   * `"end"` is the default because both search-shaped callers put this control at the **right end**
+   * of a wrapping filter row, where it was measured opening 174px past a 1280px window from the
+   * static position — and nothing clips these popups, so the overflow scrolled the whole app
+   * sideways the moment `scrollIntoView` ran. `AllPrintingsDialog` puts it second in its row and
+   * passes `"start"`: there is nothing to the left of the trigger to open back across, and a
+   * listbox that opened leftwards from a control at the head of a row reads as belonging to
+   * whatever it landed on.
+   */
+  align?: "start" | "end";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -128,6 +164,12 @@ export function SetCombobox({
   const sets = useQuery({
     queryKey: ["sets"],
     queryFn: () => ipc.listSets(),
+    // Off entirely when the caller brought its own list — not merely ignored. A disabled query
+    // never runs its `queryFn`, so the printings modal makes no `list_sets` call at all, and the
+    // shared `["sets"]` cache entry is neither seeded nor invalidated by a caller that has no use
+    // for it. It stays `isPending` while disabled, which is why the empty line below asks about
+    // `options` before it asks about the query.
+    enabled: options === undefined,
     // Cached for good once it has answered with rows — but an empty answer is not an
     // answer. The first launch opens this picker while the opening sync is still writing
     // `sets`, and a `staleTime` of `Infinity` over that `[]` would leave the filter empty
@@ -182,11 +224,15 @@ export function SetCombobox({
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const found = (sets.data ?? [])
+    // The caller's list when it brought one, the corpus otherwise — everything below this line
+    // reads the same shape and cannot tell which it got.
+    const found = (options ?? sets.data ?? [])
       // A set with no printings here can never match a search, so offering it is
       // offering an empty result. `sets` holds memorabilia and token-only sets that
       // `default_cards` carries nothing for, and Arena/MTGO sets whose every printing
-      // the search's paper-only default hides again.
+      // the search's paper-only default hides again. A supplied list is held to the same
+      // rule rather than exempted, and passes it for free: a caller counting its own rows
+      // has no way to arrive at a zero.
       .filter((s) => s.cardCount > 0)
       // Name matches anywhere, code from the start: three letters inside a longer code
       // are a coincidence, three letters inside a set's name are usually what was meant.
@@ -234,21 +280,29 @@ export function SetCombobox({
         needle ? rank(s.code, needle) : 0,
       ],
     );
-  }, [sets.data, query, selected, counts, pinned]);
+  }, [options, sets.data, query, selected, counts, pinned]);
 
-  const options = matches.slice(0, shown);
+  /**
+   * The rows actually drawn: {@link matches} cut to what the reader has asked to see.
+   *
+   * Named `page` and not `options`, which it was until the picker learnt to take a caller's list
+   * — the two are different lists a line apart, and the ambiguity is worth naming away rather
+   * than shadowing. `options` is the **source** a caller may supply; this is one page of what
+   * survived the needle from whichever source was used.
+   */
+  const page = matches.slice(0, shown);
   /**
    * What the footer's control would add — the *honest* number, so the last press reads
    * "Show 7 more" rather than promising fifty rows that are not there.
    */
-  const moreCount = Math.min(MORE_STEP, matches.length - options.length);
+  const moreCount = Math.min(MORE_STEP, matches.length - page.length);
   // Counted from what is on screen rather than from `shown`, which can outrun the list when
   // the query narrows under a reader who has already paged down.
-  const revealMore = () => setShown(options.length + MORE_STEP);
+  const revealMore = () => setShown(page.length + MORE_STEP);
   // Clamped rather than reset from an effect: the list shortens under the cursor whenever
   // the query narrows or the set list finishes loading, and a stored index that outruns it
   // would point `aria-activedescendant` at an element that is not there any more.
-  const activeIndex = Math.min(active, Math.max(0, options.length - 1));
+  const activeIndex = Math.min(active, Math.max(0, page.length - 1));
 
   useEffect(() => {
     if (!open) return;
@@ -259,8 +313,32 @@ export function SetCombobox({
   const label =
     selected.length === 0 ? "Any set" : `${selected.length} set${selected.length === 1 ? "" : "s"}`;
 
-  /** At the ceiling, adding is off and removing is still on — the way out has to stay open. */
-  const full = selected.length >= MAX_SETS;
+  /**
+   * The one sentence a listbox with no rows draws — three facts that look alike and are not.
+   *
+   * **`options` is asked about first, and that order is the whole of why this is a variable.** A
+   * disabled query reports `isPending` forever, so a caller that brought its own list and typed a
+   * needle nothing matches would have been told the sets were still *loading* — a sentence about
+   * a request that will never be made, on the one branch where the list is already complete.
+   * There is only ever one thing left to say there, because a supplied list cannot be pending and
+   * cannot fail.
+   */
+  const emptyLine =
+    options !== undefined || sets.isSuccess
+      ? "No sets match that."
+      : sets.isError
+        ? "Could not read the set list — try Refresh data."
+        : "Loading sets…";
+
+  /**
+   * At the ceiling, adding is off and removing is still on — the way out has to stay open.
+   *
+   * **Never at one when the caller supplied the list**, for {@link MAX_SETS}' own reason: the
+   * ceiling exists because `filters.rs` truncates a *backend* set filter, and a caller narrowing
+   * rows it already holds sends nothing there. Refusing its 65th tick would be a limit this app
+   * invented, and the sentence below would explain it by naming a search that is not happening.
+   */
+  const full = options === undefined && selected.length >= MAX_SETS;
   /**
    * Why a row cannot be pressed — the cap, or nothing in this search to press it for.
    *
@@ -272,7 +350,7 @@ export function SetCombobox({
     (!full || selected.includes(code)) && !optionDisabled(counts, code, selected.includes(code));
 
   const onListKeyDown = (e: React.KeyboardEvent) => {
-    if (options.length === 0) return;
+    if (page.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       // The bottom of a *page* is not the bottom of the list, so pressing past the last row
@@ -283,10 +361,10 @@ export function SetCombobox({
       // `onBlur` below only closes when focus leaves the root, so Tab does get there. It is
       // that Tab is *also* how a reader leaves this control entirely, and the arrow key they
       // are already holding is the one that meant "more of this list".
-      if (activeIndex >= options.length - 1) {
+      if (activeIndex >= page.length - 1) {
         if (moreCount > 0) {
           revealMore();
-          setActive(options.length);
+          setActive(page.length);
         }
       } else {
         setActive(activeIndex + 1);
@@ -302,15 +380,15 @@ export function SetCombobox({
       // End means "the end of what I can see"; pressing it again from there asks for the
       // rest, the same bargain `ArrowDown` strikes at the bottom row. It does not leap to
       // match 1 047 of 1 047 — one press, one page, and the reader can watch it arrive.
-      if (activeIndex === options.length - 1 && moreCount > 0) {
+      if (activeIndex === page.length - 1 && moreCount > 0) {
         revealMore();
-        setActive(options.length + moreCount - 1);
+        setActive(page.length + moreCount - 1);
       } else {
-        setActive(options.length - 1);
+        setActive(page.length - 1);
       }
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const code = options[activeIndex].code;
+      const code = page[activeIndex].code;
       if (canToggle(code)) onToggle(code);
     }
   };
@@ -374,19 +452,21 @@ export function SetCombobox({
               // share one, and a shared layer is resolved by document order — where the
               // header, coming after this filter row, painted a grey band across the picker.
               LAYER.popup,
-              // **Pinned to the trigger's right edge, not its left.** This control sits at the
-              // end of a wrapping filter row, so with the default `left: auto` — the static
-              // position, i.e. the trigger's left edge — 288px of listbox opened 174px past
-              // the window at 1280 (measured). Nothing clips it, so the *page* scrolled
-              // sideways to reveal it: the whole app slid left, sidebar and all, the moment
-              // the picker's own `scrollIntoView` ran. `AddToCollection`'s `align="end"` is
-              // the same decision for the same reason.
-              "right-0",
+              // **Pinned to one edge of the trigger, never left to the static position.** At the
+              // `"end"` default this control sits at the end of a wrapping filter row, so with
+              // `left: auto` — the static position, i.e. the trigger's left edge — 288px of
+              // listbox opened 174px past the window at 1280 (measured). Nothing clips it, so the
+              // *page* scrolled sideways to reveal it: the whole app slid left, sidebar and all,
+              // the moment the picker's own `scrollIntoView` ran. `AddToCollection`'s `align` is
+              // the same decision for the same reason, and `align="start"` is the mirror of it
+              // for a trigger at the head of a row rather than at its end.
+              align === "start" ? "left-0" : "right-0",
               // And the corner it is pinned by is the corner it grows from, which is the one
               // thing `popup` leaves to whoever anchors it: a listbox that grew from its own
-              // middle would read as unrelated to the button that opened it. Written out whole
-              // — Tailwind scans source text, so an interpolated class emits no rule.
-              "origin-top-right",
+              // middle would read as unrelated to the button that opened it. Both spellings
+              // written out whole — Tailwind scans source text, so an interpolated class emits
+              // no rule at all.
+              align === "start" ? "origin-top-left" : "origin-top-right",
             )}
           >
             <input
@@ -396,7 +476,7 @@ export function SetCombobox({
               aria-label="Search sets"
               aria-expanded="true"
               aria-controls={listboxId}
-              aria-activedescendant={options.length > 0 ? optionId(id, activeIndex) : undefined}
+              aria-activedescendant={page.length > 0 ? optionId(id, activeIndex) : undefined}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -415,18 +495,14 @@ export function SetCombobox({
               aria-multiselectable="true"
               className="max-h-64 overflow-auto"
             >
-              {options.length === 0 && (
+              {page.length === 0 && (
                 // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
                 // options are allowed. `presentation` makes it the sentence it looks like.
                 <li role="presentation" className="px-2 py-3 text-center text-xs text-dim">
-                  {sets.isPending
-                    ? "Loading sets…"
-                    : sets.isError
-                      ? "Could not read the set list — try Refresh data."
-                      : "No sets match that."}
+                  {emptyLine}
                 </li>
               )}
-              {options.map((s, i) => (
+              {page.map((s, i) => (
                 <Option
                   key={s.code}
                   id={optionId(id, i)}
@@ -450,7 +526,7 @@ export function SetCombobox({
                     reachable but it is not the intended path, and the button below is the
                     escape for the search that cannot be narrowed rather than the fast way. */}
                 <p>
-                  Showing {options.length} of {matches.length} — keep typing to narrow it down.
+                  Showing {page.length} of {matches.length} — keep typing to narrow it down.
                 </p>
                 <button
                   type="button"
