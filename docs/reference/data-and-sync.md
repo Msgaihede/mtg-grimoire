@@ -71,6 +71,58 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   used to cost +36 ms now costs +390 ms. The earlier claim that this was a "fraction more"
   survived one rewrite of this bullet on nothing but plausibility; it was false when written.
 
+- **Two keys joined that list on 2026-08-20 — `manaValue`, which orders by `c.cmc`, and
+  `released`, which orders by `c.released_at`.** Both are reachable only from the search filter
+  bar's sort picker: there is no column to press, the same way the collection's `added` has
+  none. Collapsed, both are answered **in the group step** rather than after the join, which is
+  why neither is in `REPRESENTATIVE_SORTS` — and both halves of that were checked exhaustively
+  against the corpus rather than argued. `min(c.cmc)` is that group's one mana value, exactly:
+  mana value is a fact about the _oracle_ card and the group key is
+  `coalesce(c.oracle_id, c.id)`, so every printing in a group should agree — and
+  **0 of 31 894 groups disagree**. And
+  `max(c.released_at)` _is_ the representative printing's own date rather than an aggregate
+  standing in for it, because `collapse_rep` picks the representative by `released_at` DESC
+  before it reaches price or `id` — **0 of 31 894 groups** have the two differ. Both counts are
+  of the corpus named in the next bullet, on the day it was read: strong evidence for a claim
+  about the SQL's structure, not a proof of it.
+- **Both new orders land in the _cheap_ class, and the four known ones were re-measured in the
+  same process to place them.** Measured 2026-08-20 through read-only `node:sqlite`
+  (Node v24.16.0) against the **debug** database at `src-tauri/target/debug/data/mtg.db`,
+  Windows, over **98 323 paper printings legal somewhere / 31 894 collapse groups**
+  (`is_paper = 1 AND legal_mask != 0` — the default browse). Prepared statement, two warm-ups,
+  median of nine, first page of 50 at offset 0.
+
+  | order                            | collapsed    | uncollapsed | path       |
+  | -------------------------------- | ------------ | ----------- | ---------- |
+  | `name` (control, index-covered)  | 105.0 ms     | 1.8 ms      | group step |
+  | `price` (control, index-covered) | 96.8 ms      | 20.7 ms     | group step |
+  | `set` (control, uncovered)       | 578.6 ms     | 748.3 ms    | after join |
+  | `rarity` (control, uncovered)    | 797.3 ms     | 767.7 ms    | after join |
+  | **`manaValue`**                  | **147.2 ms** | **28.7 ms** | group step |
+  | **`released`**                   | **152.2 ms** | **29.8 ms** | group step |
+
+  Collapsed, the two new orders are **~1.4–1.5×** the `name` control, against **~5.5–7.6×**
+  for the pair that runs after the join: pressing `Mana value` or `Released` costs tens of
+  milliseconds where a `set` or `rarity` press costs hundreds. Uncollapsed they are ~29 ms
+  against the control's 1.8 ms — both columns ride in `idx_cards_collapse` but **neither leads
+  it**, so neither order can be read off an index and each is a sort pass — and still ~25×
+  under the uncovered pair. So it is the **group step** that puts them in the cheap class, not
+  the "is the sort's column in the index" split above — the two rules agree on these two keys
+  only because both columns happen to be in the index as well.
+
+  **These figures do not belong in the table above and must not be compared to its numbers row
+  by row.** The SQL was rebuilt from `search.rs` by hand — the same `collapse_rep`, the same
+  group step, both correlated status subqueries — but it is **not** `run_search`: a different
+  SQLite build, no IPC hop, no DTO serialisation, a debug database, and a different corpus day
+  from the 2026-08-11 release session above. They were also taken on the **pre-fix** statement
+  shape, the join still re-sorting every page by name — the defect the collapsed-sort bullet
+  further down records — and whether restating the sort there moves them is unmeasured. The
+  controls are the whole reason this session answers anything: it was taken to place two
+  orders in a class, and it does that _internally_, against its own
+  `name`/`price`/`set`/`rarity` numbers and nothing else. **The rows in the table above are
+  still owed**, end to end through `invoke` on a release build, the way every row in it was
+  earned.
+
 - **"A text filter makes every sort cheap" is only true of a _narrow_ term**, and the old
   12–15 ms figure named none. Measured the same way, collapsed, over three breadths:
   `bolt` (45 matches) **4.4–4.5 ms** and the three orders indistinguishable; `dragon` (722)
@@ -213,12 +265,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
   unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
 - Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
-  gives up its `LIMIT` and the sort runs after the join; name and price are answered by the
-  grouping itself. The mechanism stands; **its numbers are superseded and must not be quoted**
-  — the 670 ms unfiltered figure by the end-to-end table above (collapsed `set` 524.2 ms,
-  `rarity` 489.7 ms), and "88 ms with any text" by the breadth bullet above, which is the
-  finding that a text filter's help scales with how far it narrowed (4.4 ms on `bolt`, 69–78 ms
-  on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is not "any text".
+  gives up its `LIMIT` and the sort runs after the join; name, price and — since 2026-08-20 —
+  `manaValue` and `released` are answered inside the grouping. **But the grouping answers only
+  _which_ groups reach the page, never the order they arrive in** — the outer join carries its
+  own `ORDER BY`, and unless that restates the sort the page comes back in name order. It did
+  not restate it until 2026-08-20, and the older wording here ("name and price are answered by
+  the grouping itself") read as though it did: **right rows, wrong order**, on every collapsed
+  search the group step answered but name-ascending. Reproduced against the live database
+  2026-08-20 — price DESC returned the ten dearest groups listed alphabetically, and name DESC
+  the Z-end of the corpus presented ascending. The mechanism stands; **its numbers are
+  superseded and must not be quoted** — the 670 ms unfiltered figure by the end-to-end table
+  above (collapsed `set` 524.2 ms, `rarity` 489.7 ms), and "88 ms with any text" by the
+  breadth bullet above, which is the finding that a text filter's help scales with how far it
+  narrowed (4.4 ms on `bolt`, 69–78 ms on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is
+  not "any text".
 - **Art series outrank the card they depict, and collapse does not fix it.**
   `Lightning Bolt // Lightning Bolt` (`astx 76s`, `layout='art_series'`) held the phrase twice
   in its name field and bm25 rewarded it; art series carry their own `oracle_id`, so grouping
