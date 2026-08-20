@@ -5,6 +5,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`
   rows and files stay 1:1, and the row's `source_uri` — Scryfall's `?<epoch>` cache-buster
   — is the only invalidation signal. Deleting `data/images` is always safe.
+- **Settings can delete it, and `reset::cache_clear` is the one command that does** (added
+  2026-08-20). It drops every `image_cache` row, sweeps `data/images/` and `data/tmp/` file by
+  file, and then drains `Cache::pending` — in that order, and the order is the part worth
+  keeping. A row that outlives its file is already a supported state (`Cache::get` reads
+  `cached` from the row, fails the file read, and treats it as a miss), so the window between
+  the first two steps only costs a re-fetch. `pending` goes **last** because it holds rows
+  *owed* for bytes already on disk: drain it first and a fetch landing mid-walk re-queues, and
+  the next served image writes a row for a file that is gone — a permanent re-fetch of that key,
+  the exact leak `flush_records` exists to close.
+  It **refuses outright while a sync is running**: `data/tmp/` is where the corpus download puts
+  77 MB the ingest then reads back, and a sweep landing between the write and the read fails a
+  90-second job the reader is watching a progress bar for. It never touches `data/covers/` —
+  those are pictures the reader *chose* — and no table but `image_cache`.
+  Measured on this machine 2026-08-20: **5,540 files, 329,682,302 bytes** in `data/images/`.
 - A `grid` image averages **59.6 KB**. 600 browsed cards cost ~36 MB, so all 116 k
   printings at `grid` would be ~7 GB — which is why Plan 3's pre-warm is scoped to what
   the user owns rather than to the database.

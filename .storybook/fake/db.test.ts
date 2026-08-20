@@ -2970,10 +2970,17 @@ describe("the busy fault", () => {
     // `Set as foil` then added `deck_set_card_finish`, 40 → 41. Another card write: it moves
     // copies between two rows of one printing and takes the write lock like every other.
     //
+    // Settings' four clears then took it 41 → 45 in one branch, which is the largest single
+    // move this number has had. All four are ordinary writes on `AppState.db` and refusable for
+    // the usual reason. `cache_clear` is the one worth a sentence: it carries a **second**
+    // refusal of its own — a sync in flight, checked before the connection is ever asked for,
+    // which is the `syncing` fault rather than this one — and it still belongs in this loop,
+    // because a reader who is merely mid-*write* gets BUSY here exactly like everything else.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(41);
+    expect(names).toHaveLength(45);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -3961,5 +3968,107 @@ describe("categories, tags, folders, history and the plan", () => {
     // panel about it.
     expect(r.deck_get({ id: 4, variant: "live" })).not.toBeNull();
     expect(r.deck_list()).toHaveLength(4);
+  });
+});
+
+/**
+ * The four Settings can throw away.
+ *
+ * Every one of them is a **table**, not a row, so there is no id to get wrong and nothing to
+ * assert about arguments — what these pin is which tables each takes and, more to the point,
+ * which it leaves standing. That second half is what a story about a wipe is actually showing,
+ * and it is where a fake that "just empties everything" would stop being a fake of this crate.
+ */
+describe("the four clears", () => {
+  /** `starter` owns cards, wishes cards, and holds decks in folders — all three at once. */
+  const world = () => seed("starter");
+
+  it("empties the collection and leaves the decks and wishes standing", () => {
+    const db = world();
+    const wishes = db.wishlistEntries.length;
+    const decks = db.decks.length;
+
+    const out = writeHandlers(db).collection_clear();
+
+    expect(out.entries).toBeGreaterThan(0);
+    expect(db.collectionEntries).toHaveLength(0);
+    expect(db.wishlistEntries).toHaveLength(wishes);
+    expect(db.decks).toHaveLength(decks);
+  });
+
+  /**
+   * The number the panel's sentence is about, and the one this fake has to *derive*: there is
+   * no allocations table here (simplification 2), so a claim is a live deck row for a card the
+   * reader owned. Pinned as "more than none" rather than as a figure — the figure is a property
+   * of the seed, and `seeds.ts` is where that is stated.
+   */
+  it("reports the deck reservations the collection took with it", () => {
+    const db = world();
+
+    expect(writeHandlers(db).collection_clear().allocations).toBeGreaterThan(0);
+  });
+
+  it("empties the wishlist and touches nothing else", () => {
+    const db = world();
+    const entries = db.collectionEntries.length;
+
+    expect(writeHandlers(db).wishlist_clear()).toBeGreaterThan(0);
+    expect(db.wishlistEntries).toHaveLength(0);
+    expect(db.collectionEntries).toHaveLength(entries);
+  });
+
+  /**
+   * The folders are the half a reader does not predict, and the half worth a test: `decks.
+   * folder_id` is `ON DELETE SET NULL`, so the crate clears them in a **second** statement and
+   * a fake that stopped at the cascade would draw an empty tree still standing in the gallery.
+   */
+  it("empties the decks, everything hanging off them, and the folders", () => {
+    const db = world();
+    const entries = db.collectionEntries.length;
+
+    const out = writeHandlers(db).decks_clear();
+
+    expect(out.decks).toBeGreaterThan(0);
+    expect(out.folders).toBeGreaterThan(0);
+    expect(db.decks).toHaveLength(0);
+    expect(db.deckFolders).toHaveLength(0);
+    expect(db.deckCards).toHaveLength(0);
+    expect(db.deckCategories).toHaveLength(0);
+    expect(db.deckTags).toHaveLength(0);
+    expect(db.deckAudit).toHaveLength(0);
+    // A deck is not the collection's owner. The reader still owns every card.
+    expect(db.collectionEntries).toHaveLength(entries);
+  });
+
+  it("reports what the cache freed, and answers zero the second time", () => {
+    const db = world();
+
+    const first = writeHandlers(db).cache_clear();
+    expect(first.files).toBeGreaterThan(0);
+    expect(first.bytes).toBeGreaterThan(0);
+    expect(first.failed).toBe(0);
+
+    expect(writeHandlers(db).cache_clear()).toMatchObject({ files: 0, bytes: 0, rows: 0 });
+  });
+
+  /**
+   * The one refusal `cache_clear` has, and it is **not** `busy`: the crate checks it before the
+   * write connection is ever asked for, because `data/tmp/` is where the corpus download puts
+   * 77 MB that the ingest then reads back.
+   */
+  it("refuses the cache sweep while a card update is running", () => {
+    const db = { ...world(), fault: "syncing" as const };
+
+    expect(() => writeHandlers(db).cache_clear()).toThrow(/card update is running/);
+    expect(db.imageCache.files).toBeGreaterThan(0);
+  });
+
+  /** And that fault reaches nothing else — it is one command's, deliberately. */
+  it("leaves every other clear alone under the syncing fault", () => {
+    const db = { ...world(), fault: "syncing" as const };
+
+    expect(() => writeHandlers(db).collection_clear()).not.toThrow();
+    expect(() => writeHandlers(db).wishlist_clear()).not.toThrow();
+    expect(() => writeHandlers(db).decks_clear()).not.toThrow();
   });
 });
