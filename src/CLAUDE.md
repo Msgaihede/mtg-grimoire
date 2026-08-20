@@ -409,6 +409,42 @@ Every one of these has its measurement and its story in
   `MIN_PANEL_WIDTH_PX` plus the gap) and every pixel the sidebar takes is a pixel off that.
   Widening the sidebar is a change to `DECK_FLOOR`'s arithmetic first. Both, with every figure:
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **The window's caption is the app's, not Windows'** — `tauri.conf.json` sets
+  `decorations: false` and `components/TitleBar.tsx` draws a 34px row above the sidebar and the
+  ribbon (2026-08-20). Four rules it does not share with the rest of the chrome, each because the
+  window's edge is not the page's: **the caption buttons are square and flush** (a radius or a
+  margin puts window between the button and the corner, and a corner button's whole value is that
+  a throw of the mouse cannot overshoot it), **they do not take `PRESS`** (a target that shrinks
+  away at the moment of the press reads as a misclick, and at the screen's edge there is nowhere
+  to correct to), their focus ring is **`ring-inset`** (an outset ring on a flush element is drawn
+  outside the window), and the wordmark is the one **Cinzel below 18px** in the app — 13px with
+  `tracking-[0.2em]`, which the display face's own floor forbids and a 34px row cannot honour. It
+  is paid for by being a *wordmark* rather than interface text. **`Ribbon` gave up its `MTG` mark
+  to it**: that mark's comment justified the abbreviation on the grounds that "the window title
+  bar already says that in full", so the two would have been the name twice.
+- **`data-tauri-drag-region` does not inherit, so every element that should move the window
+  carries its own** — Tauri reads the attribute off the element under the pointer and nothing
+  else. A child without it is a hole in the grab area; an element *with* it that also handles a
+  click is a button that drags the window instead of pressing. The row and the wordmark have it,
+  the three buttons deliberately do not.
+- **The maximize button's hover is state, never `:hover`, and the reason is native.**
+  `tauri-plugin-snap-layout` parks a transparent Win32 child window over that button's rectangle
+  so Windows 11 can answer `HTMAXBUTTON` to its own `WM_NCHITTEST` and raise the Snap Layouts
+  flyout — which means the pointer is over a native child and never over the webview. Its CSS
+  `:hover` cannot fire, and its `onClick` never runs either (the overlay sends `SC_MAXIMIZE`
+  itself). The plugin emits `tauri-snap://snap/mouseenter`/`mouseleave` instead, and
+  `src/lib/window.ts`'s `onSnapHover` subscribes to both as one thing — a caller that took only
+  `enter` would leave the button lit for the rest of the session. **The button's `id` is the whole
+  contract with Rust and fails silently at both ends**: a typo creates no overlay, raises no
+  error and logs nothing, so `SNAP_BUTTON_ID` is shared and `TitleBar.test.tsx` pins it. The
+  `onClick` still stands, because everywhere but Windows 11 the plugin is a documented no-op.
+- **Every window verb goes through `src/lib/window.ts`, for `lib/ipc.ts`'s reason.** One module
+  names them, so a story and a test have one thing to fake — and its four exports match the four
+  `core:window:allow-*` permissions in `capabilities/default.json` exactly, in both directions: a
+  fifth verb needs its permission, and a granted permission nothing here calls is a widening
+  nobody asked for. `TitleBar` importing `@tauri-apps/api/event` directly is what made every
+  existing `AppShell` and `App` test reach the real module and print **336** unhandled rejections
+  while still passing green, which is the shape of a mock boundary in the wrong place.
 - **The ribbon's status line is one permanently mounted `role="status"`** — a live region that
   first appears with its sentence already inside announces nothing — and the number inside it is
   `aria-hidden`.

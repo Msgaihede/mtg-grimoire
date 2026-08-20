@@ -485,9 +485,44 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   What keeps that honest is the CSP: `script-src 'self'`, no remote origin, and no
   `dangerouslySetInnerHTML` anywhere in `src/`, so no foreign script runs in the page to find
   it. Adding any one of those three back is what would make a dev-only config worth its cost.
+- **The window's four verbs are granted one by one, because `core:window:default` grants none of
+  them.** That default is the *getters* — `is-maximized`, the position and size reads, the monitor
+  queries — so `decorations: false` and `components/TitleBar.tsx` needed
+  **`core:window:allow-minimize`**, **`-toggle-maximize`**, **`-close`** and
+  **`-start-dragging`** naming themselves (2026-08-20). Worth pinning rather than trusting, and
+  `the_title_bar_gets_four_window_verbs_and_the_overlay_two` does: the family those four come from
+  also holds `allow-set-always-on-top`, `allow-set-fullscreen`, `allow-set-position` and thirty
+  more, and a window acquires an ACL nobody decided on one `allow-*` at a time. The frontend's
+  half is `src/lib/window.ts`, which exports one function per permission and says so.
+- **`tauri-plugin-snap-layout` gets its two commands and not its `:default`, even though today
+  they are the same set.** The plugin is the whole of what an undecorated window needs to keep
+  Windows 11's Snap Layouts: it creates a transparent Win32 child over the maximize button's rect
+  and answers `HTMAXBUTTON` to `WM_NCHITTEST`, which is a question the OS asks its own frame and
+  never asks a `<button>` in a webview. `allow-update-snap-bounds` and `allow-detach-snap-bounds`
+  are named because naming them records that both were looked at — a plugin's default is a promise
+  about *its* future, not about this app's. **It draws nothing**, which is why it was chosen over
+  `tauri-plugin-decoration`: that one renders its own HTML controls (replacing ours) and wants a
+  CSP loosened for its stylesheet. **This one needs no CSP change at all** — it injects through
+  `js_init_script`, which the webview runs before the page and the page's CSP therefore does not
+  govern. It is also a **plain dependency rather than a `cfg(windows)` one**, for the reason the
+  mcp-bridge paragraph gives: `tauri-build` discovers a plugin's ACL through the dependency graph,
+  so target-gating it would leave those two entries unresolvable on the Linux half of the CI
+  matrix. The crate compiles to a dummy everywhere but Windows, and is a documented no-op on
+  Windows 10.
+- **The button id is the contract, and it is silent at both ends.**
+  `snap_layout::init().button_id("snap-maximize-button")` in `lib.rs` must equal `SNAP_BUTTON_ID`
+  in `src/lib/window.ts`. A mismatch creates no overlay, raises no error and logs nothing: the
+  button keeps working and Snap Layouts simply never appear, which is a regression neither a test
+  nor a launch can catch. `TitleBar.test.tsx` pins the frontend half.
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
-  load-bearing; re-enabling it kills all in-app drag-and-drop on Windows.
+  load-bearing; re-enabling it kills all in-app drag-and-drop on Windows. **So are the window's
+  other two flags**: `"decorations": false` is what makes `TitleBar` the only way to move,
+  maximize or close the app — turning it back on draws two title bars, turning it off without
+  that component leaves a window the reader cannot put down — and `"shadow": true` is easy to
+  lose because nothing breaks without it, the window simply rendering with square corners and no
+  drop shadow, flat against the desktop with no border of its own on a dark wallpaper. Both are
+  pinned by `the_main_window_is_undecorated_and_keeps_its_shadow`.
 - **The window's opening size is decided in Rust, not by the config** (`window.rs`, first call in
   `setup`). The config's 1920×1080 is the top rung and the fallback; `open_sized_to_monitor` takes
   the largest of 1920×1080 and 1280×720 that the monitor's **work area** holds, then centres and
@@ -497,7 +532,11 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   that shows it**, so it runs before anything in `setup` that can fail — an early `?` above it
   would leave a running app with no window, which is exactly what the single-instance guard
   looks like. Nothing is remembered between launches: no window-state plugin is registered, so
-  a size the reader chose is theirs until they close it.
+  a size the reader chose is theirs until they close it. **`decorations: false` does not change
+  that arithmetic**: `open_sized_to_monitor` sizes the *window*, and an undecorated window's
+  outer rect is 16px wider and 9px taller than its client area for the invisible grab margin —
+  which is inside the work-area check either way, since both rungs are chosen against the work
+  area rather than against the screen.
 
 ## Further reading
 
