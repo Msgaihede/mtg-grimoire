@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { ToggleChip } from "@/components/FilterChips";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { DeckAuditEntry } from "@/lib/ipc";
@@ -116,7 +117,7 @@ const TIME = new Intl.DateTimeFormat("en-US", {
 /** "August 6" — the month and day, for the filter bar's "since" and a day heading that reads
  *  "Today". Same locale as `auditText`'s own day labels, so the two never disagree. */
 const DAY = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" });
-/** The whole stamp, on a row's `title`, for the reader who wants the date a time belongs to. */
+/** The whole stamp, on a row's tooltip, for the reader who wants the date a time belongs to. */
 const STAMP = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" });
 
 const at = (entry: DeckAuditEntry) => new Date(entry.at * 1000);
@@ -468,6 +469,7 @@ function Delta({ gained, lost }: { gained: number; lost: number }) {
  * reach is a true short sentence rather than a hole.
  */
 function Row({ entry, others }: { entry: DeckAuditEntry; others: readonly DeckAuditEntry[] }) {
+  const tip = useTooltip();
   const band = bandOf(auditBand(entry));
   const { text, detail } = auditSentence(entry, others);
   const when = at(entry);
@@ -490,7 +492,7 @@ function Row({ entry, others }: { entry: DeckAuditEntry; others: readonly DeckAu
       </div>
       <time
         dateTime={when.toISOString()}
-        title={STAMP.format(when)}
+        {...tip(STAMP.format(when))}
         className="flex-shrink-0 font-mono text-[0.7rem] leading-5 text-dim"
       >
         {TIME.format(when)}

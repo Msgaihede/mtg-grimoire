@@ -1,7 +1,8 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import { TooltipProvider, TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import {
   DEFAULT_SECTION_ZOOMS,
   DEFAULT_ZOOM,
@@ -303,16 +304,21 @@ const COMMAND_DECK: DeckCard[] = [
 ];
 
 describe.each(VIEWS)("$name", ({ render: renderView }) => {
+  // `TooltipProvider` wraps every render here rather than only the cases that hover something:
+  // `useTooltip` answers a no-op with none above it (the same trade `useContextMenu` makes), so a
+  // bare render would pass the group-price and rule-marker assertions below by never being asked.
   const setup = (over: Partial<ViewProps> = {}) => {
     const onSelect = vi.fn();
     render(
-      renderView({
-        groups: GROUPS,
-        marketplace: TCG,
-        violations: VIOLATIONS,
-        onSelect,
-        ...over,
-      }),
+      <TooltipProvider>
+        {renderView({
+          groups: GROUPS,
+          marketplace: TCG,
+          violations: VIOLATIONS,
+          onSelect,
+          ...over,
+        })}
+      </TooltipProvider>,
     );
     return onSelect;
   };
@@ -336,9 +342,15 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
   });
 
   /** A price is never shown without saying when it was true, and whose it is. */
-  it("says when its prices were true", () => {
+  it("says when its prices were true", async () => {
     setup();
-    expect(screen.getAllByTitle(pricesAsOf(MARKETPLACES.tcgplayer)).length).toBeGreaterThan(0);
+    fireEvent.pointerEnter(screen.getByText("$4.97"));
+    const tooltip = await screen.findByRole(
+      "tooltip",
+      {},
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    expect(tooltip).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
   });
 
   /**
@@ -354,30 +366,44 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
    * column, and `$4.97` (what the TCGplayer rows would have summed to) is asserted absent
    * because a view that ignored its `marketplace` prop would print exactly that.
    */
-  it("quotes the selected marketplace, and the previous one disappears", () => {
+  it("quotes the selected marketplace, and the previous one disappears", async () => {
     const priced: DeckCard[] = [
       card({ name: "Sol Ring", quantity: 2, unitPrice: 1 }),
       card({ name: "Arcane Signet", unitPrice: 0.5 }),
     ];
     render(
-      renderView({
-        groups: buildGroups(priced, [RAMP], "category", "alphabetical"),
-        marketplace: MARKETPLACES.cardmarket,
-      }),
+      <TooltipProvider>
+        {renderView({
+          groups: buildGroups(priced, [RAMP], "category", "alphabetical"),
+          marketplace: MARKETPLACES.cardmarket,
+        })}
+      </TooltipProvider>,
     );
 
     expect(screen.getByText("€2.50")).toBeInTheDocument();
     expect(screen.queryByText("$4.97")).not.toBeInTheDocument();
-    expect(screen.getAllByTitle(pricesAsOf(MARKETPLACES.cardmarket)).length).toBeGreaterThan(0);
+    fireEvent.pointerEnter(screen.getByText("€2.50"));
+    const tooltip = await screen.findByRole(
+      "tooltip",
+      {},
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    expect(tooltip).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
   });
 
-  it("marks the piles the rules read and the piles that count toward nothing", () => {
+  it("marks the piles the rules read and the piles that count toward nothing", async () => {
     setup();
 
     // The Commander pile has a rules role; a category the reader made does not.
     expect(screen.getAllByText("RULE")).toHaveLength(1);
     expect(screen.getAllByText("INACTIVE")).toHaveLength(1);
-    expect(screen.getByText("INACTIVE").getAttribute("title")).toContain("counts toward");
+    fireEvent.pointerEnter(screen.getByText("INACTIVE"));
+    const tooltip = await screen.findByRole(
+      "tooltip",
+      {},
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    expect(tooltip.textContent).toContain("counts toward");
   });
 
   /**
@@ -2598,7 +2624,9 @@ describe("TableView", () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     render(
-      <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={onSelect} />,
+      <TooltipProvider>
+        <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={onSelect} />
+      </TooltipProvider>,
     );
 
     await user.click(screen.getByText("Arcane Signet"));
@@ -2606,7 +2634,16 @@ describe("TableView", () => {
     expect(onSelect.mock.calls[0][0].name).toBe("Arcane Signet");
 
     expect(screen.getByText("Rule break: Sol Ring is banned here.")).toBeInTheDocument();
-    expect(screen.getByTitle("Sol Ring is banned here.")).toBeInTheDocument();
+    // `describes: false` — the sr-only text just asserted above already puts the sentence in
+    // the accessible tree, so this span's tooltip carries no `role="tooltip"`; found by
+    // `TOOLTIP_PANEL_ID` instead, the one stable id the provider ever draws.
+    fireEvent.pointerEnter(screen.getByText("Sol Ring").closest(".border-l-2") as HTMLElement);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sol Ring is banned here.",
+    );
     expect(screen.getByTitle("Game changer")).toBeInTheDocument();
   });
 
