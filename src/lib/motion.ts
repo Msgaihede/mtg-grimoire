@@ -152,9 +152,9 @@ export const scrim: EnterExit = {
 };
 
 /**
- * A centred surface drawn over the view: `DeckDialog` (and through it the deck editor's
+ * A centred surface drawn over the view: `Dialog` (and through it the deck editor's
  * categories, tags, history and settings), `CreateDeckDialog`, `TheoryDiffDialog`,
- * `ImportDeckDialog`, and `CardDetailPane`, which is docked but arrives by scaling from its own
+ * `ImportDialog`, and `CardDetailPane`, which is docked but arrives by scaling from its own
  * right edge.
  *
  * **There is no drawer preset, and its absence is a decision** (2026-08-14). `drawerRight` slid a

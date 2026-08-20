@@ -5,7 +5,7 @@ import { ipc, ipcError, type DeckInput, type DeckRow } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY } from "./autoCategory";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
 import { useDeckFolders } from "./useDeckFolders";
@@ -122,7 +122,7 @@ export interface CreateDeckDialogProps {
    */
   defaultFolderId?: number | null;
   /**
-   * **A mount, not a class**, and it is {@link DeckDialog}'s guarantee rather than this file's:
+   * **A mount, not a class**, and it is {@link Dialog}'s guarantee rather than this file's:
    * everything with state — the half-typed name, the picked format, the chosen cover, the caret
    * — lives in {@link CreateDeckBody}, which the shell renders only while this is true. Closing
    * unmounts all of it and reopening starts a genuinely new question rather than one somebody
@@ -134,7 +134,7 @@ export interface CreateDeckDialogProps {
   onCreated: (deck: DeckRow) => void;
   /**
    * Escape, the header's ✕ and the trigger pressed again: close, and hand the caret back to
-   * whatever opened this. Handed straight to {@link DeckDialog}, which owns both rungs.
+   * whatever opened this. Handed straight to {@link Dialog}, which owns both rungs.
    *
    * **Stability is a courtesy here now, not a requirement.** This said "`useDismissOnEscape`
    * takes it as a dependency, so a function rebuilt on every render of the opener re-registers
@@ -174,7 +174,7 @@ export interface CreateDeckDialogProps {
  * so Tab cannot walk out into a gallery the reader is not looking at; and the surface is
  * `fixed` rather than `absolute`, so it cannot hang off the right of the window.
  *
- * **The chrome is {@link DeckDialog}'s and no longer this file's** (2026-08-16). The scrim, the
+ * **The chrome is {@link Dialog}'s and no longer this file's** (2026-08-16). The scrim, the
  * `LAYER.overlay` rung, `aria-modal`, `trapTab`, the Escape registration on the *flag* and the
  * titled header with its ✕ were a hand-copy of that shell, and a copy is a second decision that
  * happens to agree today: this file's scrim and the shell's were already byte-identical, while
@@ -209,7 +209,7 @@ export function CreateDeckDialog({
   // draft, no folder read and no format read — `DeckSettingsDialog`'s arrangement, for
   // `DeckSettingsDialog`'s reason.
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="New deck"
       closeLabel="Close"
@@ -223,13 +223,13 @@ export function CreateDeckDialog({
         defaultFolderId={defaultFolderId}
         onCreated={onCreated}
       />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
 /**
  * The question the dialog asks — mounted only while it is open, which is
- * {@link DeckDialog}'s guarantee and what makes every draft below a session rather than
+ * {@link Dialog}'s guarantee and what makes every draft below a session rather than
  * something an effect has to clear.
  *
  * It is the shell's `children`, so it renders inside the same `AnimatePresence` child the panel
@@ -292,7 +292,7 @@ function CreateDeckBody({
    * **A lazy initializer, and mount-only by construction.** There is no effect anywhere here
    * that could land on top of a format the reader has already picked — the question is asked
    * once, when the body mounts, and the answer is theirs from that moment. That is safe
-   * *because* {@link DeckDialog} renders this only while it is open: closing unmounts the
+   * *because* {@link Dialog} renders this only while it is open: closing unmounts the
    * whole draft, so every reopen asks again and gets the freshly invalidated answer rather than
    * a value cached from the last deck the reader started and abandoned.
    */
@@ -499,7 +499,7 @@ function CreateDeckBody({
 
   return (
     // The shell's header sits above these two, and the panel around them is the `flex flex-col`
-    // that makes the scroller work — see {@link DeckDialog}.
+    // that makes the scroller work — see {@link Dialog}.
     <>
       {/* Not a `<form>`, and that is a decision rather than an omission — but Enter still
           makes the deck. Implicit submission fires from *any* single-line input in a form,

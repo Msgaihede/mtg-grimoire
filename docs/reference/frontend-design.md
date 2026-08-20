@@ -856,7 +856,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
   `CategoriesDialog` and `TagsDialog` — two sections of one drawer that each cost a press and a
   scroll are two dialogs one press apart, each sized for what it draws. All of them and
-  `DeckSettingsDialog` are now built on **one shell, `src/features/decks/DeckDialog.tsx`**, so
+  `DeckSettingsDialog` are now built on **one shell, `src/components/Dialog.tsx`**, so
   "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
   `scrim` preset, `aria-modal`, `trapTab`, the `"inner"` Escape rung registered on the open flag
   (the panel outlives that flag by the length of its fade), and **nothing mounted while closed**,
@@ -1740,7 +1740,7 @@ the 580 MB dev database).** Every figure below is a reading from that window.
 `activeView`, `selectedCardId`, `paneDeckContext`, `openDeckId` and `returnToDeckId` in one `set`,
 so a reader on the Collection lost their place and a reader in the deck editor lost the deck.
 Inside the editor the row went to the 384px card pane instead, which is the right content at the
-wrong width. Both are one `AllPrintingsDialog` now, on the `DeckDialog` shell.
+wrong width. Both are one `AllPrintingsDialog` now, on the `Dialog` shell.
 
 - **It opens over the view and moves nothing.** From a Search tile: `activeView` stayed `search`,
   `openDeckId` and `selectedCardId` stayed `null`, and the search box still read `lightning bolt`
@@ -1891,7 +1891,7 @@ would have parted company with them the first time either moved.
 
 ### One thing this pass did not fix
 
-Escape out of the modal drops the caret to `<body>`. That is `DeckDialog`'s behaviour for **every**
+Escape out of the modal drops the caret to `<body>`. That is `Dialog`'s behaviour for **every**
 dialog on the shell rather than anything this work introduced — the shell focuses its panel on
 mount and restores nothing on close — so it is recorded here and left alone. It is more visible now
 than it was: a reader who walks the deck from inside the modal and then closes it has to Tab back

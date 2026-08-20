@@ -142,7 +142,7 @@ const meta = {
           "list or a number on this page**: this paragraph carried both, and both had stopped " +
           "being true by the next thing that landed, with nothing going red — which is exactly " +
           "what a prose-only edit costs.\n\n" +
-          "**The shell is `DeckDialog`** (2026-08-14), and the exception list is the thing worth " +
+          "**The shell is `Dialog`** (2026-08-14), and the exception list is the thing worth " +
           "carrying rather than the count: the scrim, the centring, `aria-modal`, the tab trap, " +
           "the ✕ and the Escape rung are written once and every host passes a title, a close " +
           "label and a width, so Categories, Tags, History, Deck settings, the export dialog, " +

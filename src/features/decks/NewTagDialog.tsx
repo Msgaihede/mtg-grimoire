@@ -29,7 +29,7 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { META_FIELD, META_SUBMIT } from "./metaRows";
 import { TagColorPanel } from "./TagColorPicker";
 import { DEFAULT_TAG_COLOR } from "./tagColors";
@@ -63,7 +63,7 @@ export function NewTagDialog({
   onClose,
 }: NewTagDialogProps): JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="New tag"
       subtitle={cardName === null ? undefined : `Made in this deck and put on “${cardName}”.`}
@@ -73,12 +73,12 @@ export function NewTagDialog({
       onClose={onClose}
     >
       <NewTagBody pending={pending} onCreate={onCreate} onCancel={onDismiss} />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
 /**
- * Separate for {@link DeckDialog}'s reason — a closed dialog mounts no body — and here that also
+ * Separate for {@link Dialog}'s reason — a closed dialog mounts no body — and here that also
  * makes the state free: the name and the colour are this component's, so every open starts on an
  * empty field and the default colour without anything having to reset them.
  */
@@ -95,7 +95,7 @@ function NewTagBody({
   const [color, setColor] = useState(DEFAULT_TAG_COLOR.hex);
   const ref = useRef<HTMLInputElement>(null);
 
-  // **The caret starts in the field**, which is the exception `DeckDialog`'s own focus effect
+  // **The caret starts in the field**, which is the exception `Dialog`'s own focus effect
   // documents and defers to: this is a single empty box asking one question rather than a panel
   // of settled values, so the reader's first keystroke being the name is right rather than an
   // accidental edit. Child effects run before a parent's, so this one wins by ordering.

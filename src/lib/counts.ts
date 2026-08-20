@@ -28,7 +28,7 @@ export function count(n: number): string {
  *
  * The app must never print "1 cards". The irregular plural is **passed rather than derived** —
  * teaching this English is a much larger promise than the four sentences that need it, and the
- * one caller that tried to route around a missing `many` (`ImportDeckDialog`'s `categoryCount`,
+ * one caller that tried to route around a missing `many` (`ImportDialog`'s `categoryCount`,
  * deleted 2026-08-16) was solving a problem the default argument had already solved.
  *
  * The number is written plainly rather than through {@link count}: every caller counts cards,

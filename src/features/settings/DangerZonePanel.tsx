@@ -93,7 +93,7 @@ const ROWS: readonly Row[] = [
 export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element {
   const [asking, setAsking] = useState<Asking>(null);
   // **The row outlives the flag by the length of the dialog's fade**, which is why it is held
-  // beside `asking` rather than looked up from it. `DeckDialog` animates out over ~200 ms, and a
+  // beside `asking` rather than looked up from it. `Dialog` animates out over ~200 ms, and a
   // heading derived from `asking` would blank to an empty string on the render that starts the
   // exit — a dialog visibly losing its own title as it closes. `DecksPage` holds its
   // `settingsDeckId` beside its panel flag for exactly this, and says so there. Never cleared:

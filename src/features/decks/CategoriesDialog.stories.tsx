@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { CategoriesDialog } from "./CategoriesDialog";
 
-/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+/** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
  *  and why the number is seconds; each file keeps its own copy because CSF would index an
  *  exported one as a story. */

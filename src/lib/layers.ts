@@ -107,7 +107,7 @@ export const LAYER = {
    * and there is none today.
    *
    * This read "categories drawer, history drawer" until 2026-08-14, when the editor's right-hand
-   * drawers became centred modals on one shell (`DeckDialog`) and the categories one split into
+   * drawers became centred modals on one shell (`Dialog`) and the categories one split into
    * two. That changed what is drawn on this rung and not which rung it is: a surface that covers
    * the window covers it whichever edge it arrived from, which is the whole reason a rung is
    * named for its *reach* rather than for its shape.

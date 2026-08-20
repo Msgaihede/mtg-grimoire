@@ -161,7 +161,7 @@ it says `tags: ["autodocs"]`.
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckDialog`, `DeckSettingsDialog`,
-  `CreateDeckDialog` and `import/ImportDeckDialog` — **four** files — carry the same parameter for
+  `CreateDeckDialog` and `import/ImportDialog` — **four** files — carry the same parameter for
   an unrelated reason: their scrim is `fixed inset-0`, so inline it would cover the docs page
   rather than its own block. **A third kind arrived 2026-08-14 with the zoom work**:
   `CardZoomIndicator` sets the parameter on **one story** rather than in its meta, because that
@@ -175,7 +175,7 @@ it says `tags: ["autodocs"]`.
   per-section-zoom branch, sweeping `inline: false` under `src/**/*.stories.tsx`: **eight** frame
   wholesale in a meta, four of them because they write `useAppStore` during render (`AppShell`,
   `CardDetailPane`, `CollectionPage`, `SearchPage`) and four because of the scrim (`DeckDialog`,
-  `DeckSettingsDialog`, `CreateDeckDialog`, `import/ImportDeckDialog`), and `CardZoomIndicator`
+  `DeckSettingsDialog`, `CreateDeckDialog`, `import/ImportDialog`), and `CardZoomIndicator`
   frames a single story. **`DeckDialog` was missing from this list** and is the correction that
   found the rot below: the shell arrived with the deck-dialog work, framed from the day it landed,
   and no prose-only edit routes to a CI job that would have said so.

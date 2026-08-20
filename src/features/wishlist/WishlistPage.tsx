@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -7,8 +7,13 @@ import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { ExportDialog } from "@/features/transfer/export/ExportDialog";
+import { scopeLabel, useExportScope } from "@/features/transfer/export/scope";
+import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
+import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { count } from "@/lib/counts";
 import { isFinish } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type WishlistPage as Page, type WishRow } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -77,6 +82,19 @@ export function WishlistPage() {
   const { query, rows, total, marketplace } = wishlist;
   const view = useAppStore((s) => s.wishlistView);
   const queryClient = useQueryClient();
+
+  /**
+   * The export dialog, and the sweep that fills it — `CollectionPage`'s twin, for the same
+   * reason: `ExportDialog` is mounted unconditionally below so its close can fade rather than
+   * vanish, so this hook runs every render and `enabled: exporting` is what stops it sweeping
+   * the whole wishlist on every filter keystroke nobody asked to export.
+   */
+  const [exporting, setExporting] = useState(false);
+  const exportScope = useExportScope("wishlist", wishlist.filters, exporting);
+
+  /** The import dialog. One destination, so no radio group is drawn — a choice between one
+   *  thing is not a choice. */
+  const [importing, setImporting] = useState(false);
 
   /**
    * Rewrite one wish wherever the wishlist is cached.
@@ -313,7 +331,35 @@ export function WishlistPage() {
         />
       </FigureRow>
 
-      <WishlistFilterBar wishlist={wishlist} />
+      <div className="flex flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <WishlistFilterBar wishlist={wishlist} />
+        </div>
+        {/* The first export entry point outside the deck editor (Task 11), `CollectionPage`'s
+            twin; Import beside it since Task 14, over `wishlistDestination`. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setImporting(true)}
+            className={cn(
+              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            Import
+          </button>
+          <button
+            type="button"
+            onClick={() => setExporting(true)}
+            className={cn(
+              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            Export
+          </button>
+        </div>
+      </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
         {/* One live region, mounted for the life of the view: a region that appears together
@@ -385,6 +431,35 @@ export function WishlistPage() {
             />
           ))}
       </div>
+
+      {/* Mounted unconditionally — `CollectionPage`'s reason: `Dialog` renders nothing while
+          closed, and staying in the tree is what lets its scrim fade out on close instead of
+          the whole thing vanishing the instant `exporting` flips back. */}
+      <ExportDialog
+        open={exporting}
+        subject="your wishlist"
+        surface="wishlist"
+        cards={exportScope.cards}
+        suggestedFileName="wishlist"
+        onDismiss={() => setExporting(false)}
+        onClose={() => setExporting(false)}
+        scope={{
+          label: scopeLabel(exportScope.total, exportScope.everything),
+          loading: exportScope.loading,
+          everything: exportScope.everything,
+          onEverything: exportScope.setEverything,
+        }}
+      />
+
+      {/* One destination — the wishlist itself — so no destination radios are drawn, and
+          `onDone`'s message is discarded, `CollectionPage`'s precedent. */}
+      <ImportDialog
+        destinations={[wishlistDestination]}
+        open={importing}
+        onDismiss={() => setImporting(false)}
+        onClose={() => setImporting(false)}
+        onDone={() => setImporting(false)}
+      />
     </section>
   );
 }

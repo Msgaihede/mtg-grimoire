@@ -8,7 +8,7 @@ import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload, type DropTarget } from "./dnd";
 import { META_FIELD, META_SUBMIT } from "./metaRows";
 
@@ -422,7 +422,7 @@ function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElem
  *
  * A modal rather than a field in the bar, because the bar is gone by the time this is needed —
  * the platform ends the drag on the drop, and a control that appeared where the pointer had just
- * been would be a control the reader is no longer looking at. It is a `DeckDialog` like every
+ * been would be a control the reader is no longer looking at. It is a `Dialog` like every
  * other surface this editor opens over itself.
  *
  * **Two writes, in order, and only the first is asked about here.** The category is created, then
@@ -453,7 +453,7 @@ export function QuickCategoryDialog({
   onClose: () => void;
 }): ReactElement {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="New category"
       closeLabel="Close new category"
@@ -467,11 +467,11 @@ export function QuickCategoryDialog({
         failure={failure}
         onCreate={onCreate}
       />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
-/** Mounted only while the dialog is open — `DeckDialog`'s guarantee — so the draft below starts
+/** Mounted only while the dialog is open — `Dialog`'s guarantee — so the draft below starts
  *  clean on every open with no effect clearing it. */
 function QuickCategoryBody({
   cardName,
@@ -487,7 +487,7 @@ function QuickCategoryBody({
   const [name, setName] = useState("");
   const fieldRef = useRef<HTMLInputElement>(null);
 
-  // **The one dialog in this editor that puts the caret in a field**, against `DeckDialog`'s own
+  // **The one dialog in this editor that puts the caret in a field**, against `Dialog`'s own
   // rule that its panels hold "settled values rather than questions" and must not make a reader's
   // first keystroke an edit. This one is a question and nothing else: it was opened by a gesture
   // that has already finished, it holds a single empty box, and the reader's next act is

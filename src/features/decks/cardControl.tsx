@@ -525,7 +525,7 @@ export function deckCardMenuProps(
  *
  * **The handlers go on the view's own group element and never on `GroupHeader`, and that is a
  * layer decision rather than a preference.** `CategoriesDialog` draws that same component in
- * every one of its rows, *inside* a `DeckDialog` — which is `LAYER.overlay`, 45, over a scrim.
+ * every one of its rows, *inside* a `Dialog` — which is `LAYER.overlay`, 45, over a scrim.
  * `ContextMenu` draws at `LAYER.popup`, 30. (Named rather than spelled as classes: Tailwind's
  * scanner reads a comment as eagerly as code, so a bare utility written here is a rule the build
  * emits — which is why `layers.test.ts` sweeps prose too, and why it went red for this comment.)

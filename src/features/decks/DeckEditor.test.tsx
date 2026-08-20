@@ -21,6 +21,7 @@ import {
   TOOLTIP_PANEL_ID,
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
+import { fromDeckCard } from "@/features/transfer/TransferCard";
 import { dragOnto, startDrag } from "@/test-drag";
 import {
   CARD_BODY_ATTR,
@@ -92,9 +93,9 @@ const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet".
-const deckImportResolve = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The editor warms the `art` its own views draw — the variant the deck builder renders, and
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
@@ -147,9 +148,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckRedoApply,
     deckTheoryDiff,
     deckFolderList,
-    deckImportResolve,
+    importResolve,
     deckImportCommit,
-    deckImportReadFile,
+    importReadFile,
     syncStatus,
   },
 }));
@@ -310,7 +311,7 @@ function found(name: string): CardSummary {
   };
 }
 
-/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+/** The one printing `import_resolve` answers with here — everything the plan does not
  *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
 const SOL_RING: ImportMatch = {
   cardId: "sol-ring",
@@ -583,11 +584,11 @@ beforeEach(() => {
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  deckImportResolve
+  importResolve
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
 });
@@ -2431,7 +2432,7 @@ describe("DeckEditor", () => {
    * The other way out of a layer, and the one no test covered: its own ✕.
    *
    * The ✕ is *inside* the layer that is about to unmount, so it is the reader saying "put me
-   * back" exactly as Escape is — `DeckDialog` calls `onDismiss`, and the editor's `dismiss`
+   * back" exactly as Escape is — `Dialog` calls `onDismiss`, and the editor's `dismiss`
    * focuses the trigger *before* the close, while the trigger is still mounted. Asserted here
    * rather than in each layer's own test file, because the hand-back is the **opener's** half
    * of the contract: a layer handed two callbacks can only be checked for calling the right one
@@ -2468,12 +2469,12 @@ describe("DeckEditor", () => {
    * ones still outside the sweep are the delete-category and clear-stack confirmations and the
    * quick zones' New category, all opened without a button to point it at.
    *
-   * **Every one of them is `DeckDialog` since 2026-08-16**, and this sweep is still driven per
+   * **Every one of them is `Dialog` since 2026-08-16**, and this sweep is still driven per
    * surface rather than pointed at the shell — deliberately. The claim is that *this overlay*,
    * opened by *that* button, traps the caret; a sweep aimed at the shell would prove the shell
    * and say nothing about a host that passed the wrong thing, and it was this sweep that held
    * the three hand-copies to the shell's behaviour for as long as they existed. It is what would
-   * go red if a modality fix reached `DeckDialog.tsx` and a host stopped using it.
+   * go red if a modality fix reached `Dialog.tsx` and a host stopped using it.
    *
    * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
    * claim about what is behind it: each layer's own test file mounts it alone, where there is
@@ -3523,14 +3524,15 @@ describe("exportSubject", () => {
    *
    * **Every row of the variant on screen and no filtering at all** — the switched-off piles
    * included, because what a format does with a maybeboard is the *format's* decision and
-   * `omittedCount` is what says so in the dialog. Identity rather than contents, since handing
-   * the deck's own array through untouched is the claim.
+   * `omittedCount` is what says so in the dialog. **Mapped rather than identical** since the
+   * cards it now hands `ExportDialog` are `TransferCard`s, built through `fromDeckCard` — the
+   * claim this pins is that every row survives the conversion, in order, none dropped.
    */
   it("answers the whole deck for a deck scope", () => {
     const exported = exportSubject({ kind: "deck" }, [REMOVAL], CARDS, "Burn");
 
     expect(exported.subject).toBe("Burn");
-    expect(exported.cards).toBe(CARDS);
+    expect(exported.cards).toEqual(CARDS.map(fromDeckCard));
     expect(exported.fileName).toBe("Burn");
   });
 
@@ -4224,7 +4226,7 @@ describe("DeckEditor — a card's menu", () => {
  * **A pile's right-click — the last surface on this branch, and the one with a layer hazard.**
  *
  * The handlers hang on the view's own group element and never on `GroupHeader`, because
- * `CategoriesDialog` draws that same component inside a `DeckDialog` on `LAYER.overlay` (z-45)
+ * `CategoriesDialog` draws that same component inside a `Dialog` on `LAYER.overlay` (z-45)
  * and `ContextMenu` draws at `LAYER.popup` (z-30) — so a menu wired onto the shared header would
  * open **behind that dialog's scrim**, invisible and unreachable, with nothing going red because
  * jsdom has no opinion about a z-index. The sweep below is over all four views for the reason the
@@ -4490,7 +4492,7 @@ describe("DeckEditor — a category's menu", () => {
    * **A refusal belongs to the press that produced it, and the next press has not been made yet.**
    *
    * The sentence above is drawn off `meta.deleteCategory.isError`, and that observer is the
-   * **editor's** — unlike `CategoriesDialog`'s, which lives in a body `DeckDialog` unmounts, it
+   * **editor's** — unlike `CategoriesDialog`'s, which lives in a body `Dialog` unmounts, it
    * outlives every open of this layer. So a refused delete left the mutation in `isError` and the
    * next `Delete…` mounted its body already holding the alert: `role="alert"` announces on
    * insertion, and the reader was told that a delete they never attempted, on a pile it was never
@@ -4537,7 +4539,7 @@ describe("DeckEditor — a category's menu", () => {
   /**
    * **The caret goes back to the pile, for all three rows that open a full-window surface.**
    *
-   * A menu row has no control to return to, and `DeckDialog` focuses its own panel and restores
+   * A menu row has no control to return to, and `Dialog` focuses its own panel and restores
    * nothing — so a `null` hand-back leaves the caret on an unmounting panel and drops it on
    * `<body>`, with the next Tab restarting from the top of the app. This is the third surface on
    * this branch to have been wired that way; here the hand-back is a function, so the rows can

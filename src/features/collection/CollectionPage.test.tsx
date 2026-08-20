@@ -10,9 +10,16 @@ import {
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
-import type { CollectionQuery, CollectionRow, CollectionSummary, DeckRow } from "@/lib/ipc";
+import type {
+  CollectionQuery,
+  CollectionRow,
+  CollectionSummary,
+  DeckRow,
+  ImportMatch,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -40,6 +47,11 @@ const deckFolderList = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+// The collection's own bulk-import entry point (Task 14): one resolved line and the commit it
+// feeds, so `resolve` and `collectionImportCommit` both have a real answer rather than a
+// rejection about a missing Tauri runtime.
+const importResolve = vi.hoisted(() => vi.fn());
+const collectionImportCommit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -57,6 +69,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     oracleTagsForPrintings,
+    importResolve,
+    collectionImportCommit,
   },
 }));
 
@@ -97,6 +111,34 @@ const BOLT: CollectionRow = {
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
+};
+
+/** The one printing `import_resolve` answers with for the import test below — everything the
+ *  collection's planner does not read filled in as nothing, `DeckEditor.test.tsx`'s own
+ *  `SOL_RING` cut to what this file needs. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: null,
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  printingCount: 1,
+  ownedQuantity: 0,
 };
 
 /** One deck for the menu's "Add to → Deck" to reach. No theory list, so it is one row. */
@@ -151,6 +193,19 @@ const REVIEW_NOTE =
 
 const lastQuery = () =>
   collectionList.mock.calls[collectionList.mock.calls.length - 1][0] as CollectionQuery;
+
+/**
+ * How many **sweep** requests (`limit: 500`, `scope.ts`'s `SWEEP_PAGE`) have gone out at a given
+ * marketplace — as opposed to the ordinary paged list's own `limit: 100` requests, which also
+ * carry `marketplace` in their key and legitimately refetch on a feed switch regardless of this
+ * task. A cache-key test on the export sweep has to filter those out, or a marketplace switch
+ * reads as "a fresh sweep went out" when it was really just the list behind the table doing what
+ * it always does.
+ */
+const sweepCallsAt = (marketplace: string) =>
+  collectionList.mock.calls.filter(
+    ([q]) => (q as CollectionQuery).limit === 500 && (q as CollectionQuery).marketplace === marketplace,
+  ).length;
 
 /**
  * The filter bar's sort control.
@@ -230,7 +285,16 @@ beforeEach(() => {
   prewarmCollection.mockReset().mockResolvedValue(0);
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
-  useAppStore.setState({ collectionView: "table", selectedCardId: null });
+  // One printing, so a one-line paste resolves to something the collection's own preview can
+  // plan and commit. `resetImportDefaults` below is what keeps a written default from bleeding
+  // between tests, since `importDefaults` lives in the store rather than in this component.
+  importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+  useAppStore.setState({
+    collectionView: "table",
+    selectedCardId: null,
+    importDefaults: { condition: "NM", finish: null },
+  });
 });
 
 describe("CollectionPage", () => {
@@ -884,6 +948,169 @@ describe("CollectionPage", () => {
     // And no corner either: the backing collapses on a mark that rendered nothing, so a wall
     // of unowned tiles is not a wall of empty chips. (`CardGrid`'s own test pins the rule.)
     expect(container.querySelector('[class*="bg-bg/85"]')).toBeEmptyDOMElement();
+  });
+
+  /**
+   * **Task 11's first export entry point outside the deck editor.** The list here is a
+   * `useInfiniteQuery` at 100 rows a page, so what is in memory is a scroll position rather
+   * than a decision — exporting it would silently truncate a filtered collection to whatever
+   * page the reader happened to have loaded. The sweep asks for the whole filtered set at 500
+   * a page instead, which is what the `limit: 500` assertion below is pinning.
+   */
+  it("exports every row the filter matches, not the page that happens to be loaded", async () => {
+    // 250 rows, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
+    const rows250 = Array.from({ length: 250 }, (_, i) => ({
+      ...BOLT,
+      id: i + 1,
+      cardId: `c${i + 1}`,
+      name: `Card ${i + 1}`,
+    }));
+    collectionList.mockImplementation(async ({ limit, offset }: CollectionQuery) =>
+      page(rows250.slice(offset, offset + limit), rows250.length),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Card 1");
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
+    // **251, not 250.** A collection opens on CSV (see the store's defaults) and CSV writes a
+    // header row. Asserting the row count here is how a correct implementation reads as red.
+    expect(await screen.findByText(/251 lines/)).toBeInTheDocument();
+  });
+
+  /**
+   * **Task 14's entry point: the Import button, over `collectionDestination`.** Wired the same
+   * way Export is — one press, one dialog, one destination — so the round trip that matters here
+   * is that a paste reaches `collectionImportCommit` with the plan `planCollectionImport` builds,
+   * in the mode the reader picked, through the shell `ImportDialog` mounts without knowing which
+   * destination it is holding.
+   */
+  it("imports a pasted list into the collection", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    await user.click(within(dialog).getByLabelText("Decklist"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+
+    // The collection's own preview: a condition/finish default pair the deck's importer has
+    // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
+    expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Condition when the file doesn't say")).toHaveValue("NM");
+
+    // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
+    // same accessible name.
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(collectionImportCommit).toHaveBeenCalledWith(
+        [
+          {
+            cardId: "sol-ring",
+            quantity: 1,
+            finish: "nonfoil",
+            condition: "NM",
+            conditionOriginal: undefined,
+            purchasePrice: undefined,
+            purchaseCurrency: undefined,
+            acquiredAt: undefined,
+            acquisitionSource: undefined,
+            notes: undefined,
+          },
+        ],
+        "add",
+      ),
+    );
+    // The dialog closes on its own report — `onDone` — the same precedent `DeckEditor` and
+    // `DecksPage` set for their own import dialogs.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * **Fix round 1's marketplace ruling.** `marketplace` sits inside the same `filters` object as
+   * every row-narrowing field (`useCollection.ts`), but it decides which *price* a row is quoted
+   * at rather than which rows match, and it is not one of the filter bar's own controls — so
+   * "Export everything, ignoring the filters" must not also silently reprice the export at the
+   * backend's default (TCGplayer) for a reader who had picked another marketplace. A regression
+   * to `scope.ts`'s old `{}` for the "everything" case fails this the moment `getMarketplace`
+   * answers anything but the default.
+   */
+  it("keeps the reader's marketplace when Export everything is ticked, and drops only the filters", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
+
+    // A filter switched on, so there is something real for "everything" to have dropped — the
+    // marketplace assertion below is not just "the field was never set to begin with".
+    await user.click(screen.getByRole("button", { name: "Foil" }));
+    await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    collectionList.mockClear();
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    const asked = lastQuery();
+    // The marketplace survives the toggle...
+    expect(asked.marketplace).toBe("cardmarket");
+    // ...and the filter that was on does not: "everything" really does ignore the filters.
+    expect(asked.finishes).toBeUndefined();
+  });
+
+  /**
+   * **Fix round 2's cache-key ruling.** `scope.ts`'s "everything" branch used to key its query
+   * as the literal `[surface, "export", "everything"]`, with no `marketplace` in it — so a
+   * reader who exported everything, then switched marketplace, and exported everything again
+   * could be served the *first* sweep straight back out of cache, priced at the feed they had
+   * left. That is Important 1's wrong-prices symptom again, arriving through the cache instead
+   * of through the request this time. `marketplace` is part of the `everything` key now, so a
+   * feed switch is a different query and issues a fresh request.
+   *
+   * The switch is driven the way `useMarketplace`'s own `select` mutation actually makes it —
+   * `queryClient.setQueryData(MARKETPLACE_KEY, id)` on success — rather than through a Settings
+   * control this page does not have. That is the one write the real code path performs, so
+   * reaching for the query client directly here exercises the same mechanism a Settings press
+   * would, without needing a second page mounted in this suite.
+   */
+  it("issues a fresh sweep when the marketplace changes while Export everything is on", async () => {
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(lastQuery().marketplace).toBe("tcgplayer"));
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+    // The first sweep, at the marketplace the reader had when they ticked the box.
+    await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(0));
+
+    client.setQueryData(MARKETPLACE_KEY, "cardmarket");
+
+    // A genuinely new **sweep** request (`limit: 500`) at the new marketplace — filtered to
+    // that limit specifically, because the ordinary paged list behind the table also carries
+    // `marketplace` in its own key and refetches on a feed switch regardless of this fix; that
+    // refetch alone must not make this assertion pass. Without the cache-key fix this `waitFor`
+    // times out: the "everything" query's key never changes, so nothing at `limit: 500` goes
+    // out a second time and the previous sweep's cards are served back at the new marketplace.
+    await waitFor(() => expect(sweepCallsAt("cardmarket")).toBeGreaterThan(0));
   });
 });
 

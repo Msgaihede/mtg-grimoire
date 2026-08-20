@@ -74,7 +74,7 @@
  * 10. **Every refusal is its Rust sentence verbatim, with one exception.** A story renders
  *    these, so they are copied rather than paraphrased; the parenthetical *why* inside
  *    {@link canonicalGrading}'s refusal is this parser's wording, because serde's could not be.
- * 11. **The import's fold arm reads the whole fixture, where `deck_import::fold_match` reads
+ * 11. **The import's fold arm reads the whole fixture, where `import::fold_match` reads
  *    200 FTS candidates.** `cards_fts` exists to stop that arm scanning 116 k rows; over 43
  *    it is the scan that is cheap and the index that would be the fiction. Everything the cap
  *    decides — which candidates survive a truncation, and in what order — is therefore
@@ -123,6 +123,7 @@ import type {
   CategoryKind,
   CategoryOrigin,
   CollectionCleared,
+  CollectionImportItem,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
@@ -148,6 +149,7 @@ import type {
   EntryPatch,
   FacetResponse,
   FinishPrices,
+  ImportCommitOutcome,
   ImportItem,
   ImportMatch,
   ImportMode,
@@ -174,10 +176,12 @@ import type {
   TagStatus,
   TagSuggestion,
   TheoryDiffRow,
+  TransferImportMode,
   UpdateAsset,
   UpdateStatus,
   WishInput,
   WishRow,
+  WishlistImportItem,
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
@@ -3759,7 +3763,7 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
 /* ------------------------------------------------------------------ the import -------- */
 
 /**
- * `deck_import::IMPORT_MODES` — what an import may do to the variant it lands in.
+ * `import::IMPORT_MODES` — what an import may do to the variant it lands in.
  *
  * A list rather than a union type for the Rust's reason: the refusal below **quotes it**, so
  * the two spellings a caller can name and the two the sentence offers are one array. Read
@@ -3768,12 +3772,12 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
 const IMPORT_MODES = ["merge", "replace"] as const;
 const IMPORT_REPLACE = IMPORT_MODES[1];
 
-/** `deck_import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
+/** `import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
  *  "clear the deck and put nothing back" are the same call with the same arguments. */
 const NOTHING_TO_IMPORT = "There is nothing to import.";
 
 /**
- * What {@link readHandlers}'s `deck_import_read_file` says instead of inventing a decklist.
+ * What {@link readHandlers}'s `import_read_file` says instead of inventing a decklist.
  *
  * **Not a Rust sentence, and the only handler in this file that has none.** The real command
  * takes a path the OS file picker answered, and there is no picker in a browser — so a fake
@@ -3783,7 +3787,7 @@ const NOTHING_TO_IMPORT = "There is nothing to import.";
 const NO_FILE_PICKER = "No file picker in Storybook.";
 
 /**
- * `deck_import::fold_name`'s table, transcribed — every character it maps and no other.
+ * `import::fold_name`'s table, transcribed — every character it maps and no other.
  *
  * Keyed on the **lower-case** half of each pair only, because {@link foldName} lowercases
  * before it looks anything up where the Rust lowercases in its fallthrough arm. The two agree
@@ -3829,7 +3833,7 @@ const FOLD_LETTERS: Readonly<Record<string, string>> = {
 };
 
 /**
- * `deck_import::fold_name` — a card name reduced to what two people typing it would agree on:
+ * `import::fold_name` — a card name reduced to what two people typing it would agree on:
  * lowercase, no diacritics, one kind of apostrophe, single spaces.
  *
  * Anything not in {@link FOLD_LETTERS} passes through, so a name in a script the table has
@@ -3845,7 +3849,7 @@ export function foldName(raw: string): string {
 }
 
 /**
- * `deck_import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
+ * `import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
  * the whole name, `1` for the front face only, `null` for neither.
  *
  * **A rank rather than a bool**, and that is what keeps an art series from winning: the SQL
@@ -3860,7 +3864,7 @@ function foldRank(cardName: string, wanted: string): number | null {
 }
 
 /**
- * `deck_import::MATCH_ORDER` — a printing you own, then the newest, then the id.
+ * `import::MATCH_ORDER` — a printing you own, then the newest, then the id.
  *
  * The `id` tie-break is not decoration: it is what makes an import **deterministic**, so the
  * same list pasted twice puts the same printings in the deck. `releasedAt` needs no coalesce
@@ -3874,7 +3878,7 @@ function importOrder(db: FakeDb): Compare<FakeCard> {
 }
 
 /**
- * `deck_import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
+ * `import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
  * money**, plus the two facts only an import asks for.
  *
  * `everUncommon` is read off its column for {@link toDeckCard}'s reason, where the SQL
@@ -3931,7 +3935,7 @@ function bestOf(db: FakeDb, candidates: FakeCard[]): ImportMatch | null {
 }
 
 /**
- * `deck_import::fold_match` — fold both sides and compare, the arm the three exact ones fall
+ * `import::fold_match` — fold both sides and compare, the arm the three exact ones fall
  * through to.
  *
  * The candidate set is the whole paper fixture rather than `cards_fts`' 200; simplification 11
@@ -3956,7 +3960,7 @@ function foldMatch(db: FakeDb, name: string): ImportMatch | null {
   return toImportMatch(db, kept[0].card, kept.length);
 }
 
-/** `deck_import::given` — a hint the caller actually gave: trimmed, and absent when blank.
+/** `import::given` — a hint the caller actually gave: trimmed, and absent when blank.
  *  `""` and `"   "` reach here from real exports (a trailing tab in a Moxfield paste is
  *  enough), and either bound into `set_code = ?1` turns every line into a missed hint. */
 function givenHint(hint: string | null): string | null {
@@ -4593,7 +4597,7 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::resolve_lines` — every name in a parsed decklist, resolved to a printing
+     * `import::resolve_lines` — every name in a parsed decklist, resolved to a printing
      * this app has. **Read-only**, and one call for the whole list.
      *
      * Six arms, tried in the order the reader's own intent runs out — **narrowest first, and
@@ -4624,11 +4628,11 @@ export function readHandlers(db: FakeDb) {
      * upper-cases `(MH2)` is the ordinary source of one. The collector number keeps its
      * case-insensitivity, which is the one place `COLLATE NOCASE` survives.
      */
-    deck_import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
+    import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
       // `is_paper = 1` is on every arm, so it is applied once here.
       const paper = db.cards.filter((c) => c.isPaper);
       // `c.name >= "{name} // " AND c.name < "{name} //!"`, which over a byte-wise comparison
-      // is exactly "carries that prefix" — see `deck_import::front_face_range` for the proof.
+      // is exactly "carries that prefix" — see `import::front_face_range` for the proof.
       const fronts = (name: string) => paper.filter((c) => c.name.startsWith(`${name} // `));
 
       return args.lines.map((line, index) => {
@@ -4684,7 +4688,7 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::read_import_file`, which **throws here and always will**.
+     * `import::read_import_file`, which **throws here and always will**.
      *
      * The real command takes a path `@tauri-apps/plugin-dialog`'s `open()` answered — a native
      * window CDP cannot drive and a browser does not have. So there is no gesture in a story
@@ -4693,7 +4697,7 @@ export function readHandlers(db: FakeDb) {
      * it would be the wrong one. A story that wants a list pastes one, which is the same string
      * travelling the same path from one line later.
      */
-    deck_import_read_file: (): string => {
+    import_read_file: (): string => {
       throw refuse(NO_FILE_PICKER);
     },
 
@@ -5824,6 +5828,139 @@ function cardGone(category: string): string {
 }
 
 /**
+ * `collection::add_entry`, as a function rather than only a handler — the quick-add, folding
+ * into the row that already holds this grain. `collection_add` and `collection_import_commit`'s
+ * `add` mode both write through here, so the grain's fold rule lives in one place.
+ */
+function addEntry(db: FakeDb, input: EntryInput): EntryChange {
+  const finish = validFinish(input.finish);
+  const condition = validCondition(input.condition);
+  // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
+  // conjure a row out of a card the user never said they had. Zero is a state a row is
+  // moved to, never one it is created in.
+  if (input.quantity <= 0) throw refuse(ZERO_ADD);
+  const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+  const grading = canonicalGrading(input.grading);
+  const card = requireCard(db, input.cardId);
+
+  const row: FakeEntry = {
+    id: 0,
+    cardId: input.cardId,
+    finish,
+    condition,
+    quantity: input.quantity,
+    // A tradelist bigger than the pile it is drawn from is not a promise anyone can
+    // keep, and the importer is the caller that will send one.
+    tradelistQuantity: Math.min(tradelist, input.quantity),
+    // Read from `cards` at write time and never from the caller: letting a caller supply
+    // these would let a caller disagree with the card it named.
+    lang: card.lang,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    purchasePrice: input.purchasePrice ?? null,
+    purchaseCurrency: input.purchaseCurrency ?? null,
+    acquiredAt: input.acquiredAt ?? null,
+    acquisitionSource: input.acquisitionSource ?? null,
+    serialNumber: input.serialNumber ?? null,
+    altered: input.altered ?? false,
+    signed: input.signed ?? false,
+    proxy: input.proxy ?? false,
+    misprint: input.misprint ?? false,
+    grading,
+    conditionOriginal: input.conditionOriginal ?? null,
+    // The column's own `DEFAULT '[]'`: a tags string is never null.
+    tags: input.tags ?? "[]",
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+
+  const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
+  if (existing) {
+    // The quantities add; everything else is first-writer-wins. A second add of a card
+    // you already own is "one more of these", not "and here is what I paid this time".
+    // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
+    // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
+    // provenance of the condition already there, which a later add cannot retroactively
+    // change. The entry editor is where both change.
+    existing.quantity += row.quantity;
+    existing.tradelistQuantity = Math.min(
+      existing.tradelistQuantity + tradelist,
+      existing.quantity,
+    );
+    existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+    existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+    existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+    existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.collectionEntries);
+  db.collectionEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
+ * `collection::set_entry` — `addEntry` with one clause changed: the grain's quantity is
+ * **written**, not accumulated, which is what a `set` import means. Every other column keeps
+ * `addEntry`'s first-writer-wins rule, and `tradelistQuantity` follows `collection_set_quantity`'s
+ * own clamp (`min(existing, new quantity)`) rather than the additive cap, because a written
+ * total is not a delta.
+ */
+function setEntry(db: FakeDb, input: EntryInput): EntryChange {
+  const finish = validFinish(input.finish);
+  const condition = validCondition(input.condition);
+  validQuantity(input.quantity, "collection quantity");
+  const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+  const grading = canonicalGrading(input.grading);
+  const card = requireCard(db, input.cardId);
+
+  const row: FakeEntry = {
+    id: 0,
+    cardId: input.cardId,
+    finish,
+    condition,
+    quantity: input.quantity,
+    tradelistQuantity: Math.min(tradelist, input.quantity),
+    lang: card.lang,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    purchasePrice: input.purchasePrice ?? null,
+    purchaseCurrency: input.purchaseCurrency ?? null,
+    acquiredAt: input.acquiredAt ?? null,
+    acquisitionSource: input.acquisitionSource ?? null,
+    serialNumber: input.serialNumber ?? null,
+    altered: input.altered ?? false,
+    signed: input.signed ?? false,
+    proxy: input.proxy ?? false,
+    misprint: input.misprint ?? false,
+    grading,
+    conditionOriginal: input.conditionOriginal ?? null,
+    tags: input.tags ?? "[]",
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+
+  const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
+  if (existing) {
+    existing.quantity = row.quantity;
+    existing.tradelistQuantity = Math.min(existing.tradelistQuantity, row.quantity);
+    existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+    existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+    existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+    existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.collectionEntries);
+  db.collectionEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
  * `wishlist::add_wish`, as a function rather than only a handler.
  *
  * `deck::missing_to_wishlist` writes **through** this for the reason the Rust does: the
@@ -5924,75 +6061,7 @@ export function writeHandlers(db: FakeDb) {
      *  grain. */
     collection_add: (args: { entry: EntryInput }): EntryChange => {
       refuseIfBusy(db);
-      const input = args.entry;
-      const finish = validFinish(input.finish);
-      const condition = validCondition(input.condition);
-      // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
-      // conjure a row out of a card the user never said they had. Zero is a state a row is
-      // moved to, never one it is created in.
-      if (input.quantity <= 0) throw refuse(ZERO_ADD);
-      const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
-      const grading = canonicalGrading(input.grading);
-      const card = requireCard(db, input.cardId);
-
-      const row: FakeEntry = {
-        id: 0,
-        cardId: input.cardId,
-        finish,
-        condition,
-        quantity: input.quantity,
-        // A tradelist bigger than the pile it is drawn from is not a promise anyone can
-        // keep, and the importer is the caller that will send one.
-        tradelistQuantity: Math.min(tradelist, input.quantity),
-        // Read from `cards` at write time and never from the caller: letting a caller supply
-        // these would let a caller disagree with the card it named.
-        lang: card.lang,
-        setCode: card.setCode,
-        collectorNumber: card.collectorNumber,
-        purchasePrice: input.purchasePrice ?? null,
-        purchaseCurrency: input.purchaseCurrency ?? null,
-        acquiredAt: input.acquiredAt ?? null,
-        acquisitionSource: input.acquisitionSource ?? null,
-        serialNumber: input.serialNumber ?? null,
-        altered: input.altered ?? false,
-        signed: input.signed ?? false,
-        proxy: input.proxy ?? false,
-        misprint: input.misprint ?? false,
-        grading,
-        conditionOriginal: input.conditionOriginal ?? null,
-        // The column's own `DEFAULT '[]'`: a tags string is never null.
-        tags: input.tags ?? "[]",
-        notes: input.notes ?? null,
-        needsReview: null,
-        updatedAt: stamp(db),
-      };
-
-      const existing = db.collectionEntries.find(
-        (e) => collectionGrain(e) === collectionGrain(row),
-      );
-      if (existing) {
-        // The quantities add; everything else is first-writer-wins. A second add of a card
-        // you already own is "one more of these", not "and here is what I paid this time".
-        // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
-        // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
-        // provenance of the condition already there, which a later add cannot retroactively
-        // change. The entry editor is where both change.
-        existing.quantity += row.quantity;
-        existing.tradelistQuantity = Math.min(
-          existing.tradelistQuantity + tradelist,
-          existing.quantity,
-        );
-        existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
-        existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
-        existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
-        existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
-        existing.notes = existing.notes ?? row.notes;
-        existing.updatedAt = row.updatedAt;
-        return { id: existing.id, quantity: existing.quantity, removed: false };
-      }
-      row.id = nextId(db.collectionEntries);
-      db.collectionEntries.push(row);
-      return { id: row.id, quantity: row.quantity, removed: false };
+      return addEntry(db, args.entry);
     },
 
     /** `collection::set_quantity` — the stepper. **Zero keeps the row**, with its condition,
@@ -6071,6 +6140,55 @@ export function writeHandlers(db: FakeDb) {
       return { id: args.id, quantity: 0, removed: true };
     },
 
+    /**
+     * `collection::commit_import` — one transaction for a whole imported file, mirrored here as
+     * one loop over the same `addEntry`/`setEntry` operations `collection_add` performs one
+     * line at a time. A refused item must roll the whole file back, and there is no real
+     * transaction in an in-memory array to do that for us — so the array is snapshotted first
+     * and restored if anything throws, which is this fake's stand-in for it.
+     *
+     * `added`/`updated` are counted by row-count before and after, exactly as the backend
+     * does: a hand-written lookup on the ten-column grain here would be a second copy of
+     * `collectionGrain`'s own definition.
+     */
+    collection_import_commit: (args: {
+      items: CollectionImportItem[];
+      mode: TransferImportMode;
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.mode !== "add" && args.mode !== "set") {
+        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+      }
+      const before = db.collectionEntries.length;
+      const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+      try {
+        for (const item of args.items) {
+          const entry: EntryInput = {
+            cardId: item.cardId,
+            finish: item.finish,
+            quantity: item.quantity,
+            condition: item.condition,
+            conditionOriginal: item.conditionOriginal,
+            purchasePrice: item.purchasePrice,
+            purchaseCurrency: item.purchaseCurrency,
+            acquiredAt: item.acquiredAt,
+            acquisitionSource: item.acquisitionSource,
+            notes: item.notes,
+          };
+          if (args.mode === "add") {
+            addEntry(db, entry);
+          } else {
+            setEntry(db, entry);
+          }
+        }
+      } catch (e) {
+        db.collectionEntries = snapshot;
+        throw e;
+      }
+      const added = db.collectionEntries.length - before;
+      return { added, updated: args.items.length - added, removed: 0 };
+    },
+
     /** `wishlist::add_wish`. */
     wishlist_add: (args: { wish: WishInput }): EntryChange => {
       refuseIfBusy(db);
@@ -6095,6 +6213,62 @@ export function writeHandlers(db: FakeDb) {
     wishlist_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
       return removeWish(db, args.id);
+    },
+
+    /**
+     * `wishlist::commit_import` — one transaction for a whole imported file,
+     * `collection_import_commit`'s rule and the same snapshot/restore stand-in for it.
+     *
+     * The `set` arm reaches its row through `addWish` first, exactly as the backend does — it
+     * is the only code that knows the wishlist grain — and then corrects the quantity: `0`
+     * **deletes** the wish rather than leaving an empty one, `wishlist_set_quantity`'s own
+     * asymmetry with the collection's zero. `removed` is counted in the loop rather than
+     * derived from a row count, because a delete and an insert in one file would cancel out in
+     * a before/after count and report neither.
+     */
+    wishlist_import_commit: (args: {
+      items: WishlistImportItem[];
+      mode: TransferImportMode;
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.mode !== "add" && args.mode !== "set") {
+        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+      }
+      const before = db.wishlistEntries.length;
+      const snapshot = db.wishlistEntries.map((w) => ({ ...w }));
+      let removed = 0;
+      try {
+        for (const item of args.items) {
+          const wish: WishInput = {
+            oracleId: item.oracleId,
+            cardId: item.cardId,
+            quantity: item.quantity,
+            preferredFinish: item.preferredFinish,
+            notes: item.notes,
+          };
+          if (args.mode === "add") {
+            addWish(db, wish);
+            continue;
+          }
+          const change = addWish(db, wish);
+          validQuantity(item.quantity, "wishlist quantity");
+          if (item.quantity === 0) {
+            removeWish(db, change.id);
+            removed += 1;
+            continue;
+          }
+          const row = db.wishlistEntries.find((w) => w.id === change.id);
+          if (row) {
+            row.quantity = item.quantity;
+            row.updatedAt = stamp(db);
+          }
+        }
+      } catch (e) {
+        db.wishlistEntries = snapshot;
+        throw e;
+      }
+      const added = db.wishlistEntries.length - before + removed;
+      return { added, updated: args.items.length - added - removed, removed };
     },
 
     /**
@@ -6896,7 +7070,7 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::commit_import` — a whole decklist into one deck, in one transaction.
+     * `import::commit_import` — a whole decklist into one deck, in one transaction.
      *
      * **The command exists for the allocator.** Looping {@link deck_add_card} would be correct
      * in every other respect and would rebuild the deck's claims once per line. In the app it
@@ -8012,7 +8186,7 @@ export function writeHandlers(db: FakeDb) {
      * so a sync running underneath it cannot refuse it. A story that seeded `busy` to watch an
      * export fail would be watching a refusal the app cannot produce.
      *
-     * **Nothing is stored, for {@link deck_import_read_file}'s reason turned around.** There is
+     * **Nothing is stored, for {@link import_read_file}'s reason turned around.** There is
      * no disk here and no table this belongs in — the fake stores `cards` and the user's rows,
      * and an export is neither — so what a story can observe is exactly what the app can: that
      * the write was accepted, or the sentence it was refused with. `ExportDialog` draws no
@@ -8050,7 +8224,7 @@ const SAVE_DIR = "D:\\Storybook\\";
  * them holds a connection.
  *
  * **`plugin:dialog|save` answers a path, and that is not the same decision as
- * `deck_import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
+ * `import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
  * difference is what would be invented: `open` + `read_import_file` would invent a *decklist*,
  * which is the entire subject of the screen it feeds, so a story built on one would be a story
  * about a thing that cannot happen. All this dialog produces is a **string naming a file**, and

@@ -243,7 +243,7 @@ describe("CategoriesDialog", () => {
 
   /**
    * **One wiring test, not a second copy of the shell's suite.** The scrim, the trap, the caret
-   * moving into the panel and the `aria-modal` claim are all `DeckDialog`'s now and are tested
+   * moving into the panel and the `aria-modal` claim are all `Dialog`'s now and are tested
    * where they live. What is this file's business is that this dialog hands that shell the right
    * four things: a title, a close label that is a sentence, and the two different ways out.
    */
@@ -320,14 +320,14 @@ describe("CategoriesDialog", () => {
  * dialog the reader has just **left** while the one they have just reopened is starved — a
  * capture rung `preventDefault()`s, so nothing behind it hears the press either. That is the
  * regression in its own words, and the second half of this test is what turns it red. Verified
- * by mutation, 2026-08-15: with `useDismissOnEscape` moved out of `DeckDialog` and into its
+ * by mutation, 2026-08-15: with `useDismissOnEscape` moved out of `Dialog` and into its
  * `Panel`, the first press stayed green and the second failed on `categoriesDismiss` — called 0
  * times, with `tagsDismiss` called twice.
  *
  * The reader changing their mind one press later is also the realest version of this: Categories
  * and Tags are one press apart in the same toolbar.
  *
- * **The rung it proves is `DeckDialog`'s**, and this is deliberately not a second copy of that
+ * **The rung it proves is `Dialog`'s**, and this is deliberately not a second copy of that
  * file's own tests: the case needs *two peers*, and these two are the realest pair the editor
  * has — Categories and Tags are one press apart in the same toolbar, and they split out of one
  * drawer where the reader used to scroll between them. It drives exactly that: one commit that
@@ -834,7 +834,7 @@ describe("categories", () => {
  * A category heading on the *desk* does offer one — Rename, Import, Export, the switch, Delete —
  * and it is wired onto the **view's own group element**, never onto `GroupHeader`, which is the
  * component this dialog draws in every one of its rows. Wired one level up it would open here
- * too: inside a `DeckDialog` on `LAYER.overlay` (`z-45`) while `ContextMenu` draws at
+ * too: inside a `Dialog` on `LAYER.overlay` (`z-45`) while `ContextMenu` draws at
  * `LAYER.popup` (`z-30`) — **behind this dialog's own scrim**. Invisible, unreachable, and
  * silent, because jsdom has no opinion about a z-index and every assertion about that menu would
  * go on passing. `layers.ts` names the overlap as the one that must not exist.

@@ -293,7 +293,7 @@ export const AppearsOnADrag: Story = {
  * A modal rather than a field in the bar, because by the time it is needed the bar is gone — the
  * platform ends the drag on the drop, and a control that appeared where the pointer had just
  * been would be a control the reader is no longer looking at. **It is the one dialog in this
- * editor that puts the caret in a field**, against `DeckDialog`'s own rule, because it is a
+ * editor that puts the caret in a field**, against `Dialog`'s own rule, because it is a
  * question and nothing else.
  */
 export const NamingTheNewPile: StoryObj<typeof QuickCategoryDialog> = {

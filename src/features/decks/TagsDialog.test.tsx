@@ -117,7 +117,7 @@ describe("TagsDialog", () => {
 
   /**
    * **One wiring test, not a second copy of the shell's suite.** The scrim, the trap, the caret
-   * moving into the panel and the `aria-modal` claim are all `DeckDialog`'s now and are tested
+   * moving into the panel and the `aria-modal` claim are all `Dialog`'s now and are tested
    * where they live. What is this file's business is that this dialog hands that shell the right
    * four things: a title, a close label that is a sentence, and the two different ways out.
    */

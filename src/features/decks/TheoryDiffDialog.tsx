@@ -11,7 +11,7 @@ import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 
 /** Stable identity for "not read yet", so the totals below are not recomputed over a new empty
  *  array on every render of a dialog that is still waiting. */
@@ -58,7 +58,7 @@ const ONE_DIRECTION =
  * two questions and nothing else in the app asks them.
  *
  * **No `enabled` gate and no nullable deck**, unlike every other hook in this folder — and that is
- * the whole benefit of {@link DeckDialog} mounting nothing while it is closed. A closed dialog
+ * the whole benefit of {@link Dialog} mounting nothing while it is closed. A closed dialog
  * does not mount {@link TheoryDiffBody}, so this hook does not exist, so nothing is read. The
  * query is a full pass over both of a deck's lists plus an allocation roll-up per line; a
  * button nobody has pressed should not pay for it, and unmounting says that more plainly than a
@@ -222,7 +222,7 @@ export interface TheoryDiffDialogProps {
  * on the way out — and an `"inner"` Escape rung, so one press closes it and the card pane behind
  * the view keeps its own.
  *
- * **The chrome is {@link DeckDialog}'s and no longer this file's** (2026-08-16) — the last of the
+ * **The chrome is {@link Dialog}'s and no longer this file's** (2026-08-16) — the last of the
  * three copies to be folded in, and the one whose header needed the shell to grow. Its heading
  * is `Theory <span aria-hidden>→</span><span class="sr-only">to</span> Live`, because an arrow is
  * not a word: the shell's `title` is a `ReactNode` for this, and `ariaLabel` exists because a
@@ -265,7 +265,7 @@ export function TheoryDiffDialog({
   onClose,
 }: TheoryDiffDialogProps): React.JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title={
         <>
@@ -275,7 +275,7 @@ export function TheoryDiffDialog({
       }
       // The heading draws the arrow; the name says it in words. What a screen reader makes of
       // "→" ranges from "right arrow" to silence, so the panel cannot be labelled by a heading
-      // that is half an `aria-hidden` glyph — see {@link DeckDialogProps.ariaLabel}.
+      // that is half an `aria-hidden` glyph — see {@link DialogProps.ariaLabel}.
       ariaLabel="Theory to Live difference"
       subtitle="What you would need to buy or pull to build the theory list"
       closeLabel="Close the difference list"
@@ -284,12 +284,12 @@ export function TheoryDiffDialog({
       onClose={onClose}
     >
       <TheoryDiffBody deckId={deckId} />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
 /** The shopping list itself — the query, the two writes and the body's own scroller. Mounted only
- *  while the dialog is open, which is {@link DeckDialog}'s guarantee and what makes the record of
+ *  while the dialog is open, which is {@link Dialog}'s guarantee and what makes the record of
  *  sent rows below a session rather than something an effect has to clear. */
 function TheoryDiffBody({ deckId }: { deckId: number }) {
   // Read here rather than threaded from the editor: this dialog is mounted only while it is
@@ -318,7 +318,7 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
 
   return (
     // The shell's header sits above these three, and the panel around them is the `flex flex-col`
-    // that makes the scroller work — see {@link DeckDialog}.
+    // that makes the scroller work — see {@link Dialog}.
     <>
       <FigureStrip
         totals={totals}

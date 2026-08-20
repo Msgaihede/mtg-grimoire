@@ -413,3 +413,19 @@ describe("the two result layouts", () => {
     expect(useAppStore.getState().collectionView).toBe("grid");
   });
 });
+
+/**
+ * The export dialog's format and field choice, kept apart by surface — a deck export wants
+ * Moxfield's printing line and a collection export wants a CSV with a condition column, and one
+ * remembered setting would make each of them wrong half the time.
+ */
+describe("the export dialog's remembered choice", () => {
+  it("remembers an export choice per surface, so a deck export is not dragged into the collection's", () => {
+    useAppStore.getState().setExportPrefs("collection", {
+      format: "csv",
+      fields: ["quantity", "name", "condition"],
+    });
+    expect(useAppStore.getState().exportPrefs.collection.format).toBe("csv");
+    expect(useAppStore.getState().exportPrefs.deck.format).toBe("plain");
+  });
+});

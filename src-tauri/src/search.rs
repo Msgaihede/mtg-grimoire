@@ -202,7 +202,7 @@ pub struct CardSummary {
     /// means *not on the list* — the column is only ever set for the cards Wizards named —
     /// so it is read as an `Option` and flattened here rather than handed to TypeScript as a
     /// third state every crown would have to fence. Same reading, and the same flattening, as
-    /// [`crate::deck_import::ImportMatch::game_changer`].
+    /// [`crate::import::ImportMatch::game_changer`].
     pub game_changer: bool,
     /// Copies the collection holds of **this printing**, across every finish and
     /// condition. `0` rather than `Option`: "you own none of these" is a fact, not an

@@ -252,7 +252,7 @@ describe("AllPrintingsDialog", () => {
     renderDialog();
     expect(screen.queryByRole("dialog")).toBeNull();
     // And asks nothing: a closed modal costs no query, which is the whole point of the body
-    // living inside `DeckDialog`'s children.
+    // living inside `Dialog`'s children.
     expect(cardPrintings).not.toHaveBeenCalled();
   });
 
@@ -263,7 +263,7 @@ describe("AllPrintingsDialog", () => {
 
     // `toBeInTheDocument` rather than `toBeVisible`, which is `CategoriesDialog.test.tsx`'s
     // convention. The race it was avoiding is gone as of 2026-08-20 — `src/test-setup.ts` now
-    // runs motion's batch inline, so `DeckDialog`'s panel no longer paints its `initial`
+    // runs motion's batch inline, so `AllPrintingsDialog`'s panel no longer paints its `initial`
     // (`opacity: 0`) for a frame — and this stays because it is the honest assertion anyway:
     // `findByRole` has already proved the dialog is in the tree and accessible, and what this
     // line is about is *which card* it names.
@@ -464,7 +464,7 @@ describe("AllPrintingsDialog", () => {
     open(WALK[1]);
     const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
 
-    // The caret is on the panel — `DeckDialog` puts it there on open — so the press bubbles to
+    // The caret is on the panel — `Dialog` puts it there on open — so the press bubbles to
     // the panel's own handler, which is the only thing entitled to it. Waited for rather than
     // assumed: a press made while the caret is still on `<body>` reaches no handler at all, and
     // would read as the step being broken.
