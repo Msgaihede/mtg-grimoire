@@ -1048,8 +1048,40 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
   switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
   one holding cards and `live` is the column that fills as the reader acquires them. Reading
-  left to right is then plan → reality, which is the direction the difference readout beside it
-  already counts in.
+  left to right is then plan → reality, which is the direction the difference beside it is taken
+  in.
+- **`Compare` is a button, and the editor no longer counts anything itself** (2026-08-20). It read
+  "N cards differ" and the number came from a `useMemo` in `DeckEditor` over a *second* `useDeck`
+  of the opposite variant — a second implementation of a comparison `deck_theory_diff` already
+  owns, and one that gave a different answer: it keyed rows on `` `${categoryId}:${cardId}` ``
+  and counted **both** directions, so a card the two lists file in different piles scored two —
+  once as a Theory row Live "lacks", once as the leftover Live row — and a hundred-card deck
+  routinely read as 150-odd differences. Placement is not possession. The button now says the
+  verb, the dialog answers, and **nothing reads a deck's other list until the reader asks for
+  it**: a deck with a plan costs one `deck_get`, not two. `DeckEditor.test.tsx`'s
+  "switches between the deck's two lists, and opens the difference on a Compare button" asserts
+  that absence, which is the half a re-added readout would fail.
+- **The comparison is `deck_theory_diff`'s, and its grain is the exact card —
+  `(cardId, finish)`** (changed the same day, from the oracle card). What the dialog lists is
+  everything the plan holds that the deck has not got: a plan naming the foil retro-frame Sol
+  Ring is a plan for that cardboard, and neither the precon printing nor the regular copy in the
+  live list answers it. It is `DECK_CARD_GRAIN` less `deck_id`, `variant` and `category_id`, and
+  each of the three is dropped for its own reason — the deck is the question, the variant is the
+  two sides of the subtraction, and **the category is placement rather than possession**, so each
+  side is summed across its piles before they are subtracted and the row's category is only a
+  caption. `finish` stays because it is *not* placement: the two objects cost different money
+  (`unitPrice` has always been per finish, so folding them would charge one at the other's rate)
+  and are two `deck_cards` rows for that reason.
+- **So `TheoryDiffRow.cardId` is not unique down the list** — a render keys on the pair, which is
+  `rowKey` in `TheoryDiffDialog.tsx`, and so do the sent and pending marks. `ownedSpare` answers
+  on the whole key too, and has to: `diffTotals` **sums** it down the list, so any answer wider
+  than a row's own identity counts one binder copy once per row that could have used it. Its SQL
+  carries the one translation in the pair — `coalesce(?2, 'nonfoil')` — because `deck_cards`
+  spells the regular copy NULL and `collection_entries` spells it `nonfoil`.
+- **Wishes stay oracle-grained and finish-blind**, deliberately: a shopping list is not a
+  printing preference, so two lines of one card fold into one wish on `add_wish`'s upsert, and a
+  foil line does not write a foil wish. That is the one place the diff's grain and the wishlist's
+  do not agree, and it is the wishlist's own rule rather than an oversight here.
 - **The editor reopens on the view the reader left, and the deck row is where that is kept.**
   `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
   `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
@@ -1947,7 +1979,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
   as the docked panel's set filter. **Most of the editor's full-window surfaces are opened by
   pressing a button** — the header's `ACTIONS` row (read the array, not a number: `Export deck`
-  made it six on this branch) and the theory diff from the "N cards differ" control beside the
+  made it six on this branch) and the theory diff from the `Compare` button beside the
   variant tabs — and pressing a button takes the focus out of this field, so the root's `onBlur`
   closes the list on the way.
 - **Some of them arrive another way, and the rung this used to say was missing has since been

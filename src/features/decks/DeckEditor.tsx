@@ -676,16 +676,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const gone = !loading && !deck.query.isError && deck.query.data === null;
 
   /**
-   * The deck's *other* list, read only when the deck keeps one.
+   * Whether this deck keeps a plan at all — the switch, the Compare button and the whole of
+   * what {@link Layer}'s `theoryDiff` arm is reachable from.
    *
-   * Two cached answers under two query keys (`useDeck`'s own arrangement), so flipping the
-   * switch is instant and this costs one extra `deck_get` per deck that has a plan — and none
-   * at all for a deck that does not, because `useDeck(null)` asks for nothing. It exists for
-   * one readout: how many rows the two lists disagree about, which is the whole reason a reader
-   * would open the difference dialog.
+   * **The deck's *other* list is no longer read here** (2026-08-20). A second `useDeck` under
+   * the opposite variant's query key sat on this line for one readout — "N cards differ" — and
+   * it was a second, disagreeing implementation of a comparison the backend already owns:
+   * it keyed rows on `(categoryId, cardId)` and counted **both** directions, so a card the two
+   * lists file in different piles scored two and a hundred-card deck routinely read as a
+   * hundred and fifty differences. The button says `Compare` and the dialog behind it answers,
+   * through `deck_theory_diff`, so there is exactly one rule again — and a deck with a plan
+   * costs one `deck_get` rather than two.
    */
   const theoryEnabled = row?.theoryEnabled === true;
-  const other = useDeck(theoryEnabled ? deckId : null, variant === "live" ? "theory" : "live");
 
   const [view, setView] = useState<DeckView>("stacks");
   // The two the deck row remembers, seeded from the same constants a stored word this build
@@ -2133,28 +2136,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * How many rows the two lists disagree about — a **row** count, which is what "cards differ"
-   * means to a reader looking at a list of cards.
-   *
-   * Computed over the two reads rather than through `deck_theory_diff`, because that command
-   * answers one direction only (what Theory wants that Live has not got) and this readout is
-   * the reason to open the dialog at all: a plan that has dropped four cards differs from the
-   * deck by four, and a badge that said `0` would be telling the reader there is nothing to
-   * look at.
-   */
-  const differing = useMemo(() => {
-    if (!theoryEnabled) return 0;
-    const slot = (card: DeckCard) => `${card.categoryId}:${card.cardId}`;
-    const mine = new Map(deck.cards.map((card) => [slot(card), card.quantity]));
-    let n = 0;
-    for (const card of other.cards) {
-      if (mine.get(slot(card)) !== card.quantity) n += 1;
-      mine.delete(slot(card));
-    }
-    return n + mine.size;
-  }, [theoryEnabled, deck.cards, other.cards]);
-
-  /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
    *
    * Filtering happens **before** the grouping, so every count and price in a heading is a count
@@ -2485,14 +2466,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
              * window and no test could see it.** Measured over CDP with Theory on: the field was
              * the only shrinkable child between two `shrink-0` siblings, so it collapsed to its
              * intrinsic minimum — **18px at 1100, 1200 and 1280** — while the switch and the
-             * readout beside it spilled 180px / 80px out of this box and over the actions. At
-             * 1200 the last pixels of the difference readout hit-tested to the *format select*:
-             * a reader aiming at "0 cards differ" re-formatted their deck.
+             * control beside it spilled 180px / 80px out of this box and over the actions. At
+             * 1200 the last pixels of that control (then a "N cards differ" readout, now the
+             * Compare button) hit-tested to the *format select*: a reader aiming at the
+             * difference re-formatted their deck.
              *
              * So the narrowest things yield first, which is `DECK_FLOOR`'s rule one row up. The
              * field keeps its own floor (`NAME_FLOOR`, in {@link DeckNameField}); the switch and
-             * the readout drop to a second line when they no longer fit beside it. Nothing
-             * overlaps at any width, because nothing is squeezed past its own content any more.
+             * the Compare button drop to a second line when they no longer fit beside it.
+             * Nothing overlaps at any width, because nothing is squeezed past its own content
+             * any more.
              *
              * **The field is the bare `<input>` this box's flex layout expects**, which is why
              * {@link DeckNameField} draws no wrapper of its own — see it.
@@ -2550,9 +2533,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       </button>
                     ))}
                   </div>
-                  {/* The reason to open the difference dialog, said before it is opened. Copies
-                      are the dialog's business; this counts *rows the two lists disagree
-                      about*, which is what a reader means by "cards". */}
+                  {/* **A button that says what it does, where a count used to sit.** The
+                      readout it replaces ("N cards differ") was computed in this file over a
+                      second read of the other list, by a rule that disagreed with the dialog it
+                      opened — so the two surfaces routinely gave a reader two different numbers
+                      for one question. A verb needs no rule, needs no second `deck_get`, and
+                      cannot go stale; the count that matters is the dialog's own figure strip,
+                      one press away. Sized like the switch beside it rather than like the
+                      hyperlink it used to imitate: it is a control. */}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -2562,12 +2550,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                     aria-expanded={layer?.kind === "theoryDiff"}
                     aria-haspopup="dialog"
                     className={cn(
-                      "shrink-0 rounded-md px-1 font-mono text-[0.6875rem] text-dim",
-                      "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                      "h-9 shrink-0 rounded-md border border-border px-2.5 text-xs text-dim",
+                      "transition-colors duration-150 hover:border-accent hover:text-accent",
+                      "motion-reduce:transition-none",
                       FOCUS,
                     )}
                   >
-                    {differing === 1 ? "1 card differs" : `${differing} cards differ`}
+                    Compare
                   </button>
                 </>
               )}
