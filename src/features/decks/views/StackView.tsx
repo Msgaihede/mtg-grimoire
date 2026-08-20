@@ -306,6 +306,7 @@ export function StackView({
   groups,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -317,6 +318,9 @@ export function StackView({
    *  card's own unit price. One value for the whole view, so the two cannot disagree. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
+   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
@@ -605,6 +609,7 @@ export function StackView({
             group={group}
             marketplace={marketplace}
             violations={violations}
+            theoryMatches={theoryMatches}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -668,6 +673,7 @@ export function StackView({
               group={group}
               marketplace={marketplace}
               violations={violations}
+              theoryMatches={theoryMatches}
               onSelect={selectCard}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -692,6 +698,7 @@ function StackGroup({
   group,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -703,6 +710,9 @@ function StackGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
+   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */
@@ -879,6 +889,7 @@ function StackGroup({
             label={group.name}
             currency={marketplace.currency}
             violations={violations}
+            theoryMatches={theoryMatches}
             onSelect={onSelect}
             actions={actions}
             selectedSlot={selectedSlot}

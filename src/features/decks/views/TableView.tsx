@@ -27,7 +27,14 @@ import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { DeckFinishMark, GameChangerBadge, rowMarkColor, TagDot } from "../CardMarks";
+import {
+  DeckFinishMark,
+  GameChangerBadge,
+  rowMarkColor,
+  TagDot,
+  THEORY_MATCH_LABEL,
+  TheoryMatchBadge,
+} from "../CardMarks";
 import {
   deckCardProps,
   deckCardSelectedProps,
@@ -43,6 +50,7 @@ import {
 import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
+import { matchesTheory } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { GroupHeader } from "./GroupHeader";
@@ -55,7 +63,16 @@ import { GroupHeader } from "./GroupHeader";
  */
 type Row =
   | { kind: "group"; key: string; group: CardGroup }
-  | { kind: "card"; key: string; group: CardGroup; card: DeckCard; ruleBreakText: string | null };
+  | {
+      kind: "card";
+      key: string;
+      group: CardGroup;
+      card: DeckCard;
+      ruleBreakText: string | null;
+      /** The deck's plan asks for this row too — `theoryMatch.ts`. Resolved into the row rather
+       *  than looked up in the cell, so the memo below is the one place the set is read. */
+      inTheory: boolean;
+    };
 
 /**
  * How much taller a band gets while its pile is being renamed — **and this view is the one that
@@ -80,6 +97,7 @@ export function TableView({
   groups,
   marketplace,
   violations,
+  theoryMatches,
   onSelect,
   actions,
   selectedSlot,
@@ -91,6 +109,9 @@ export function TableView({
    *  the whole view, so a band and the rows under it cannot name two currencies. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed in whole
+   *  like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /**
    * What may be done to a card here — see {@link DeckCardActions}.
@@ -120,9 +141,10 @@ export function TableView({
           group,
           card,
           ruleBreakText: ruleBreak(violations?.get(card.cardId)),
+          inTheory: matchesTheory(theoryMatches, card),
         })),
       ]),
-    [groups, violations],
+    [groups, violations, theoryMatches],
   );
 
   const columns = useMemo<TableColumn<Row>[]>(
@@ -195,6 +217,15 @@ export function TableView({
                 <>
                   <GameChangerBadge />
                   <span className="sr-only">Game changer</span>
+                </>
+              )}
+              {/* The plan's tick, and the `sr-only` twin the other three views cannot have:
+                  a cell's text is really read, so this is the surface where the badge's word is
+                  said rather than folded into `deckCardName`. */}
+              {row.inTheory && (
+                <>
+                  <TheoryMatchBadge />
+                  <span className="sr-only">{THEORY_MATCH_LABEL}</span>
                 </>
               )}
               {row.ruleBreakText !== null && (

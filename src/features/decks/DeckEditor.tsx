@@ -67,6 +67,7 @@ import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting"
 import { DEFAULT_TAG_COLOR } from "./tagColors";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
+import { theoryMatchSet } from "./theoryMatch";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -2155,6 +2156,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [theoryEnabled, deck.cards, other.cards]);
 
   /**
+   * Which rows on screen the plan also asks for — the four views' theory tick.
+   *
+   * **Off the read this editor already pays for.** `other` is one `deck_get` per deck that keeps
+   * a plan, mounted for the difference readout above; this is a second conclusion drawn from the
+   * same rows rather than a second question asked of the backend. That is also why it is safe to
+   * be a set rather than a lookup per card — a hundred-card deck is one pass, once, and the
+   * views index it.
+   *
+   * **`live` only, and `undefined` everywhere else.** On the Theory tab `other` holds the *live*
+   * list, so the same set would mean "already sleeved up" — a defensible mark, and not the one
+   * that was asked for. `undefined` rather than an empty set is the distinction
+   * {@link theoryMatchSet} exists to keep: no plan is not the same statement as a plan that
+   * wants none of this.
+   */
+  const theoryMatches = useMemo(
+    () => theoryMatchSet(theoryEnabled && variant === "live" ? other.cards : undefined),
+    [theoryEnabled, variant, other.cards],
+  );
+
+  /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
    *
    * Filtering happens **before** the grouping, so every count and price in a heading is a count
@@ -2366,6 +2387,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
+    theoryMatches,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this

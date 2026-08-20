@@ -547,6 +547,35 @@ reader to configure the deck they had just made; it now asks all of them.
   handed the reader was two identical lists with no way to tell which one they were editing.
   `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
   plan".
+- **The Live list marks which of its cards are the plan, and that mark is `theoryMatch.ts`.** A
+  live list is what the reader has actually sleeved up; the one thing it cannot say about itself is
+  which rows are the deck they designed and which are the proxies and stand-ins waiting to be
+  replaced. `TheoryMatchMark` — a tick in `CountTag`'s own banner, top-right — says it, on all four
+  views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
+  **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
+  sleeved into Main deck is still the card that was planned, and a mark that went dark because a
+  pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
+  `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
+  `foil` against a live row the reader never said anything about.
+  **It is not `deck_theory_diff`'s rule and the two must not be conflated.** The shopping list
+  groups by *oracle card* and subtracts *quantities*, because it answers "what would I have to
+  buy"; this answers "is the card in front of me the one I planned", which is a question about the
+  row. A live 2-of against a planned 4-of is the planned card, half-acquired — the toolbar's
+  "N cards differ" readout is what counts that, and `ONE_DIRECTION` in `TheoryDiffDialog` is why
+  the shopping list lists neither.
+  **It costs no read.** `DeckEditor` already mounts `other = useDeck(…, the opposite variant)` for
+  that readout, so the set is a second conclusion drawn from rows already in cache. It is built
+  only when `theoryEnabled && variant === "live"`, and `undefined` otherwise — `undefined` and an
+  empty set are different statements, and `theoryMatchSet` exists to keep them apart: on the
+  **Theory** tab `other` holds the *live* list, so the same set there would silently mean "already
+  sleeved up".
+  **What moved to make room: the `RULE BREAK` mark, out of the stacked card's top-right corner and
+  down to its bottom-left** (2026-08-20), where `GridView` had always drawn it. A tick is the one
+  glyph a reader could take for "this card is fine", so `CardMarks.tsx`'s four separations stopped
+  being an observation and became a constraint — and **place** is the one a reader takes in before
+  they have read either mark. The stack's offset is the only sum on that card mixing a scaled term
+  with a fixed one (`0.25rem × --mark-scale + 4px`): the 4px is `STACK_DATA_RISE`, which does not
+  scale, so a wholly scaled offset clears the foot at 1× and hides behind it at 0.5×.
 - **`src/features/decks/auditText.ts` is the only thing that reads the audit payload, and the only
   thing that words it** — a sentence is domain logic and the table has to survive the day the
   wording changes. `deck_audit` has no `summary` column and never will.

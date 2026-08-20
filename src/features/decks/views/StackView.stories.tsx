@@ -6,9 +6,11 @@ import {
   deckCard,
   deckCategory,
   deckGroups,
+  deckTheoryMatches,
   deckViolations,
   printing,
 } from "../../../../.storybook/fake/fixtures";
+import { THEORY_MATCH_LABEL } from "../CardMarks";
 import { DECK_CARD_ATTR } from "../dnd";
 import { buildGroups } from "../grouping";
 import { RAIL_ATTR } from "./columns";
@@ -750,5 +752,41 @@ export const KeyboardWalk: Story = {
     await userEvent.keyboard("{ArrowUp}");
     expect(cards[1]).toHaveFocus();
     expect(args.onSelect).toHaveBeenCalledTimes(3);
+  },
+};
+
+/**
+ * The **Live** list of a deck that keeps a plan, where four of the ten cards are the plan and six
+ * are not.
+ *
+ * This is the whole point of the mark: a live list is what the reader has actually sleeved up, and
+ * the one thing it cannot say about itself is which of its cards are the deck they designed and
+ * which are the proxies and stand-ins waiting to be replaced. The tick says it, in the corner
+ * opposite the `RULE BREAK` mark — see `CardMarks.tsx` for why those two are never allowed to
+ * share one.
+ *
+ * `theoryMatches` is `undefined` in every other story in this file, which is what a deck with the
+ * theory list switched off looks like and what the **Theory** tab itself looks like: no plan to
+ * compare against, so no ticks.
+ */
+export const TheoryMatches: Story = {
+  args: { theoryMatches: deckTheoryMatches() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Four ticked cards, and the label is the one string `THEORY_MATCH_LABEL` defines — a
+    // `title`, so `getByTitle` is what a pointer would find. The marks are `aria-hidden`, which
+    // is why the words below are read off the button instead.
+    expect(canvas.getAllByTitle(THEORY_MATCH_LABEL)).toHaveLength(4);
+
+    // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
+    // one sentence because a button's `aria-label` replaces everything inside it.
+    const both = canvas.getByRole("button", { name: /^Island/ });
+    expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
+    expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
+
+    // And a card the plan does not ask for says neither.
+    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
+    );
   },
 };

@@ -30,6 +30,7 @@ import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
+import { theorySlot } from "@/features/decks/theoryMatch";
 import type { ValidationIssue } from "@/features/decks/validation/types";
 import type {
   CategoryKind,
@@ -479,6 +480,42 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
       ],
     ],
   ]);
+}
+
+/**
+ * The plan behind {@link deckGroups}, as the set of slots `theoryMatch.ts` answers with — so a
+ * view story can draw the theory tick beside the two marks it must never be confusable with.
+ *
+ * **Four of the ten cards and deliberately not all of them.** A fixture where every card carried
+ * the mark would prove the mark renders and nothing else; the reader's question on this surface
+ * is *which* of these cards is the plan, so the fixture has to be able to answer it wrongly. The
+ * four are picked to put the tick against each of the other marks in turn:
+ *
+ * * `lea 288` (Island) is the one {@link deckViolations} reports — a 2-of in a singleton format —
+ *   so this is the card carrying **both** marks, in the opposite corners `CardMarks.tsx` moved
+ *   the rule break down to get.
+ * * `lea 161` (Lightning Bolt) is the **game changer**, so the tick sits under the crown chip on
+ *   the Grid tile and at the other end of the gold ribbon on the stacked card.
+ * * `mh2 138` (Ragavan) carries a **tag**, so the stack's quantity tag is drawn in a colour and
+ *   the tick at the far end of the same strip has to hold its own against it.
+ * * `gtc 148` (Boros Charm) is a plain 2-of no other mark touches — the control.
+ *
+ * What is left unticked matters as much: `dom 168` (Llanowar Elves) is the commander, and
+ * `nph 57` (Dismember) is the card the reader owns none of — so a story can show that "in the
+ * plan" and "not yet acquired" are two different statements about one deck.
+ *
+ * **The printings are named rather than the cards**, for {@link deckViolations}' reason: `CARDS`
+ * is generated and may be regenerated against a newer sync, and a hardcoded name would go on
+ * reading as true while pointing at whatever printing that slot had become.
+ */
+export function deckTheoryMatches(): ReadonlySet<string> {
+  return new Set(
+    [printing("lea", "288"), printing("lea", "161"), printing("mh2", "138"), printing("gtc", "148")]
+      // `deckCard` builds every fixture row with `finish: null`, so the plan's slots are the
+      // regular copies — which is the case the app's own grain is strictest about. See
+      // `theorySlot`, whose second term this is.
+      .map((card) => theorySlot({ cardId: card.id, finish: null })),
+  );
 }
 
 /* ------------------------------------------------------------------- the updater ------- */
