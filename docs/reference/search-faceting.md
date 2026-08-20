@@ -106,6 +106,96 @@ using it.
   exactly the kind of change that moves a line count without moving anything else. The
   printing counts and the greying claim above are facts about the corpus and are untouched by
   it; the pixels are not.
+- **Two filters have no dimension in the index and are resolved against the database instead:
+  the FTS text and the tag terms.** `run_facets` turns each into a bitset over `cards.rowid`,
+  intersects them, and hands `compute` the **one** narrowing set it takes — which is then in every
+  base, including its own dimension's, because a facet describes the search the reader is looking
+  at. Three rules run through that and each has a way of failing quietly:
+  - **`None` means _no clause_, never _an empty set_.** All-punctuation text produces no text
+    clause (`fts_query` answers `None`) and a cleared chip row produces no tag clause — an empty
+    bitset in either slot would turn a search for `"!!!"` into zero results and grey every option
+    over a page that is full. With both halves present they are intersected; with one, that one
+    rides alone.
+  - **Every bitset is sized from `ix.capacity`, never from a row count.** `BitSet::and` takes the
+    **shorter** operand, so a set built to any other size silently truncates every base it narrows
+    and sends back counts that are **low** — and low counts grey out options that would have
+    worked, which hides cards and which nobody reports. The tag side is the reachable one: a tag
+    reaches a few hundred illustrations against a 116 712-printing corpus, so a set sized from its
+    own answer would be a handful of words long. `facets.rs`'s fixture seeds a printing at
+    **rowid 5 000** for exactly this; four consecutive rowids all live in word 0 and cannot catch it.
+  - **The tag slugs come from `filters::picked_tags`, the search's own normaliser**, called rather
+    than re-derived — a facet counted over a slug list the search trimmed differently reports
+    options as live that the search cannot reach. The **weight floor rides the art include arm and
+    nothing else**, mirroring `push_card_filters` clause for clause: the exclude arm ignores it
+    ("not a dog" means not a dog at all, including weakly) and the oracle closure has no `weight`
+    column to read.
+- **What a tag term costs, measured 2026-08-20** through `node:sqlite` against a copy of the dev
+  database (116 712 printings, `oracle_tag_cards` at 423 080 rows), with v20's
+  `idx_oracle_tag_cards_slug` created on the copy — that database is at `user_version` 19 and
+  predates the art tables entirely. Best of five, and a **ceiling** rather than the Rust cost: the
+  harness marshals every rowid into a JS object where `probe_docs` sets a bit. `triggered-ability`
+  (47 599 printings) **25.0 ms**, `activated-ability` (39 502) 19.2 ms, `removal` (20 763)
+  12.7 ms, `ramp` (9 522) 7.3 ms — so the widest tag in the corpus lands on the same 25 ms the FTS
+  bitset costs at 100 129 matches, which is the floor for any design. The plan is
+  `SEARCH t USING COVERING INDEX idx_oracle_tag_cards_slug (slug=?)` feeding
+  `SEARCH c USING COVERING INDEX idx_cards_oracle (oracle_id=?)`, pinned by
+  `the_facet_closure_lookup_probes_both_indexes_and_scans_neither`. **It is one statement per
+  picked slug**, so three tags cost three of them, and nothing is cached.
+- **A keystroke DOES reach those statements, and this file used to say it could not.** The claim
+  was that the Tags page's only text box searches *tags*, so the facet key moves on a chip press
+  and never on a keystroke. That is true of the rail's type-ahead and false of the page: it also
+  renders `FilterBar`, whose `#card-search-text` is unconditional and feeds `debouncedText` into
+  `facetReq.text`. Driven in the shipped window **2026-08-20** with the real 952,729-row art
+  closure and `plane` (38,144 illustrations) picked, typing into the card box produced exactly one
+  `facet_cards` carrying both `text` and `artTags`, at **47 ms** — debounced, so one call per
+  pause rather than one per character. Measured over the same taxonomy, through the app, best of
+  three, **debug build**: nothing picked 30 ms · text only 6 ms · `plane` 63 ms · `plane`+text
+  46–56 ms · `plane`+text+floor 142–152 ms · `plane`+`humanoid`+text 65–82 ms · `dog` 5 ms. **Text
+  does not add to a tag** (the FTS bitset narrows what `compute` then walks) and **the cost is per
+  picked slug and scales with that slug's breadth**, which is why `dog` costs nothing and a second
+  wide tag adds ~20 ms.
+- **The floored facet probe, at real breadth**: `plane` 63 ms unfloored against **153–174 ms**
+  floored — **2.4×**, the same shape as the synthetic 25.6 → 91.3 ms below and about the same
+  ratio, so that estimate held up. Same run, same day, debug build. It is not a reason to widen
+  `idx_art_tag_illustrations_slug`: see `index/facets.rs`, where `(slug, weight)` is measured at
+  ten times *worse* than the status quo against the real closure.
+- **Three statements read the tag closures, all three have a different sensitivity to the slug
+  index, and one figure must never be quoted for another.** They are easy to conflate because
+  they are all "a tag lookup", and the numbers differ by four orders of magnitude:
+  - `tags::query`'s correlated `count(*)` — the tag search box's reach-per-tag — is the **hang**:
+    **49 ms** with the index against **531 seconds** without, because a wide needle is 11 531
+    candidate tags × a 951 499-row scan each. That figure is `TAG_INDEXES_SQL`'s, and it belongs
+    to the type-ahead rather than to anything on the filter row.
+  - `push_card_filters`' card filter **is no longer a correlated `EXISTS` on its include arm**,
+    which is what this bullet used to describe. Since 2026-08-20 an include is
+    `subject_id IN (SELECT … WHERE slug = ?)` — the closure is read once for the slug and `cards`
+    is driven through `idx_cards_illustration` — and the collapsed count it feeds measured
+    **315 ms → 8 ms** on `dog` and **725 ms → 614 ms** on `plane`, with the weight floor going
+    from 1.7–3.6× to free. The *exclude* arm is still a correlated `NOT EXISTS`, deliberately, and
+    `filters.rs` says why in the one place a reader would try to "simplify" it. Its cost without
+    the slug index is still unmeasured and nothing should attach a number to it.
+  - **The facet's set form is measured on both sides and degrades rather than hangs**: without the
+    slug index it plans as one `SCAN t` for the whole statement rather than a scan per anything,
+    and `removal` measured **57.1 ms** against 12.7 ms, same run, same day. A 4.5× regression,
+    which is what `the_facet_closure_lookup_probes_both_indexes_and_scans_neither` guards.
+- **The art weight floor costs the covering index — the one number here worth watching.**
+  `weight` is not in `idx_art_tag_illustrations_slug`, so a floored lookup takes a second seek per
+  closure row into the `WITHOUT ROWID` table. Measured the same day, same harness, over a
+  **synthetic** art closure: 588 744 rows over the corpus's *real* `illustration_id` column
+  (111 735 non-NULL, 50 536 distinct), because **no art taxonomy has been ingested anywhere yet** —
+  so the join cardinality is the live one and the tag breadth is invented. The widest slug ran
+  **25.6 ms** unfloored against **91.3 ms** floored (78.5 ms on a re-run), the plan dropping from
+  `SEARCH t USING COVERING INDEX` to `SEARCH t USING INDEX`. **The fix is measured and
+  deliberately not taken**: widening that index to `(slug, weight)` restores the covering plan and
+  takes the floored query to **24.0 ms** while leaving the unfloored one at 23.2 ms, for a 0.7 s
+  one-time build — but it is a schema change (`TAG_INDEXES_SQL` runs unconditionally with
+  `IF NOT EXISTS`, so widening it needs a ladder rung to `DROP` the narrow one first) bought
+  against a breadth nobody has demonstrated in the real taxonomy, where `dog` reaches 439
+  illustrations. **That measurement has since been taken and the answer was no** — see the
+  bullet above and `index/facets.rs`' `DO NOT WIDEN THAT INDEX TO (slug, weight)`: against the
+  real 952,729-row closure that index measured *ten times worse* than the status quo, and the
+  floor's cost was removed by changing the card filter's query shape instead, at no schema
+  cost. Everything above this sentence is the synthetic closure it was written against.
 - **It is derived, and it is rebuilt wholesale.** Nothing is patched in place except `owned`,
   the one dimension a user changes without a sync. `cards` is dropped and recreated by every
   sync, which renumbers every rowid, so a stale index does not go gently out of date — **it

@@ -1,9 +1,11 @@
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
+import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
+import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -48,12 +50,19 @@ export function SettingsPage({ update }: { update: Update }) {
   const history = useReleaseHistory(update.status?.lastCheckAt ?? null);
   const cache = useLocalCache();
   const danger = useDangerZone();
+  const hidden = useHiddenTags();
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
       <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
+
+      {/* Above the error log rather than below it, because this is the page's only *undo*: the
+          rail tells a reader who has just hidden a tag that Settings is where it comes back, and
+          the shorter the scroll from the top of the page to that list, the fewer of them give up
+          on the way. Everything below is either a report or a deletion. */}
+      <HiddenTagsPanel hidden={hidden} />
 
       <ErrorLogPanel log={log} />
 

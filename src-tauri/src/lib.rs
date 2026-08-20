@@ -18,7 +18,6 @@ pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
-pub mod oracle_tags;
 pub mod paths;
 pub mod reconcile;
 pub mod reset;
@@ -27,6 +26,7 @@ pub mod scryfall;
 pub mod search;
 pub mod sorting;
 pub mod sync;
+pub mod tags;
 pub mod update;
 pub mod window;
 pub mod wishlist;
@@ -372,10 +372,17 @@ pub fn run() {
             marketplace::set_marketplace,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
-            oracle_tags::oracle_tags_refresh,
-            oracle_tags::oracle_tags_status,
-            oracle_tags::oracle_tags_for_cards,
-            oracle_tags::oracle_tags_for_printings,
+            tags::oracle::oracle_tags_refresh,
+            tags::oracle::oracle_tags_status,
+            tags::oracle::oracle_tags_for_cards,
+            tags::oracle::oracle_tags_for_printings,
+            tags::art::art_tags_refresh,
+            tags::art::art_tags_status,
+            tags::query::tag_search,
+            tags::query::tag_children,
+            tags::muted::tag_mute,
+            tags::muted::tag_unmute,
+            tags::muted::tags_muted,
             export::export_write_file,
             reset::collection_clear,
             reset::wishlist_clear,
@@ -464,7 +471,21 @@ pub fn run() {
             let tags_state = state.clone();
             let tags_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                oracle_tags::refresh_if_due(&tags_state, &tags_app).await;
+                tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
+            });
+
+            // Scryfall's Art Tags, on a fifth task rather than chained onto the oracle one
+            // above. **They are the same shape of job and that is exactly why they must not
+            // share a task**: the art file is 12.5 MB against the oracle file's 5.85 MB, so
+            // awaiting one before the other would make the bigger download the reason the
+            // smaller taxonomy is late — and on a first run, the reason a deck add is still
+            // categorising by card type minutes after launch. They contend for the write
+            // connection a batch at a time, which is the engine's job and not the launch's.
+            // Silent and best-effort, like every one of its siblings.
+            let art_state = state.clone();
+            let art_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tags::art::refresh_if_due(&art_state, &art_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:

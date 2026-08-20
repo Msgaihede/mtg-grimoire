@@ -99,17 +99,23 @@ const CARDS_COLUMNS: &str = "
 /// **This list describes the table at HEAD, so only the NEWEST migration step may replay
 /// it.** It names `legal_mask`, which the v10 step is what adds — so the v1 block that used
 /// to replay it would now fail on every fresh install with "no such column", the list
-/// describing a table nine versions ahead of the one in front of it. The steps below v10
-/// therefore create no index at all: v10's replay is where every database walking the ladder
-/// gets them, and every statement being `IF NOT EXISTS` is what makes that a bring-up-to-date
-/// rather than a rebuild. A step that *changes* a definition — as v10 changes this one —
-/// drops the old one first, or `IF NOT EXISTS` silently keeps what is already there.
+/// describing a table nine versions ahead of the one in front of it. Every step below the
+/// replay therefore creates no index at all: the replay is where every database walking the
+/// ladder gets them, and every statement being `IF NOT EXISTS` is what makes that a
+/// bring-up-to-date rather than a rebuild. A step that *changes* a definition — as v10 changes
+/// `idx_cards_collapse` — drops the old one first, or `IF NOT EXISTS` silently keeps what is
+/// already there.
 ///
-/// The rule is a *moving* one: a v13 that touches `cards` must take the replay from v10, and
-/// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what fails if it does not.
-/// A step that leaves `cards` alone entirely — v8, the deck tables, v9, the error log, v11,
-/// the marketplace price tables, and v12, the oracle-tag tables — neither needs the list nor
-/// may replay it, and none of them takes the title of newest creator from v10.
+/// The rule is a *moving* one, and **it has moved: the replay lives in the v20 step, not in
+/// v10's any more.** v20 adds `idx_cards_illustration` to this list, and a database entering
+/// the ladder above v10 — every machine that has synced since — would never have run v10's
+/// block, so an index left there is an index those machines never get.
+/// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what fails if a step that
+/// touches `cards` lands without taking the replay over; v10 keeps only its own
+/// `DROP INDEX`, which is history and describes what that step corrected. A step that leaves
+/// `cards` alone entirely — v8, the deck tables, v9, the error log, v11, the marketplace price
+/// tables, and v14, the oracle-tag tables — neither needs the list nor may replay it, and none
+/// of them takes the title of newest creator.
 const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
@@ -140,6 +146,17 @@ const CARDS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_cards_collapse \
      ON cards(oracle_id, is_paper, released_at, id, name, price_usd, \
               legal_mask, cmc, color_identity)",
+    // Art tags key on `illustration_id` — an art tag is a fact about a *picture*, so the
+    // printings it belongs to are the ones carrying that picture — and the column had no index
+    // until v20. A loop of 50 k point lookups on it against the 609 MB dev database did not
+    // finish in five minutes (measured 2026-08-20, debug). 111 735 of 116 712 printings carry
+    // one, so this is close to a full second copy of the column rather than a sparse index.
+    //
+    // In this list rather than in the v20 step, for the reason the list exists: `swap_staging`
+    // drops and recreates `cards` on every sync, so an index declared only in a migration is
+    // an index the app has until the next morning — and the failure is silent, because nothing
+    // becomes wrong, only slow.
+    "CREATE INDEX IF NOT EXISTS idx_cards_illustration ON cards(illustration_id)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch.
@@ -200,7 +217,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 19;
+pub const SCHEMA_VERSION: i64 = 20;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -529,7 +546,11 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
     ('limited',         'Limited',              1, 40,  NULL, NULL, NULL, 0, 0, NULL,          20, 'max_one',             0, NULL, 1, 25, 'paper,arena,mtgo');";
 
 /// Bring `conn` up to the current schema version. Idempotent: tracked by
-/// `PRAGMA user_version`, so a rerun on an up-to-date database is a no-op.
+/// `PRAGMA user_version`, so a rerun on an up-to-date database changes nothing.
+///
+/// **A rerun is not quite a no-op, and that is deliberate**: the tail of this function replays
+/// [`TAG_INDEXES_SQL`] unconditionally, outside the ladder. The comment there says why, and it
+/// is a hang rather than a slow page that it prevents.
 ///
 /// **Adding a column later:** leave [`CARDS_COLUMNS`] alone and add a new `if v < N`
 /// block with an `ALTER TABLE cards ADD COLUMN`, the way `v < 2` and `v < 3` below do.
@@ -546,7 +567,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //
         // The indexes are deliberately not here. [`CARDS_INDEXES`] describes the table at
         // head and names columns later steps add, so the newest step replays it and no
-        // older one may — see the constant. A fresh install gets its indexes at v10, in the
+        // older one may — see the constant. A fresh install gets its indexes at v20, in the
         // same `migrate` call as this.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
@@ -969,13 +990,15 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 7 {
         // v7 is `idx_cards_collapse`, the collapsed search's covering index — and it has no
-        // statements of its own any more. It used to replay [`CARDS_INDEXES`] here; v10 puts
-        // a column in that list which no step before v10 has added, so the replay moved down
-        // to v10 and this step's index is created there, in its widened form, for every
-        // database that walks past here. What is left is the version this step stands for,
-        // kept rather than deleted because the ladder is the record of what each version
-        // was — and because creating the narrow index only for v10 to drop it would be a
-        // 0.7 s index build over the live corpus, spent on nothing.
+        // statements of its own any more. It used to replay [`CARDS_INDEXES`] here; that
+        // list describes `cards` at head, so only the newest step to touch the table may
+        // create from it — and the replay has moved twice since: down to v10, which put
+        // `legal_mask` in the list, and on to **v20**, which put `illustration_id` there.
+        // This step's index is created wherever the replay lives now, in its widened form,
+        // for every database that walks past here. What is left is the version this step
+        // stands for, kept rather than deleted because the ladder is the record of what each
+        // version was — and because creating the narrow index only for v10 to drop it would
+        // be a 0.7 s index build over the live corpus, spent on nothing.
         //
         // Nothing here reads `raw`, so [`json_raw`] has no part to play. Nothing here
         // touches an FTS-indexed column (`name`/`type_line`/`search_text`) and no rowid is
@@ -1274,15 +1297,20 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // `the_v10_step_replaces_the_narrow_collapse_index_rather_than_skipping_it` is the
         // fence: it fails without this line.
         //
-        // The replay is this step's because [`CARDS_INDEXES`] describes the table at head
-        // and only the newest step may create from it (see the constant) — so these four
-        // statements are also where a fresh install, and every database that arrives here
-        // missing an index, gets them. Hence the whole batch rather than the one name.
-        // Two steps sit between this one and v7 and neither touches `cards` — v8 is the deck
-        // tables, v9 is `error_log` — so neither needs the list nor may replay it; that this
-        // step is still the newest is what keeps the constant's rule true, and
-        // `every_version_ends_with_the_same_schema_as_a_fresh_install` is what would fail if
-        // a v11 landed without moving the replay up.
+        // **The `DROP INDEX` below is all that is left of this step's index work, and the
+        // drop is the half that had to stay.** The replay was this step's while it was the
+        // newest step to touch `cards`; v20 adds `idx_cards_illustration` to
+        // [`CARDS_INDEXES`] and takes the replay with it, because that list describes the
+        // table at head and only the newest step may create from it (see the constant). A
+        // database sitting above v10 — every machine that has synced since — never runs this
+        // block at all, so an index left here is an index it would never get.
+        //
+        // What cannot move is the drop: `idx_cards_collapse` is *widened* by the column this
+        // step adds, and every statement in the list is `IF NOT EXISTS`, so without the drop
+        // the widening is a silent no-op on exactly the machines that need it. The drop
+        // describes what v10 corrected and is history; the creation describes head and is not.
+        // `the_v10_step_replaces_the_narrow_collapse_index_rather_than_skipping_it` walks a v9
+        // database to head and is what would fail if the drop went with the replay.
         //
         // The backfill reads `legalities`, which is a plain JSON TEXT column and not `raw`,
         // so [`json_raw`] has no part to play — [`crate::legalities::mask_sql`] says why
@@ -1319,7 +1347,6 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             mask = crate::legalities::mask_sql("legalities")
         ))?;
         tx.execute_batch("DROP INDEX IF EXISTS idx_cards_collapse;")?;
-        tx.execute_batch(&cards_indexes_sql())?;
         // Literal `10`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 10;")?;
         tx.commit()?;
@@ -1354,7 +1381,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // rather than file a foil price under a nonfoil key.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables) and
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables) and
         // v9 (the error log) left it. Nothing here is FTS-indexed and no rowid is renumbered,
         // so no `cards_fts` rebuild is owed: the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
@@ -1396,7 +1423,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // per session.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables), v9
         // (the error log) and v11 (the price tables) left it. Nothing here is FTS-indexed and
         // no rowid is renumbered, so no `cards_fts` rebuild is owed either: the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
@@ -1456,7 +1483,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // lives; there is no backfill because there is nothing to compute.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid
+        // replay — v20 holds the title of newest creator. Nothing is FTS-indexed and no rowid
         // is renumbered, so no `cards_fts` rebuild is owed either.
         tx.execute_batch(
             "ALTER TABLE decks ADD COLUMN separate_x_group INTEGER NOT NULL DEFAULT 0;",
@@ -1504,7 +1531,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // tagging and inventing it back later would need a re-download.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables),
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables),
         // v9 (the error log) and v11 (the price tables) left it. Nothing here is FTS-indexed
         // and no rowid is renumbered, so no `cards_fts` rebuild is owed: the reasoning
         // `the_v2_backfill_leaves_the_search_index_answering` pins.
@@ -1542,7 +1569,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // before the upgrade.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables), v9
         // (the error log), v11 (the price tables), v12/v13 (the two `decks` rungs) and v14
         // (the oracle-tag tables) left it. Nothing here is FTS-indexed and no rowid is
         // renumbered, so no `cards_fts` rebuild is owed either: the reasoning
@@ -1620,7 +1647,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // would recover was never stored anywhere.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator, exactly as v8 (the deck tables), v9
+        // replay — v20 holds the title of newest creator, exactly as v8 (the deck tables), v9
         // (the error log), v11 (the price tables), v12/v13 (the two earlier `decks` rungs), v14
         // (the oracle-tag tables) and v15 (`deck_categories.origin`) left it. Nothing here is
         // FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild is owed either: the
@@ -1662,7 +1689,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // feature was asked for.
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid
+        // replay — v20 holds the title of newest creator. Nothing is FTS-indexed and no rowid
         // is renumbered, so no `cards_fts` rebuild is owed either.
         //
         // **`AUDIT_KINDS` is untouched and stays at nine.** An undo records `kind = 'deck'`
@@ -1721,7 +1748,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // below, which adds one.)
         //
         // Nothing here touches `cards`, so no entry in [`CARDS_INDEXES`] and no claim on its
-        // replay — v10 keeps the title of newest creator. Nothing is FTS-indexed and no rowid is
+        // replay — v20 holds the title of newest creator. Nothing is FTS-indexed and no rowid is
         // renumbered, so no `cards_fts` rebuild is owed either.
         tx.execute_batch(
             "ALTER TABLE format_specs
@@ -1788,6 +1815,91 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA user_version = 19;")?;
         tx.commit()?;
     }
+    if v < 20 {
+        let tx = conn.unchecked_transaction()?;
+        // **Scryfall Tagger's art tags, in a parallel set of tables rather than a `kind`
+        // column on the oracle ones, because the join column differs.** An art tag is a fact
+        // about an *illustration*: it belongs to the printings carrying that picture and to no
+        // others, so a card with five arts has five illustrations and the dog is in one of
+        // them. Folding both taxonomies into one table would mean a key that is an
+        // `oracle_id` on some rows and an `illustration_id` on others, which is a column no
+        // index can serve and no join can trust. See the 2026-08-20 research.
+        tx.execute_batch(ART_TAG_TABLES_SQL)?;
+        // The mute list. **A user table** — it is the reader's answer about which tags they
+        // never want offered — so it is deliberately outside [`ART_TAG_TABLES`] and
+        // [`ORACLE_TAG_TABLES`], the two lists a refresh drops and rebuilds wholesale. Both
+        // taxonomies key into it, which is why it carries the namespace rather than being two
+        // tables.
+        tx.execute_batch(MUTED_TAGS_SQL)?;
+        // `oracle_tags` gains the two columns [`ART_TAG_TABLES_SQL`] declares on its own
+        // table, so that one mute list and one search can serve both namespaces.
+        //
+        // **Unconditional, because the `if` above already guarantees it runs once**: the
+        // version bump is written in this same transaction, so a database that has run this
+        // block never reaches it again. Backfilled as `''` rather than left NULL — the next
+        // refresh rewrites every row, since the taxonomy is dropped and rebuilt wholesale, so
+        // neither value is ever read. What the backfill buys is `NOT NULL` on both columns,
+        // which is what lets the live table and its staging twin share one shape; and
+        // `DEFAULT` is what makes the `ALTER` legal at all, since SQLite refuses to add a
+        // `NOT NULL` column without one.
+        tx.execute_batch(
+            "ALTER TABLE oracle_tags ADD COLUMN id TEXT NOT NULL DEFAULT '';
+             ALTER TABLE oracle_tags ADD COLUMN slug_norm TEXT NOT NULL DEFAULT '';",
+        )?;
+        // The indexes over the two taxonomies. Beside the tables rather than in them because
+        // both live tables are renamed over by a swap, which is the same reason
+        // [`CARDS_INDEXES`] is a list — see [`TAG_INDEXES_SQL`].
+        tx.execute_batch(TAG_INDEXES_SQL)?;
+        // **This step takes the [`CARDS_INDEXES`] replay over from v10**, which is the rule
+        // that constant states: it describes `cards` at head, this is the newest step to touch
+        // it, and a database sitting anywhere above v10 would otherwise never be handed
+        // `idx_cards_illustration`. `IF NOT EXISTS` on every entry makes it a no-op for the
+        // four that are already there.
+        tx.execute_batch(&cards_indexes_sql())?;
+        // Nothing here is FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild is
+        // owed — the reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // Literal `20`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 20;")?;
+        tx.commit()?;
+    }
+
+    // **Outside the ladder, on purpose: the tag indexes are replayed on every launch, from
+    // every version.** Not belt and braces — the thing this prevents is a hung window, and the
+    // number was measured rather than guessed.
+    //
+    // [`crate::tags::query`] counts a tag's reach with a correlated `count(*)` over the
+    // closure, which is 49 ms with `idx_art_tag_illustrations_slug` and **531 seconds**
+    // without it: 11 531 candidate tags x a 951 499-row scan each, measured 2026-08-20 on a
+    // release build at that day's file size. So a database missing these indexes does not get
+    // a slow Tags page, it gets an app that stops responding when the reader types in the
+    // search box — and nothing about that symptom points here.
+    //
+    // **Self-healing, where a rung is one-shot — and the coupling above is what makes the
+    // difference matter.** A v21 rung would in fact reach every database in the state this was
+    // written for: the v20 step ran on real databases *before* the two closure indexes joined
+    // [`TAG_INDEXES_SQL`], so those have `20` recorded and `v < 20` is false for them forever.
+    // The argument for a replay is not that a rung cannot reach them. It is that a rung fires
+    // once, in one direction, and this index set has to be right on *every* launch: an
+    // interrupted swap, a restore of an older data folder, a hand-edited database, a future
+    // rung that renames a table. Any of those loses an index a rung already spent, and the
+    // failure is nine minutes of frozen window rather than a slower page. Every statement is
+    // `CREATE INDEX IF NOT EXISTS`, so on the overwhelming majority of launches this is four
+    // catalog lookups and a few microseconds.
+    //
+    // The copy inside the v20 rung is **not** a duplicate to delete: that one belongs to the
+    // step's transaction, where it lands with the tables it indexes. This one is the only
+    // thing that reaches a database the ladder is already done with.
+    //
+    // **Fatal, where [`prepare_database`] deliberately degrades**, and the coupling is what
+    // inverts the usual argument. Its two post-ladder repair steps `eprintln!` and carry on,
+    // because a stale FTS index costs accuracy and a leftover `cards_staging` costs disk — the
+    // app is still an app. Continuing here would instead hand the reader a launched window that
+    // locks up for nine minutes on the first keystroke in the tag box, which is strictly worse
+    // than a launch that says what is wrong. And a `CREATE INDEX IF NOT EXISTS` that fails at
+    // all means the database is not accepting DDL, so nothing after this point would have
+    // worked either.
+    conn.execute_batch(TAG_INDEXES_SQL)?;
     Ok(())
 }
 
@@ -1852,6 +1964,144 @@ const ORACLE_TAG_TABLES_SQL: &str = "
         tag_count INTEGER NOT NULL,
         tagging_count INTEGER NOT NULL
     );";
+
+/// The four art-tag tables and their watermark, as the v20 step creates them.
+///
+/// **A parallel set rather than a `kind` column on the oracle tables, because the join column
+/// differs**: an art tag is a fact about an *illustration*, so it belongs to the printings
+/// carrying that art and to no others. A card with five arts has five illustrations and the
+/// dog is in one of them.
+///
+/// A literal and history from the day it shipped, [`CARDS_COLUMNS`]' rule, with
+/// [`ART_TAG_STAGING_SQL`] as a *second* literal for [`ORACLE_TAG_TABLES_SQL`]'s reason.
+const ART_TAG_TABLES_SQL: &str = "
+    CREATE TABLE IF NOT EXISTS art_tags (
+        slug TEXT PRIMARY KEY,
+        -- Scryfall's stable uuid. `slug` stays the key — storage is rebuilt wholesale on every
+        -- ingest, so a rename is harmless there — but anything that *persists* a tag across
+        -- ingests has to be able to notice one, and `muted_tags` is exactly that. Their docs:
+        -- 'Do not treat tag slugs or labels as permanent identifiers […] Use the id field.'
+        id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        description TEXT,
+        -- The slug reduced to `[a-z0-9]`, computed at ingest. SQLite has no `regexp_replace`,
+        -- so the alternative is normalising every row on every keystroke of the tag search.
+        slug_norm TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS art_tag_parents (
+        -- Child first: every read of this table asks 'what is above this tag'.
+        child_slug TEXT NOT NULL,
+        parent_slug TEXT NOT NULL,
+        PRIMARY KEY (child_slug, parent_slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS art_taggings (
+        illustration_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        -- Stored because it is data we were given. **Unlike the oracle side this one is
+        -- read**: art tags use the full scale (median 462 008, strong 5 980, weak 4 495,
+        -- very_strong 2 680, measured 2026-08-20), where oracle taggings are 99.7 % median
+        -- and `strong` occurs exactly once in the whole file.
+        weight TEXT,
+        -- OMITTED rather than null on ~99 % of taggings, which is a different absence from
+        -- `description`'s null and needs a different parse.
+        annotation TEXT,
+        PRIMARY KEY (illustration_id, slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS art_tag_illustrations (
+        illustration_id TEXT NOT NULL,
+        -- Every tag the illustration holds *and* every ancestor of those tags.
+        slug TEXT NOT NULL,
+        -- The STRONGEST weight among the direct taggings this row descends from
+        -- ('very_strong' > 'strong' > 'median' > 'weak'). Resolved once here because a closure
+        -- row can be reached from several taggings that disagree: a printing whose `dog`
+        -- tagging is weak but whose `hound` tagging is strong is not a weak match, and
+        -- deciding that per row at read time would be work on every keystroke.
+        weight TEXT NOT NULL,
+        PRIMARY KEY (illustration_id, slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS art_tag_meta (
+        -- One row, ever — `oracle_tag_meta`'s shape and its reasons, for a second file on a
+        -- schedule of its own. A failed art refresh must not read as a failed oracle one.
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        etag TEXT,
+        updated_at TEXT,
+        ingested_at INTEGER NOT NULL,
+        checked_at INTEGER NOT NULL,
+        tag_count INTEGER NOT NULL,
+        tagging_count INTEGER NOT NULL
+    );";
+
+/// The tags a reader never wants offered, as the v20 step creates it.
+///
+/// **A user table.** Everything around it is rebuilt on a schedule — the card corpus daily,
+/// both taxonomies weekly — and this is the one row in the neighbourhood that is the reader's
+/// answer rather than Scryfall's. It is therefore deliberately absent from [`ART_TAG_TABLES`]
+/// and [`ORACLE_TAG_TABLES`], the two lists a refresh drops and rebuilds wholesale, and it has
+/// no staging twin: a `muted_tags_staging` would be a table the next swap emptied.
+///
+/// One table with a namespace column rather than two tables, because the two taxonomies have
+/// separate id spaces and every reader of this list wants both at once.
+const MUTED_TAGS_SQL: &str = "
+    CREATE TABLE IF NOT EXISTS muted_tags (
+        -- 'art' | 'oracle'
+        namespace TEXT NOT NULL,
+        -- Scryfall's STABLE uuid, not the slug. Their docs: 'Do not treat tag slugs or
+        -- labels as permanent identifiers.' A mute keyed on a slug silently un-mutes
+        -- itself the week Tagger renames the tag -- which is exactly the week it mattered.
+        tag_id TEXT NOT NULL,
+        -- The slug as it read when muted, so Settings can name the tag without a join
+        -- against a taxonomy that may have been rebuilt since.
+        slug TEXT NOT NULL,
+        muted_at INTEGER NOT NULL,
+        PRIMARY KEY (namespace, tag_id)
+    ) WITHOUT ROWID;";
+
+/// The indexes over the two live tag taxonomies.
+///
+/// **Here rather than in the `CREATE TABLE`s, for [`CARDS_INDEXES`]' reason one family over.**
+/// A tag refresh renames a staging table *over* the live one, and a rename carries the staging
+/// table's indexes rather than the live table's — so an index declared once at migration time
+/// is an index that vanishes at the first weekly refresh, with the app staying correct and
+/// merely becoming slow. **Every table indexed here is renamed over by a swap** — the
+/// taxonomies and both closures are all on [`ART_TAG_TABLES`] / [`ORACLE_TAG_TABLES`], and the
+/// staging twins carry no indexes at all — so [`swap_tag_staging`] replays this after its
+/// renames, and `IF NOT EXISTS` is what makes that a no-op the rest of the time.
+///
+/// Four indexes: each family has one on its taxonomy and one on its closure. The taggings
+/// tables need none — nothing reads them but the ingest that wrote them, and their primary
+/// key is the only order anyone asks for. Both
+/// families are in one constant and every swap replays all of it — the statements for the
+/// family that was not swapped are `IF NOT EXISTS` no-ops, and one list is one place to look.
+///
+/// `slug_norm` is what the tag search matches a normalised needle against.
+///
+/// **The closure indexes are what make the tag search's card counts affordable**, and the
+/// numbers are worth writing down because the shape looks harmless without them. A closure is
+/// `WITHOUT ROWID` on `(subject_id, slug)`, so counting *by slug* — which is the only count the
+/// Tags page wants, since a tag's reach is the whole point of showing it — has no path but a
+/// full scan of 951 499 rows.
+///
+/// Measured 2026-08-20 at that day's file size, release build, in memory: the grouped count
+/// these replace was **271 ms per `tag_search` call and flat** (a needle answering 11 tags cost
+/// the same as one answering 11 531, because SQLite materialises the subquery before the
+/// `WHERE` narrows anything), and `tag_children` over the 3 219 roots was **281 ms**. With
+/// these indexes and the correlated count they permit, the same two are **49 ms** and
+/// **26 ms**, and a narrow needle is **7.7 ms**. That is a type-ahead firing on every
+/// keystroke, so the difference is the feature working or not.
+///
+/// **Deleting one of these is not a slowdown, it is a hang.** `tags::query` counts
+/// per row now, so without the index a wide needle is 11 531 candidates x a 951 499-row scan
+/// each: **531 seconds**, measured. The two `the_tag_indexes_survive_a_*_tag_swap` tests are
+/// what stand between that and a weekly refresh.
+///
+/// The cost is one slug-ordered copy of each closure — ~380 ms to build at swap time, on a
+/// weekly background refresh.
+const TAG_INDEXES_SQL: &str = "
+    CREATE INDEX IF NOT EXISTS idx_art_tags_norm ON art_tags(slug_norm);
+    CREATE INDEX IF NOT EXISTS idx_oracle_tags_norm ON oracle_tags(slug_norm);
+    CREATE INDEX IF NOT EXISTS idx_art_tag_illustrations_slug
+        ON art_tag_illustrations(slug);
+    CREATE INDEX IF NOT EXISTS idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);";
 
 /// (Re)create the external-content FTS5 index over `cards` and populate it.
 ///
@@ -2056,7 +2306,26 @@ const ORACLE_TAG_STAGING_SQL: &str = "
     CREATE TABLE oracle_tags_staging (
         slug TEXT PRIMARY KEY,
         label TEXT NOT NULL,
-        description TEXT
+        description TEXT,
+        -- **Last two, and the order is not a preference.** v20 adds both to the live table
+        -- with `ALTER TABLE … ADD COLUMN`, which can only append — so a fresh install's
+        -- `oracle_tags` reads `slug, label, description, id, slug_norm` and this twin has to
+        -- read the same, or the fence test fails at the rename rather than here.
+        --
+        -- **NOT NULL with no default, which `art_tags_staging` has been from the start.**
+        -- Both carried `DEFAULT ''` for exactly one commit: v20 added them while the ingest
+        -- still wrote three columns, and without the bridge a schema step would have taken a
+        -- working tag refresh down mid-flight. `tags::ingest_gz` fills both on every insert
+        -- now, so the bridge came off with it.
+        --
+        -- What a default costs once nothing needs it is the silent failure the comments
+        -- around here exist to prevent: every `oracle_tags.slug_norm` empty,
+        -- `idx_oracle_tags_norm` indexing one value, and the tag search matching nothing in
+        -- this namespace with no error anywhere. Without one, a forgotten column is a
+        -- `NOT NULL constraint failed` at the refresh's first insert.
+        -- See [`ART_TAG_TABLES_SQL`] for what each column holds.
+        id TEXT NOT NULL,
+        slug_norm TEXT NOT NULL
     ) WITHOUT ROWID;
     CREATE TABLE oracle_tag_parents_staging (
         child_slug TEXT NOT NULL,
@@ -2078,12 +2347,79 @@ const ORACLE_TAG_STAGING_SQL: &str = "
 
 /// The four live oracle-tag tables and their staging twins, paired. One list, because the
 /// swap, the cleanup and the test that compares the two shapes must all name the same four.
+///
+/// `muted_tags` is deliberately not here and is not a fifth entry waiting to be added: it is
+/// the reader's, and everything on this list is emptied by the next refresh.
 pub const ORACLE_TAG_TABLES: [(&str, &str); 4] = [
     ("oracle_tags", "oracle_tags_staging"),
     ("oracle_tag_parents", "oracle_tag_parents_staging"),
     ("oracle_taggings", "oracle_taggings_staging"),
     ("oracle_tag_cards", "oracle_tag_cards_staging"),
 ];
+
+/// The four art-tag tables again, `_staging` and empty.
+///
+/// [`ORACLE_TAG_STAGING_SQL`]'s shape and every one of its reasons — a second literal rather
+/// than [`ART_TAG_TABLES_SQL`] with its names rewritten, because the live DDL is *history* the
+/// day it ships while this one describes head and moves with it.
+/// `the_art_tag_staging_tables_match_the_live_ones` is what stops the two coming apart.
+///
+/// No `art_tag_meta_staging`: the watermark is one row written *with* the swap, not a table
+/// that is rebuilt.
+const ART_TAG_STAGING_SQL: &str = "
+    DROP TABLE IF EXISTS art_tags_staging;
+    DROP TABLE IF EXISTS art_tag_parents_staging;
+    DROP TABLE IF EXISTS art_taggings_staging;
+    DROP TABLE IF EXISTS art_tag_illustrations_staging;
+    CREATE TABLE art_tags_staging (
+        slug TEXT PRIMARY KEY,
+        id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        description TEXT,
+        slug_norm TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE TABLE art_tag_parents_staging (
+        child_slug TEXT NOT NULL,
+        parent_slug TEXT NOT NULL,
+        PRIMARY KEY (child_slug, parent_slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE art_taggings_staging (
+        illustration_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        weight TEXT,
+        annotation TEXT,
+        PRIMARY KEY (illustration_id, slug)
+    ) WITHOUT ROWID;
+    CREATE TABLE art_tag_illustrations_staging (
+        illustration_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        weight TEXT NOT NULL,
+        PRIMARY KEY (illustration_id, slug)
+    ) WITHOUT ROWID;";
+
+/// The four live art-tag tables and their staging twins, paired — [`ORACLE_TAG_TABLES`]'s
+/// rule: the swap, the cleanup and the shape-comparison test all name the same four.
+pub const ART_TAG_TABLES: [(&str, &str); 4] = [
+    ("art_tags", "art_tags_staging"),
+    ("art_tag_parents", "art_tag_parents_staging"),
+    ("art_taggings", "art_taggings_staging"),
+    ("art_tag_illustrations", "art_tag_illustrations_staging"),
+];
+
+/// Create the four empty `art_tag_*_staging` tables, dropping any an interrupted run left
+/// behind. [`create_oracle_tag_staging`]'s shape and its reason.
+pub fn create_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(ART_TAG_STAGING_SQL)
+}
+
+/// Drop the four `art_tag_*_staging` tables. What a refused or failed run leaves owing.
+pub fn drop_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    let batch: String = ART_TAG_TABLES
+        .iter()
+        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {staging};"))
+        .collect();
+    conn.execute_batch(&batch)
+}
 
 /// Create the four empty `oracle_tag_*_staging` tables, dropping any an interrupted run
 /// left behind.
@@ -2109,7 +2445,34 @@ pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&batch)
 }
 
-/// Promote the four staging tables over the live ones.
+/// Promote one tag family's four staging tables over its live ones.
+///
+/// **The index replay below is this function's own, borrowed from [`swap_staging`] one family
+/// over, and it is why both taxonomies come through one function rather than two hand-written
+/// swaps.** Two of the four tables carry no index but their own primary key, which the rename
+/// brings with it. The other two do: the taxonomy has `idx_{family}_tags_norm` and the closure
+/// has `idx_{family}_..._slug` — and a rename carries the *staging* table's indexes rather than
+/// the live table's, while no staging DDL creates an index at all.
+///
+/// **So without [`TAG_INDEXES_SQL`] here, the first weekly refresh silently un-indexes the
+/// closure, and that is a hang rather than a slow page.** [`crate::tags::query`] counts a tag's
+/// reach with a correlated `count(*)`, which is 49 ms with the closure index and **531 seconds**
+/// without it (measured 2026-08-20, release build, at that day's file size). The reader's
+/// window stops responding on the first keystroke in the tag box, a week after a refresh nobody
+/// noticed, with nothing anywhere pointing here. A second hand-written swap is exactly where
+/// this would be forgotten, and `the_tag_indexes_survive_a_*_tag_swap` are the fences.
+fn swap_tag_staging(conn: &Connection, tables: &[(&str, &str)]) -> rusqlite::Result<()> {
+    let batch: String = tables
+        .iter()
+        .map(|(live, staging)| {
+            format!("DROP TABLE IF EXISTS {live}; ALTER TABLE {staging} RENAME TO {live};")
+        })
+        .collect();
+    conn.execute_batch(&batch)?;
+    conn.execute_batch(TAG_INDEXES_SQL)
+}
+
+/// Promote the four `oracle_tag_*_staging` tables over the live ones.
 ///
 /// **The caller supplies the transaction**, which is the difference between this and
 /// [`swap_staging`]: the watermark row that says which file these rows came from has to
@@ -2117,17 +2480,14 @@ pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// the next run re-download and re-ingest a file it already holds — or, worse the other way
 /// round, a meta row that landed without its rows would make it 304 past an empty closure
 /// forever.
-///
-/// No index replay, unlike [`swap_staging`]: every one of these tables is `WITHOUT ROWID`
-/// and carries no index but its own primary key, which the rename brings with it.
 pub fn swap_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
-    let batch: String = ORACLE_TAG_TABLES
-        .iter()
-        .map(|(live, staging)| {
-            format!("DROP TABLE IF EXISTS {live}; ALTER TABLE {staging} RENAME TO {live};")
-        })
-        .collect();
-    conn.execute_batch(&batch)
+    swap_tag_staging(conn, &ORACLE_TAG_TABLES)
+}
+
+/// Promote the four `art_tag_*_staging` tables over the live ones.
+/// [`swap_oracle_tag_staging`]'s contract, one taxonomy over.
+pub fn swap_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
+    swap_tag_staging(conn, &ART_TAG_TABLES)
 }
 
 /// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
@@ -2395,13 +2755,14 @@ pub(crate) mod tests {
     /// `IF NOT EXISTS`, which is what lets the newest step replay the whole list rather than
     /// naming the one index it changed.
     ///
-    /// **Which step that is has moved, and moves again with every merge: the index arrives at
-    /// v10 now, not v7.** v7 used to replay [`CARDS_INDEXES`] itself; the list names
-    /// `legal_mask`, which v10 is what adds, so the replay moved to v10 and every step below
-    /// it creates no index at all. What this test asserts is unchanged and is deliberately
-    /// written in terms of the *outcome* — a pre-collapse-index database ends up with the
-    /// index, whichever step hands it over. That is why the renumber from v9 to v10 left this
-    /// test's body untouched.
+    /// **Which step that is has moved twice, and moves again with every merge: the index
+    /// arrives at v20 now — not v7, and no longer v10 either.** v7 used to replay
+    /// [`CARDS_INDEXES`] itself; the list named `legal_mask`, which v10 is what adds, so the
+    /// replay moved to v10 — and then to v20, which adds `illustration_id` to the same list.
+    /// Every step below the replay creates no index at all. What this test asserts is
+    /// unchanged and is deliberately written in terms of the *outcome* — a pre-collapse-index
+    /// database ends up with the index, whichever step hands it over. That is why neither the
+    /// renumber from v9 to v10 nor the move to v20 touched this test's body.
     ///
     /// The fixture is [`v6_deck_database`] — a database genuinely *at* version 6, with
     /// `cards` in its v1 shape and the three indexes v1 created — rather than a head
@@ -2882,7 +3243,7 @@ pub(crate) mod tests {
     /// `migrate` now runs straight through to head and there is no way back.
     ///
     /// No indexes, for the reason the v1 step creates none: [`CARDS_INDEXES`] describes the
-    /// table at head and names columns a v1 table does not have. The v10 step replays the
+    /// table at head and names columns a v1 table does not have. The v20 step replays the
     /// list, so a database built here has its indexes by the time `migrate` returns —
     /// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what asserts it.
     fn v1_database() -> Connection {
@@ -3828,11 +4189,14 @@ pub(crate) mod tests {
     /// **`cards` is here for the v10 step, which also runs.** [`migrate`] reads
     /// `user_version` once and then walks *every* step above it, so a database that says 6
     /// runs v7, the v8 rebuild, v9's error log and v10 alike — and v10's body is
-    /// `ALTER TABLE cards … / UPDATE cards … / CREATE INDEX … ON cards(…)`, a hard error
-    /// against a database with no `cards` table. (v7 used to be the step that needed it; it
-    /// has no statements of its own any more, because the [`CARDS_INDEXES`] replay moved up
-    /// to v10 where the list's newest column exists. The requirement moved with it, it did
-    /// not go away.)
+    /// `ALTER TABLE cards … / UPDATE cards … / DROP INDEX idx_cards_collapse`, a hard error
+    /// against a database with no `cards` table. **v20 needs it for the same reason**: it is
+    /// where the [`CARDS_INDEXES`] replay lives now, so it is the step that puts the widened
+    /// collapse index back and creates every other index over `cards`. (v7 used to be the
+    /// step that needed it; it has no statements of its own any more, because the replay
+    /// moved up to v10 and then on to v20 — always to the newest step that touches `cards`,
+    /// which is the only version at which every column the list names exists. The requirement
+    /// moved with it, it did not go away.)
     ///
     /// It is built from [`CARDS_COLUMNS`], which is frozen to exactly the v1 shape and so is
     /// exactly what a v6 database has, and it carries the three indexes v1 created and *not*
@@ -4673,8 +5037,49 @@ pub(crate) mod tests {
          CREATE UNIQUE INDEX idx_deck_cards_grain
             ON deck_cards (deck_id, variant, category_id, card_id);";
 
-    /// A database that stopped at version 9 — the last version below the step that replays
-    /// [`CARDS_INDEXES`], which is the property this fixture exists for.
+    /// And v20's art tags, mute list, two columns on `oracle_tags`, and the illustration
+    /// index.
+    ///
+    /// Owed for [`UNDO_V13`]'s reason — two `ALTER TABLE … ADD COLUMN`s, so a fixture that
+    /// forgot this one could not migrate at all — and for [`UNDO_V14`]'s quieter one as well,
+    /// since the six `CREATE TABLE IF NOT EXISTS`es beside them would leave a fixture claiming
+    /// a version it is not.
+    ///
+    /// **This is the first undo that has to run *before* the ones numbered below it**, and it
+    /// is why every fixture spells it first rather than last. [`UNDO_V14`] drops `oracle_tags`
+    /// outright; a v20 undo that ran after it would `ALTER` a table that is no longer there.
+    /// Newest-first is the order every rewind always meant — the ascending lists below worked
+    /// only because no rung had ever touched a table a lower rung deletes.
+    ///
+    /// Three indexes come down by hand and two ride along. `idx_oracle_tags_norm` names
+    /// `slug_norm`, and SQLite refuses `DROP COLUMN` on a column an index references — the trap
+    /// [`UNDO_V19`] documents one table over. `idx_cards_illustration` and
+    /// `idx_oracle_tag_cards_slug` are dropped for [`UNDO_V14`]'s quieter reason: `IF NOT
+    /// EXISTS` means a fixture that kept one would migrate perfectly happily while claiming a
+    /// version that never had it. **Which index needs a line is decided by whether this fixture
+    /// drops its table**, not by which rung created it — the two art indexes need none because
+    /// `DROP TABLE art_tags` and `DROP TABLE art_tag_illustrations` take their own indexes with
+    /// them, while `oracle_tag_cards` survives to be dropped by [`UNDO_V14`] and so leaves its
+    /// index standing.
+    const UNDO_V20: &str = "DROP INDEX idx_oracle_tags_norm;
+         ALTER TABLE oracle_tags DROP COLUMN slug_norm;
+         ALTER TABLE oracle_tags DROP COLUMN id;
+         DROP INDEX idx_cards_illustration;
+         DROP INDEX idx_oracle_tag_cards_slug;
+         DROP TABLE art_tags;
+         DROP TABLE art_tag_parents;
+         DROP TABLE art_taggings;
+         DROP TABLE art_tag_illustrations;
+         DROP TABLE art_tag_meta;
+         DROP TABLE muted_tags;";
+
+    /// A database that stopped at version 9 — the version below the step that *widens*
+    /// `idx_cards_collapse`, which is the property this fixture exists for.
+    ///
+    /// **It was the last version below the [`CARDS_INDEXES`] replay until v20 took that
+    /// replay over**, and it kept its number rather than following it: what only a pre-v10
+    /// database can show is a *narrow* collapse index being replaced, and that is a fact about
+    /// version 9 and no other. [`v19_database`] is the last version below the replay now.
     ///
     /// **The version it names is not this branch's to choose.** It was `v8_database` while the
     /// `legal_mask` step was v9; main's own v9 (the error log) pushed that step to v10 and this
@@ -4714,6 +5119,7 @@ pub(crate) mod tests {
              ALTER TABLE cards DROP COLUMN legal_mask;
              CREATE INDEX idx_cards_collapse
                  ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
+             {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -4914,6 +5320,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
+             {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -4941,7 +5348,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
@@ -5015,7 +5422,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
@@ -5329,7 +5736,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
+            "{UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -5532,23 +5939,14 @@ pub(crate) mod tests {
         migrate(&conn).unwrap();
         create_oracle_tag_staging(&conn).unwrap();
 
-        // (name, type, notnull, pk-position) per column, in ordinal order.
-        let shape = |table: &str| -> Vec<(String, String, i64, i64)> {
-            let mut stmt = conn
-                .prepare(&format!("PRAGMA table_info({table})"))
-                .unwrap();
-            let rows = stmt
-                .query_map([], |r| Ok((r.get(1)?, r.get(2)?, r.get(3)?, r.get(5)?)))
-                .unwrap()
-                .map(Result::unwrap)
-                .collect();
-            rows
-        };
-
         for (live, staging) in ORACLE_TAG_TABLES {
-            let want = shape(live);
+            let want = table_shape(&conn, live);
             assert!(!want.is_empty(), "{live} must exist at head");
-            assert_eq!(shape(staging), want, "`{staging}` must match `{live}`");
+            assert_eq!(
+                table_shape(&conn, staging),
+                want,
+                "`{staging}` must match `{live}`"
+            );
         }
     }
 
@@ -5568,8 +5966,8 @@ pub(crate) mod tests {
 
         create_oracle_tag_staging(&conn).unwrap();
         conn.execute_batch(
-            "INSERT INTO oracle_tags_staging (slug,label,description)
-                VALUES ('ramp','ramp','Cards that ramp.');
+            "INSERT INTO oracle_tags_staging (slug,id,label,description,slug_norm)
+                VALUES ('ramp','uuid-ramp','ramp','Cards that ramp.','ramp');
              INSERT INTO oracle_tag_cards_staging (oracle_id,slug) VALUES ('oid-1','ramp');",
         )
         .unwrap();
@@ -5636,7 +6034,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
+            "{UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -5811,7 +6209,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
+            "{UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -5834,7 +6232,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+            "{UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
         ))
         .unwrap();
         conn
@@ -5910,22 +6308,428 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    /// `(name, type, notnull, pk-position)` per column, in ordinal order — the four things a
+    /// staging table renamed over a live one has to agree with it about.
+    ///
+    /// One helper rather than one closure per family, because the whole value of the fence is
+    /// that both families are compared the *same* four ways: a twin that checked three of them
+    /// would pass while the fourth drifted.
+    fn table_shape(conn: &Connection, table: &str) -> Vec<(String, String, i64, i64)> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(1)?, r.get(2)?, r.get(3)?, r.get(5)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    }
+
+    // ---- v20: the art tags, the normalised slug and the mute list --------------------
+
+    /// A database at version 19: everything v19 left behind, and none of v20.
+    ///
+    /// Honest for [`UNDO_V13`]'s reason — two of v20's statements are
+    /// `ALTER TABLE … ADD COLUMN`, so a fixture that forgot the rewind could not migrate at
+    /// all. It is the "one step below head" fixture now, the title [`v18_database`] held.
+    fn v19_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V20} PRAGMA user_version = 19;"))
+            .unwrap();
+        conn
+    }
+
+    /// The step's own tables, and the index that is not one of them.
+    ///
+    /// An art tag is a fact about an *illustration*, so the four tables key on
+    /// `illustration_id` rather than on `oracle_id` and are a parallel set instead of a `kind`
+    /// column on the oracle ones. The index is asserted separately because it lives in
+    /// [`CARDS_INDEXES`] rather than in the step, which is the only place it can survive a
+    /// sync.
+    #[test]
+    fn v20_creates_the_art_tag_tables_and_the_illustration_index() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        for (live, _) in ART_TAG_TABLES {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                [live],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{live} is missing"));
+        }
+        assert_eq!(table_count(&conn, "art_tag_meta"), 1, "the watermark too");
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_cards_illustration'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .expect("idx_cards_illustration is missing");
+    }
+
+    /// The closure carries a weight; the oracle one does not. This is the column the
+    /// "Strong matches only" control reads, and its absence is silent — the filter would
+    /// simply match everything — so it is asserted rather than assumed.
+    #[test]
+    fn the_art_closure_carries_a_weight_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(has_column(&conn, "art_tag_illustrations", "weight"), 1);
+    }
+
+    /// [`swap_staging`] drops and recreates `cards` on every sync. An index declared anywhere
+    /// but [`CARDS_INDEXES`] silently disappears the next morning — the failure that costs a
+    /// session, because the app stays correct and merely becomes slow.
+    #[test]
+    fn the_illustration_index_survives_a_cards_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_staging(&conn).unwrap();
+        swap_staging(&conn).unwrap();
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_cards_illustration'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .expect("the index did not survive swap_staging");
+    }
+
+    /// [`the_oracle_tag_staging_tables_match_the_live_ones`]' twin, and owed for the same
+    /// reason: the staging tables are renamed *over* the live ones, so name, declared type,
+    /// `NOT NULL` and primary-key position must agree column for column. Two literals rather
+    /// than one with the names rewritten, which is what makes this a fence and not a tautology.
+    #[test]
+    fn the_art_tag_staging_tables_match_the_live_ones() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+
+        for (live, staging) in ART_TAG_TABLES {
+            let want = table_shape(&conn, live);
+            assert!(!want.is_empty(), "{live} must exist at head");
+            assert_eq!(
+                table_shape(&conn, staging),
+                want,
+                "`{staging}` must match `{live}`"
+            );
+        }
+    }
+
+    /// What a refused or failed run leaves owing: the four staging tables go and the four
+    /// live ones stay.
+    ///
+    /// The pairing is what makes this worth driving — `drop_art_tag_staging` walks
+    /// [`ART_TAG_TABLES`], where each entry holds *both* names, and taking the live one
+    /// instead would empty the taxonomy the reader is searching rather than tidying up after
+    /// a download that never finished.
+    #[test]
+    fn dropping_the_art_staging_tables_leaves_the_live_ones_standing() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+        drop_art_tag_staging(&conn).unwrap();
+
+        for (live, staging) in ART_TAG_TABLES {
+            assert_eq!(table_count(&conn, staging), 0, "{staging} must be gone");
+            assert_eq!(table_count(&conn, live), 1, "{live} must be standing");
+        }
+    }
+
+    /// Both taxonomies carry the slug reduced to `[a-z0-9]`, indexed.
+    ///
+    /// The search matches on it because SQLite has no `regexp_replace`, so the alternative is
+    /// normalising every row on every keystroke. Its absence is silent in the worst direction
+    /// — the needle is normalised in Rust either way, so a missing column is a search that
+    /// matches nothing rather than one that errors.
+    #[test]
+    fn both_taxonomies_carry_a_normalised_slug_with_an_index_on_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        for table in ["art_tags", "oracle_tags"] {
+            assert_eq!(has_column(&conn, table, "slug_norm"), 1, "{table}");
+        }
+        for index in ["idx_art_tags_norm", "idx_oracle_tags_norm"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} is missing"));
+        }
+    }
+
+    /// Both closures are indexed by `slug`, which is the column the Tags page counts by.
+    ///
+    /// **Its own test rather than a line in the one above, because the failure is a different
+    /// kind.** A missing `slug_norm` index is a slower search; a missing closure index is a
+    /// hang. A closure is `WITHOUT ROWID` on `(subject_id, slug)`, so counting by slug has no
+    /// path but a full scan, and [`crate::tags::query`] counts per row: 49 ms with the index,
+    /// **531 seconds** without it, measured 2026-08-20 on a release build at that day's file
+    /// size. Whoever deletes one of these will be reading this test's name, not that one's.
+    #[test]
+    fn both_tag_closures_are_indexed_by_slug() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        for index in [
+            "idx_art_tag_illustrations_slug",
+            "idx_oracle_tag_cards_slug",
+        ] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} is missing"));
+        }
+    }
+
+    /// [`swap_oracle_tag_staging`] renames a staging table over `oracle_tags`, and a rename
+    /// carries the *staging* table's indexes rather than the live one's. So the tag swap owes
+    /// the replay [`swap_staging`] owes [`CARDS_INDEXES`], and without it the index is gone
+    /// after the first weekly refresh with nothing anywhere saying so.
+    ///
+    /// **Both of the family's indexes, because both tables are renamed over.** The closure's
+    /// is the one that would hurt, and it would not hurt gently: `tags::query` counts a tag's
+    /// reach per row, so losing `idx_oracle_tag_cards_slug` takes a wide `tag_search` from
+    /// 49 ms to **531 seconds** (measured 2026-08-20) — a frozen window one weekly refresh
+    /// after this test stopped being true.
+    #[test]
+    fn the_tag_indexes_survive_an_oracle_tag_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_oracle_tag_staging(&conn).unwrap();
+        swap_oracle_tag_staging(&conn).unwrap();
+        for index in ["idx_oracle_tags_norm", "idx_oracle_tag_cards_slug"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} did not survive the tag swap"));
+        }
+    }
+
+    /// A database that is **already at v20** and lacks the closure indexes gains them on the
+    /// next `migrate`.
+    ///
+    /// **This is the one reachable state no other test covers**, and it is not hypothetical:
+    /// every database that ran the v20 rung before `idx_art_tag_illustrations_slug` and
+    /// `idx_oracle_tag_cards_slug` joined [`TAG_INDEXES_SQL`] is in it right now. `user_version`
+    /// reads 20, so the rung never fires again; the two `..._survive_a_*_tag_swap` tests around
+    /// this one prove the *refresh* path, which is up to a week away and only runs at all if the
+    /// reader has ever fetched a tag file. The
+    /// unconditional replay at the tail of [`migrate`] is the only thing that reaches these,
+    /// and without it [`crate::tags::query`]'s correlated count is 531 seconds rather than
+    /// 49 ms - a frozen window, measured 2026-08-20.
+    ///
+    /// Dropping the indexes by hand is exactly what that history looks like from here: there is
+    /// no way to build a real pre-change database in a test, and the state is defined by which
+    /// indexes exist, not by how they came to be missing.
+    #[test]
+    fn a_v20_database_missing_the_closure_indexes_gains_them_on_the_next_migrate() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_art_tag_illustrations_slug;
+             DROP INDEX idx_oracle_tag_cards_slug;",
+        )
+        .unwrap();
+
+        // The ladder is spent: `v < 20` is false, so nothing inside `migrate`'s blocks can run
+        // and only the unconditional tail is left to do this.
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION, "the rung must already be spent");
+
+        migrate(&conn).unwrap();
+
+        for index in [
+            "idx_art_tag_illustrations_slug",
+            "idx_oracle_tag_cards_slug",
+        ] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} must be restored by a plain re-migrate"));
+        }
+    }
+
+    /// [`swap_art_tag_staging`] goes through the same replay [`swap_oracle_tag_staging`]
+    /// does, and a shared helper is only as good as its least-tested caller. Without this the
+    /// art indexes would vanish at the first refresh of the art taxonomy alone, which is the
+    /// half of the failure the oracle test cannot see.
+    #[test]
+    fn the_tag_indexes_survive_an_art_tag_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+        swap_art_tag_staging(&conn).unwrap();
+        for index in ["idx_art_tags_norm", "idx_art_tag_illustrations_slug"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} did not survive the art tag swap"));
+        }
+    }
+
+    /// The step over the version below it: both columns arrive on `oracle_tags`, and a row
+    /// that predates them reads `''`.
+    ///
+    /// **Empty rather than NULL, and it is never read.** The taxonomy is dropped and rebuilt
+    /// wholesale on every refresh, so the first one after this step rewrites every row — what
+    /// the backfill is for is keeping the two columns `NOT NULL`, which is what lets the live
+    /// table and its staging twin share one shape.
+    #[test]
+    fn the_v20_step_adds_the_uuid_and_the_normalised_slug_over_a_v19_database() {
+        let conn = v19_database();
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, label, description) VALUES ('ramp', 'Ramp', NULL);",
+        )
+        .unwrap();
+        assert_eq!(
+            has_column(&conn, "oracle_tags", "id"),
+            0,
+            "a v19 database may not already carry v20's column"
+        );
+
+        migrate(&conn).unwrap();
+
+        let row: (String, String) = conn
+            .query_row(
+                "SELECT id, slug_norm FROM oracle_tags WHERE slug = 'ramp'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (String::new(), String::new()));
+
+        // **And on an upgraded database, not only a fresh one.** The two sibling tests that
+        // check these four indexes run over a fresh install, where they could have come from
+        // anywhere in the step; here they have to arrive on a database that already carried
+        // `oracle_tags`. That is this rung's own thesis turned on itself — an index declared
+        // where only a fresh install reaches it is an index every existing reader lacks. For
+        // the two `slug_norm` indexes that is a slower search; for the two closure indexes it
+        // is a nine-minute freeze, because `tags::query` counts a tag's reach per row.
+        for index in [
+            "idx_art_tags_norm",
+            "idx_oracle_tags_norm",
+            "idx_art_tag_illustrations_slug",
+            "idx_oracle_tag_cards_slug",
+        ] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} must arrive on an upgraded database"));
+        }
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// A mute is the reader's, and everything around it is rebuilt on a schedule: the card
+    /// corpus daily, both taxonomies weekly. Losing one would read as the app forgetting what
+    /// the reader hid, so all three rebuilds are driven over it here.
+    ///
+    /// The assertion at the end is the same rule in its general form — **everything named on
+    /// either swap list is dropped by that swap** — which is exactly why `muted_tags` is on
+    /// neither and must stay off both.
+    #[test]
+    fn a_mute_survives_a_card_sync_and_a_taxonomy_rebuild() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
+             VALUES ('art', 'uuid-1', 'dog', 1)",
+            [],
+        )
+        .unwrap();
+
+        create_oracle_tag_staging(&conn).unwrap();
+        swap_oracle_tag_staging(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+        swap_art_tag_staging(&conn).unwrap();
+        create_staging(&conn).unwrap();
+        swap_staging(&conn).unwrap();
+
+        let slug: String = conn
+            .query_row("SELECT slug FROM muted_tags", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(slug, "dog");
+
+        assert!(
+            !ART_TAG_TABLES
+                .iter()
+                .chain(ORACLE_TAG_TABLES.iter())
+                .any(|(live, _)| *live == "muted_tags"),
+            "a swap list is a list of tables the next refresh destroys"
+        );
+    }
+
+    /// A mute is keyed on Scryfall's stable uuid and on the namespace it was made in, which
+    /// is two decisions this drives rather than reads off the DDL.
+    ///
+    /// The **namespace** is in the key because the two taxonomies are separate files with
+    /// separate id spaces, and one id appearing in both must be two mutes. The **id** is in
+    /// the key instead of the slug because Tagger renames tags — a mute keyed on a slug would
+    /// silently un-mute itself the week the rename landed, which is exactly the week it
+    /// mattered. Re-muting the same tag under its new slug is therefore the *same* row.
+    #[test]
+    fn a_mute_is_one_row_per_namespace_and_tag_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mute = |namespace: &str, tag_id: &str, slug: &str| {
+            conn.execute(
+                "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
+                 VALUES (?1, ?2, ?3, 1)",
+                rusqlite::params![namespace, tag_id, slug],
+            )
+        };
+        mute("art", "uuid-1", "dog").unwrap();
+        mute("oracle", "uuid-1", "dog")
+            .expect("the same id in the other namespace is a second mute");
+
+        let again = mute("art", "uuid-1", "hound").expect_err("a renamed tag is the same mute");
+        assert!(
+            again.to_string().contains("UNIQUE constraint failed"),
+            "refused for the key, not for a broken statement: {again}"
+        );
+    }
+
     // ---- v19: a deck card names a finish ---------------------------------------------
 
     /// A database at version 18: everything v18 left behind, and none of v19.
     ///
     /// Honest for [`UNDO_V13`]'s reason rather than [`UNDO_V17`]'s — v19's DDL is
     /// `ALTER TABLE … ADD COLUMN`, so a fixture that forgot the rewind could not migrate at
-    /// all. It is the "one step below head" fixture now, the title [`v17_database`] held.
+    /// all. **It held the "one step below head" title, taking it from [`v17_database`], and
+    /// v20 has moved it on to [`v19_database`]** — that line has moved with every rung and is
+    /// left here as the record of which fixture the title belonged to.
     fn v18_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V19} PRAGMA user_version = 18;"))
+        conn.execute_batch(&format!("{UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"))
             .unwrap();
         conn
     }
 
-    /// `deck_cards` columns with this name — 0 or 1.
+    /// Columns of `table` with this name — 0 or 1. Parameterised by table and read that way:
+    /// callers ask it about `deck_cards`, `oracle_tags`, `art_tags` and
+    /// `art_tag_illustrations`.
     fn has_column(conn: &Connection, table: &str, column: &str) -> i64 {
         conn.query_row(
             &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
@@ -5984,29 +6788,36 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION);
     }
 
-    /// [`v18_database`] must really sit one step below head, or the tests below it are a fresh
+    /// [`v19_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     ///
-    /// **The fixture named here has changed five times** — v14's, then v15's, then v16's,
-    /// then v17's, now v18's — and each move was this assertion going red, which is the whole
-    /// reason it is written against `SCHEMA_VERSION - 1` rather than a number.
+    /// **The fixture named here has changed six times** — v14's, then v15's, then v16's,
+    /// then v17's, then v18's, now v19's — and each move was this assertion going red, which is
+    /// the whole reason it is written against `SCHEMA_VERSION - 1` rather than a number.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v18_database();
+        let conn = v19_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
         assert_eq!(
-            has_column(&conn, "deck_cards", "finish"),
+            has_column(&conn, "oracle_tags", "slug_norm"),
             0,
-            "the v19 column must not be there yet"
+            "the v20 column must not be there yet"
+        );
+        assert_eq!(
+            table_count(&conn, "art_tags"),
+            0,
+            "nor v20's tables: their DDL is `IF NOT EXISTS`, so keeping them is the quiet way \
+             a fixture stops being the version it claims"
         );
 
-        // v18's own columns are standing, because this fixture undoes one rung rather than
-        // two — and v17's table below them with it.
+        // v19's own column is standing, because this fixture undoes one rung rather than
+        // two — and v18's and v17's below it with it.
+        assert_eq!(has_column(&conn, "deck_cards", "finish"), 1);
         assert!(
             deck_columns(&conn).contains(&"game_key".to_owned()),
             "v18's column belongs to this version and must survive the rewind"
@@ -6031,8 +6842,10 @@ pub(crate) mod tests {
     fn v17_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -6264,14 +7077,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_nineteen() {
+    fn the_schema_version_is_twenty() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 19);
+        assert_eq!(SCHEMA_VERSION, 20);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular
@@ -6408,9 +7221,12 @@ pub(crate) mod tests {
     ///
     /// The rewound fixtures are the honest ones available — [`v1_database`] is built from the
     /// frozen v1 DDL, [`v6_deck_database`] is a hand-built v6, [`v9_database`] undoes the steps
-    /// above 9 over a head database, [`v11_database`] undoes v12 to v15,
-    /// [`v12_database`] undoes v13 to v15, [`v13_database`] undoes v14 and v15, and
-    /// [`v14_database`] undoes v15 alone. The v9 one is
+    /// above 9 over a head database, and the rest each undo every rung above the version they
+    /// claim: [`v11_database`] undoes v12 to v20, [`v12_database`] v13 to v20,
+    /// [`v13_database`] v14 to v20, [`v14_database`] v15 to v20, [`v15_database`] v16 to v20
+    /// and [`v19_database`] v20 alone. **The ranges are named rather than counted, and this
+    /// line read "to v15" through five later rungs** — a prose-only edit routes to neither CI
+    /// job, so nothing here can go red on its own. The v9 one is
     /// the case an earlier merge added: a database sitting at main's v9, above every step that
     /// could hand it an index and below the one that does. A rewind that skipped a step's own
     /// table rebuild would fail here for a reason no upgrade could produce, which is why the
@@ -6466,12 +7282,16 @@ pub(crate) mod tests {
             // The rungs the same-day v12/v13/v14 collision created. A machine that ran v12
             // before v13 existed — or v13 before v14 did — is the commonest database in the
             // world the day after a release, and those are the arrivals this list would
-            // otherwise not cover. `v13` is head minus one.
+            // otherwise not cover.
             ("v12", v12_database()),
             ("v13", v13_database()),
             ("v14", v14_database()),
-            // `v15` is head minus one.
             ("v15", v15_database()),
+            // `v19` is head minus one, and it is the arrival that matters most to v20: the
+            // `CARDS_INDEXES` replay moved from v10 to v20 with that step, so a database
+            // entering the ladder *above* v10 gets every index from the new step or from
+            // nowhere. This row is what says which.
+            ("v19", v19_database()),
         ] {
             migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
 

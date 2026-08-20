@@ -199,7 +199,19 @@ export function installWorld(
   if (db.fault === "errorLog") db.errorLog = errorLogSeed();
   if (db.fault === "oracleTagsMissing") {
     db.oracleTags = [];
+    db.oracleTagTaxonomy = [];
+    db.oracleTagParents = [];
     db.oracleTagMeta = null;
+  }
+  // The same fault one taxonomy over, and **all four tables leave together** because one ingest
+  // writes all four: a watermark with no taxonomy behind it is the state the backend goes out of
+  // its way never to leave, and half-emptying it here would story a page against a world the app
+  // cannot be in.
+  if (db.fault === "artTagsMissing") {
+    db.artTags = [];
+    db.artTagTaxonomy = [];
+    db.artTagParents = [];
+    db.artTagMeta = null;
   }
 
   const scope = createScope(allHandlers(db));

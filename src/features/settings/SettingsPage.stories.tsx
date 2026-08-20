@@ -128,6 +128,10 @@ export const Default: Story = {
     await expect(
       canvas.getByRole("heading", { name: "Not here yet", level: 2 }),
     ).toBeInTheDocument();
+    // The page's one undo, high up for the reason `SettingsPage` gives: the rail tells a reader
+    // who has just hidden a tag that this is where it comes back, and until 2026-08-20 the page
+    // it sent them to had no such list.
+    await expect(canvas.getByRole("heading", { name: "Hidden tags", level: 2 })).toBeInTheDocument();
     // The two new ones, and their order on the page: the reversible sweep above the blurb,
     // the irreversible clears below it.
     await expect(canvas.getByRole("heading", { name: "Local cache", level: 2 })).toBeInTheDocument();

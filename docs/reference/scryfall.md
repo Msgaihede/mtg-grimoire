@@ -26,15 +26,40 @@ collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — 
   exponential backoff with jitter. **Never a 429** (the docs forbid exactly that) and never a 404.
 - **Bulk data is already the only card source, and that is the compliance story.**
   `default_cards` JSONL.gz feeds the 116 k corpus; there is no per-card API lookup anywhere.
-  **A second bulk dataset joined it**: `oracle_tags`, ~5.85 MB gzipped JSONL, 4 521 tag objects
-  carrying 229 633 taggings keyed on `oracle_id` (measured live 2026-08-14). Its manifest entry
-  has the same shape as `default_cards`' — `jsonl_download_uri` and `compressed_size`, neither
-  of the pre-2026-07-20 `download_uri`/`size` fields — which is why one `BulkInfo` describes
-  both and `Client::check_bulk_dataset` is the one call that fetches either. It goes through
-  `api_send` like everything else, so it spends the same pacing budget and honours the same 429
-  lockout, and it is checked **weekly** rather than daily: the taxonomy is hand-curated and a
-  card's categories should not regroup between two sessions on the same afternoon.
-  `/sets` and `/migrations` stay API calls because neither has a bulk equivalent, and both are
+  **Two more bulk datasets joined it**, both from Scryfall Tagger:
+
+  | | `oracle_tags` | `art_tags` |
+  | --- | --- | --- |
+  | manifest id | `bd8df61e-5d0a-47a2-9086-40137a645b98` | `48da5752-eeb6-4126-bf97-8829e20ad14f` |
+  | `compressed_size` | **5 846 422 bytes** | **12 544 874 bytes** |
+  | tags | 4 521 | 11 531 |
+  | taggings | 229 633, keyed on `oracle_id` | 475 163, keyed on `illustration_id` |
+  | closure rows | — | 951 499 (2.0× the taggings) |
+  | measured | live 2026-08-14 | live 2026-08-20 |
+
+  Both manifest entries have the same shape as `default_cards`' — **`jsonl_download_uri` and
+  `compressed_size` only**, neither of the pre-2026-07-20 `download_uri`/`size` fields, and no
+  legacy fallback on either the index endpoint or the per-type one — which is why one `BulkInfo`
+  describes all three and `Client::check_bulk_dataset` is the one call that fetches any of them.
+  Each goes through `api_send` like everything else, so they spend the same pacing budget and
+  honour the same 429 lockout.
+  **Both are checked weekly while Scryfall regenerates them daily**, and the two cadences must not
+  be blurred: Scryfall's `docs/api/tags` says the files are updated daily and both `updated_at`
+  stamps were the previous day when checked on 2026-08-20, while the week is
+  `tags::{oracle,art}::REFRESH_INTERVAL_SECS` — this app's own answer to how often to ask, because
+  the taxonomies are hand-curated and a card's categories should not regroup between two sessions
+  on the same afternoon. Full figures:
+  [the oracle research](../superpowers/research/2026-08-14-scryfall-oracle-tags.md) and
+  [the art one](../superpowers/research/2026-08-20-scryfall-art-tags.md).
+- **`scryfall.com/docs/*` and `tagger.scryfall.com` 403 a non-browser User-Agent;
+  `api.scryfall.com` and `data.scryfall.io` do not.** The block is on the UA rather than on
+  authentication — `curl.exe` sending an ordinary Chrome UA gets HTTP 200 from both HTML sites,
+  and the API wants `MTGGrimoire/0.1 (+…)` and answers normally. **This is not a tooling bug to
+  re-investigate**: WebFetch cannot reach either HTML site, and neither can headless Edge behind
+  the Cloudflare challenge. Verified 2026-08-14 for the docs site and 2026-08-20 for Tagger. It is
+  also the reason nothing in this app scrapes Tagger: everything it needs is in the two bulk
+  files, which come off `data.scryfall.io` and are not rate-limited at all.
+- `/sets` and `/migrations` stay API calls because neither has a bulk equivalent, and both are
   polled at most once per 24 h. **`/cards/manifest` is deliberately not adopted**: it would add
   traffic rather than remove it, and the research doc measured `created_at`/`data_updated_at`
   as null on every sampled row, so it cannot answer "what data changed" today.

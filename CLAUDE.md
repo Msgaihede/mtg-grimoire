@@ -9,10 +9,20 @@ construction: nothing downloads until a reader selects that marketplace, and a f
 answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
 needs a per-user JWT and publishes no bulk download.
 
-**Scryfall's Oracle Tags are a second bulk download from the same source, and optional the same
-way.** They say what a card _does_ (`removal`, `ramp`, `recursion`), which is what a deck add is
-filed by; a database that has never fetched them files by card type instead, and that fallback is
-the floor rather than an error. Weekly, ~5.85 MB — [the research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md).
+**Scryfall's two Tagger datasets are further bulk downloads from the same source, and optional
+the same way.** **Oracle Tags** say what a card _does_ (`removal`, `ramp`, `recursion`), which is
+what a deck add is filed by; a database that has never fetched them files by card type instead,
+and that fallback is the floor rather than an error. **Art Tags** say what an illustration
+_shows_ (`forest`, `dragon`, `dog`), which is what the Tags page browses by; a database that
+has never fetched them has a Tags page that says so and still answers from the oracle side.
+~5.85 MB and ~12.5 MB — [the oracle research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md)
+and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
+
+**Both files regenerate _daily_; _weekly_ is this app's refresh interval, and the two must not be
+blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and both `updated_at`
+stamps were the previous day when checked on 2026-08-20. The week is
+`tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
+taxonomy up to seven days behind Scryfall is the design working, not a stale download.
 
 ## Commands
 
@@ -88,6 +98,7 @@ number to compare against.
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, the allocator, the audit log, the decklist import |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
+| [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |

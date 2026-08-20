@@ -147,6 +147,14 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
 - **`key` knows `ArrowLeft`/`ArrowRight`/`Home`/`End`** as well as Escape, Enter, Tab and the
   vertical arrows. The four were added for the app's one `separator`, whose whole keyboard contract
   is them; `rawKeyDown` is the right event for all of these, which is `press`'s distinction below.
+  **It also knows `F10` and `ContextMenu`, and `--shift` applies to `key` as well**, which is how
+  a card menu is opened from the keyboard: `useContextMenu` answers `ContextMenu` or `Shift+F10`,
+  and until 2026-08-20 neither could be sent from here at all — so the keyboard half of every
+  context menu in the app had never been driven. It has to be a real key rather than a
+  `dispatchEvent`, because the handler reads `e.shiftKey`, which comes from Chromium's own
+  modifier state and not from a property you can set on a synthetic event. Note the shape of the
+  gesture: `key F10 --shift` opens the menu on **whatever is focused**, so focus it the way a
+  reader would first — see the programmatic-focus trap.
 - **`hover <css> [--from x,y] [--rest ms] [--probe expr]`** is a real dwell — `mouseMoved`
   events, so React synthesises `onMouseEnter`/`onMouseLeave` from Chromium's own hover
   pipeline and a `dispatchEvent` out of `eval` proves nothing. Two facts it cost a session to

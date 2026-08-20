@@ -315,7 +315,7 @@ reader to configure the deck they had just made; it now asks all of them.
   started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
   _different_ one from the dialog's — TanStack shares a query's cache between observers and a
   mutation's state with nobody — so this banner speaks only for presses made out here.
-- **A deck card names a finish, and the grain says so** (schema v18, 2026-08-17). This reverses
+- **A deck card names a finish, and the grain says so** (schema v19, 2026-08-17). This reverses
   "a deck names a printing and never a finish", which was true for as long as Scryfall's model
   went unread: foil is a **finish of a printing** rather than a printing, so 53 224 of 107 337
   paper printings carry one under the same id and wanting the shiny copy was a thing the model
@@ -657,7 +657,7 @@ reader to configure the deck they had just made; it now asks all of them.
   told apart by `deck_cards.finish` being NULL. The set arm has **no fallback**: a foil row
   quoted at the nonfoil rate is a price nobody published. The unsaid arm is
   `printing_price_by_finish_expr`'s `nonfoil → foil → etched`, and it is the arm every row that
-  predates schema v18 takes; the
+  predates schema v19 takes; the
   rule was the flat **nonfoil** rate until 2026-08-15 and that was a bug, because **13 515
   foil-only and 892 etched-only printings have no nonfoil price at any marketplace**. An
   Invocation or a Secret Lair drew an em dash on its card foot, was left out of its pile's
