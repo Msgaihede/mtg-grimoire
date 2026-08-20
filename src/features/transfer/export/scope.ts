@@ -120,8 +120,17 @@ export function useExportScope(
   const query = useQuery({
     // `everything` is in the key on purpose: switching the toggle is switching *what* is being
     // asked for, exactly as a filter change is, and the two must not be served from one
-    // another's cache.
-    queryKey: [surface, "export", everything ? "everything" : filters],
+    // another's cache. **`marketplace` rides along on the `everything` arm rather than being
+    // implied by `filters`** — that arm's key drops `filters` entirely (see `everythingFilters`),
+    // so without this a marketplace switch would collapse to the same `[surface, "export",
+    // "everything"]` key it had before the switch and hand back the previous sweep's cards,
+    // priced at the marketplace the reader had left — the same wrong-price symptom the request
+    // fix above exists to prevent, arriving through the cache instead of the request. The
+    // filtered arm needs nothing extra: `filters` already carries `marketplace` as one of its
+    // own fields.
+    queryKey: everything
+      ? [surface, "export", "everything", filters.marketplace]
+      : [surface, "export", filters],
     enabled,
     queryFn: async () => {
       setProgress({ loaded: 0, total: 0 });

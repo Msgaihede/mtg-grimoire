@@ -8,6 +8,7 @@ import { readDragData } from "@/features/decks/dnd";
 import type { CollectionQuery, CollectionRow, CollectionSummary, DeckRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -146,6 +147,19 @@ const REVIEW_NOTE =
 
 const lastQuery = () =>
   collectionList.mock.calls[collectionList.mock.calls.length - 1][0] as CollectionQuery;
+
+/**
+ * How many **sweep** requests (`limit: 500`, `scope.ts`'s `SWEEP_PAGE`) have gone out at a given
+ * marketplace — as opposed to the ordinary paged list's own `limit: 100` requests, which also
+ * carry `marketplace` in their key and legitimately refetch on a feed switch regardless of this
+ * task. A cache-key test on the export sweep has to filter those out, or a marketplace switch
+ * reads as "a fresh sweep went out" when it was really just the list behind the table doing what
+ * it always does.
+ */
+const sweepCallsAt = (marketplace: string) =>
+  collectionList.mock.calls.filter(
+    ([q]) => (q as CollectionQuery).limit === 500 && (q as CollectionQuery).marketplace === marketplace,
+  ).length;
 
 /**
  * The filter bar's sort control.
@@ -906,6 +920,45 @@ describe("CollectionPage", () => {
     expect(asked.marketplace).toBe("cardmarket");
     // ...and the filter that was on does not: "everything" really does ignore the filters.
     expect(asked.finishes).toBeUndefined();
+  });
+
+  /**
+   * **Fix round 2's cache-key ruling.** `scope.ts`'s "everything" branch used to key its query
+   * as the literal `[surface, "export", "everything"]`, with no `marketplace` in it — so a
+   * reader who exported everything, then switched marketplace, and exported everything again
+   * could be served the *first* sweep straight back out of cache, priced at the feed they had
+   * left. That is Important 1's wrong-prices symptom again, arriving through the cache instead
+   * of through the request this time. `marketplace` is part of the `everything` key now, so a
+   * feed switch is a different query and issues a fresh request.
+   *
+   * The switch is driven the way `useMarketplace`'s own `select` mutation actually makes it —
+   * `queryClient.setQueryData(MARKETPLACE_KEY, id)` on success — rather than through a Settings
+   * control this page does not have. That is the one write the real code path performs, so
+   * reaching for the query client directly here exercises the same mechanism a Settings press
+   * would, without needing a second page mounted in this suite.
+   */
+  it("issues a fresh sweep when the marketplace changes while Export everything is on", async () => {
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(lastQuery().marketplace).toBe("tcgplayer"));
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+    // The first sweep, at the marketplace the reader had when they ticked the box.
+    await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(0));
+
+    client.setQueryData(MARKETPLACE_KEY, "cardmarket");
+
+    // A genuinely new **sweep** request (`limit: 500`) at the new marketplace — filtered to
+    // that limit specifically, because the ordinary paged list behind the table also carries
+    // `marketplace` in its own key and refetches on a feed switch regardless of this fix; that
+    // refetch alone must not make this assertion pass. Without the cache-key fix this `waitFor`
+    // times out: the "everything" query's key never changes, so nothing at `limit: 500` goes
+    // out a second time and the previous sweep's cards are served back at the new marketplace.
+    await waitFor(() => expect(sweepCallsAt("cardmarket")).toBeGreaterThan(0));
   });
 });
 
