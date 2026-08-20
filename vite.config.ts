@@ -43,6 +43,24 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // Vitest's default is 5000ms, and that number was the third-largest source of red CI in
+    // this repo — a bare `Test timed out in 5000ms` with no assertion message, on a different
+    // test each time, always green in isolation.
+    //
+    // **It is a budget, not a bound, which is why raising it is the right dial here.** Nothing
+    // asserts on it: it measures no behaviour and guards no regression, unlike
+    // `images::tests::consecutive_fetches_are_not_paced_apart`, where the number *was* the
+    // claim and raising it would have deleted the test. What runs out of it is wall-clock
+    // under contention. Measured 2026-08-20 on this machine: `App.test.tsx > announces a
+    // fold…` and `SearchPage.test.tsx > keeps the loaded rows…` take **646ms** and **702ms**
+    // run alone and both hit the 5000ms wall under `verify`, which puts `tsc` + `vite build` +
+    // `eslint` in front of 148 files running in parallel — a 7–8× starvation, not a test
+    // sitting near its limit.
+    //
+    // 15s against a **1219ms** slowest-passing test in the whole suite is ~12× headroom. The
+    // cost is the only thing this trades away: a test that genuinely hangs now reports in 15s
+    // rather than 5s.
+    testTimeout: 15_000,
     // `.storybook` is in scope so the fake backend is covered by the one suite `verify`
     // runs. No `*.stories.tsx` is ever collected as a **test file** — both globs require a
     // literal `.test.` segment, not a particular extension, so
