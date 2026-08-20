@@ -61,7 +61,10 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   contract landed (Plan 4, Task 11). `setDeviceMetricsOverride` is the opposite and **survives
   detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
   window back, so read `innerWidth`/`innerHeight` before the first override and end the run
-  with an explicit `size 1280 800`.
+  with an explicit `size <those two numbers>`. **Read them; do not assume them.** Since
+  2026-08-20 the app opens at the largest of 1920×1080 and 1280×720 the monitor's work area
+  holds (`src-tauri/src/window.rs`), so the natural size differs between desks — the
+  `size 1280 800` this contract used to name is now nobody's window.
   **`innerWidth` is the right width to _restore_ and the wrong width to _position_ from.** It
   includes the classic vertical scrollbar and `document.documentElement.clientWidth` does not —
   **1280 against 1265**, measured in the 2026-08-14 zoom pass. A `fixed` element is laid out
