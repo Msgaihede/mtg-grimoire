@@ -629,4 +629,104 @@ describe("SetCombobox", () => {
     rerender(<SetCombobox selected={["lea"]} onToggle={vi.fn()} />);
     expect(screen.getByRole("option", { name: /Kamigawa/ })).not.toHaveAttribute("aria-disabled");
   });
+
+  /**
+   * The three facts a caller-supplied `options` list changes, which is the whole of what
+   * `AllPrintingsDialog` leans on: the list is the caller's, the backend is never asked, and the
+   * ceiling that mirrors a backend truncation does not apply to a filter that never reaches one.
+   */
+  describe("with a caller's own list", () => {
+    /** One card's sets, as `PrintingsFilterBar` builds them off `printingFilters.setOptions`. */
+    const cardSets: SetSummary[] = [
+      { code: "lea", name: "Limited Edition Alpha", setType: null, releasedAt: null, cardCount: 3 },
+      { code: "3ed", name: "Revised Edition", setType: null, releasedAt: null, cardCount: 1 },
+    ];
+
+    /**
+     * **The backend is not asked at all**, which is the half a `?? sets.data` would have got
+     * wrong: it would have drawn the caller's rows while a `list_sets` round trip ran behind
+     * them, seeding a cache entry for a picker that has no use for it. `enabled` is what makes
+     * the query never run, and an uncalled mock is the only way to see the difference.
+     */
+    it("draws only the sets it was handed, and makes no list_sets call", async () => {
+      listSets.mockReset();
+      wrap(<SetCombobox selected={[]} onToggle={vi.fn()} options={cardSets} />);
+
+      await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+      expect(await screen.findByRole("option", { name: /Alpha/ })).toBeVisible();
+      expect(screen.getByRole("option", { name: /Revised/ })).toBeVisible();
+      // The corpus fixture's own sets are not offered — this list is the card's, not the app's.
+      expect(screen.queryByRole("option", { name: /Kamigawa/ })).toBeNull();
+      expect(listSets).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A disabled query reports `isPending` for the length of the session, so the empty line had
+     * to stop reading it first. Without that, a reader who typed a needle nothing matched was
+     * told the sets were still **loading** — about a request that will never be made, on the one
+     * branch where the list is already complete.
+     */
+    it("says nothing matched rather than still loading", async () => {
+      listSets.mockReset();
+      wrap(<SetCombobox selected={[]} onToggle={vi.fn()} options={cardSets} />);
+
+      await userEvent.click(screen.getByRole("button", { name: "Set" }));
+      await userEvent.type(screen.getByRole("combobox", { name: /search sets/i }), "zzz");
+
+      expect(await screen.findByText("No sets match that.")).toBeVisible();
+      expect(screen.queryByText(/Loading sets/)).toBeNull();
+    });
+
+    /**
+     * **The classes, because jsdom has no layout engine and this is a layout fact.**
+     *
+     * The listbox is 288px, `absolute`, and clipped by nothing — so which edge it is pinned to
+     * decides whether it opens into the row or off the window, and the failure mode at the wrong
+     * end is the whole app scrolling sideways. Both spellings are written out in the source for
+     * Tailwind's scanner; asserting them here is what keeps an interpolated class, which would
+     * emit no rule at all, from passing as a change of anchor.
+     */
+    it("pins the listbox to the trigger's left edge where the caller asks for it", async () => {
+      listSets.mockReset();
+      const { rerender } = wrap(
+        <SetCombobox selected={[]} onToggle={vi.fn()} options={cardSets} align="start" />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Set" }));
+      const panel = (await screen.findByRole("listbox")).parentElement;
+      expect(panel).toHaveClass("left-0", "origin-top-left");
+      expect(panel).not.toHaveClass("right-0");
+
+      // And the default is the other end, which is what both search-shaped callers get.
+      rerender(<SetCombobox selected={[]} onToggle={vi.fn()} options={cardSets} />);
+      expect((await screen.findByRole("listbox")).parentElement).toHaveClass(
+        "right-0",
+        "origin-top-right",
+      );
+    });
+
+    /**
+     * `MAX_SETS` mirrors `filters.rs`'s truncation of a *backend* set filter. A caller narrowing
+     * rows it already holds sends nothing there, so refusing its 65th tick would be a limit this
+     * app invented — and the sentence explaining it would name a search that is not happening.
+     */
+    it("does not cap a list nothing truncates", async () => {
+      listSets.mockReset();
+      const onToggle = vi.fn();
+      const many = manySets(70);
+      // 64 picked — one past the cap's arm — with `s64` left over and on screen.
+      const atCap = Array.from({ length: 64 }, (_, i) => `s${i}`);
+      wrap(<SetCombobox selected={atCap} onToggle={onToggle} options={many} />);
+
+      await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+      const spare = await screen.findByRole("option", { name: /^Set 64/ });
+      expect(spare).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(spare);
+      expect(onToggle).toHaveBeenCalledWith("s64");
+
+      expect(screen.queryByText(/is the most one search can name/i)).toBeNull();
+    });
+  });
 });

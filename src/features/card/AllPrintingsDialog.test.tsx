@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -267,6 +267,38 @@ describe("AllPrintingsDialog", () => {
     // The tile that fell out is gone from the wall, not merely uncounted.
     expect(screen.queryByRole("button", { name: /LEA/ })).toBeNull();
     expect(screen.getByRole("button", { name: /LEB/ })).toBeVisible();
+  });
+
+  /**
+   * The sets are `SetCombobox`, the search page's own picker, rather than a row of chips — and
+   * it is handed **this card's** sets rather than the corpus's ~1 050.
+   *
+   * Two things are asserted and the second is the load-bearing one. The picker narrows the wall,
+   * which is what any set control has to do; and it offers exactly the two sets these printings
+   * are in, which is what tells a caller-supplied `options` list apart from the session-cached
+   * `list_sets()` the search page gets. The `ipc` mock above carries no `listSets` at all, so a
+   * picker that reached for the corpus here would not draw a longer list — it would throw.
+   */
+  it("narrows the wall by set, from a picker holding only this card's sets", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea", "Alpha"), p("b", "leb", "Beta")]));
+    const user = userEvent.setup();
+    renderDialog();
+    open({ oracleId: "o1", name: "Sol Ring", deck: null });
+
+    await user.click(await screen.findByRole("button", { name: "Set" }));
+
+    // **Scoped to the picker's own listbox**, because the `Sort printings by` `<select>` beside
+    // it holds four native `<option>`s and a native option's implicit role is `option` too — an
+    // unscoped count answers 6 here and reads as a picker offering the corpus.
+    const listbox = within(await screen.findByRole("listbox"));
+    const alpha = listbox.getByRole("option", { name: /Alpha/ });
+    expect(listbox.getByRole("option", { name: /Beta/ })).toBeVisible();
+    expect(listbox.getAllByRole("option")).toHaveLength(2);
+
+    await user.click(alpha);
+
+    expect(await screen.findByText("showing 1 of 2 printings")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /LEB/ })).toBeNull();
   });
 
   it("says why an over-narrowed wall is empty, and offers the way out", async () => {
