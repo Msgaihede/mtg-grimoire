@@ -224,15 +224,16 @@ describe("formatExport", () => {
       card({ name: "Branchloft Pathway // Boulderloft Pathway", categoryName: "Land" }),
       card({ name: "Duress", categoryName: "Sideboard", categoryKind: "side" }),
     ];
-    // **Two formats are write-only, and each for its own reason.** CSV, because nothing in
-    // `parse.ts` reads a comma-separated decklist and adding one would be a second grammar
-    // rather than a rule inside the one there is. TCGplayer, because its line is aimed at a
-    // cart rather than at us: `parse.ts`'s `BRACKET` is anchored to the end of the line, so a
-    // bracket with a collector number after it is not a bracket to that parser and the whole
-    // tail lands in the name — see the next test, which pins that rather than leaving it as a
-    // claim. Both are excluded **by name** so neither gap can read as an oversight.
-    const readable = EXPORT_FORMATS.filter((f) => f !== "csv" && f !== "tcgplayer");
-    expect(readable).toEqual(["plain", "mtgo", "arena", "moxfield", "archidekt"]);
+    // **One format is write-only.** TCGplayer, because its line is aimed at a cart rather than
+    // at us: `parse.ts`'s `BRACKET` is anchored to the end of the line, so a bracket with a
+    // collector number after it is not a bracket to that parser and the whole tail lands in the
+    // name — see the next test, which pins that rather than leaving it as a claim. Excluded **by
+    // name** so the gap cannot read as an oversight. **CSV carried this label through Tasks 1–9
+    // and stopped being true in Task 10** — `parse.ts` reads a CSV by its header row now, and
+    // `decklists.test.ts` drives it over three real decklists — so it belongs in `readable`
+    // beside everything else that round-trips.
+    const readable = EXPORT_FORMATS.filter((f) => f !== "tcgplayer");
+    expect(readable).toEqual(["plain", "mtgo", "arena", "moxfield", "archidekt", "csv"]);
     for (const f of readable) {
       const back = parseDecklist(formatExport(cards, f, defaultFields(f, "deck")));
       expect(back.issues, f).toEqual([]);
@@ -242,9 +243,9 @@ describe("formatExport", () => {
   });
 
   it("does not round-trip TCGplayer, and this is where that is measured", () => {
-    // The reason TCGplayer sits beside CSV in the exclusion above, pinned rather than asserted
-    // in prose: the copies survive and the **name does not**. If `parse.ts` ever learns to read
-    // an unanchored bracket, this test fails and the exclusion is the thing to revisit.
+    // The reason TCGplayer is the one exclusion above, pinned rather than asserted in prose: the
+    // copies survive and the **name does not**. If `parse.ts` ever learns to read an unanchored
+    // bracket, this test fails and the exclusion is the thing to revisit.
     const back = parseDecklist(formatExport([BOLT], "tcgplayer", defaultFields("tcgplayer", "deck")));
     expect(back.lines.map((l) => l.name)).toEqual(["Lightning Bolt [LEA] 161"]);
     expect(back.lines.map((l) => l.quantity)).toEqual([2]);

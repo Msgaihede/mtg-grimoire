@@ -223,16 +223,26 @@ function sectioned(
  * never fold together on the strength of `category` being off. Archidekt keys on the category
  * name **and** the active flag together, because it writes `{noDeck}` from the second and would
  * otherwise fold a switched-off copy into a switched-on one and silently drop the flag. `plain`,
- * `tcgplayer` and `csv` are absent — they are flat and branch on nothing structural, so two rows
+ * `tcgplayer` and `csv` key `null` — they are flat and branch on nothing structural, so two rows
  * that agree on the chosen fields really are indistinguishable in that file.
+ *
+ * **Total, not partial, for `SECTION_CATEGORY`'s reason** (`import/destinations/deck.ts`): a
+ * format this table says nothing about is a format that folds with no discriminator at all — the
+ * same silent Sideboard-into-Main-deck fold the entries above exist to close, reproduced by
+ * omission for whichever format arrives next rather than by a typo anyone would catch. A new
+ * `ExportFormat` arm with no entry here fails to compile rather than filing itself under
+ * `undefined`; the explicit `null` says "checked, and flat" rather than "not checked yet".
  */
-const DISCRIMINATOR: Partial<Record<ExportFormat, (card: TransferCard) => string>> = {
+const DISCRIMINATOR: Record<ExportFormat, ((card: TransferCard) => string) | null> = {
   // `sectionOf` answers `null` on a category-less surface, where there is nothing structural
   // to key on and every row shares the same `""` — folding is untouched there.
   arena: (card) => sectionOf(card) ?? "",
   moxfield: (card) => sectionOf(card) ?? "",
   mtgo: (card) => sectionOf(card) ?? "",
   archidekt: (card) => JSON.stringify([card.categoryName, card.categoryActive]),
+  plain: null,
+  tcgplayer: null,
+  csv: null,
 };
 
 /**
@@ -263,7 +273,10 @@ export function formatExport(
   fields: readonly TransferFieldId[],
 ): string {
   const set = new Set(fields);
-  const rows = foldForFields(written(cards, format), fields, DISCRIMINATOR[format]);
+  // `?? undefined`: the table is total and says `null` for a flat format, but `foldForFields`'s
+  // parameter is optional rather than nullable — the two spellings of "nothing structural to
+  // key on" meeting at this one call site.
+  const rows = foldForFields(written(cards, format), fields, DISCRIMINATOR[format] ?? undefined);
   if (rows.length === 0) return "";
   const spec = LINE_SPEC[format];
   const line = (card: TransferCard) => writeLine(card, set, spec);

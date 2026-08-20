@@ -57,11 +57,19 @@ function tabStops(panel: HTMLElement): HTMLElement[] {
   // looked at right now.
   const radioStop = new Map<string, HTMLInputElement>();
   for (const el of all) {
+    // `el.name !== ""` here is *not* load-bearing — the filter below already sends an unnamed
+    // radio through its own `el.name === ""` branch before it would ever consult this map, so
+    // this guard only stops an unnamed radio from occupying key `""` in a map nothing reads it
+    // back from by that key. Removable, unlike its twin below.
     if (el instanceof HTMLInputElement && el.type === "radio" && el.name !== "") {
       if (radioStop.get(el.name) === undefined || el.checked) radioStop.set(el.name, el);
     }
   }
   return all.filter((el) => {
+    // `el.name === ""` here **is** load-bearing. Drop it and an unnamed radio falls through to
+    // `radioStop.get("") === el` — which is always `false`, since the loop above never adds a
+    // `""` key to the map — silently removing every unnamed radio from the tab order instead of
+    // keeping it as its own stop.
     if (!(el instanceof HTMLInputElement) || el.type !== "radio" || el.name === "") return true;
     return radioStop.get(el.name) === el;
   });
