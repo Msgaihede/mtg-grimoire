@@ -113,11 +113,15 @@ function columnsFor(
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
       // — the same rule as the grid caption and the pane.
+      //
+      // No `whenClipped`: the span shows the set *code* and the tip says its *name*, so gating
+      // the panel on the code's own clip gates it on a different string than the one it says —
+      // the rule is stated once at `CardDetailPane.tsx`'s printings row.
       cellClassName: "flex items-center gap-1.5 font-mono text-xs text-dim",
       cell: (row) => (
         <>
           <RarityGem rarity={row.rarity} />
-          <span className="truncate" {...tip(row.setName, { whenClipped: true })}>
+          <span className="truncate" {...tip(row.setName)}>
             {row.setCode.toUpperCase()} · {row.collectorNumber}
           </span>
         </>

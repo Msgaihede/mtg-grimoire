@@ -1128,11 +1128,15 @@ function StackedCard({
         <RarityGem rarity={card.rarity} className="ml-[calc(0.375rem*var(--mark-scale,1))]" />
         {/* The code is what fits; the set's name is one hover away, because `PF26` is not a
             word anybody knows. `setName` comes from `cards` and is `null` for an orphan — then
-            the code stands on its own rather than being annotated with a guess. */}
+            the code stands on its own rather than being annotated with a guess.
+
+            No `whenClipped`: the span shows the set *code*, the tip says the set *name* — a
+            different string — so gating the panel on the code's own clip would gate it on
+            something the tip is not about (`CardDetailPane.tsx`'s printings row states the
+            rule this reverses). */}
         <span
           {...tip(
             card.setName === null ? null : `${card.setName} · #${card.collectorNumber}`,
-            { whenClipped: true },
           )}
           className="min-w-0 flex-1 truncate"
         >

@@ -1538,10 +1538,18 @@ function PrintingRow({
       <div className="flex items-center gap-2">
         <RarityGem rarity={printing.rarity} className="shrink-0" />
         {current ? (
-          <span
-            className="min-w-0 flex-1 truncate font-mono"
-            {...tip(printing.setName, { whenClipped: true })}
-          >
+          // **No `whenClipped`.** The rule that decides it, stated once here because this row
+          // and the `<button>` row just below it are both a defect this one was fixed beside:
+          // `whenClipped` is only correct when the tooltip's words are the anchor's *own* text —
+          // the span above (`card.setName` shown *and* tipped, `:1026`) qualifies, this one does
+          // not. It shows `printing.setCode` and tips `printing.setName`, a different string, so
+          // gating the panel on whether the *code* happens to be clipped gates it on something
+          // that has nothing to do with the name it is about to say — and at this row's width the
+          // code rarely clips, so the name was unreachable by hover in practice. `whenClipped`
+          // also forces `describes: false`, so dropping it does double duty: it restores the
+          // panel *and* puts the words back in the accessibility tree, which `title` always did
+          // and `whenClipped` quietly had not.
+          <span className="min-w-0 flex-1 truncate font-mono" {...tip(printing.setName)}>
             {printing.setCode.toUpperCase()} · {printing.collectorNumber}
             {printing.releasedAt && <> · {printing.releasedAt.slice(0, 4)}</>}
           </span>
@@ -1588,7 +1596,9 @@ function PrintingRow({
             onKeyDown={menu.onKeyDown}
             // Greyed and refused, never removed from the tab order — see {@link inert}.
             aria-disabled={inert}
-            {...tip(printing.setName, { whenClipped: true })}
+            // No `whenClipped` — same defect and the same fix as the `current` row's `<span>`
+            // above.
+            {...tip(printing.setName)}
             className={cn(
               "min-w-0 flex-1 truncate text-left font-mono aria-disabled:opacity-50",
               FOCUS,

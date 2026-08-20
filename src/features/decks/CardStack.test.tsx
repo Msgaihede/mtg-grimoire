@@ -1272,13 +1272,21 @@ describe("CardStack tooltips", () => {
     );
     await closeTooltip(shortage);
 
-    // The set code's own span is `whenClipped`, which never opens on its own in jsdom —
-    // `scrollWidth`/`clientWidth` are both 0 by default, unclipped — so it is faked exactly as
-    // the needs-review band's is in `CollectionPage.test.tsx`.
+    // **No `whenClipped` here** (fixed alongside the same defect in `CollectionTable.tsx`,
+    // `CollectionTable`'s Set column and the search table's): the span shows the set *code* and
+    // the tip says its *name*, a different string, so it opens on hover with no clip needed —
+    // unlike every other jsdom probe in this file, nothing is faked on `scrollWidth`/
+    // `clientWidth`. This is the case that would fail against a `whenClipped` version: jsdom
+    // lays nothing out, so `scrollWidth === clientWidth` (`0 === 0`) and `whenClipped` would
+    // return before ever arming the open timer.
     const setCode = screen.getByText("LEA · 161");
-    Object.defineProperty(setCode, "scrollWidth", { value: 200, configurable: true });
-    Object.defineProperty(setCode, "clientWidth", { value: 100, configurable: true });
     expect(await openTooltip(setCode)).toHaveTextContent("Limited Edition Alpha · #161");
+    // And it describes, unlike the redundant `describes: false` marks above: this is the one
+    // piece of information on the card that is nowhere else in its accessible name, so the panel
+    // carries `role="tooltip"` and the code wires `aria-describedby` to it.
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Limited Edition Alpha · #161");
+    expect(setCode).toHaveAttribute("aria-describedby", TOOLTIP_PANEL_ID);
+    await closeTooltip(setCode);
   });
 
   /** An untagged card still answers the question the colour raises — the count alone, with no
@@ -1313,13 +1321,9 @@ describe("CardStack tooltips", () => {
       </TooltipProvider>,
     );
 
-    // Faked clipped, exactly as the positive case above — so a tooltip that opened here would
-    // be caught. `tip(null, { whenClipped: true })` binds nothing at all: `useTooltip.ts`'s
-    // null guard runs before `whenClipped` is even asked, which is the one case a genuinely
-    // clipped span still says nothing.
+    // `tip(null)` binds nothing at all — `useTooltip.ts`'s null guard runs before the anchor is
+    // even asked about, so no clip needs faking to prove this one silent.
     const setCode = screen.getByText("LEA · 161");
-    Object.defineProperty(setCode, "scrollWidth", { value: 200, configurable: true });
-    Object.defineProperty(setCode, "clientWidth", { value: 100, configurable: true });
     fireEvent.pointerEnter(setCode);
     await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 150));
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull();
