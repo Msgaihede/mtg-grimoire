@@ -387,9 +387,26 @@ export function AllPrintingsDialog() {
       // what `Dialog`'s doc says a host must not need.
       title={request?.name ?? ""}
       closeLabel="Close printings"
-      // Written out whole, never interpolated: Tailwind scans source text for class names.
-      // 72rem is a wall rather than a list — six 170px tiles across at the default zoom.
-      width="w-[72rem]"
+      // **The whole column the shell reserves for a panel, and no number of its own.**
+      //
+      // This is the one dialog in the builder whose body is a *grid to pick out of* rather than a
+      // form or a list, so every tile the window can hold is a tile the reader does not scroll
+      // past. A fixed `w-[72rem]` — 1152px — was that at the app's own 1280 default, where
+      // `max-w-full` clamped it to 1120 and it filled the window anyway; on a 2560 display it went
+      // on drawing six 170px tiles in the middle of a 2400px scrim and left the rest to the dim.
+      //
+      // `w-full` is 100% of the panel's grid area, which is exactly the room the shell has already
+      // worked out: `p-4 sm:p-6` off the scrim, and — this is the part the number could not track
+      // — `DeckDialog`'s `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for.
+      // **So the chevrons keep their room by construction rather than by arithmetic here agreeing
+      // with arithmetic there.** They are `absolute right-full mr-2` off this panel's edges, a
+      // 36px disc plus an 8px gap into a 56px column, and a width spelled as `calc(100vw - 10rem)`
+      // would have had to restate both of those constants to say the same thing and would have
+      // gone quietly wrong the first time either moved.
+      //
+      // 13 tiles across at 2560 maximised, 6 at the 1280 default (which is what it drew before),
+      // and 4 at the 1024 floor — 5 where there is no walk and so no flank column to reserve.
+      width="w-full"
       flanks={flanks}
       onPanelKeyDown={onPanelKeyDown}
       onDismiss={close}
