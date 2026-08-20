@@ -19,7 +19,7 @@
 //!   and not a preference — `every_deck_write_leaves_exactly_one_audit_row` drives each command
 //!   once and counts. Two commands make more than one change in a call and so owe more than one
 //!   row, each pinned by a test of its own: [`crate::deck::update_deck`] records one row per
-//!   changed **field**, and [`crate::deck_import::commit_import`] in `replace` mode records the
+//!   changed **field**, and [`crate::import::commit_import`] in `replace` mode records the
 //!   `remove` and the `add` it did — opposite deltas, which one signed row cannot carry.
 //!   **Seven** writes deliberately record nothing, and each says why on its own doc:
 //!   [`crate::deck::delete_deck`] (the row would CASCADE away with the deck it describes);
@@ -166,7 +166,7 @@ pub struct DeckAuditEntry {
 ///
 /// # An import is `add` and `remove` with an `import` payload
 ///
-/// [`crate::deck_import::commit_import`] reuses those two kinds rather than adding a tenth —
+/// [`crate::import::commit_import`] reuses those two kinds rather than adding a tenth —
 /// no new [`crate::schema::AUDIT_KINDS`] value, so no CHECK rebuild and no migration — and
 /// tells itself apart by the single `import` key its payload nests everything under:
 ///
@@ -434,12 +434,8 @@ mod tests {
         type Case<'a> = (&'a str, i64, Box<dyn Fn() + 'a>);
 
         /// One line of an imported decklist.
-        fn imported(
-            card_id: &str,
-            quantity: i64,
-            category: &str,
-        ) -> crate::deck_import::ImportItem {
-            crate::deck_import::ImportItem {
+        fn imported(card_id: &str, quantity: i64, category: &str) -> crate::import::ImportItem {
+            crate::import::ImportItem {
                 card_id: card_id.to_owned(),
                 quantity,
                 category_name: category.to_owned(),
@@ -739,7 +735,7 @@ mod tests {
                 "deck_import_commit (merge)",
                 1,
                 Box::new(|| {
-                    crate::deck_import::commit_import(
+                    crate::import::commit_import(
                         &conn,
                         id,
                         "live",
@@ -762,7 +758,7 @@ mod tests {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 6)
                         .unwrap();
                     clear(&conn);
-                    crate::deck_import::commit_import(
+                    crate::import::commit_import(
                         &conn,
                         id,
                         "live",

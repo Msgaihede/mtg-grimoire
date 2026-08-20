@@ -45,6 +45,7 @@ import { FINISH_LABEL, playedFinish } from "@/lib/finish";
 import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { THEORY_MATCH_LABEL } from "./CardMarks";
 import {
   cardDraggable,
   deckCardSlot,
@@ -322,15 +323,22 @@ export function keepsSelection(target: EventTarget | null): boolean {
  * **This is the whole of what a keyboard reader gets, and that is why it is one function.** An
  * `aria-label` *replaces* an element's content for naming purposes, so every `sr-only` span
  * inside one of these buttons is announced to nobody: the tag chip, the `GC` badge, the
- * `RULE BREAK` mark and the red shortage figure are all decoration once the button is named,
- * and each of them is a fact somebody needs. They are said here instead, once, so no surface
- * can be the one that forgets.
+ * `RULE BREAK` mark, the theory tick and the red shortage figure are all decoration once the
+ * button is named, and each of them is a fact somebody needs. They are said here instead, once,
+ * so no surface can be the one that forgets.
  *
  * The shortage is included even on the two surfaces that have no room to draw it. A name is
  * what a reader gets *instead of* the visual scan, not a transcript of it — one name carrying
  * every fact beats three that each omit a different one.
  */
-export function deckCardName(card: DeckCard, ruleBreakText: string | null): string {
+export function deckCardName(
+  card: DeckCard,
+  ruleBreakText: string | null,
+  /** Whether the deck's plan also asks for this row — `theoryMatch.ts`'s answer, and `false` for
+   *  every card of a deck that keeps no plan. The mark itself is `TheoryMatchMark`, which is a
+   *  tick and therefore says nothing at all to a reader who cannot see it. */
+  inTheory = false,
+): string {
   // The allocator claims no copy for an inactive category, so every card in one reads 0 owned
   // by construction — announcing a shortage there would report one the reader does not have.
   const short = card.categoryActive && card.ownedQuantity < card.quantity;
@@ -346,6 +354,10 @@ export function deckCardName(card: DeckCard, ruleBreakText: string | null): stri
     finish === null ? null : FINISH_LABEL[finish].toLowerCase(),
     card.tagName,
     card.gameChanger === true ? "game changer" : null,
+    // Before the rule break, because it is the milder fact and this list runs from what the card
+    // *is* to what is wrong with it — and lowercased like every other clause here, since the
+    // constant is written as a tooltip (a fragment on its own) and this is a sentence.
+    inTheory ? THEORY_MATCH_LABEL.toLowerCase() : null,
     ruleBreakText === null ? null : `rule break: ${ruleBreakText}`,
   ]
     .filter((part): part is string => part !== null)
@@ -522,7 +534,7 @@ export function deckCardMenuProps(
  *
  * **The handlers go on the view's own group element and never on `GroupHeader`, and that is a
  * layer decision rather than a preference.** `CategoriesDialog` draws that same component in
- * every one of its rows, *inside* a `DeckDialog` — which is `LAYER.overlay`, 45, over a scrim.
+ * every one of its rows, *inside* a `Dialog` — which is `LAYER.overlay`, 45, over a scrim.
  * `ContextMenu` draws at `LAYER.popup`, 30. (Named rather than spelled as classes: Tailwind's
  * scanner reads a comment as eagerly as code, so a bare utility written here is a rule the build
  * emits — which is why `layers.test.ts` sweeps prose too, and why it went red for this comment.)

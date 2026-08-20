@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { useAppStore, type SearchView } from "@/lib/store";
 import { WishlistPage } from "./WishlistPage";
 
@@ -209,9 +210,15 @@ export const FlaggedOnTheWall: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const flag = await canvas.findByText("Needs review", { selector: "span" });
-    await expect(flag).toHaveAttribute(
-      "title",
-      expect.stringContaining("Scryfall removed this printing from its database"),
+    // The reconciler's sentence rides as a tooltip now, not a `title` — describing (the default
+    // `describes: true`, since nothing else on the tile carries the sentence as text), so the
+    // panel carries `role="tooltip"` once hovered.
+    await userEvent.hover(flag);
+    const reviewTooltip = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(reviewTooltip).toHaveTextContent(
+      "Scryfall removed this printing from its database",
     );
   },
 };

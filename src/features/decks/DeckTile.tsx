@@ -16,6 +16,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import { Archive, ArchiveRestore, Copy, FolderInput, Trash2 } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { FOCUS } from "@/lib/focus";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
@@ -155,6 +156,7 @@ export function DeckTile({
   onClosePanel: () => void;
 }) {
   const ref = useRef<HTMLLIElement>(null);
+  const tip = useTooltip();
   const { id, name } = deck;
   const { menu, menuKey } = useContextMenu();
   /** This tile's rows, built when the reader right-clicks it and never before — and from **one**
@@ -278,7 +280,10 @@ export function DeckTile({
           and crediting an illustrator whose work is *not on screen* is the one thing this line
           must never do. `DeckCoverPicker`'s `CoverPreview` guards the same way. */}
       {deck.coverKind === "card_art" && deck.coverArtist && (
-        <p className="mt-0.5 truncate text-[0.7rem] text-dim" title={deck.coverArtist}>
+        <p
+          className="mt-0.5 truncate text-[0.7rem] text-dim"
+          {...tip(deck.coverArtist, { whenClipped: true })}
+        >
           Art by {deck.coverArtist}
         </p>
       )}
@@ -327,7 +332,7 @@ export function DeckTile({
           aria-label={`Move ${deck.name} to a folder`}
           aria-expanded={choosingFolder}
           aria-haspopup="dialog"
-          title="Move to a folder"
+          {...tip("Move to a folder", { describes: false })}
           onClick={(e) => (choosingFolder ? onCancelPanel() : onAskMove(deck, e.currentTarget))}
           className={ICON_BUTTON}
         >
@@ -337,7 +342,7 @@ export function DeckTile({
           type="button"
           data-no-drag=""
           aria-label={`Duplicate ${deck.name}`}
-          title="Duplicate"
+          {...tip("Duplicate", { describes: false })}
           onClick={() => decks.duplicate.mutate(deck.id)}
           className={ICON_BUTTON}
         >
@@ -347,7 +352,7 @@ export function DeckTile({
           type="button"
           data-no-drag=""
           aria-label={`${deck.archived ? "Restore" : "Archive"} ${deck.name}`}
-          title={deck.archived ? "Restore" : "Archive"}
+          {...tip(deck.archived ? "Restore" : "Archive", { describes: false })}
           onClick={() => decks.update.mutate({ id: deck.id, patch: { archived: !deck.archived } })}
           className={ICON_BUTTON}
         >
@@ -361,7 +366,7 @@ export function DeckTile({
           type="button"
           data-no-drag=""
           aria-label={`Delete ${deck.name}`}
-          title="Delete"
+          {...tip("Delete", { describes: false })}
           onClick={(e) => onAskDelete(deck, e.currentTarget)}
           className={cn(ICON_BUTTON, "hover:text-destructive")}
         >

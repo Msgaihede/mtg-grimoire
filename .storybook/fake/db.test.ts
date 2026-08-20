@@ -8,11 +8,15 @@
 import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
 import {
+  ART_TAGGED_PRINTINGS,
   ORACLE_TAGGED_NAMES,
   allHandlers,
+  artTagIllustrations,
   makeDb,
   neverCheckedUpdate,
   oracleTagCards,
+  oracleTagEdges,
+  oracleTagRows,
   pluginHandlers,
   readHandlers,
   writeHandlers,
@@ -25,6 +29,7 @@ import { CARDS, type FakeCard } from "./cards";
 import type {
   CardSummary,
   CategoryKind,
+  CollectionImportItem,
   CollectionPage,
   CollectionSortKey,
   DeckDetail,
@@ -34,9 +39,12 @@ import type {
   ImportResolveLine,
   SearchRequest,
   SearchSortKey,
+  TransferImportMode,
+  WishlistImportItem,
   WishlistPage,
   WishlistSortKey,
 } from "@/lib/ipc";
+import type { Finish } from "@/lib/finish";
 import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 import type { MarketplaceId } from "@/lib/marketplace";
 import type { SortSpec } from "@/lib/sort";
@@ -1030,6 +1038,71 @@ describe("ordering", () => {
       ]);
     });
 
+    /**
+     * The first of the two keys with **no column to press** — added 2026-08-20 and reachable
+     * only from the filter bar's sort picker, so nothing in the table can ask for this order
+     * and a story that wants it is driving that control.
+     *
+     * `cards.cmc` is REAL and nullable and **no row of `CARDS` has a null one**, so the hole
+     * is made rather than found, exactly as the type-line fixture above it is. Little Girl's
+     * 0.5 is found, and is the fixture's own proof that the column is REAL rather than an
+     * INTEGER: a cast would file her with the Forest.
+     */
+    it("keeps a missing mana value last in both directions", () => {
+      const noCmc: FakeCard = { ...at("2x2", "117"), id: "no-mana-value", cmc: null };
+      const db = makeDb({
+        cards: [
+          at("mb2", "502"), // Kozilek, Compleated — 10
+          at("unf", "239"), // Forest — 0
+          noCmc, // `2x2 117` with its cost taken away
+          at("unh", "16"), // Little Girl — 0.5
+          at("fut", "153"), // Tarmogoyf — 2
+        ],
+      });
+      expect(setCodesFor(db, [{ key: "manaValue", dir: "asc" }])).toEqual([
+        "unf",
+        "unh",
+        "fut",
+        "mb2",
+        "2x2",
+      ]);
+      // Reversed rows, not moved holes — the rule every nullable column in `SEARCH_SORTS`
+      // states twice, and the whole reason this one is `nullsLast` and not `reversible`.
+      expect(setCodesFor(db, [{ key: "manaValue", dir: "desc" }])).toEqual([
+        "mb2",
+        "fut",
+        "unh",
+        "unf",
+        "2x2",
+      ]);
+    });
+
+    /**
+     * The other key with no column. `released_at` is ISO `YYYY-MM-DD`, so the byte order
+     * {@link cmp} applies *is* date order — which is the claim worth pinning, because a
+     * comparator that parsed the string first would agree with this on every row here and
+     * disagree with SQLite the moment a corpus held a date it could not parse.
+     *
+     * Its hole cannot be storied: `FakeCard.releasedAt` is not nullable where
+     * `cards.released_at` is (the fake says so at `toCardSummary`), so the both-directions
+     * rule is carried by `nullsLast` and pinned above, on the one of the two whose fixture
+     * column can hold a null.
+     */
+    it("orders `released` by the date and not by the order the rows arrived", () => {
+      // Declared newest-first, so insertion order is a wrong answer this can catch.
+      const db = makeDb({
+        cards: [
+          at("sld", "913"), // 2025-12-01 — the corpus's newest printing
+          at("lea", "161"), // 1993-08-05 — its oldest
+          at("pcy", "45"), // 2000-06-05
+        ],
+      });
+      expect(setCodesFor(db, [{ key: "released", dir: "asc" }])).toEqual(["lea", "pcy", "sld"]);
+      // Newest first, which is the direction the picker opens this key on and the one
+      // `SEARCH_FIRST_DIR` gives it.
+      expect(setCodesFor(db, [{ key: "released", dir: "desc" }])).toEqual(["sld", "pcy", "lea"]);
+    });
+
     it("answers name order for an empty spec, for no spec, and reverses on desc", () => {
       // Declared out of name order, so insertion order is a wrong answer this can catch.
       const db = makeDb({
@@ -1051,10 +1124,16 @@ describe("ordering", () => {
     it("drops a key it does not know, and keeps a repeated key's first appearance", () => {
       const db = makeDb({ cards: [at("c21", "263"), at("2ed", "48"), at("unf", "239")] });
       const nameOrder = ["2ed", "unf", "c21"];
-      // `released` is the key the contract lost. A key the table does not list is dropped
-      // rather than interpolated, so this spec is empty and the browse order answers.
+      // A key the table does not list is dropped rather than interpolated, so this spec is
+      // empty and the browse order answers. **Synthetic on purpose**: this used to be
+      // `released`, which stopped being an unknown key the day the filter bar's sort picker
+      // gave it a control (2026-08-20). A hyphenated word is something no member of
+      // `SEARCH_SORTS` can ever become — they are camelCase — so the next real key cannot
+      // collide with it and quietly turn this assertion into its opposite.
       expect(
-        setCodesFor(db, [{ key: "released", dir: "desc" }] as unknown as SortSpec<SearchSortKey>),
+        setCodesFor(db, [
+          { key: "not-a-sort-key", dir: "desc" },
+        ] as unknown as SortSpec<SearchSortKey>),
       ).toEqual(nameOrder);
       // A repeated key is dead SQL whose second copy reads like the one that won. The first
       // appearance is the one the reader built first.
@@ -2101,6 +2180,117 @@ describe("the wishlist write", () => {
   });
 });
 
+describe("collection_import_commit", () => {
+  it("accumulates a repeated grain and counts added versus updated", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2 },
+      // Two lines, one grain: the file named the same printing twice and the copies add up.
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 3 },
+    ];
+    const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
+    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(db.collectionEntries).toHaveLength(1);
+    expect(db.collectionEntries[0].quantity).toBe(5);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the collection as it was", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      // A finish no CHECK will take. A half-imported collection is worse than a refused one.
+      { cardId: BOLT.id, finish: "glitter" as Finish, quantity: 1 },
+    ];
+    expect(() => writeHandlers(db).collection_import_commit({ items, mode: "add" })).toThrow(
+      /not a finish/,
+    );
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  it("refuses an unknown mode rather than defaulting it, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).collection_import_commit({
+        items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 1 }],
+        mode: "replace" as TransferImportMode,
+      }),
+    ).toThrow(/not an import mode/);
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+});
+
+describe("wishlist_import_commit", () => {
+  it("accumulates a repeated grain and counts added versus updated", () => {
+    const db = makeDb();
+    const items: WishlistImportItem[] = [
+      { oracleId: BOLT.oracleId!, quantity: 2 },
+      { oracleId: BOLT.oracleId!, quantity: 1 },
+    ];
+    const out = writeHandlers(db).wishlist_import_commit({ items, mode: "add" });
+    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0].quantity).toBe(3);
+  });
+
+  it("is all or nothing: one line it cannot land leaves the wishlist as it was", () => {
+    const db = makeDb();
+    const items: WishlistImportItem[] = [
+      { oracleId: BOLT.oracleId!, quantity: 1 },
+      { oracleId: BOLT.oracleId!, quantity: 1, preferredFinish: "glitter" as Finish },
+    ];
+    expect(() => writeHandlers(db).wishlist_import_commit({ items, mode: "add" })).toThrow(
+      /not a finish/,
+    );
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  it("refuses an unknown mode rather than defaulting it, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).wishlist_import_commit({
+        items: [{ oracleId: BOLT.oracleId!, quantity: 1 }],
+        mode: "replace" as TransferImportMode,
+      }),
+    ).toThrow(/not an import mode/);
+    expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  /**
+   * The trap `removed` being counted explicitly (rather than derived from a row-count delta)
+   * exists for: one line creates a row and another zeroes an existing one, in the same `set`
+   * call. A before/after row count alone would cancel these two events out and report neither.
+   *
+   * Expected by hand: before the import, 1 wish exists (the any-printing one seeded via
+   * `wishlist_add`). The first item names that exact grain (`oracleId`, no `cardId`) at
+   * quantity `0` — `add_wish`'s own fold (which never subtracts) leaves the row momentarily
+   * higher, and the immediate `set` to `0` deletes it: `removed` becomes `1`, row count drops by
+   * one. The second item names a different grain (pinned to `BOLT.id`) that does not exist yet,
+   * so it is created and then `set` to `5` — a real net-new row, row count rises by one. Net row
+   * count is therefore unchanged (1 → 1), which is exactly the case that would read as "nothing
+   * happened" without the explicit counter: `added = (after - before) + removed = (1 - 1) + 1 =
+   * 1`, `removed = 1`, `updated = items.length - added - removed = 2 - 1 - 1 = 0`.
+   */
+  it("counts a mixed set import: one new row, one deleted, none merely updated", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 2 } });
+    const out = w.wishlist_import_commit({
+      items: [
+        // Same grain as the seeded wish (any printing): zeroed by this line.
+        { oracleId: BOLT.oracleId!, quantity: 0 },
+        // A different grain (pinned to a printing): a genuinely new row.
+        { oracleId: BOLT.oracleId!, cardId: BOLT.id, quantity: 5 },
+      ],
+      mode: "set",
+    });
+    expect(out).toEqual({ added: 1, updated: 0, removed: 1 });
+    // The any-printing wish is gone and only the pinned one remains — not an id check, because
+    // `nextId` derives from the array's current contents and reuses the id the delete freed.
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0]).toMatchObject({ cardId: BOLT.id, quantity: 5 });
+  });
+});
+
 describe("the deck grain (deck, variant, category, card)", () => {
   /** The four card commands all address a row this way, which is the grain and nothing else. */
   const MAIN = { categoryId: categoryId(1, "main"), variant: "live" } as const;
@@ -2660,7 +2850,7 @@ describe("the decklist import", () => {
 
   /** The three fields of a resolve line, so a case can name only the ones it is about. */
   function resolve(db: FakeDb, lines: Partial<ImportResolveLine>[]) {
-    return readHandlers(db).deck_import_resolve({
+    return readHandlers(db).import_resolve({
       lines: lines.map((l) => ({ name: "", setCode: null, collectorNumber: null, ...l })),
     });
   }
@@ -2854,7 +3044,7 @@ describe("the decklist import", () => {
   });
 
   it("has no file to read, and says so rather than inventing a decklist", () => {
-    expect(() => readHandlers(makeDb()).deck_import_read_file()).toThrow(/no file picker/i);
+    expect(() => readHandlers(makeDb()).import_read_file()).toThrow(/no file picker/i);
   });
 });
 
@@ -2893,6 +3083,11 @@ describe("the busy fault", () => {
       // with a read and a network call, and only its ingest reaches for `db::lock_for`. So a
       // running sync delays a tag refresh rather than refusing it at the door.
       "oracle_tags_refresh",
+      // The art taxonomy's refresh, unlocked for exactly the same reason as its oracle twin —
+      // `tags::refresh` opens with a read and a network call and only its ingest reaches for
+      // `db::lock_for`. It is the *larger* of the two (12.5 MB against 5.85), which is why
+      // `tags::art::refresh_if_due` is emphatic that nothing may wait on it.
+      "art_tags_refresh",
       // The seventh, and the only one here that touches **no database at all**:
       // `export::export_write_file` takes no `AppState`, so there is no connection for a sync
       // to be holding and no `BUSY` it could ever answer. It writes a file at a path the OS
@@ -2944,7 +3139,7 @@ describe("the busy fault", () => {
     //
     // All three follow the same split as `error_log_clear` before them: the write half takes
     // `AppState.db` through `lock_for` and is therefore refusable, while its read half
-    // (`deck_import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
+    // (`import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
     // `db_read` and answers through every second of a sync.
     //
     // The card pane's grouping selector then added `set_printing_group_by`, on the same split
@@ -2970,10 +3165,33 @@ describe("the busy fault", () => {
     // `Set as foil` then added `deck_set_card_finish`, 40 → 41. Another card write: it moves
     // copies between two rows of one printing and takes the write lock like every other.
     //
+    // Settings' four clears then took it 41 → 45 in one branch, which is the largest single
+    // move this number has had. All four are ordinary writes on `AppState.db` and refusable for
+    // the usual reason. `cache_clear` is the one worth a sentence: it carries a **second**
+    // refusal of its own — a sync in flight, checked before the connection is ever asked for,
+    // which is the `syncing` fault rather than this one — and it still belongs in this loop,
+    // because a reader who is merely mid-*write* gets BUSY here exactly like everything else.
+    //
+    // The tags branch then added three writes: `tag_mute` and `tag_unmute` take
+    // `sync::with_write` and are refusable like everything else in the loop, while
+    // `art_tags_refresh` joined `unlocked` beside its oracle twin. Two of three, and the third
+    // had to be argued for on the list above rather than counted here.
+    //
+    // The bulk-import commands added two more: `collection_import_commit` and
+    // `wishlist_import_commit` are one transaction for a whole imported file rather than one
+    // `collection_add`/`wishlist_add` per line, and each holds the same write lock its per-line
+    // sibling does, so a reader mid-write gets BUSY on an import exactly as they do on a
+    // quick-add.
+    //
+    // **Those two branches landed independently and each wrote 45 → 47, which is the merge this
+    // paragraph exists for**: the number is a fact about the *merged* table, so the two moves sum
+    // to 45 → 49 rather than either one winning. Neither side was wrong when it was written, and
+    // taking one side's figure would have been a count that was true of a tree nobody has.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(41);
+    expect(names).toHaveLength(49);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -3421,6 +3639,671 @@ describe("the Oracle tag taxonomy", () => {
     // The status still answers, and still says the taxonomy is there: a refusal here is never a
     // reason to stop filing cards.
     expect(readHandlers(db).oracle_tags_status().ingestedAt).not.toBeNull();
+  });
+
+  /**
+   * **`ORACLE_TAG_EDGES` is a claim about `ORACLE_TAGGINGS`, and this is what holds it to it.**
+   *
+   * Those taggings are written out already closed — every list carries its ancestors — so an
+   * edge `child → parent` is the assertion that no card in the fixture carries the child without
+   * the parent. Get one wrong and nothing else breaks: the rail would simply file a tag under a
+   * heading whose `cardCount` did not include it, which reads as a counting bug three screens
+   * away from the table that caused it.
+   *
+   * It is also why `repeatable-token-generator` has **no** edge to `token-generator` despite the
+   * names — Ragavan carries the first without the second, so that edge is not in this taxonomy
+   * and adding it on the strength of the spelling would fail here.
+   */
+  it("keeps every oracle parent edge consistent with the closed taggings", () => {
+    const edges = oracleTagEdges();
+    const bySlug = new Map(oracleTagCards(CARDS).map((r) => [r.oracleId, [] as string[]]));
+    for (const row of oracleTagCards(CARDS)) bySlug.get(row.oracleId)!.push(row.slug);
+
+    const broken: string[] = [];
+    for (const slugs of bySlug.values()) {
+      for (const edge of edges) {
+        if (slugs.includes(edge.childSlug) && !slugs.includes(edge.parentSlug)) {
+          broken.push(`${edge.childSlug} without ${edge.parentSlug}`);
+        }
+      }
+    }
+    expect(broken).toEqual([]);
+    // Every slug an edge names has a row of its own, so no rail entry points at a tag the
+    // taxonomy does not hold.
+    const known = new Set(oracleTagRows().map((t) => t.slug));
+    const dangling = edges
+      .flatMap((e) => [e.childSlug, e.parentSlug])
+      .filter((slug) => !known.has(slug));
+    expect(dangling).toEqual([]);
+  });
+});
+
+/**
+ * The **art** taxonomy, whose whole contract is one word different from the oracle one's and
+ * the difference decides every answer: it is keyed on the **illustration**.
+ *
+ * An art tag is a fact about a picture, not about a card. Get that wrong and the fake is still
+ * plausible — a wall comes back, the counts are numbers — while every story on the page teaches
+ * a reader that all four Lightning Bolts depict the same thing.
+ */
+describe("the art tag taxonomy", () => {
+  /** The seed's own state: both taxonomies ingested, fresh, and answering. */
+  const tagged = () => seed("starter");
+
+  const LIGHTNING = CARDS.find((c) => c.name === "Lightning Bolt" && c.setCode === "lea")!;
+  const LURRUS = CARDS.find((c) => c.name === "Lurrus of the Dream-Den")!;
+  const LLANOWAR = CARDS.find((c) => c.name === "Llanowar Elves")!;
+  const FOREST = CARDS.find((c) => c.name === "Forest" && c.setCode === "unf")!;
+  const ISLAND = CARDS.find((c) => c.name === "Island" && c.setCode === "lea")!;
+
+  /** `ART_TAGGINGS` names printings by `(name, setCode)` against a corpus that is generated
+   *  wholesale, so a regenerated `cards.ts` could silently empty the taxonomy — a pair that no
+   *  longer resolves contributes nothing and nothing else would go red. This notices, exactly as
+   *  {@link ORACLE_TAGGED_NAMES}' test does one taxonomy over. */
+  it("resolves every tagged printing against the generated corpus", () => {
+    const printings = new Set(CARDS.map((c) => `${c.name} ${c.setCode}`));
+
+    expect(ART_TAGGED_PRINTINGS.filter((p) => !printings.has(p))).toEqual([]);
+    // Eleven printings, eleven illustrations: no two of them share an art, so each tagging lands
+    // on a row of its own and the counts below are readable one card at a time.
+    expect(ART_TAGGED_PRINTINGS).toHaveLength(11);
+    expect(new Set(artTagIllustrations(CARDS).map((r) => r.illustrationId)).size).toBe(11);
+  });
+
+  /**
+   * **The key is the illustration, and this is the assertion that says so.**
+   *
+   * Lightning Bolt has four printings, four illustrations and one oracle id. `lightning` is on
+   * the `lea` art alone, so the art taxonomy answers one printing where the *oracle* tag `burn`
+   * answers all four — which is the whole difference between the two tables, and it is invisible
+   * unless the other three Bolts are left untagged.
+   */
+  it("tags a printing's illustration, never its oracle card", () => {
+    const db = tagged();
+    const bolts = CARDS.filter((c) => c.name === "Lightning Bolt");
+    expect(bolts).toHaveLength(4);
+
+    const lit = db.artTags.filter((r) => r.slug === "lightning");
+    expect(lit.map((r) => r.illustrationId)).toEqual([LIGHTNING.illustrationId]);
+
+    // The oracle side of the same card, for contrast: one set of rows shared by all four.
+    const art = readHandlers(db).search_cards({
+      req: { artTags: { include: ["lightning"] }, limit: 50, offset: 0 },
+    });
+    const oracle = readHandlers(db).search_cards({
+      req: { oracleTags: { include: ["burn"] }, limit: 50, offset: 0 },
+    });
+    expect(art.items.map((i) => i.id)).toEqual([LIGHTNING.id]);
+    expect(oracle.items.filter((i) => i.name === "Lightning Bolt")).toHaveLength(4);
+  });
+
+  /**
+   * **The closure is the answer and the direct taggings are the wrong number.**
+   *
+   * Nothing is tagged `animal` or `creature` directly. `cat` is on Lurrus and `monkey` on
+   * Ragavan, so a query for their grandparent has to reach both through the hierarchy — the same
+   * shape as the real `removal`, which has zero direct taggings and answers 6 686 cards. A
+   * predicate over the taggings would answer this with nothing at all, which looks like a data
+   * problem rather than a query one.
+   */
+  it("answers a category tag through the closure, not through its own taggings", () => {
+    const db = tagged();
+    const rows = readHandlers(db).search_cards({
+      req: { artTags: { include: ["animal"] }, limit: 50, offset: 0 },
+    });
+
+    expect(rows.items.map((i) => i.name).sort()).toEqual([
+      "Lurrus of the Dream-Den",
+      "Ragavan, Nimble Pilferer",
+    ]);
+    // …and `creature`, one level further up, adds the angels, the elf and the sphinx.
+    const creatures = readHandlers(db).search_cards({
+      req: { artTags: { include: ["creature"] }, limit: 50, offset: 0 },
+    });
+    expect(creatures.total).toBe(6);
+  });
+
+  /**
+   * **`forest` has two parents and both are followed.** 43 % of Scryfall's art tags do, so a
+   * closure walk that took the first parent and stopped would be wrong for two tags in five —
+   * and it would be wrong quietly, since the tag it *did* reach would still answer.
+   */
+  it("follows every parent edge, not the first", () => {
+    const rows = artTagIllustrations(CARDS).filter(
+      (r) => r.illustrationId === FOREST.illustrationId,
+    );
+    expect(rows.map((r) => r.slug).sort()).toEqual(["forest", "landscape", "plant"]);
+  });
+
+  /**
+   * **The weight floor drops `weak` and nothing else**, and the two counts are what make that
+   * visible: Llanowar Elves' `forest` is `weak` (the wood behind the elf is the background
+   * element Scryfall's own definition names), so `landscape` answers three illustrations open
+   * and two floored.
+   *
+   * `median` surviving is the half a control's wording rests on — the predicate is
+   * `weight <> 'weak'`, so this **excludes background detail** rather than narrowing to strong
+   * matches, and Forest `unf` is `median` and stays.
+   */
+  it("drops only the weak rows when the floor is on", () => {
+    const db = tagged();
+    const open = readHandlers(db).search_cards({
+      req: { artTags: { include: ["landscape"] }, limit: 50, offset: 0 },
+    });
+    const floored = readHandlers(db).search_cards({
+      req: { artTags: { include: ["landscape"] }, artWeightFloor: "strong", limit: 50, offset: 0 },
+    });
+
+    expect(open.items.map((i) => i.name).sort()).toEqual(["Forest", "Island", "Llanowar Elves"]);
+    expect(floored.items.map((i) => i.name).sort()).toEqual(["Forest", "Island"]);
+
+    // **`"any"` is not a floor**, and neither is a word this build has not heard of: an
+    // unrecognised value fails *open*, showing more rather than hiding cards nobody reports.
+    const any = readHandlers(db).search_cards({
+      req: { artTags: { include: ["landscape"] }, artWeightFloor: "any", limit: 50, offset: 0 },
+    });
+    expect(any.total).toBe(3);
+  });
+
+  /**
+   * **The closure's weight is the strongest tagging it descends from, not the last one written.**
+   *
+   * Island `lea` is tagged `water` strong *and* `landscape` median, and both reach `landscape` —
+   * directly and through `water`. The row has to come out `strong`, so the floored search above
+   * keeps it. A single-tagging fixture passes a last-write-wins fold by luck of ordering.
+   */
+  it("folds a closure row to the strongest tagging that reaches it", () => {
+    const rows = artTagIllustrations(CARDS).filter(
+      (r) => r.illustrationId === ISLAND.illustrationId,
+    );
+    expect(rows).toEqual([
+      { illustrationId: ISLAND.illustrationId, slug: "landscape", weight: "strong" },
+      { illustrationId: ISLAND.illustrationId, slug: "water", weight: "strong" },
+    ]);
+    // The weak one keeps its weight all the way up: nothing stronger reaches Llanowar's
+    // `landscape`, so the fold leaves it alone.
+    const elves = artTagIllustrations(CARDS).filter(
+      (r) => r.illustrationId === LLANOWAR.illustrationId && r.slug === "landscape",
+    );
+    expect(elves.map((r) => r.weight)).toEqual(["weak"]);
+  });
+
+  /**
+   * **One tagging reaches every printing that shares the art**, which is the positive half of
+   * the illustration rule — Lightning Bolt is the negative half.
+   *
+   * Ancestral Recall `lea` and `2ed` are one illustration (Mark Poole's, `d20eda7b…`) under two
+   * printings. Built here rather than seeded, because the seed only tags motifs somebody has
+   * actually checked are in the picture and nobody has checked that one: what this is about is
+   * the join, and the join does not care what the slug says.
+   */
+  it("reaches both printings that share one illustration", () => {
+    const both = CARDS.filter((c) => c.name === "Ancestral Recall");
+    expect(both).toHaveLength(2);
+    expect(both[0].illustrationId).toBe(both[1].illustrationId);
+
+    const db = makeDb({
+      artTags: [{ illustrationId: both[0].illustrationId!, slug: "flower", weight: "median" }],
+    });
+    const rows = readHandlers(db).search_cards({
+      req: { artTags: { include: ["flower"] }, limit: 50, offset: 0 },
+    });
+    expect(rows.items.map((i) => i.setCode).sort()).toEqual(["2ed", "lea"]);
+  });
+
+  /**
+   * **A printing with no `illustration_id` fails every include and passes every exclude**, and
+   * that is SQL's rule rather than a choice — the real predicate correlates on a NULL column, so
+   * the `EXISTS` finds nothing and the `NOT EXISTS` around it is satisfied. Three of the 43
+   * printings are in that state, against 4 977 of 116 712 live ones.
+   */
+  it("keeps an illustration-less printing out of every include and in every exclude", () => {
+    const db = tagged();
+    const blind = CARDS.filter((c) => c.illustrationId === null);
+    expect(blind.length).toBeGreaterThan(0);
+
+    const included = readHandlers(db).search_cards({
+      req: { artTags: { include: ["creature"] }, limit: 50, offset: 0 },
+    });
+    const excluded = readHandlers(db).search_cards({
+      req: { artTags: { exclude: ["creature"] }, limit: 200, offset: 0 },
+    });
+    for (const card of blind) {
+      expect(included.items.some((i) => i.id === card.id)).toBe(false);
+      expect(excluded.items.some((i) => i.id === card.id)).toBe(true);
+    }
+  });
+
+  /**
+   * **The exclude arm ignores the floor, deliberately.** "Not a landscape" means not a landscape
+   * at all, including weakly — a floor here would let the weakly-tagged cards back into a result
+   * the reader asked to have none of, which is the one direction a filter must never fail in.
+   */
+  it("excludes a weak match even with the floor on", () => {
+    const db = tagged();
+    const rows = readHandlers(db).search_cards({
+      req: { artTags: { exclude: ["landscape"] }, artWeightFloor: "strong", limit: 200, offset: 0 },
+    });
+    expect(rows.items.some((i) => i.id === LLANOWAR.id)).toBe(false);
+  });
+
+  /**
+   * **Includes INTERSECT and the two taxonomies AND with each other**, so "an animal that ramps"
+   * is one request. A union here would answer a superset that looks entirely plausible.
+   */
+  it("intersects the includes and ANDs the two taxonomies", () => {
+    const db = tagged();
+    // Lurrus is a cat; Ragavan is a monkey. Nothing is both.
+    expect(
+      readHandlers(db).search_cards({
+        req: { artTags: { include: ["cat", "monkey"] }, limit: 50, offset: 0 },
+      }).total,
+    ).toBe(0);
+    // An animal that also ramps: Ragavan makes treasure but is not tagged `ramp`, and Lurrus is
+    // recursion — so the pair narrows to nothing, where either alone answers something.
+    const animals = readHandlers(db).search_cards({
+      req: { artTags: { include: ["animal"] }, limit: 50, offset: 0 },
+    });
+    const both = readHandlers(db).search_cards({
+      req: {
+        artTags: { include: ["animal"] },
+        oracleTags: { include: ["recursion"] },
+        limit: 50,
+        offset: 0,
+      },
+    });
+    expect(animals.total).toBe(2);
+    expect(both.items.map((i) => i.name)).toEqual(["Lurrus of the Dream-Den"]);
+  });
+
+  /** A blank or all-blank list is **no filter**, never "match nothing" — `filters::picked_tags`.
+   *  A cleared chip row sends `[]` and some send `[""]`, and either taken literally would be an
+   *  empty wall with no chip drawn to explain it. */
+  it("treats an empty or blank tag list as no filter at all", () => {
+    const db = tagged();
+    const all = readHandlers(db).search_cards({ req: { limit: 200, offset: 0 } }).total;
+
+    for (const include of [[], [""], ["  "]]) {
+      expect(
+        readHandlers(db).search_cards({ req: { artTags: { include }, limit: 200, offset: 0 } })
+          .total,
+      ).toBe(all);
+    }
+  });
+
+  /**
+   * **The facets narrow by a tag**, since 2026-08-20. `run_facets` resolves each picked slug
+   * through its closure into a bitset over `cards.rowid`, intersects those with the FTS one and
+   * hands `compute` the single narrowing set it takes — so the counts describe the tag-filtered
+   * wall rather than the corpus above it, and this mirror stopped stripping the three tag fields
+   * out of its base on the same day.
+   *
+   * Read against `search_cards`' own answer rather than a written-down number, because the two
+   * agreeing is the whole claim: a count that disagreed with the wall beside it would grey a set
+   * the search returns rows for. Uncollapsed on purpose — `facet_cards.total` is **printings**,
+   * always, while a collapsed search counts cards.
+   */
+  it("facets a tag-filtered request over the tag-filtered corpus", () => {
+    const db = tagged();
+    const plain = readHandlers(db).facet_cards({ req: { limit: 50, offset: 0 } });
+    const req = { artTags: { include: ["animal"] }, limit: 200, offset: 0 };
+    const tagFiltered = readHandlers(db).facet_cards({ req });
+    const wall = readHandlers(db).search_cards({ req });
+
+    expect(wall.total).toBeGreaterThan(0);
+    expect(tagFiltered.total).toBe(wall.total);
+    expect(tagFiltered.total).toBeLessThan(plain.total);
+
+    // Every other dimension narrows with it — and a set the motif cannot reach arrives as an
+    // explicit **0** rather than as an absent key, which is what lets the picker grey a row
+    // instead of dropping it.
+    const reachable = new Set(wall.items.map((i) => i.setCode));
+    expect(reachable.size).toBeGreaterThan(0);
+    expect(Object.keys(tagFiltered.sets).length).toBeGreaterThan(reachable.size);
+    for (const [code, count] of Object.entries(tagFiltered.sets)) {
+      if (!reachable.has(code)) expect(count).toBe(0);
+    }
+  });
+
+  /**
+   * The weight floor rides the art **include** arm and nothing else, so it moves the counts the
+   * same way the wall moves — `landscape` is the seed's floored motif, weak on Llanowar Elves.
+   */
+  it("narrows the facet counts by the art weight floor", () => {
+    const db = tagged();
+    const req = { artTags: { include: ["landscape"] }, limit: 200, offset: 0 };
+    const open = readHandlers(db).facet_cards({ req });
+    const floored = readHandlers(db).facet_cards({ req: { ...req, artWeightFloor: "strong" } });
+
+    expect(open.total).toBe(3);
+    expect(floored.total).toBe(2);
+    expect(floored.total).toBe(
+      readHandlers(db).search_cards({ req: { ...req, artWeightFloor: "strong" } }).total,
+    );
+  });
+
+  /** The status is the oracle one's twin and cannot fail either: a store that has never
+   *  ingested answers every field null with `stale: true`, which is what lets the Tags page say
+   *  it has nothing yet rather than draw a banner. */
+  it("answers a never-ingested art store rather than refusing", () => {
+    expect(readHandlers(makeDb()).art_tags_status()).toEqual({
+      updatedAt: null,
+      ingestedAt: null,
+      checkedAt: null,
+      tagCount: null,
+      taggingCount: null,
+      stale: true,
+      refreshing: false,
+    });
+    // …and the seeded one carries the real file's figures, inside the seven-day window.
+    expect(readHandlers(tagged()).art_tags_status()).toMatchObject({
+      tagCount: 11_531,
+      taggingCount: 475_163,
+      stale: false,
+    });
+  });
+
+  /**
+   * A refresh emits its five phases on **its own channel** and fills all four tables. The
+   * channel matters: either taxonomy may be refreshing while the other is, so one shared line
+   * would have them fighting over it.
+   */
+  it("rebuilds the art taxonomy and reports it on art-tags:progress", async () => {
+    const db = makeDb();
+    const seen: string[] = [];
+    const stop = await listen<{ phase: string }>("art-tags:progress", (e) =>
+      seen.push(e.payload.phase),
+    );
+
+    const status = writeHandlers(db).art_tags_refresh({ force: true });
+
+    expect(seen).toEqual(["checking", "downloading", "downloading", "ingesting", "done"]);
+    expect(status.ingestedAt).not.toBeNull();
+    expect(db.artTags.length).toBeGreaterThan(0);
+    expect(db.artTagTaxonomy).toHaveLength(13);
+    expect(db.artTagParents.length).toBeGreaterThan(0);
+    await stop();
+  });
+
+  /** The fetch failing leaves **the taxonomy already ingested exactly where it was** and writes
+   *  the reason to `error_log` under its own dataset name — so a reader can tell an art tag
+   *  failure from an oracle one in the same list. */
+  it("keeps the art taxonomy it had when a refresh fails", () => {
+    const db = tagged();
+    const before = db.artTags.length;
+    db.fault = "artTagsFetchError";
+
+    expect(() => writeHandlers(db).art_tags_refresh({ force: true })).toThrow(
+      /could not be downloaded/,
+    );
+    expect(db.artTags).toHaveLength(before);
+    expect(db.artTagMeta).not.toBeNull();
+    expect(db.errorLog[db.errorLog.length - 1].operation).toBe("art_tags");
+  });
+
+  /** Not stale and not forced is a **no-op**: it answers the status it already had and emits
+   *  nothing, which is why a story that wants the phases has to press with `force`. */
+  it("does nothing at all when the taxonomy is fresh and nobody forced it", async () => {
+    const db = tagged();
+    const seen: string[] = [];
+    const stop = await listen<{ phase: string }>("art-tags:progress", (e) =>
+      seen.push(e.payload.phase),
+    );
+
+    writeHandlers(db).art_tags_refresh({ force: false });
+
+    expect(seen).toEqual([]);
+    await stop();
+  });
+
+  /** {@link LURRUS} is here so the two constants above are not unused, and because it is the one
+   *  card carrying **only** a leaf tag — the whole reason the closure test above can tell a
+   *  rollup from a direct tagging. */
+  it("gives the leaf-only card exactly its leaf and its ancestors", () => {
+    const rows = artTagIllustrations(CARDS).filter(
+      (r) => r.illustrationId === LURRUS.illustrationId,
+    );
+    expect(rows.map((r) => r.slug)).toEqual(["animal", "cat", "creature"]);
+  });
+});
+
+/**
+ * Finding a tag, rather than finding a card that holds one — and switching one off.
+ *
+ * Two commands read the taxonomies and three write the reader's answer over them, and the rule
+ * that ties them together is the one worth the assertions: **muting hides a tag, and never hides
+ * a card.**
+ */
+describe("the tag search, the tag tree and muting", () => {
+  const tagged = () => seed("starter");
+  const slugs = (hits: { slug: string }[]) => hits.map((h) => h.slug);
+
+  /** Substring, with the exact hit first and prefixes ahead of the rest — the three bands, and
+   *  the departure from Scryfall that makes a type-ahead possible at all (`otag:remov` 404s
+   *  there, verified live 2026-08-20). */
+  it("matches a substring and ranks the exact hit first", () => {
+    const hits = readHandlers(tagged()).tag_search({
+      text: "creature",
+      namespace: "both",
+      limit: 20,
+    });
+
+    // Exact first, whatever its reach; `removal-creature` is a substring match behind it.
+    expect(hits[0].slug).toBe("creature");
+    expect(slugs(hits)).toContain("removal-creature");
+  });
+
+  /** The needle goes through the same `normalize` the ingest wrote `slug_norm` with, so
+   *  punctuation and case are both ignored. Two copies of this rule would leave the search
+   *  matching nothing with both halves self-consistent and no test failing. */
+  it("normalises the needle the way the ingest normalised the column", () => {
+    const read = readHandlers(tagged());
+    for (const text of ["SPOT-REMOVAL", "spot removal", "spotremoval", "  spot!removal  "]) {
+      expect(slugs(read.tag_search({ text, namespace: "oracle", limit: 20 }))[0]).toBe(
+        "spot-removal",
+      );
+    }
+  });
+
+  /** **An empty box matches everything, not nothing** — so it opens on the tags with the widest
+   *  reach rather than looking broken before it has been typed in. */
+  it("answers the widest tags for an empty needle", () => {
+    const hits = readHandlers(tagged()).tag_search({ text: "", namespace: "art", limit: 3 });
+
+    expect(hits).toHaveLength(3);
+    expect(hits[0].cardCount).toBeGreaterThanOrEqual(hits[1].cardCount);
+  });
+
+  /**
+   * `"both"` puts **art first on an equal rank**: the page's job is an art theme, so a reader who
+   * types a word both taxonomies know means the picture, and the oracle tag of that name is the
+   * secondary reading.
+   *
+   * Built rather than seeded, and everything but the namespace is held equal on purpose — same
+   * slug, same label, same band, same reach — because with any of those differing the tie never
+   * comes up and the assertion passes on a rule that was never applied. The real taxonomies share
+   * plenty of slugs (`dog` is in both) and mean different things by them.
+   */
+  it("puts art ahead of oracle on an equal rank", () => {
+    const row = (id: string) => ({
+      slug: "chimera",
+      id,
+      label: "Chimera",
+      description: null,
+      slugNorm: "chimera",
+    });
+    const db = makeDb({ artTagTaxonomy: [row("a-1")], oracleTagTaxonomy: [row("o-1")] });
+
+    const hits = readHandlers(db).tag_search({ text: "chimera", namespace: "both", limit: 10 });
+
+    expect(hits.map((h) => h.namespace)).toEqual(["art", "oracle"]);
+    expect(hits.map((h) => h.cardCount)).toEqual([0, 0]);
+  });
+
+  /** A `cardCount` over the **closure**, a `childCount` over the visible children, and **every**
+   *  parent rather than the first — the three numbers a rail draws itself out of. */
+  it("counts a tag by its closure and names all of its parents", () => {
+    const [forest] = readHandlers(tagged()).tag_search({
+      text: "forest",
+      namespace: "art",
+      limit: 5,
+    });
+
+    expect(forest.cardCount).toBe(2);
+    expect(forest.childCount).toBe(0);
+    expect(forest.parents.map((p) => p.slug)).toEqual(["landscape", "plant"]);
+    expect(forest.parents.every((p) => p.namespace === "art")).toBe(true);
+  });
+
+  /** The roots are the tags with no parent edge at all; a named parent answers its own children,
+   *  and a tag with two parents is listed under **both**. */
+  it("walks the tree one level at a time, listing a tag under every parent", () => {
+    const read = readHandlers(tagged());
+
+    expect(slugs(read.tag_children({ namespace: "art", slug: null })).sort()).toEqual([
+      "creature",
+      "landscape",
+      "lightning",
+      "plant",
+    ]);
+    expect(slugs(read.tag_children({ namespace: "art", slug: "creature" })).sort()).toEqual([
+      "angel",
+      "animal",
+      "elf",
+      "sphinx",
+    ]);
+    expect(slugs(read.tag_children({ namespace: "art", slug: "plant" }))).toContain("forest");
+    expect(slugs(read.tag_children({ namespace: "art", slug: "landscape" }))).toContain("forest");
+  });
+
+  /** An unknown namespace **throws** rather than answering nothing: a typo and a taxonomy that
+   *  has never been fetched would otherwise be the same answer, and only one of them is a bug. */
+  it("refuses a namespace it does not know", () => {
+    expect(() =>
+      readHandlers(tagged()).tag_search({ text: "dog", namespace: "arty", limit: 5 }),
+    ).toThrow(/unknown tag namespace/);
+  });
+
+  /**
+   * **Muting takes the tag off every read, and takes nothing off the card wall.**
+   *
+   * It leaves the search, the tree, its parent's `childCount` and its children's `parents` — and
+   * the cards it reached are still there, because nothing in the card filters consults the mute
+   * table. Hiding a card because one of its tags was muted would be a silent loss of results.
+   */
+  it("hides a muted tag from every tag read and no card from the wall", () => {
+    const db = tagged();
+    const before = readHandlers(db).search_cards({ req: { limit: 200, offset: 0 } }).total;
+    const cat = readHandlers(db).tag_search({ text: "cat", namespace: "art", limit: 5 })[0];
+
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: cat.id, slug: cat.slug });
+
+    const read = readHandlers(db);
+    expect(slugs(read.tag_search({ text: "cat", namespace: "art", limit: 5 }))).toEqual([]);
+    expect(slugs(read.tag_children({ namespace: "art", slug: "animal" }))).toEqual(["monkey"]);
+    const [animal] = read.tag_search({ text: "animal", namespace: "art", limit: 5 });
+    expect(animal.childCount).toBe(1);
+    // The card wall is untouched, and so is the muted tag's own reach where it is still visible.
+    expect(read.search_cards({ req: { limit: 200, offset: 0 } }).total).toBe(before);
+    expect(animal.cardCount).toBe(2);
+  });
+
+  /** **Muting a category takes its subtree off the rail with it** — the children are not roots,
+   *  so nothing lists them — and they stay findable through the search. Accepted, recoverable by
+   *  unmuting, and the reason `parents` names every branch. */
+  it("takes a muted category's subtree off the rail, leaving it findable by search", () => {
+    const db = tagged();
+    const animal = readHandlers(db).tag_search({ text: "animal", namespace: "art", limit: 5 })[0];
+
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: animal.id, slug: animal.slug });
+
+    const read = readHandlers(db);
+    expect(slugs(read.tag_children({ namespace: "art", slug: "creature" }))).not.toContain(
+      "animal",
+    );
+    expect(slugs(read.tag_search({ text: "cat", namespace: "art", limit: 5 }))).toEqual(["cat"]);
+    // The child's breadcrumb loses the muted parent rather than naming a tag nothing can reach.
+    expect(read.tag_search({ text: "cat", namespace: "art", limit: 5 })[0].parents).toEqual([]);
+  });
+
+  /**
+   * **A mute is keyed on the id and re-muting refreshes the row rather than adding one**, which
+   * is what makes a rename harmless — Scryfall's docs say outright not to treat a slug as a
+   * permanent identifier.
+   */
+  it("keys a mute on the uuid and folds a re-mute into the row it already has", () => {
+    const db = tagged();
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: "u-1", slug: "cat" });
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: "u-1", slug: "kitty" });
+    // The same uuid in the other taxonomy is a **different** mute: two files, two id spaces.
+    writeHandlers(db).tag_mute({ namespace: "oracle", tagId: "u-1", slug: "cat" });
+
+    expect(readHandlers(db).tags_muted()).toEqual([
+      { namespace: "art", tagId: "u-1", slug: "kitty", mutedAt: WHEN },
+      { namespace: "oracle", tagId: "u-1", slug: "cat", mutedAt: WHEN },
+    ]);
+  });
+
+  /**
+   * **A blank id is refused, and that refusal is load-bearing.** `oracle_tags.id` is
+   * `NOT NULL DEFAULT ''` in the app, so one stored mute with an empty id would equal every
+   * un-refreshed row and take the whole taxonomy off the page with nothing logged. The read side
+   * guards it too: a tag whose id was never written is *unmutable* rather than mutable-by-
+   * accident.
+   */
+  it("refuses a blank tag id, and leaves a tag that has one visible", () => {
+    const db = tagged();
+    expect(() => writeHandlers(db).tag_mute({ namespace: "art", tagId: "", slug: "cat" })).toThrow(
+      /no Scryfall id yet/,
+    );
+    expect(db.mutedTags).toEqual([]);
+
+    // The read side of the same fence: a blank-id row *and* a blank-id mute, and the tag is
+    // still offered rather than the whole taxonomy vanishing.
+    const stale = makeDb({
+      artTagTaxonomy: [
+        { slug: "cat", id: "", label: "Cat", description: null, slugNorm: "cat" },
+        { slug: "monkey", id: "", label: "Monkey", description: null, slugNorm: "monkey" },
+      ],
+      mutedTags: [{ namespace: "art", tagId: "", slug: "cat", mutedAt: WHEN }],
+    });
+    expect(slugs(readHandlers(stale).tag_search({ text: "", namespace: "art", limit: 9 }))).toEqual(
+      ["cat", "monkey"],
+    );
+  });
+
+  /** A namespace no build knows is refused on the way **in**, which is the only place the row can
+   *  be created and therefore the honest place to stop it. `"both"` is an input to a search, never
+   *  a stored row. */
+  it("refuses to file a mute under a namespace that is not a taxonomy", () => {
+    const db = tagged();
+    expect(() =>
+      writeHandlers(db).tag_mute({ namespace: "both", tagId: "u-1", slug: "cat" }),
+    ).toThrow(/is not a tag taxonomy/);
+  });
+
+  /** Unmuting a tag that was never muted is **not** an error, and unlike muting it accepts a
+   *  blank id — a row with one is unreachable by any tag it named, so junk to delete is all it
+   *  can ever be. */
+  it("gives a tag back, and shrugs at one that was never taken", () => {
+    const db = tagged();
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: "u-1", slug: "cat" });
+
+    expect(() => writeHandlers(db).tag_unmute({ namespace: "art", tagId: "nope" })).not.toThrow();
+    expect(() => writeHandlers(db).tag_unmute({ namespace: "art", tagId: "" })).not.toThrow();
+    writeHandlers(db).tag_unmute({ namespace: "art", tagId: "u-1" });
+    expect(readHandlers(db).tags_muted()).toEqual([]);
+  });
+
+  /** **A user table**: a mute survives a taxonomy rebuild, because everything around it is
+   *  Scryfall's answer and this one is the reader's. */
+  it("keeps a mute across a taxonomy refresh", () => {
+    const db = tagged();
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: "u-1", slug: "cat" });
+
+    writeHandlers(db).art_tags_refresh({ force: true });
+
+    expect(readHandlers(db).tags_muted()).toHaveLength(1);
   });
 });
 
@@ -3961,5 +4844,107 @@ describe("categories, tags, folders, history and the plan", () => {
     // panel about it.
     expect(r.deck_get({ id: 4, variant: "live" })).not.toBeNull();
     expect(r.deck_list()).toHaveLength(4);
+  });
+});
+
+/**
+ * The four Settings can throw away.
+ *
+ * Every one of them is a **table**, not a row, so there is no id to get wrong and nothing to
+ * assert about arguments — what these pin is which tables each takes and, more to the point,
+ * which it leaves standing. That second half is what a story about a wipe is actually showing,
+ * and it is where a fake that "just empties everything" would stop being a fake of this crate.
+ */
+describe("the four clears", () => {
+  /** `starter` owns cards, wishes cards, and holds decks in folders — all three at once. */
+  const world = () => seed("starter");
+
+  it("empties the collection and leaves the decks and wishes standing", () => {
+    const db = world();
+    const wishes = db.wishlistEntries.length;
+    const decks = db.decks.length;
+
+    const out = writeHandlers(db).collection_clear();
+
+    expect(out.entries).toBeGreaterThan(0);
+    expect(db.collectionEntries).toHaveLength(0);
+    expect(db.wishlistEntries).toHaveLength(wishes);
+    expect(db.decks).toHaveLength(decks);
+  });
+
+  /**
+   * The number the panel's sentence is about, and the one this fake has to *derive*: there is
+   * no allocations table here (simplification 2), so a claim is a live deck row for a card the
+   * reader owned. Pinned as "more than none" rather than as a figure — the figure is a property
+   * of the seed, and `seeds.ts` is where that is stated.
+   */
+  it("reports the deck reservations the collection took with it", () => {
+    const db = world();
+
+    expect(writeHandlers(db).collection_clear().allocations).toBeGreaterThan(0);
+  });
+
+  it("empties the wishlist and touches nothing else", () => {
+    const db = world();
+    const entries = db.collectionEntries.length;
+
+    expect(writeHandlers(db).wishlist_clear()).toBeGreaterThan(0);
+    expect(db.wishlistEntries).toHaveLength(0);
+    expect(db.collectionEntries).toHaveLength(entries);
+  });
+
+  /**
+   * The folders are the half a reader does not predict, and the half worth a test: `decks.
+   * folder_id` is `ON DELETE SET NULL`, so the crate clears them in a **second** statement and
+   * a fake that stopped at the cascade would draw an empty tree still standing in the gallery.
+   */
+  it("empties the decks, everything hanging off them, and the folders", () => {
+    const db = world();
+    const entries = db.collectionEntries.length;
+
+    const out = writeHandlers(db).decks_clear();
+
+    expect(out.decks).toBeGreaterThan(0);
+    expect(out.folders).toBeGreaterThan(0);
+    expect(db.decks).toHaveLength(0);
+    expect(db.deckFolders).toHaveLength(0);
+    expect(db.deckCards).toHaveLength(0);
+    expect(db.deckCategories).toHaveLength(0);
+    expect(db.deckTags).toHaveLength(0);
+    expect(db.deckAudit).toHaveLength(0);
+    // A deck is not the collection's owner. The reader still owns every card.
+    expect(db.collectionEntries).toHaveLength(entries);
+  });
+
+  it("reports what the cache freed, and answers zero the second time", () => {
+    const db = world();
+
+    const first = writeHandlers(db).cache_clear();
+    expect(first.files).toBeGreaterThan(0);
+    expect(first.bytes).toBeGreaterThan(0);
+    expect(first.failed).toBe(0);
+
+    expect(writeHandlers(db).cache_clear()).toMatchObject({ files: 0, bytes: 0, rows: 0 });
+  });
+
+  /**
+   * The one refusal `cache_clear` has, and it is **not** `busy`: the crate checks it before the
+   * write connection is ever asked for, because `data/tmp/` is where the corpus download puts
+   * 77 MB that the ingest then reads back.
+   */
+  it("refuses the cache sweep while a card update is running", () => {
+    const db = { ...world(), fault: "syncing" as const };
+
+    expect(() => writeHandlers(db).cache_clear()).toThrow(/card update is running/);
+    expect(db.imageCache.files).toBeGreaterThan(0);
+  });
+
+  /** And that fault reaches nothing else — it is one command's, deliberately. */
+  it("leaves every other clear alone under the syncing fault", () => {
+    const db = { ...world(), fault: "syncing" as const };
+
+    expect(() => writeHandlers(db).collection_clear()).not.toThrow();
+    expect(() => writeHandlers(db).wishlist_clear()).not.toThrow();
+    expect(() => writeHandlers(db).decks_clear()).not.toThrow();
   });
 });

@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import {
   ipc,
   ipcError,
+  type ArtTagProgressEvent,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
   type SyncProgressEvent,
@@ -701,22 +702,22 @@ describe("ipc argument names match the Rust command signatures", () => {
   /**
    * The three import commands, and the one in the whole file that takes **no managed state**.
    *
-   * `deck_import_read_file(path)` touches no database, so `path` is its only parameter — and it
+   * `import_read_file(path)` touches no database, so `path` is its only parameter — and it
    * is a *path* rather than bytes, which is the contract that keeps `dialog:allow-open` the only
    * capability this feature needs. A mirror that sent the file's contents under `path` would
    * type-check perfectly and import a filename.
    *
-   * The other two break the module's own patterns in opposite directions: `deck_import_resolve`
+   * The other two break the module's own patterns in opposite directions: `import_resolve`
    * takes a bare `lines` array where every other list-shaped read in this file wraps its payload
    * in `query` or `req`, and `deck_import_commit` takes `deckId` where the card writes beside it
    * take `deckId` too but spell their payload out field by field rather than as `items`.
    */
   it("sends every import command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
-    await ipc.deckImportResolve([{ name: "Sol Ring", setCode: null, collectorNumber: null }]);
+    await ipc.importResolve([{ name: "Sol Ring", setCode: null, collectorNumber: null }]);
     // `lines`, not `query` or `req` — and both hints travel as explicit `null`s, because Tauri
     // fills parameters by name and the preview must be able to say a hint was *given*.
-    expect(invoke).toHaveBeenCalledWith("deck_import_resolve", {
+    expect(invoke).toHaveBeenCalledWith("import_resolve", {
       lines: [{ name: "Sol Ring", setCode: null, collectorNumber: null }],
     });
 
@@ -735,8 +736,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(outcome).toEqual({ added: 100, removed: 0, categoriesCreated: 2 });
 
     invoke.mockResolvedValue("1 Sol Ring\n");
-    const text = await ipc.deckImportReadFile("C:\\lists\\edh.txt");
-    expect(invoke).toHaveBeenCalledWith("deck_import_read_file", { path: "C:\\lists\\edh.txt" });
+    const text = await ipc.importReadFile("C:\\lists\\edh.txt");
+    expect(invoke).toHaveBeenCalledWith("import_read_file", { path: "C:\\lists\\edh.txt" });
     expect(text).toBe("1 Sol Ring\n");
   });
 
@@ -864,6 +865,127 @@ describe("ipc argument names match the Rust command signatures", () => {
     // refusal, not a default.
     await ipc.oracleTagsRefresh(false);
     expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: false });
+  });
+
+  /**
+   * The **art** taxonomy's pair, which is the oracle pair's shape under different command names
+   * and one different event channel — and that last one is the trap.
+   *
+   * `oracle-tags:progress` and `art-tags:progress` are two channels because either taxonomy may
+   * be refreshing while the other is, so a listener wired to the wrong one is a progress bar that
+   * never moves and never errors. Both payloads are the same `tags::TagProgress`, which is
+   * exactly what makes the mistake invisible to the compiler.
+   */
+  it("reads the art tag status, forces its refresh, and listens on its own channel", async () => {
+    const status = {
+      updatedAt: "2026-08-20T09:12:44.207+00:00",
+      ingestedAt: 1_800_000_000,
+      checkedAt: 1_800_003_600,
+      tagCount: 11_531,
+      taggingCount: 475_163,
+      stale: false,
+      refreshing: false,
+    };
+    invoke.mockResolvedValue(status);
+
+    expect(await ipc.artTagsStatus()).toEqual(status);
+    expect(invoke).toHaveBeenCalledWith("art_tags_status");
+
+    await ipc.artTagsRefresh(true);
+    expect(invoke).toHaveBeenCalledWith("art_tags_refresh", { force: true });
+
+    let emit: ((evt: { payload: ArtTagProgressEvent }) => void) | undefined;
+    listen.mockImplementation(
+      (_name: string, handler: (evt: { payload: ArtTagProgressEvent }) => void) => {
+        emit = handler;
+        return Promise.resolve(vi.fn());
+      },
+    );
+    const heard: ArtTagProgressEvent[] = [];
+
+    await ipc.onArtTagProgress((e) => heard.push(e));
+    emit?.({ payload: { phase: "downloading", done: 512_000, total: 12_544_874 } });
+
+    expect(listen).toHaveBeenCalledWith("art-tags:progress", expect.any(Function));
+    expect(heard).toEqual([{ phase: "downloading", done: 512_000, total: 12_544_874 }]);
+  });
+
+  /**
+   * The five tag commands the Tags page is built out of, and **three different argument shapes
+   * between them** — the family a copy-paste gets wrong in a way nothing type-checks.
+   *
+   * `tag_search` takes three, `tag_children` takes a namespace and a nullable slug, and the mute
+   * pair takes `tagId` — snake_case `tag_id` on the Rust side, so a wrapper that sent `tag_id`
+   * deserializes to nothing and the mute silently never lands. `tags_muted` takes none at all,
+   * which is `prewarm_collection`'s trap: an argument object is a deserialization error rather
+   * than something the compiler could have caught.
+   */
+  it("sends the tag reads and the mute pair under the argument names their commands declare", async () => {
+    invoke.mockResolvedValue([]);
+
+    await ipc.tagSearch("dog", "both", 25);
+    expect(invoke).toHaveBeenCalledWith("tag_search", {
+      text: "dog",
+      namespace: "both",
+      limit: 25,
+    });
+
+    // **`null` must travel as a key.** The roots are what an absent slug means, and Tauri fills
+    // `Option<String>` by name — a wrapper that omitted the key would still resolve, and would
+    // answer the roots when a rail asked for a named parent's children only by accident.
+    await ipc.tagChildren("art", null);
+    expect(invoke).toHaveBeenCalledWith("tag_children", { namespace: "art", slug: null });
+    await ipc.tagChildren("art", "dog");
+    expect(invoke).toHaveBeenCalledWith("tag_children", { namespace: "art", slug: "dog" });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.tagMute("oracle", "b8f1", "removal");
+    expect(invoke).toHaveBeenCalledWith("tag_mute", {
+      namespace: "oracle",
+      tagId: "b8f1",
+      slug: "removal",
+    });
+    // The unmute drops `slug` and keeps the other two: the row is keyed on the pair, and the
+    // slug it stored was only ever there so Settings could name it.
+    await ipc.tagUnmute("oracle", "b8f1");
+    expect(invoke).toHaveBeenCalledWith("tag_unmute", { namespace: "oracle", tagId: "b8f1" });
+
+    invoke.mockResolvedValue([{ namespace: "art", tagId: "b8f1", slug: "dog", mutedAt: 1 }]);
+    const muted = await ipc.tagsMuted();
+    expect(invoke).toHaveBeenCalledWith("tags_muted");
+    // Read back rather than assumed: `tag_id` and `muted_at` are camelCase on the wire, and a
+    // mirror that spelled either the column's way would be `undefined` with no type error.
+    expect(muted).toEqual([{ namespace: "art", tagId: "b8f1", slug: "dog", mutedAt: 1 }]);
+  });
+
+  /**
+   * A tag-filtered search, in the shape the request really goes out in.
+   *
+   * **`artTags`, `oracleTags` and `artWeightFloor` are pinned by a Rust end-to-end JSON test**
+   * (`search::tests`), and a misspelling on this side is an *ignored unknown key* rather than an
+   * error — the search would simply not narrow, and the wall would look like a filter that found
+   * a lot of matches. The nested `include`/`exclude` are the same trap one level down.
+   */
+  it("sends the tag filters under the keys the request deserializes", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+
+    await ipc.searchCards({
+      artTags: { include: ["dog"], exclude: ["skeleton"] },
+      oracleTags: { include: ["ramp"] },
+      artWeightFloor: "strong",
+      limit: 60,
+      offset: 0,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("search_cards", {
+      req: {
+        artTags: { include: ["dog"], exclude: ["skeleton"] },
+        oracleTags: { include: ["ramp"] },
+        artWeightFloor: "strong",
+        limit: 60,
+        offset: 0,
+      },
+    });
   });
 
   /**
@@ -1024,5 +1146,26 @@ describe("ipcError", () => {
 
   it("never renders an object as [object Object]", () => {
     expect(ipcError({ code: 42 })).toContain('{"code":42}');
+  });
+});
+
+/**
+ * The four clears take **no arguments at all**, so the only half of the contract that can drift
+ * is the command name — and a name Rust does not register is a runtime rejection with no type
+ * error anywhere. These are irreversible commands reached from one button each, so "it silently
+ * did nothing" and "it silently did it to the wrong table" are both worth a spelling test.
+ */
+describe("the Settings clears name the commands `reset.rs` registers", () => {
+  it.each([
+    ["collectionClear", "collection_clear"],
+    ["wishlistClear", "wishlist_clear"],
+    ["decksClear", "decks_clear"],
+    ["cacheClear", "cache_clear"],
+  ] as const)("%s invokes %s with no arguments", async (method, command) => {
+    invoke.mockResolvedValue({});
+
+    await ipc[method]();
+
+    expect(invoke).toHaveBeenCalledWith(command);
   });
 });

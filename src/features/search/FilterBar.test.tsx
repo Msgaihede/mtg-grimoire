@@ -1,8 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
-import type { FacetResponse } from "@/lib/ipc";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
+import type { SortSpec } from "@/lib/sort";
 import { FilterBar } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
@@ -24,10 +26,23 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleManaValue: vi.fn(),
     manaX: false,
     toggleManaX: vi.fn(),
+    // The sort's four members, in the shape `useCardSearch` hands them over. `sortSelection` is
+    // a **controlled** select's value and has to be a string on every render an override does
+    // not touch: `undefined` would make the picker uncontrolled, and React says so once, on the
+    // render it changes, which is nowhere near the case that would have caused it.
+    sort: [] as SortSpec<SearchSortKey>,
+    sortSelection: "" as SearchSortKey | "",
+    setSortKey: vi.fn(),
+    flipSortDir: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
     ...over,
   }) as unknown as Parameters<typeof FilterBar>[0]["search"];
+
+/** The direction button, matched on a **prefix**: its accessible name carries the direction and
+ *  grows a reason when there is none to flip, so the exact enabled string fails on the row this
+ *  suite opens with and would read as "the button is not there". */
+const dirButton = () => screen.getByRole("button", { name: /^Sort direction/ });
 
 vi.mock("./SetCombobox", () => ({
   SetCombobox: () => <div data-testid="set-combobox" />,
@@ -269,7 +284,6 @@ describe("FilterBar, greyed by its facets", () => {
     const counted = screen.getByRole("button", {
       name: "Cards with X in their mana cost — 812 printings",
     });
-    expect(counted).toHaveAttribute("title", "Cards with X in their mana cost — 812 printings");
     expect(counted).toHaveTextContent("X");
 
     rerender(<FilterBar search={search({ facets: facets({ manaX: 0 }) })} />);
@@ -376,7 +390,6 @@ describe("FilterBar, greyed by its facets", () => {
     );
 
     const white = screen.getByRole("button", { name: "White — 12,481 printings" });
-    expect(white).toHaveAttribute("title", "White — 12,481 printings");
     expect(white.textContent).toBe("");
 
     const seven = screen.getByRole("button", { name: "Mana value 7 — nothing in this search" });
@@ -409,8 +422,15 @@ describe("FilterBar, greyed by its facets", () => {
 describe("FilterBar, its format options in order", () => {
   /** Every `<option>` the select draws, in document order. The **sequence** is the behaviour
    *  under test, so each of these asserts the whole list: two formats swapped past each other
-   *  pass any assertion about one row's presence, and did. */
-  const formatOrder = () => screen.getAllByRole("option").map((o) => o.textContent);
+   *  pass any assertion about one row's presence, and did.
+   *
+   *  Scoped to the format select rather than the document. This row has carried a second
+   *  `<select>` since the sort picker landed beside it, and a bare `screen.getAllByRole` would
+   *  hand every case below eight sort orders it has never heard of. */
+  const formatOrder = () =>
+    within(screen.getByLabelText("Format"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
 
   /**
    * A reader hunting for "Modern" hunts under M. `FORMATS` is authored in the order the formats
@@ -660,5 +680,379 @@ describe("FilterBar, its format options in order", () => {
       "Vintage",
       "Historic",
     ]);
+  });
+});
+
+/**
+ * The sort picker and its direction button — the pair that gives the **grid** an order to be in.
+ *
+ * Everything here is asserted against the stub's four sort members rather than against a real
+ * `useCardSearch`, so what these cases pin is the contract between the two: which key the select
+ * sends, which term the arrow reads, and that neither invents a sort of its own.
+ */
+describe("FilterBar, its sort picker", () => {
+  /** Every `<option>` the sort select draws, in document order. Scoped, because the format
+   *  select beside it draws nine more and a bare `screen.getAllByRole` mixes the two lists. */
+  const sortOrder = () =>
+    within(screen.getByLabelText("Sort results"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+
+  /**
+   * **`Sort results`, and this is the case that stops it being shortened back to `Sort`.**
+   *
+   * The collection's twin is a bare `Sort` and this one may not copy it, because this row is
+   * drawn on two surfaces and one of them already has a `Sort`: the deck editor's toolbar sorts
+   * the deck, this sorts the search results, and with the docked panel open both lists are on
+   * screen at once. Two comboboxes with one name is a control that cannot be addressed
+   * unambiguously — by a screen reader walking the form, by voice control, or by a
+   * `getByLabelText` that starts throwing "found multiple" the day a test opens that panel.
+   *
+   * The absence of the bare name is asserted beside the presence of the long one, because that
+   * is the half that fails when somebody shortens it: `Sort results` would still be *found* by a
+   * substring query, and only an exact one says which word is drawn.
+   */
+  it("names the picker for the list it sorts, not for the act of sorting", () => {
+    render(<FilterBar search={search()} layoutToggle={false} />);
+
+    expect(screen.getByRole("combobox", { name: "Sort results" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Sort")).toBeNull();
+  });
+
+  /**
+   * The row a reader opens the app on. `Default order` is not one of the orders — it is the
+   * absence of one, which for this view means relevance when there is a query and name when
+   * there is not — so it is pinned above them rather than sorted in.
+   *
+   * **`toHaveValue`, never the text of the selected option.** A controlled `<select>` whose
+   * `value` matches no `<option>` does not draw blank: `react-dom` walks the options setting
+   * `selected` and on no match picks the first row that is not disabled, which here is this very
+   * row — so a picker that had lost its selection entirely would read exactly like one that is
+   * correctly untouched.
+   */
+  it("opens on Default order, pinned above the orders", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(screen.getByLabelText("Sort results")).toHaveValue("");
+    expect(sortOrder()[0]).toBe("Default order");
+  });
+
+  /**
+   * Alphabetical by the words on screen, which is the one order an option list in this app is
+   * drawn in (`lib/options.ts`). `SEARCH_SORT_OPTIONS` is declared in the order the orders were
+   * reasoned about — the table's five columns, then the two with no column at all — and a picker
+   * that showed that would be showing the author's notes.
+   *
+   * The whole sequence rather than a spot check: two rows swapped past each other satisfy any
+   * assertion about one row's presence. `Mana value` and `Released` are the two orders no header
+   * can reach, and they are in here as ordinary rows, pinned nowhere.
+   */
+  it("offers the orders alphabetically, under the pinned Default order", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(sortOrder()).toEqual([
+      "Default order",
+      "Mana value",
+      "Name",
+      "Price",
+      "Rarity",
+      "Released",
+      "Set",
+      "Type",
+    ]);
+  });
+
+  /**
+   * Picking a row *replaces* the sort with that one term, which is the hook's job. This row's
+   * job is to send the key it drew, spelled the way Rust's `SEARCH_SORTS` whitelist spells it —
+   * an unrecognised key is dropped silently at the far end, so a typo here is a control that
+   * does nothing and no test anywhere goes red for it.
+   */
+  it("sends the key a picked order names", async () => {
+    const setSortKey = vi.fn();
+    render(<FilterBar search={search({ setSortKey })} />);
+
+    await userEvent.selectOptions(screen.getByLabelText("Sort results"), "manaValue");
+
+    expect(setSortKey).toHaveBeenCalledWith("manaValue");
+  });
+
+  /** …and back out again, which on the grid is the **only** way out of a sort: the third press
+   *  that clears one is a press on a table header the grid does not draw. Selected by element
+   *  rather than by value, because `""` as a value string is not a match Testing Library can
+   *  resolve unambiguously. */
+  it("sends the empty key when the reader picks Default order back", async () => {
+    const setSortKey = vi.fn();
+    render(
+      <FilterBar
+        search={search({
+          setSortKey,
+          sortSelection: "price",
+          sort: [{ key: "price", dir: "desc" }],
+        })}
+      />,
+    );
+
+    const select = screen.getByLabelText("Sort results");
+    const back = within(select).getByRole("option", { name: "Default order" });
+    await userEvent.selectOptions(select, back);
+
+    expect(setSortKey).toHaveBeenCalledWith("");
+  });
+
+  /**
+   * There is no direction in the view's own order to flip, and the button says *that* rather
+   * than claiming one — a button announcing "ascending" over a relevance-ordered list would be
+   * describing a sort that is not there.
+   *
+   * The **real `disabled`**, against this row's `aria-disabled` rule, and the reason is inside
+   * that rule: it is about a row greying as the reader *types*, where a control leaving the tab
+   * order shrinks the row out from under a keyboard caret. This one can only grey from the
+   * select beside it, which is where the caret already is when it happens.
+   */
+  it("disables the direction button while the list is in its default order", () => {
+    render(<FilterBar search={search()} />);
+
+    const button = dirButton();
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleName("Sort direction — no order picked");
+  });
+
+  /**
+   * The wrapper's whole reason to exist, and the one state nothing else covers: this suite has
+   * no `TooltipProvider` above it anywhere else, and `FilterBar.stories.tsx`'s `SortedDescending`
+   * — the only other wrapper coverage in the app — hovers only the *enabled* button. A real
+   * `disabled` attribute fires no pointer events at all, so `FilterBar.tsx` binds the tooltip to
+   * the `<span>` around the button rather than to the button itself; a browser then delivers the
+   * hover to that span, which is what this fires on. **This is the test that fails if the
+   * wrapper is ever removed and the binding moves onto the button directly** — nothing would be
+   * listening on the span any more, and firing on the disabled button itself proves nothing (a
+   * real browser never delivers a hover there, and jsdom does not hit-test to tell the two cases
+   * apart).
+   */
+  it("still opens the direction tooltip by hover while the button is disabled", async () => {
+    render(
+      <TooltipProvider>
+        <FilterBar search={search()} />
+      </TooltipProvider>,
+    );
+    const button = dirButton();
+    expect(button).toBeDisabled();
+
+    fireEvent.pointerEnter(button.parentElement as HTMLElement);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction — no order picked",
+    );
+  });
+
+  /**
+   * Important 3's fix, evidenced live rather than through the shared component's own unit
+   * tests: `useTooltip.ts`'s `onFocus` used to hand the wrapping `<span>` above to
+   * `TooltipProvider.focus()`, which tests `:focus-visible` on whatever anchor it is given — and
+   * a `<span>` with no `tabIndex` is never itself the focused element, so Tab landing on this
+   * *enabled* button opened nothing at all. `e.target`, the button React reports as actually
+   * focused, is what fixes it — proven here with a real `userEvent.tab()` from the control just
+   * before it in the row, the same path a keyboard reader takes.
+   */
+  it("opens the direction tooltip on Tab once an order is picked", async () => {
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <FilterBar
+          search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })}
+        />
+      </TooltipProvider>,
+    );
+    const button = dirButton();
+    expect(button).not.toBeDisabled();
+
+    screen.getByLabelText("Sort results").focus();
+    await user.tab();
+    expect(button).toHaveFocus();
+
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull());
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction: ascending — press for descending",
+    );
+  });
+
+  /** The name says the state **and** what pressing does, because an arrow is the whole of what
+   *  is drawn on the button — an arrow pointing up reads as "this is ascending" to one reader
+   *  and "press to go up" to the next. One string, spent as the name and — since the tooltip
+   *  sweep — as the hover tooltip too (`FilterBar.tsx`'s wrapped `useTooltip` binding). */
+  it("enables the direction button once an order is picked, and says which way it runs", () => {
+    render(
+      <FilterBar search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })} />,
+    );
+
+    const button = dirButton();
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveAccessibleName("Sort direction: ascending — press for descending");
+  });
+
+  it("says the other sentence when the list runs the other way", () => {
+    render(
+      <FilterBar
+        search={search({ sortSelection: "price", sort: [{ key: "price", dir: "desc" }] })}
+      />,
+    );
+
+    expect(dirButton()).toHaveAccessibleName("Sort direction: descending — press for ascending");
+  });
+
+  /** The press is `flipSortDir` and nothing else. That call rewrites the **first** term in place,
+   *  so a Shift-built second key stays where the table's headers put it — a button that reached
+   *  for `setSortKey` instead would silently throw the rest of the sort away. */
+  it("flips the direction on a press, without rebuilding the sort", async () => {
+    const flipSortDir = vi.fn();
+    const setSortKey = vi.fn();
+    render(
+      <FilterBar
+        search={search({
+          flipSortDir,
+          setSortKey,
+          sortSelection: "name",
+          sort: [{ key: "name", dir: "asc" }],
+        })}
+      />,
+    );
+
+    await userEvent.click(dirButton());
+
+    expect(flipSortDir).toHaveBeenCalledTimes(1);
+    expect(setSortKey).not.toHaveBeenCalled();
+  });
+
+  /** A disabled `<button>` takes no click at all, which is the whole reason the attribute is
+   *  right here: there is no handler left to guard, unlike every `aria-disabled` chip on this
+   *  row. */
+  it("ignores a press while there is no order to flip", async () => {
+    const flipSortDir = vi.fn();
+    render(<FilterBar search={search({ flipSortDir })} />);
+
+    await userEvent.click(dirButton());
+
+    expect(flipSortDir).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The other end of one piece of state. The table's headers write into the same spec, so a
+   * header press has to show up here — without it the two controls would be two sorts, and the
+   * reader would be told two different things about one list.
+   */
+  it("reads back the key a table header put in the spec", () => {
+    render(
+      <FilterBar
+        search={search({ sortSelection: "rarity", sort: [{ key: "rarity", dir: "asc" }] })}
+      />,
+    );
+
+    expect(screen.getByLabelText("Sort results")).toHaveValue("rarity");
+  });
+
+  /** A Shift-built second key belongs to the table and is none of this row's business: the
+   *  select shows the **first** term and the arrow shows that term's direction. */
+  it("shows the first term of a multi-key sort and ignores the rest", () => {
+    render(
+      <FilterBar
+        search={search({
+          sortSelection: "rarity",
+          sort: [
+            { key: "rarity", dir: "desc" },
+            { key: "price", dir: "asc" },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("Sort results")).toHaveValue("rarity");
+    expect(dirButton()).toHaveAccessibleName("Sort direction: descending — press for ascending");
+  });
+
+  /**
+   * One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. Two components in one
+   * slot is an unmount and a mount, so the indicator *teleports* and the whole of what the press
+   * means is lost.
+   *
+   * Asserted as **element identity** across the flip, the way this repo asserts every "same
+   * element, changed" claim: the two drawings are otherwise indistinguishable in the DOM, so a
+   * swap would satisfy every other case in this file. The rotation itself is a `motion` style
+   * and is deliberately not asserted — `SortableHeader` pins the same fact in words too.
+   */
+  it("turns one arrow rather than swapping a second one in", () => {
+    const { rerender } = render(
+      <FilterBar search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })} />,
+    );
+
+    const ascending = dirButton().querySelector("svg");
+    expect(ascending).not.toBeNull();
+
+    rerender(
+      <FilterBar
+        search={search({ sortSelection: "name", sort: [{ key: "name", dir: "desc" }] })}
+      />,
+    );
+
+    expect(dirButton().querySelectorAll("svg")).toHaveLength(1);
+    expect(dirButton().querySelector("svg")).toBe(ascending);
+  });
+
+  /** A sort is not a filter: the badge does not count it and Reset all does not clear it. A
+   *  sorted, unfiltered search is therefore a greyed Reset all beside a live direction button,
+   *  which is the one drawing that says both halves at once. */
+  it("does not count the sort as a filter", () => {
+    render(
+      <FilterBar
+        search={search({ sortSelection: "released", sort: [{ key: "released", dir: "desc" }] })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(dirButton()).not.toBeDisabled();
+  });
+
+  /**
+   * `layoutToggle` is not the fence, and this is the case that says so. The deck editor's docked
+   * panel passes `layoutToggle={false}` because it is a wall of art with no table to switch to —
+   * which makes it exactly the surface with no other way to sort at all, so the pair rides there
+   * unconditionally. The absence of the layout group is asserted beside it, because a pair that
+   * happened to be drawn on a row that still had its toggle would prove nothing.
+   */
+  it("draws the picker on the surface that has no layout pair", () => {
+    render(<FilterBar search={search()} layoutToggle={false} />);
+
+    expect(screen.queryByRole("group", { name: "Result layout" })).toBeNull();
+    expect(screen.getByLabelText("Sort results")).toBeInTheDocument();
+    expect(dirButton()).toBeInTheDocument();
+  });
+
+  /**
+   * **Never gold.** A list is always in *some* order, so a sort cannot be inactive, and accent
+   * on this row means "a filter is on" — which the format select two controls back really does
+   * mean and this one must not.
+   *
+   * `classList.contains`, never `className.includes`: the row's quiet controls carry `hover:`
+   * variants of these same colours, and a substring match passes on a variant without the
+   * control ever being in the state.
+   */
+  it("never draws the sort in the filter-active colour", () => {
+    render(
+      <FilterBar
+        search={search({ sortSelection: "price", sort: [{ key: "price", dir: "desc" }] })}
+      />,
+    );
+
+    const select = screen.getByLabelText("Sort results");
+    expect(select.classList.contains("text-accent")).toBe(false);
+    expect(select.classList.contains("border-accent")).toBe(false);
+    expect(select.classList.contains("text-dim")).toBe(true);
+    expect(dirButton().classList.contains("text-accent")).toBe(false);
+    expect(dirButton().classList.contains("border-accent")).toBe(false);
   });
 });

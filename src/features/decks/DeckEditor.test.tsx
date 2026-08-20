@@ -16,6 +16,12 @@ import type {
   SyncStatus,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
+import { fromDeckCard } from "@/features/transfer/TransferCard";
 import { dragOnto, startDrag } from "@/test-drag";
 import {
   CARD_BODY_ATTR,
@@ -87,9 +93,9 @@ const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet".
-const deckImportResolve = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The editor warms the `art` its own views draw — the variant the deck builder renders, and
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
@@ -142,15 +148,15 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckRedoApply,
     deckTheoryDiff,
     deckFolderList,
-    deckImportResolve,
+    importResolve,
     deckImportCommit,
-    deckImportReadFile,
+    importReadFile,
     syncStatus,
   },
 }));
 
 import { DeckEditor, exportFileName, exportSubject, layerMatches } from "./DeckEditor";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type CardWalkStop } from "@/lib/store";
 
 /** The change the Undo button would reverse — a history row like any other, because that is
  *  what the state command answers and what `auditText` words the button's name from. */
@@ -305,7 +311,7 @@ function found(name: string): CardSummary {
   };
 }
 
-/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+/** The one printing `import_resolve` answers with here — everything the plan does not
  *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
 const SOL_RING: ImportMatch = {
   cardId: "sol-ring",
@@ -359,7 +365,9 @@ function wrap(ui: ReactElement) {
   });
   return render(
     <QueryClientProvider client={client}>
-      <ContextMenuProvider>{ui}</ContextMenuProvider>
+      <TooltipProvider>
+        <ContextMenuProvider>{ui}</ContextMenuProvider>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -527,7 +535,7 @@ beforeEach(() => {
     printingsRequest: null,
     // The order the printings modal steps through, published by this editor. Reset with the rest
     // so a test reading it is reading its own editor's answer and not the previous one's.
-    deckWalk: [],
+    cardWalk: { label: "", stops: [] },
   });
   deckGet
     .mockReset()
@@ -576,11 +584,11 @@ beforeEach(() => {
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  deckImportResolve
+  importResolve
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
 });
@@ -617,7 +625,16 @@ describe("DeckEditor", () => {
     expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
     const built = screen.getByRole("button", { name: /^Built/ });
     expect(built).toHaveAttribute("aria-pressed", "false");
-    expect(built).toHaveAttribute("title", "Reserves your copies for this deck");
+    // `ToggleChip`'s `hint` is redundant with its own composed `aria-label` ("Built, Reserves
+    // …"), so it binds `describes: false` — no `role="tooltip"`, found by the panel's one id.
+    fireEvent.pointerEnter(built);
+    const tooltip = await screen.findByText(
+      "Reserves your copies for this deck",
+      {},
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    expect(tooltip.id).toBe(TOOLTIP_PANEL_ID);
+    fireEvent.pointerLeave(built);
   });
 
   /**
@@ -2106,7 +2123,13 @@ describe("DeckEditor", () => {
       // Not a control that records an intention and moves nothing: there is no width for what
       // it would open, and it says so rather than doing nothing.
       expect(rail).toHaveAttribute("aria-disabled", "true");
-      expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
+      // The reason moved off `title` to `useTooltip()` — a description of an already-named
+      // control, so it is `describes: true` by default and the panel carries `role="tooltip"`.
+      fireEvent.pointerEnter(rail);
+      const tooltip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+      expect(tooltip).toHaveTextContent(/not enough room/i);
+      expect(document.getElementById(TOOLTIP_PANEL_ID)).toBe(tooltip);
+      fireEvent.pointerLeave(rail);
       expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
       // **And pressing it really is refused**, which is the half of this that a shut-by-default
       // panel would otherwise be answering for: `aria-expanded="false"` is now true of a panel
@@ -2306,6 +2329,58 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * Issue #134: a card in a pile the reader has switched off drew no mark at all, so a Golgari
+   * card dropped into a mono-white Commander deck's Maybeboard looked exactly like a card that
+   * fits.
+   *
+   * **Both halves in one test, because either alone is satisfied by the wrong fix.** The mark
+   * has to be on the parked card — that is what the reader reported missing — *and* the chip
+   * beside it has to go on counting only the deck, or the change has quietly put the Maybeboard
+   * back inside the validation that schema v8 took it out of. The chip reads `1 issue` for the
+   * size and nothing else: the colour-identity sentence exists on the card and nowhere in the
+   * panel.
+   */
+  it("marks a rule break on a parked card without counting it as a finding of the deck", async () => {
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "commander", formatName: "Commander" }, [
+        card({
+          name: "Sram, Senior Edificer",
+          categoryKind: "commander",
+          typeLine: "Legendary Creature — Dwarf Advisor",
+          manaCost: "{2}{W}",
+          cmc: 3,
+          colors: "W",
+          colorIdentity: "W",
+          quantity: 1,
+        }),
+        card({
+          name: "Deadly Rollick",
+          categoryKind: "maybe",
+          categoryActive: false,
+          typeLine: "Instant",
+          manaCost: "{3}{B}",
+          cmc: 4,
+          colors: "B",
+          colorIdentity: "BG",
+          quantity: 1,
+        }),
+      ]),
+    );
+    wrap(<DeckEditor deckId={4} />);
+
+    const parked = await screen.findByRole("button", { name: /^Deadly Rollick/ });
+    expect(parked.getAttribute("aria-label")).toContain(
+      "rule break: Deadly Rollick's color identity (BG) is outside your commander's (W).",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "1 issue · Commander" }));
+    expect(
+      screen.getByText("Commander decks are exactly 100 cards including the commander; you have 1."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/color identity/)).not.toBeInTheDocument();
+  });
+
+  /**
    * Beside the check chip rather than folded into it, because the two answer different
    * questions: the chip counts what is *wrong*, and this counts what is *powerful*. A game
    * changer is legal by definition — it is the bracket conversation, not the legality one — so
@@ -2357,7 +2432,7 @@ describe("DeckEditor", () => {
    * The other way out of a layer, and the one no test covered: its own ✕.
    *
    * The ✕ is *inside* the layer that is about to unmount, so it is the reader saying "put me
-   * back" exactly as Escape is — `DeckDialog` calls `onDismiss`, and the editor's `dismiss`
+   * back" exactly as Escape is — `Dialog` calls `onDismiss`, and the editor's `dismiss`
    * focuses the trigger *before* the close, while the trigger is still mounted. Asserted here
    * rather than in each layer's own test file, because the hand-back is the **opener's** half
    * of the contract: a layer handed two callbacks can only be checked for calling the right one
@@ -2394,12 +2469,12 @@ describe("DeckEditor", () => {
    * ones still outside the sweep are the delete-category and clear-stack confirmations and the
    * quick zones' New category, all opened without a button to point it at.
    *
-   * **Every one of them is `DeckDialog` since 2026-08-16**, and this sweep is still driven per
+   * **Every one of them is `Dialog` since 2026-08-16**, and this sweep is still driven per
    * surface rather than pointed at the shell — deliberately. The claim is that *this overlay*,
    * opened by *that* button, traps the caret; a sweep aimed at the shell would prove the shell
    * and say nothing about a host that passed the wrong thing, and it was this sweep that held
    * the three hand-copies to the shell's behaviour for as long as they existed. It is what would
-   * go red if a modality fix reached `DeckDialog.tsx` and a host stopped using it.
+   * go red if a modality fix reached `Dialog.tsx` and a host stopped using it.
    *
    * Asserted **here**, in the assembled editor, because "must not reach anything behind it" is a
    * claim about what is behind it: each layer's own test file mounts it alone, where there is
@@ -3449,14 +3524,15 @@ describe("exportSubject", () => {
    *
    * **Every row of the variant on screen and no filtering at all** — the switched-off piles
    * included, because what a format does with a maybeboard is the *format's* decision and
-   * `omittedCount` is what says so in the dialog. Identity rather than contents, since handing
-   * the deck's own array through untouched is the claim.
+   * `omittedCount` is what says so in the dialog. **Mapped rather than identical** since the
+   * cards it now hands `ExportDialog` are `TransferCard`s, built through `fromDeckCard` — the
+   * claim this pins is that every row survives the conversion, in order, none dropped.
    */
   it("answers the whole deck for a deck scope", () => {
     const exported = exportSubject({ kind: "deck" }, [REMOVAL], CARDS, "Burn");
 
     expect(exported.subject).toBe("Burn");
-    expect(exported.cards).toBe(CARDS);
+    expect(exported.cards).toEqual(CARDS.map(fromDeckCard));
     expect(exported.fileName).toBe("Burn");
   });
 
@@ -3807,38 +3883,51 @@ describe("DeckEditor — a card's menu", () => {
    * A `useMutation`'s callbacks belong to its observer, so a chain started inside the panel would
    * lose its second half to any dismissal landing during the round trip — the label created and
    * silently never attached. The mutation is mounted in `DeckEditor`, which is still on screen
-   * when the answer arrives, so the menu can close on the press and the chain still completes.
-   * That is what the second half of this case asserts: the panel is **already gone** before
-   * either command has answered.
+   * when the answer arrives, so the row can close the menu on the press and the chain still
+   * completes. That is what the second half of this case asserts: the panel is **already gone**
+   * before either command has answered.
+   *
+   * **The field this drove became a dialog on 2026-08-20**, and the colour is why: it was a text
+   * box inside the panel that created in `DEFAULT_TAG_COLOR` because a menu has no room for a
+   * picker, so every label made this way was gold. Two presses instead of one, and the label
+   * arrives in the colour the reader chose — everything about the *chain* is unchanged, which is
+   * what the three cases here are actually about.
    */
-  it("makes a label from the menu's own field and puts it on the card", async () => {
+  it("makes a label from the menu's New tag… dialog and puts it on the card", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt()]));
     await open();
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
-
-    // The press closes the menu; it does not wait for a network to answer first.
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    // The menu is gone the moment the row is pressed; the dialog is what is left.
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    // The default colour, silently — recolouring is what the Tags dialog is for.
-    await waitFor(() => expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "gold"));
-    // …and the chain's second half runs with the panel long gone.
+    await screen.findByRole("dialog", { name: "New tag" });
+
+    await userEvent.type(screen.getByLabelText("New tag name"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Slate" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
+
+    // The colour the reader picked, where the field this replaced sent gold and never asked.
+    await waitFor(() =>
+      expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "#c8c4bf"),
+    );
+    // …and the chain's second half runs with the dialog long gone.
     await waitFor(() =>
       expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
     );
   });
 
   /**
-   * **The create outlives the menu, driven the hard way**: the reader presses Escape while the
-   * label is still being written.
+   * **The create outlives the surface it was asked for from, driven the hard way**: the reader
+   * presses Escape while the label is still being written.
    *
-   * This is the case the `mutate`-scoped chain could not survive and the reason the write moved
-   * to the editor. The create is held open until after the dismissal, so the observer would be
-   * long gone by the time it answered if it belonged to the panel.
+   * This is the case the `mutate`-scoped chain could not survive and the reason the write lives
+   * in the editor. The create is held open until after the dismissal, so the observer would be
+   * long gone by the time it answered if it belonged to the panel — or, now, to the dialog, which
+   * is a second surface with the same lifetime problem and the same answer.
    */
-  it("attaches a label whose create was still in flight when the menu was dismissed", async () => {
+  it("attaches a label whose create was still in flight when the dialog was dismissed", async () => {
     let landed: (tag: DeckTag) => void = () => {};
     deckTagCreate.mockImplementation(
       () =>
@@ -3851,13 +3940,16 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    await userEvent.type(await screen.findByLabelText("New tag name"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
     await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New tag" })).not.toBeInTheDocument(),
+    );
     expect(deckCardSetTag).not.toHaveBeenCalled();
 
-    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "#d9b95c", cardCount: 0 });
 
     await waitFor(() =>
       expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
@@ -3868,9 +3960,9 @@ describe("DeckEditor — a card's menu", () => {
    * …and a refused *create* is spoken for by the deck's own banner, which is why the mutation is
    * in the editor's refused-write family rather than merely mounted in it.
    *
-   * A label the reader typed and pressed Add on, that never appears and never says why, is the
-   * silent failure this family exists to prevent — and the menu it was typed in is gone by the
-   * time the answer arrives, so there is nowhere else it could be said.
+   * A label the reader typed and pressed Add tag on, that never appears and never says why, is
+   * the silent failure this family exists to prevent — and the dialog it was typed in closes on
+   * the press, so there is nowhere else it could be said.
    */
   it("says so when the menu's tag create is refused", async () => {
     deckTagCreate.mockRejectedValue("The database is busy");
@@ -3879,8 +3971,9 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.type(await screen.findByLabelText("New tag"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    await userEvent.type(await screen.findByLabelText("New tag name"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
 
     expect(
       await screen.findByText(/Could not change this deck — The database is busy/),
@@ -4006,6 +4099,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "c-Lightning Bolt",
       oracleId: "o-Lightning Bolt",
       name: "Lightning Bolt",
       deck: {
@@ -4041,6 +4135,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "s-Goblin Guide",
       oracleId: "o-Goblin Guide",
       name: "Goblin Guide",
       deck: null,
@@ -4131,7 +4226,7 @@ describe("DeckEditor — a card's menu", () => {
  * **A pile's right-click — the last surface on this branch, and the one with a layer hazard.**
  *
  * The handlers hang on the view's own group element and never on `GroupHeader`, because
- * `CategoriesDialog` draws that same component inside a `DeckDialog` on `LAYER.overlay` (z-45)
+ * `CategoriesDialog` draws that same component inside a `Dialog` on `LAYER.overlay` (z-45)
  * and `ContextMenu` draws at `LAYER.popup` (z-30) — so a menu wired onto the shared header would
  * open **behind that dialog's scrim**, invisible and unreachable, with nothing going red because
  * jsdom has no opinion about a z-index. The sweep below is over all four views for the reason the
@@ -4397,7 +4492,7 @@ describe("DeckEditor — a category's menu", () => {
    * **A refusal belongs to the press that produced it, and the next press has not been made yet.**
    *
    * The sentence above is drawn off `meta.deleteCategory.isError`, and that observer is the
-   * **editor's** — unlike `CategoriesDialog`'s, which lives in a body `DeckDialog` unmounts, it
+   * **editor's** — unlike `CategoriesDialog`'s, which lives in a body `Dialog` unmounts, it
    * outlives every open of this layer. So a refused delete left the mutation in `isError` and the
    * next `Delete…` mounted its body already holding the alert: `role="alert"` announces on
    * insertion, and the reader was told that a delete they never attempted, on a pile it was never
@@ -4444,7 +4539,7 @@ describe("DeckEditor — a category's menu", () => {
   /**
    * **The caret goes back to the pile, for all three rows that open a full-window surface.**
    *
-   * A menu row has no control to return to, and `DeckDialog` focuses its own panel and restores
+   * A menu row has no control to return to, and `Dialog` focuses its own panel and restores
    * nothing — so a `null` hand-back leaves the caret on an unmounting panel and drops it on
    * `<body>`, with the next Tab restarting from the top of the app. This is the third surface on
    * this branch to have been wired that way; here the hand-back is a function, so the rows can
@@ -4688,14 +4783,14 @@ describe("DeckEditor — the walk it publishes", () => {
     card({ name: "Pyroblast", categoryKind: "side" }),
   ];
 
-  const walk = () => useAppStore.getState().deckWalk;
+  const walk = () => useAppStore.getState().cardWalk.stops;
 
   it("publishes the deck in the order the desk draws it, the command zone first and the rail last", async () => {
     deckGet.mockResolvedValue(detail({}, SPREAD));
     await open();
 
     await waitFor(() =>
-      expect(walk().map((stop) => stop.name)).toEqual([
+      expect(walk().map((stop: CardWalkStop) => stop.name)).toEqual([
         "Kenrith, the Returned King",
         "Lightning Bolt",
         "Pyroblast",
@@ -4720,6 +4815,7 @@ describe("DeckEditor — the walk it publishes", () => {
     await waitFor(() =>
       expect(walk()).toEqual([
         {
+          cardId: "c-Lightning Bolt",
           oracleId: "o-Lightning Bolt",
           name: "Lightning Bolt",
           deck: {
@@ -4749,7 +4845,22 @@ describe("DeckEditor — the walk it publishes", () => {
     screen.getByLabelText("Filter this deck").focus();
     await userEvent.keyboard("bolt");
 
-    await waitFor(() => expect(walk().map((stop) => stop.name)).toEqual(["Lightning Bolt"]));
+    await waitFor(() =>
+      expect(walk().map((stop: CardWalkStop) => stop.name)).toEqual(["Lightning Bolt"]),
+    );
+  });
+
+  /**
+   * **And it says it is the deck.** The store carries one walk, published by whichever surface is
+   * drawing a list of cards — the desk, the search results, the collection, the wishlist — and the
+   * modal reads the label straight into its chevrons' names. A walk that did not carry a noun of
+   * its own would have this editor's chevrons saying somebody else's.
+   */
+  it("names the list its chevrons are stepping along", async () => {
+    deckGet.mockResolvedValue(detail({}, SPREAD));
+    await open();
+
+    await waitFor(() => expect(useAppStore.getState().cardWalk.label).toBe("the deck"));
   });
 
   /** And it goes when the editor does. A walk left behind would step a modal opened from the

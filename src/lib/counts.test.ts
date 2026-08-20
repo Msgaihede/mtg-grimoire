@@ -9,7 +9,7 @@ describe("plural", () => {
     expect(plural(2, "folder")).toBe("2 folders");
   });
 
-  /** The case `ImportDeckDialog` carried a private `categoryCount` for: the default argument
+  /** The case `ImportDialog` carried a private `categoryCount` for: the default argument
    *  already answered it, and the workaround was the reason a fourth definition existed. */
   it("takes an irregular plural rather than deriving one", () => {
     expect(plural(1, "category", "categories")).toBe("1 category");

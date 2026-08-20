@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
@@ -9,6 +10,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
@@ -46,8 +48,17 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * the sentence in its header names the marketplace and the figures in its cells are read out
  * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
  * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
+ *
+ * **Exported, and the Tags page's table is the second caller.** That wall draws the same
+ * `CardSummary` rows narrowed by a motif rather than by a name, so it is the same six columns
+ * about the same printings — and a second copy would be six cells' worth of formatting, six
+ * sort keys and one accessible price header free to drift from these. {@link summaryOf} below
+ * is shared for the same reason and was shared first.
  */
-function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
+export function columnsFor(
+  marketplace: Marketplace,
+  tip: TooltipBinder,
+): TableColumn<CardSummary>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return [
@@ -91,12 +102,20 @@ function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
       width: "8rem",
       header: "Set",
       sortable: true,
-      cellClassName: "truncate font-mono text-dim",
+      cellClassName: "font-mono text-dim",
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
       // — the same rule as the grid caption and the pane.
+      //
+      // **No `whenClipped` here — the tooltip says the set's *name* and the span shows its
+      // *code*, so gating the panel on whether the code happens to be clipped would gate it on
+      // something unrelated to the words it carries.** At the search table's 8rem column,
+      // `MH3 · 234` never clips, so `whenClipped` never opened at all: the rule and the four
+      // sites it applied to wrongly are in `CardDetailPane.tsx`, beside the printings-row span
+      // this one matches. `block truncate` stays for the visual clip alone — an inline span
+      // ignores the grid cell's width and `truncate` needs a real layout box to act on.
       cell: (card) => (
-        <span title={card.setName ?? undefined}>
+        <span className="block truncate" {...tip(card.setName)}>
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
       ),
@@ -184,8 +203,12 @@ function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
  * The tiles only. The table beside them is the view for *comparing* — five columns of facts
  * and a price — and a row there is read rather than picked up; the drag sources spec §1 names
  * are the wall's tiles, the two lists that are inventories, and the pane's printings.
+ *
+ * Exported for the Tags page's wall, which carries the same printing to the same places: a
+ * tile there is a card the reader found by motif rather than by name, and what it *is* when it
+ * lands on a deck column does not depend on how they found it.
  */
-const tileDrag = (card: CardSummary): DragPayload => ({
+export const tileDrag = (card: CardSummary): DragPayload => ({
   kind: "card",
   cardId: card.id,
   name: card.name,
@@ -198,9 +221,11 @@ const tileDrag = (card: CardSummary): DragPayload => ({
  * The finish a result row's printing *is*, for the sheen over its art.
  *
  * Only the printings that leave no choice — foil-only and etched-only. Module scope for
- * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes.
+ * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes — and
+ * an import satisfies that promise exactly as a local `const` would, which is what lets the
+ * Tags page's wall share this one rather than hold a fourth copy.
  */
-const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
+export const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
 
 /**
  * Whether a tile's card is one the Commander bracket counts — the crown, in the same top-right
@@ -211,8 +236,12 @@ const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
  * "which finish leaves no choice" question to answer. Module scope for `tileDrag`'s reason all
  * the same — the wall re-registers a tile's drag when a callback's identity changes, and this one
  * travels the same path.
+ *
+ * Exported for the Tags page's wall. The deck editor's docked panel keeps a copy of its own,
+ * and says at its site why: that wall passes no `finish`, so its chip holds the crown alone
+ * and the pair of callbacks there is genuinely a different pair.
  */
-const tileGameChanger = (card: CardSummary) => card.gameChanger;
+export const tileGameChanger = (card: CardSummary) => card.gameChanger;
 
 /**
  * The card a right-click on a result is about — the same object for a tile and for a table row,
@@ -225,8 +254,12 @@ const tileGameChanger = (card: CardSummary) => card.gameChanger;
  *
  * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
  * does — the same fact, from the same row, that {@link tileDrag} hands a drop.
+ *
+ * Exported for the Tags page, whose wall and table are the same list of printings reached by a
+ * different question. **The `finish` omission is the whole content of this function**, so a
+ * second copy of it is a second place for a surface to start choosing a finish nobody named.
  */
-function cardTarget(card: CardSummary): CardMenuTarget {
+export function cardTarget(card: CardSummary): CardMenuTarget {
   return {
     cardId: card.id,
     name: card.name,
@@ -350,9 +383,12 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
 
 function Results({ search }: { search: CardSearch }) {
   const { query, rows, total, totalIsCapped, searchKey, marketplace } = search;
-  // Only the Price column depends on it, and a `TableColumn[]` rebuilt every render would
-  // re-key every header — so it is rebuilt when the marketplace changes and not otherwise.
-  const columns = useMemo(() => columnsFor(marketplace), [marketplace]);
+  const tip = useTooltip();
+  // Only the Price column and the tooltip binder depend on it, and a `TableColumn[]` rebuilt
+  // every render would re-key every header — so it is rebuilt when the marketplace changes and
+  // not otherwise. `tip`'s own identity never changes (`useTooltip` memoises it on the context
+  // alone), so it costs the memo nothing to depend on it too.
+  const columns = useMemo(() => columnsFor(marketplace, tip), [marketplace, tip]);
   // Read here rather than taken as a prop: the layout is the result area's own business,
   // and the page above it only needs to know which pager is live.
   const view = useAppStore((s) => s.searchView);
@@ -360,6 +396,30 @@ function Results({ search }: { search: CardSearch }) {
   // never has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+
+  /**
+   * These results as a **walk**, so the printings modal's chevrons and arrow keys step along them.
+   *
+   * Published from here rather than derived in the modal for `cardWalk.ts`'s reason: the order is
+   * the query's, narrowed by a filter bar and sorted by whichever header was last clicked, and
+   * `AllPrintingsDialog` is mounted at `App` level with no way to ask. **From `rows` rather than
+   * from either layout**, which is what keeps the two agreeing — the wall and the table draw the
+   * same list in the same order, and a walk built inside one of them would be a walk the other
+   * did not have.
+   *
+   * Memoised because the hook requires it: an array rebuilt on every render republishes an
+   * identical walk under a new identity, and a search page re-renders on every keystroke.
+   */
+  const walk = useMemo(
+    () =>
+      listWalkStops(rows, (card) => ({
+        cardId: card.id,
+        oracleId: card.oracleId,
+        name: card.name,
+      })),
+    [rows],
+  );
+  usePublishCardWalk("these results", walk);
 
   /**
    * The right-click menu, built here rather than in either layout: one object for the page, as
@@ -502,7 +562,7 @@ function Results({ search }: { search: CardSearch }) {
             topLeft={(card) =>
               card.printings > 1 ? (
                 <span
-                  title={`${card.printings} printings matched these filters`}
+                  {...tip(`${card.printings} printings matched these filters`)}
                   className={cn(
                     "block whitespace-nowrap tabular-nums text-text",
                     "text-[calc(10px*var(--mark-scale,1))] leading-none",

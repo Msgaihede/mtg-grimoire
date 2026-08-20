@@ -48,6 +48,7 @@ import {
 import type { FakeScope } from "./scope";
 import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
+import { resetWindow } from "./window";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -198,11 +199,28 @@ export function installWorld(
   if (db.fault === "errorLog") db.errorLog = errorLogSeed();
   if (db.fault === "oracleTagsMissing") {
     db.oracleTags = [];
+    db.oracleTagTaxonomy = [];
+    db.oracleTagParents = [];
     db.oracleTagMeta = null;
+  }
+  // The same fault one taxonomy over, and **all four tables leave together** because one ingest
+  // writes all four: a watermark with no taxonomy behind it is the state the backend goes out of
+  // its way never to leave, and half-emptying it here would story a page against a world the app
+  // cannot be in.
+  if (db.fault === "artTagsMissing") {
+    db.artTags = [];
+    db.artTagTaxonomy = [];
+    db.artTagParents = [];
+    db.artTagMeta = null;
   }
 
   const scope = createScope(allHandlers(db));
   activateScope(scope);
+
+  // The window is a singleton and therefore not part of `scope` — see `fake/window.ts`. That
+  // makes it the one piece of fake state a story could inherit from the story before it, so it
+  // is cleared here, beside the store reset, for the same reason and at the same moment.
+  resetWindow();
 
   // Replaced *wholesale* (`setState(…, true)`), which works because `store.ts` keeps its
   // actions in the state object: replacing state restores the actions along with the fields.

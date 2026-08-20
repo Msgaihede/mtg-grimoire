@@ -1,4 +1,5 @@
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
@@ -102,13 +103,18 @@ const tileDrag = (tile: WishTile): DragPayload | null =>
  * crosses it off.
  */
 function WishProgress({ wish }: { wish: WishRow }) {
+  const tip = useTooltip();
   const done = missingOf(wish) === 0;
   const sentence = done
     ? `Fulfilled, ${wish.ownedQuantity} of ${wish.quantity} owned`
     : `${wish.ownedQuantity} of ${wish.quantity} owned`;
   return (
     <span
-      title={sentence}
+      // Redundant, not a description: the `sr-only` span below already carries this sentence
+      // as text in the accessible tree, so a screen reader that reaches this element has it
+      // already — `describes: false` keeps the panel a pointer/sighted-only hint and stops it
+      // wiring `aria-describedby` onto text that would then be read twice.
+      {...tip(sentence, { describes: false })}
       className={[
         "inline-flex shrink-0 items-center font-mono tabular-nums",
         "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
@@ -169,6 +175,7 @@ export function WishlistGrid({
   // has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  const tip = useTooltip();
 
   const tiles = useMemo(() => rows.map(toTile), [rows]);
   const asOf = pricesAsOf(marketplace);
@@ -199,8 +206,17 @@ export function WishlistGrid({
       // sentence, and the rule it is written under is "listed, counted, and asking to be looked
       // at" — a layout that drew the wish and dropped the question would be the one place in the
       // app where a flagged row looks fine. The table has a band across the row for it; a 170px
-      // card has this, with the reconciler's whole sentence as the tooltip and in the accessible
-      // name, which is the same arrangement the band already makes for its own truncation.
+      // card has this, with the reconciler's whole sentence as the tooltip on the short label
+      // below.
+      //
+      // The *label* below never truncates — "Needs review" is fixed and short — so `whenClipped`
+      // is wrong here: it would never open. But the *sentence* is the same 130–190 characters as
+      // the collection table's band, whose second half is what to do about it ("check the
+      // printing and re-add it… or remove this entry") — so it is `interactive` for the same
+      // reason the band is: the reader has to be able to select and copy the instruction, and
+      // that must not depend on which surface is showing it. `describes` stays at its default
+      // (`true`): unlike `WishProgress` above, nothing else on this tile carries the sentence as
+      // text, so `aria-describedby` is a genuine gain over the old `title` rather than a double-up.
       //
       // The cost is over the copies still *missing* — the same arithmetic the header's "Still to
       // buy" is summed from and the same the table's Cost column shows, so one definition means
@@ -219,7 +235,7 @@ export function WishlistGrid({
           <span className="flex flex-col items-start leading-[calc(1rem*var(--mark-scale,1))]">
             {review && (
               <span
-                title={review}
+                {...tip(review, { interactive: true })}
                 className="font-medium text-[calc(0.7rem*var(--mark-scale,1))] text-destructive"
               >
                 Needs review
@@ -227,9 +243,10 @@ export function WishlistGrid({
             )}
             {missing > 0 && (
               // Spec §5: a price is never shown without saying how old it is, and a corner mark
-              // has no room for the sentence — so it rides as the tooltip.
+              // has no room for the sentence — so it rides as the tooltip, describing the
+              // already-visible figure.
               <span
-                title={`${wishLabel(tile.wish)} — ${asOf}`}
+                {...tip(`${wishLabel(tile.wish)} — ${asOf}`)}
                 className="font-mono text-[calc(0.75rem*var(--mark-scale,1))] tabular-nums text-text"
               >
                 {formatPrice(

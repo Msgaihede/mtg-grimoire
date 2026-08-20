@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { DeckStats } from "./DeckStats";
 
@@ -449,10 +450,14 @@ export const CommanderDeck: Story = {
     // The pile's own name, lower-cased — "Companion" here, and whatever the reader called it
     // in a deck of their own.
     await expect(cards).toHaveTextContent("+ 1 companion");
-    // The sentence a figure has no room for, as its `title` — the same place the price figure
-    // keeps its as-of line.
-    await expect(cards).toHaveAttribute(
-      "title",
+    // The sentence a figure has no room for, as a tooltip bound on the same wrapper — the same
+    // place the price figure keeps its as-of line. Describing (the default `describes: true`),
+    // so the panel carries `role="tooltip"` once hovered.
+    await userEvent.hover(cards!);
+    const cardsTooltip = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(cardsTooltip).toHaveTextContent(
       "The cards a format's size rule counts — every switched-on pile except the sideboard.",
     );
     // The companion *is* counted everywhere else: 40 copies owned, not 39.

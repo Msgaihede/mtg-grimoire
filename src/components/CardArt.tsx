@@ -1,6 +1,7 @@
 import { CardImage } from "@/components/CardImage";
 import { FinishMark } from "@/components/FinishMark";
 import { GAME_CHANGER_LABEL, GameChangerMark } from "@/components/GameChangerMark";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -268,13 +269,18 @@ export function FoilOverlay({
    */
   mark?: boolean;
 }) {
+  const tip = useTooltip();
   // Two marks, one chip, and either of them is reason enough to draw it — but only if the
   // caller wanted a chip at all.
   const chip = mark && (finish !== null || gameChanger);
   if (!finish && !chip) return null;
-  // What the chip's own padding says on hover, since a `<title>` inside a glyph only covers
-  // the 12px the glyph occupies. Joined with the separator the app uses between card facts
-  // everywhere else, so "Game changer · Foil" reads as one line rather than a sentence.
+  // What the chip's own padding says on hover, covering the gap between the two glyphs as
+  // well as each glyph's own tooltip (bound separately, in `FinishMark`/`GameChangerMark`
+  // themselves, since those components are also drawn standalone — a data line, a table row —
+  // with no chip around them). The innermost binding wins on a hover that lands exactly on a
+  // glyph, so this is only ever seen over the padding between or around them; it still needs
+  // the words, because "Game changer · Foil" is a fact this chip alone states. Joined with the
+  // separator the app uses between card facts everywhere else.
   const chipTitle = [gameChanger ? GAME_CHANGER_LABEL : null, finish ? FINISH_LABEL[finish] : null]
     .filter((word) => word !== null)
     .join(" · ");
@@ -286,9 +292,9 @@ export function FoilOverlay({
     // name came back as bare "Foil". The crown would have made that worse rather than
     // different: "Rhystic Study Game changer", on every game changer in the wall. It is the
     // same trap the owned badge avoids by being a *sibling* of the button rather than a child
-    // of it. A `title` attribute is excluded on the same terms — name computation skips an
-    // `aria-hidden` subtree entirely — while the browser still shows it on hover, which is the
-    // whole reason the tooltips below can exist at all.
+    // of it. A tooltip is excluded on the same terms — name computation skips an `aria-hidden`
+    // subtree entirely — while `aria-hidden` says nothing about pointer events, so `useTooltip()`
+    // still opens on hover, which is the whole reason the tooltips below can exist at all.
     //
     // Nothing is lost: both facts are stated in text on every surface that has room for them —
     // the search table's Name cell, the deck row beside the card's name, the pane's per-finish
@@ -343,7 +349,7 @@ export function FoilOverlay({
       {chip && (
         <span
           data-card-marks
-          title={chipTitle}
+          {...tip(chipTitle, { describes: false })}
           className={cn(
             "pointer-events-auto absolute flex items-center bg-bg/85",
             "top-[calc(0.25rem*var(--mark-scale,1))] right-[calc(0.25rem*var(--mark-scale,1))]",

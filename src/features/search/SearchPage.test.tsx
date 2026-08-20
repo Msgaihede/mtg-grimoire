@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
@@ -135,12 +136,17 @@ const cards = (n: number, from = 0): CardSummary[] =>
  * `ContextMenuProvider` and not inside it: the menu panel is drawn as a *sibling* of that
  * provider's children, so a provider around this page is around none of the menu's rows.
  * `CollectionPage.test.tsx` has the wiring, and `App.tsx` uses the same nesting.
+ *
+ * `TooltipProvider` is here for `useTooltip`'s own no-op reason: the price column's hint below
+ * would bind a tooltip that can never open without it.
  */
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <ContextMenuProvider>{ui}</ContextMenuProvider>
+      <TooltipProvider>
+        <ContextMenuProvider>{ui}</ContextMenuProvider>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -573,13 +579,23 @@ describe("SearchPage", () => {
     await screen.findByText("Lightning Bolt");
     const header = screen.getByRole("columnheader", { name: /^Price/ });
 
-    // On the button, because the button fills the header cell — a `title` on the cell is a
-    // tooltip nothing can reach. And beside the sort hint rather than instead of it: a
-    // sortable price column has two things to say and may drop neither.
-    expect(screen.getByRole("button", { name: /^Price/ })).toHaveAttribute(
-      "title",
+    // On the button, because the button fills the header cell — a tooltip on the cell is one
+    // nothing can reach. And beside the sort hint rather than instead of it: a sortable price
+    // column has two things to say and may drop neither. The two sentences are joined by a
+    // literal `\n`, which `normalizeWhitespace: false` is what actually pins — the default
+    // collapses it to a space and would pass a binder that joined with `" "` just the same.
+    const button = screen.getByRole("button", { name: /^Price/ });
+    await userEvent.hover(button);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(
       `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price — Shift-click to add to the sort`,
+      { normalizeWhitespace: false },
     );
+    // And bound to the button rather than to the header cell — `aria-describedby` is what
+    // `TooltipProvider` sets on the anchor it actually opened for, so this is what proves the
+    // binding is where the comment above says it is rather than merely open somewhere.
+    expect(button).toHaveAttribute("aria-describedby", panel.id);
+    await userEvent.unhover(button);
     // And in the accessible name, because a tooltip is not an answer for anyone who is not
     // holding a mouse over the right four pixels. It still *starts* with "Price", so the
     // column is still addressable by the word on screen.
@@ -1111,7 +1127,12 @@ describe("the result layout toggle", () => {
 
     const mark = screen.getByText("132 printings");
     expect(mark).toBeVisible();
-    expect(mark).toHaveAttribute("title", "132 printings matched these filters");
+    await userEvent.hover(mark);
+    const tooltip = await screen.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(tooltip).toHaveTextContent("132 printings matched these filters");
+    await userEvent.unhover(mark);
     // The wall's own chip, 4px in from the card's top-left corner at 100% zoom. That inset scales
     // with the card: fixed, it climbed out of the printed nameplate it is meant to sit on and into
     // the border strip above it by ~2×, which is what this corner's own comment recorded.
@@ -1538,6 +1559,56 @@ describe("nextOffset", () => {
     expect(nextOffset([full])).toBe(5000);
     expect(nextOffset([full, page(Array(50).fill(BOLT), 5000, true)])).toBe(5050);
     expect(nextOffset([full, page([], 5000, true)])).toBeUndefined();
+  });
+});
+
+/**
+ * The list the printings modal's own arrow keys walk, published to the store by this page.
+ *
+ * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, outside every
+ * view, and the order is this page's — a query narrowed by its filter bar and sorted by whichever
+ * header was last clicked. What the modal *does* with a walk belongs to
+ * `AllPrintingsDialog.test.tsx`; what this file owes is that a walk of the right shape is
+ * published at all, and taken back when the page goes.
+ */
+describe("the walk it publishes for the printings modal", () => {
+  const walk = () => useAppStore.getState().cardWalk;
+
+  /**
+   * **Built from the rows rather than from either layout**, which is what keeps the wall and the
+   * table agreeing: they draw the same list in the same order, and a walk built inside one of
+   * them would be a walk the other did not have. `SPARSE` is the orphan — no oracle id, so no
+   * printings to list and no stop to land on — and it is in the middle so this reads as a skip
+   * rather than as a filter.
+   */
+  it("publishes the results in their drawn order, minus the rows with no oracle card", async () => {
+    searchCards.mockResolvedValue(page([BOLT, SPARSE, { ...BOLT, id: "3", name: "Counterspell" }]));
+    wrap(<SearchPage />);
+
+    await waitFor(() =>
+      expect(walk().stops).toEqual([
+        { cardId: "1", oracleId: "o-bolt", name: "Lightning Bolt", deck: null },
+        { cardId: "3", oracleId: "o-bolt", name: "Counterspell", deck: null },
+      ]),
+    );
+  });
+
+  /** The noun the modal's chevrons read into their own names — `Next card in these results`. */
+  it("says which list it is", async () => {
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(walk().label).toBe("these results"));
+  });
+
+  /** And it goes when the page does: a walk left behind would step a modal opened somewhere else
+   *  through a list nobody is looking at. */
+  it("clears the walk when the page goes", async () => {
+    const view = wrap(<SearchPage />);
+    await waitFor(() => expect(walk().stops.length).toBeGreaterThan(0));
+
+    view.unmount();
+
+    expect(walk().stops).toEqual([]);
   });
 });
 

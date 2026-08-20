@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { CardStack, STACK_OPEN_ATTR, stackHeight } from "./CardStack";
@@ -217,9 +218,20 @@ export const TaggedAndShortOfCopies: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Both marks are decoration with a `title`; the words are in the card's own name, which
-    // is the only text inside an `aria-label`-ed button that anyone hears.
-    expect(canvas.getByTitle("Wincon · 3 in this pile")).toHaveAttribute("aria-hidden", "true");
+    // The mark is decoration, `aria-hidden`, and its words are one hover away — found by its
+    // own text rather than by `getByTitle`: `QuantityTag` forwards to `components/CountTag`,
+    // which binds `useTooltip()` (`describes: false`, redundant with the card's own name, the
+    // only text inside an `aria-label`-ed button that anyone hears) rather than a native
+    // `title`. `describes: false` means no `role="tooltip"`, so the panel is found by its one
+    // stable id — `.storybook/preview.tsx` already wraps every story in `TooltipProvider`.
+    const tag = canvas.getByText("3");
+    expect(tag).toHaveAttribute("aria-hidden", "true");
+    await userEvent.hover(tag);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Wincon · 3 in this pile");
+    await userEvent.unhover(tag);
     expect(canvas.getByRole("button", { name: /Wincon.*/ }).getAttribute("aria-label")).toContain(
       "you own 1 of 3",
     );

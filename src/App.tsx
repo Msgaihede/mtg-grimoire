@@ -4,6 +4,7 @@ import { AnimatePresence, MotionConfig } from "motion/react";
 import { AppShell } from "@/components/AppShell";
 import { CardZoomIndicator } from "@/components/CardZoomIndicator";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
@@ -12,6 +13,7 @@ import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { TagsPage } from "@/features/tags/TagsPage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
@@ -21,6 +23,7 @@ function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
   if (activeView === "search") return <SearchPage />;
+  if (activeView === "tags") return <TagsPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
   if (activeView === "settings") return <SettingsPage update={update} />;
@@ -109,66 +112,75 @@ export default function App() {
             need goes here, outside the menu provider, not inside the shell it renders.
 
             Inside `QueryClientProvider` because it mounts `useDeck`, which is a query. */}
-        <CardToDeckProvider>
-          <ContextMenuProvider>
-            <AppShell update={update}>
-              <div className="flex h-full min-h-0 gap-4">
-                <div className="min-w-0 flex-1">
-                  <ActiveView update={update} />
+        {/* **Above `ContextMenuProvider` for the reason `CardToDeckProvider` is**: that provider
+            draws its panel as a *sibling* of `children`, so a context mounted inside it would be
+            around every view and around none of the menu's own rows — and a menu row binding a
+            tooltip would silently get the no-op API. Inside `QueryClientProvider`, because a
+            caller's tooltip `content` is rendered here and may be a component that reads the
+            cache. Nothing between here and the root transforms, which is what lets the panel be
+            `fixed` against the window rather than against a virtualised row. */}
+        <TooltipProvider>
+          <CardToDeckProvider>
+            <ContextMenuProvider>
+              <AppShell update={update}>
+                <div className="flex h-full min-h-0 gap-4">
+                  <div className="min-w-0 flex-1">
+                    <ActiveView update={update} />
+                  </div>
+                  {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
+                  purpose: it used to be `selectedCardId`, which was right when a close was
+                  instant and is wrong the moment there is an exit, because every card-to-card
+                  move would then be one pane leaving and another arriving — a 440ms cross-fade
+                  where the reader pressed a printings row and expected the picture to change.
+                  The per-card remount that keying bought is *kept*, one level down and inside
+                  the animated element, where React can throw the body away without the box it
+                  is in going anywhere. See `CardDetailPane`. */}
+                  <AnimatePresence>
+                    {selectedCardId && (
+                      <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
+                    )}
+                  </AnimatePresence>
                 </div>
-                {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
-                purpose: it used to be `selectedCardId`, which was right when a close was
-                instant and is wrong the moment there is an exit, because every card-to-card
-                move would then be one pane leaving and another arriving — a 440ms cross-fade
-                where the reader pressed a printings row and expected the picture to change.
-                The per-card remount that keying bought is *kept*, one level down and inside
-                the animated element, where React can throw the body away without the box it
-                is in going anywhere. See `CardDetailPane`. */}
-                <AnimatePresence>
-                  {selectedCardId && (
-                    <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
-                  )}
-                </AnimatePresence>
-              </div>
-            </AppShell>
-            {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
-            `LAYER.popup`, and a z-index only competes inside its own stacking context — so
-            mounting it inside a view would cap it at whatever that view's transformed or
-            positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
-            Nothing between here and the root transforms.
+              </AppShell>
+              {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
+              `LAYER.popup`, and a z-index only competes inside its own stacking context — so
+              mounting it inside a view would cap it at whatever that view's transformed or
+              positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
+              Nothing between here and the root transforms.
 
-            One instance for the whole app, because a reader makes one gesture at a time. Each
-            card section now keeps its **own** zoom — the search and collection walls, the deck
-            editor's docked search column, and its desk — so the figure is never about "the
-            zoom"; it is about the one section the last ctrl+wheel landed in, and it is drawn in
-            that section's top-right corner (`zoomSection` names it, `anchorFor` measures it).
-            That is what makes a single badge right rather than a compromise: four badges would
-            be three of them describing a gesture nobody just made, and the one that mattered
-            would be no easier to find. It is mounted *here* and drawn *there*, which is the
-            whole trick — the corner comes from a measurement, not from where this line sits. */}
-            <CardZoomIndicator />
-            {/* **Every printing of one card, over whatever the reader is already looking at.**
-            A sibling of the shell for the badge's reason one line up: the panel is `fixed` at
-            `LAYER.overlay`, a z-index competes only inside its own stacking context, and every
-            card surface in this app draws rows that are positioned and transformed — so mounted
-            where it was opened it would be capped by that row's layer. Nothing between here and
-            the root transforms.
+              One instance for the whole app, because a reader makes one gesture at a time. Each
+              card section now keeps its **own** zoom — the search and collection walls, the deck
+              editor's docked search column, and its desk — so the figure is never about "the
+              zoom"; it is about the one section the last ctrl+wheel landed in, and it is drawn in
+              that section's top-right corner (`zoomSection` names it, `anchorFor` measures it).
+              That is what makes a single badge right rather than a compromise: four badges would
+              be three of them describing a gesture nobody just made, and the one that mattered
+              would be no easier to find. It is mounted *here* and drawn *there*, which is the
+              whole trick — the corner comes from a measurement, not from where this line sits. */}
+              <CardZoomIndicator />
+              {/* **Every printing of one card, over whatever the reader is already looking at.**
+              A sibling of the shell for the badge's reason one line up: the panel is `fixed` at
+              `LAYER.overlay`, a z-index competes only inside its own stacking context, and every
+              card surface in this app draws rows that are positioned and transformed — so mounted
+              where it was opened it would be capped by that row's layer. Nothing between here and
+              the root transforms.
 
-            **One instance, and that is what the whole change is for.** `View all printings` is on
-            the card menu of twelve surfaces, and it used to answer by *moving* the reader: to the
-            Search view from the collection and the wishlist, into the 384px card pane inside the
-            deck editor. Both destinations closed something to show a list. A dialog mounted here
-            is drawn over all twelve without any of them knowing it exists, so asking the question
-            costs the reader nothing — the deck stays open behind the scrim, and closing the modal
-            puts them back exactly where they were.
+              **One instance, and that is what the whole change is for.** `View all printings` is on
+              the card menu of twelve surfaces, and it used to answer by *moving* the reader: to the
+              Search view from the collection and the wishlist, into the 384px card pane inside the
+              deck editor. Both destinations closed something to show a list. A dialog mounted here
+              is drawn over all twelve without any of them knowing it exists, so asking the question
+              costs the reader nothing — the deck stays open behind the scrim, and closing the modal
+              puts them back exactly where they were.
 
-            Inside `CardToDeckProvider` and `ContextMenuProvider` because its tiles carry the same
-            card menu every other wall in the app draws, lazy deck picker included; inside
-            `QueryClientProvider` because it reads `card_printings` and writes through
-            `deck_swap_printing`. */}
-            <AllPrintingsDialog />
-          </ContextMenuProvider>
-        </CardToDeckProvider>
+              Inside `CardToDeckProvider` and `ContextMenuProvider` because its tiles carry the same
+              card menu every other wall in the app draws, lazy deck picker included; inside
+              `QueryClientProvider` because it reads `card_printings` and writes through
+              `deck_swap_printing`. */}
+              <AllPrintingsDialog />
+            </ContextMenuProvider>
+          </CardToDeckProvider>
+        </TooltipProvider>
       </QueryClientProvider>
     </MotionConfig>
   );

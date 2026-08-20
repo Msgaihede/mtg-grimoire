@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { DeckSearchPanel } from "./DeckSearchPanel";
@@ -292,8 +293,8 @@ export const Collapsed: Story = {
  * **`aria-disabled` and a press that does nothing, not `disabled`.** A disabled button is out of
  * the tab order, which would leave the reason hanging on a hover a keyboard reader cannot perform
  * — a rail that cannot be activated and never says why. This way the control is reachable, its
- * `title` is its description, and it is somewhere the caret can be put when the card pane closes
- * and the tile that opened it has gone with the panel.
+ * `useTooltip()` hint is its description, and it is somewhere the caret can be put when the card
+ * pane closes and the tile that opened it has gone with the panel.
  *
  * The reader's own choice is untouched by this, so a panel they had opened comes back the moment
  * the room does — **and comes back as they left it**. `roomy` decides what is *drawn* and the
@@ -316,12 +317,20 @@ export const NoRoom: Story = {
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(toggle).toHaveAttribute("aria-disabled", "true");
-    await expect(toggle).toHaveAttribute(
-      "title",
-      "Not enough room — close the card details or widen the window",
-    );
     // Reachable, which is the whole point of not using `disabled`.
     await expect(toggle).toBeEnabled();
+
+    // The reason is a hover away — a description of an already-named control, so it is
+    // `describes: true` by default and the panel carries `role="tooltip"`.
+    await userEvent.hover(toggle);
+    await waitFor(
+      async () =>
+        expect(await canvas.findByRole("tooltip")).toHaveTextContent(
+          "Not enough room — close the card details or widen the window",
+        ),
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    await userEvent.unhover(toggle);
 
     // And the press is recorded and does nothing, rather than being swallowed by the browser.
     await userEvent.click(toggle);

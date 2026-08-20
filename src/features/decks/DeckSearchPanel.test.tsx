@@ -3,6 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import type { CardSummary, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
@@ -205,7 +210,9 @@ function panel({
   let props: Props = { categories, targetCategoryId, roomy, defaultFormat, maxWidth };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
-      <Harness {...p} />
+      <TooltipProvider>
+        <Harness {...p} />
+      </TooltipProvider>
     </QueryClientProvider>
   );
   const view = render(ui(props));
@@ -587,8 +594,16 @@ describe("DeckSearchPanel", () => {
 
     const rail = screen.getByRole("button", { name: "Search cards" });
     expect(rail).toHaveAttribute("aria-expanded", "false");
-    expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+
+    // The reason moved off `title` to `useTooltip()` — a description of an already-named
+    // control (the button's own visible words are "Search cards"), so it is `describes: true`
+    // by default and the panel carries `role="tooltip"`, found by role and by its content.
+    fireEvent.pointerEnter(rail);
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(tooltip).toHaveTextContent(/not enough room/i);
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toBe(tooltip);
+    fireEvent.pointerLeave(rail);
 
     // `aria-disabled` and a press that does nothing, never the `disabled` attribute: a
     // disabled button leaves the tab order, and the reason for the refusal would then be

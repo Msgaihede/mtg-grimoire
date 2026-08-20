@@ -10,6 +10,7 @@ import {
 import { Plus, Search } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
@@ -252,7 +253,7 @@ export interface DeckSearchPanelProps {
  * It is a docked column rather than one of the editor's dialogs because it is **worked out of**:
  * its tiles are drag sources into the deck's own category columns beside it, and a scrim would
  * end that drag path and cover the card pane a reader flips printings in. `src/CLAUDE.md` carries
- * that rule; everything the reader merely *consults* is a `DeckDialog`.
+ * that rule; everything the reader merely *consults* is a `Dialog`.
  *
  * The tiles stay selectable, so the pane keeps working from inside the editor: clicking the
  * art opens the card exactly as it does on the search view, and the Add button beside it does
@@ -304,6 +305,7 @@ export function DeckSearchPanel({
    * classes, the `aria-expanded` and the row's shape and nothing else. **A press is the only
    * thing that can unmount a search; a railing hides one** — see {@link DeckSearchPanelProps.roomy}.
    */
+  const tip = useTooltip();
   const [open, setOpen] = useState(false);
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -409,7 +411,7 @@ export function DeckSearchPanel({
       type="button"
       aria-expanded={shown}
       aria-disabled={!roomy || undefined}
-      title={roomy ? undefined : NO_ROOM}
+      {...tip(roomy ? null : NO_ROOM)}
       onClick={() => roomy && setOpen((v) => !v)}
       className={cn(
         "flex shrink-0 items-center gap-1.5 rounded-md text-xs text-dim",
@@ -654,7 +656,7 @@ function ResizeHandle({
  *
  * A hook cannot be called conditionally, so `useCardSearch` sitting in the root meant its query
  * ran for every deck the reader opened whether or not they had asked for a wall. Closed is
- * nothing mounted here for the same reason it is in `DeckDialog`: the search, its filter state,
+ * nothing mounted here for the same reason it is in `Dialog`: the search, its filter state,
  * its facets and its scroll position all begin at the press and cost nothing before it. A
  * *reader's* collapse throws that state away rather than hiding it, and that is the intended
  * reading — this is a column you open to do a job and shut when the job is done, and its own
@@ -712,6 +714,7 @@ function OpenPanel({
   // the reader picked is still theirs when the room returns. A resize is not a decision, and
   // this used to answer one as though it were: the panel remounted on the way back and put the
   // deck's format over a filter the reader had cleared.
+  const tip = useTooltip();
   const search = useCardSearch({ defaultFormat });
   const { query, rows, searchKey } = search;
 
@@ -896,7 +899,7 @@ function OpenPanel({
                 // "Add" are two controls a screen reader cannot tell apart, and the category is
                 // the one thing about this press that is not visible on the tile.
                 aria-label={`Add ${card.name} to ${landsIn}`}
-                title={`Add to ${landsIn}`}
+                {...tip(`Add to ${landsIn}`, { describes: false })}
                 // Never disabled while a write is in flight, and that is the behaviour rather
                 // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
                 // three times is three copies. Disabling would drop presses two and three, and

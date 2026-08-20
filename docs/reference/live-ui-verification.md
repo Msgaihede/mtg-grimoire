@@ -61,7 +61,10 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   contract landed (Plan 4, Task 11). `setDeviceMetricsOverride` is the opposite and **survives
   detach**, but `clearDeviceMetricsOverride` restores nothing: `size reset` cannot get the
   window back, so read `innerWidth`/`innerHeight` before the first override and end the run
-  with an explicit `size 1280 800`.
+  with an explicit `size <those two numbers>`. **Read them; do not assume them.** Since
+  2026-08-20 the app opens at the largest of 1920×1080 and 1280×720 the monitor's work area
+  holds (`src-tauri/src/window.rs`), so the natural size differs between desks — the
+  `size 1280 800` this contract used to name is now nobody's window.
   **`innerWidth` is the right width to _restore_ and the wrong width to _position_ from.** It
   includes the classic vertical scrollbar and `document.documentElement.clientWidth` does not —
   **1280 against 1265**, measured in the 2026-08-14 zoom pass. A `fixed` element is laid out
@@ -144,6 +147,14 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
 - **`key` knows `ArrowLeft`/`ArrowRight`/`Home`/`End`** as well as Escape, Enter, Tab and the
   vertical arrows. The four were added for the app's one `separator`, whose whole keyboard contract
   is them; `rawKeyDown` is the right event for all of these, which is `press`'s distinction below.
+  **It also knows `F10` and `ContextMenu`, and `--shift` applies to `key` as well**, which is how
+  a card menu is opened from the keyboard: `useContextMenu` answers `ContextMenu` or `Shift+F10`,
+  and until 2026-08-20 neither could be sent from here at all — so the keyboard half of every
+  context menu in the app had never been driven. It has to be a real key rather than a
+  `dispatchEvent`, because the handler reads `e.shiftKey`, which comes from Chromium's own
+  modifier state and not from a property you can set on a synthetic event. Note the shape of the
+  gesture: `key F10 --shift` opens the menu on **whatever is focused**, so focus it the way a
+  reader would first — see the programmatic-focus trap.
 - **`hover <css> [--from x,y] [--rest ms] [--probe expr]`** is a real dwell — `mouseMoved`
   events, so React synthesises `onMouseEnter`/`onMouseLeave` from Chromium's own hover
   pipeline and a `dispatchEvent` out of `eval` proves nothing. Two facts it cost a session to

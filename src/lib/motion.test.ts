@@ -1,5 +1,7 @@
+import { createElement } from "react";
+import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { MotionGlobalConfig } from "motion/react";
+import { motion, MotionGlobalConfig } from "motion/react";
 /**
  * The stylesheet as it ships. Read through Vite with `?raw`, exactly as `tokens.test.ts` and
  * `iconFont.test.ts` read the files they assert against — this project has no `@types/node`,
@@ -164,5 +166,27 @@ describe("the test environment", () => {
    */
   it("skips animations, out of the same module instance the setup file wrote", () => {
     expect(MotionGlobalConfig.skipAnimations).toBe(true);
+  });
+
+  /**
+   * The flag alone is **not** enough, and this is the assertion that says so.
+   *
+   * `skipAnimations` still applies the final keyframe inside `frame.update(...)`, one
+   * `requestAnimationFrame` after the commit — so without the frame flush `src/test-setup.ts`
+   * installs beside it, a `motion` element sits at its `initial` (`opacity: 0` for every preset
+   * in this file) for one frame after it renders. Anything asserting `toBeVisible` on content
+   * inside a dialog or the card pane then races that frame, and loses on a loaded CI runner:
+   * `byRole` finds the element, because the accessibility tree ignores opacity, and
+   * `toBeVisible` refuses it, because it does not.
+   *
+   * A behavioural check rather than a check that the patch is installed, so that a `motion`
+   * upgrade which changes *how* the keyframe is scheduled fails here rather than on CI a week
+   * later. `dialog` is the preset the card pane and every modal spread.
+   */
+  it("paints a motion element at its animate value, not its initial, on the first frame", () => {
+    // `role` rather than a `data-testid`: this file is `.ts`, so the element is built with
+    // `createElement`, whose props are typed and reject an arbitrary `data-*` attribute.
+    const { getByRole } = render(createElement(motion.div, { ...MOTION.dialog, role: "note" }));
+    expect(getComputedStyle(getByRole("note")).opacity).toBe("1");
   });
 });

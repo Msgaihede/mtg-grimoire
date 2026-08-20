@@ -117,7 +117,7 @@ describe("TagsDialog", () => {
 
   /**
    * **One wiring test, not a second copy of the shell's suite.** The scrim, the trap, the caret
-   * moving into the panel and the `aria-modal` claim are all `DeckDialog`'s now and are tested
+   * moving into the panel and the `aria-modal` claim are all `Dialog`'s now and are tested
    * where they live. What is this file's business is that this dialog hands that shell the right
    * four things: a title, a close label that is a sentence, and the two different ways out.
    */
@@ -164,12 +164,22 @@ describe("TagsDialog", () => {
   });
 
   /**
-   * The rule that is not guessable from the controls, spelled out where the controls are.
-   * Asserted on the *sentence* rather than on a class: this is copy the dialog exists to carry.
+   * The rules that are not guessable from the controls, each said where its controls are.
+   *
+   * **This was one paragraph above the list until the redesign of 2026-08-20**, and it said three
+   * things at once: a card carries at most one, deleting a tag keeps its cards, and the
+   * suggestions come from every deck. The first two are true of the whole dialog and are the
+   * header's line now; the third was never a paragraph's job — it is what the section is
+   * *called*. Asserted on the *words* rather than on a class, because this is copy the dialog
+   * exists to carry, and asserted in both places, because a redesign that dropped one of the
+   * three would leave the other two reading fine.
    */
-  it("says where the suggestions come from", async () => {
+  it("says the two rules in the header and where the suggestions come from over the chips", async () => {
     mount();
-    expect(await screen.findByText(/come from\s+every deck you have/)).toBeInTheDocument();
+    expect(await screen.findByText(/A card carries at most one/)).toHaveTextContent(
+      "Deleting a tag keeps its cards",
+    );
+    expect(screen.getByText("Suggestions from your other decks")).toBeInTheDocument();
   });
 });
 
@@ -329,19 +339,96 @@ describe("tags", () => {
     expect(deckTagCreate).toHaveBeenCalledWith(1, "Budget swap", "moss");
   });
 
+  /**
+   * The empty dialog, and the control that fixes it.
+   *
+   * **The field is the first thing in the dialog now**, where it used to be the last: a reader
+   * with no tags met a four-line paragraph about a thing they did not have, with the control
+   * that would give them one below it.
+   *
+   * The colour is a **hex string** and no longer one of six token words — see `tagColors.ts` for
+   * what that trades away and why. The six the picker offers first are still the app's own
+   * palette, so pressing "Moss" writes what `--color-pie-g` is.
+   */
   it("makes a first tag from the field, in the colour the picker is on", async () => {
     deckTagList.mockResolvedValue([]);
     deckTagSuggestions.mockResolvedValue([]);
     mount();
-    await screen.findByText("No tags yet.");
+    await screen.findByText(/No tags yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New tag name"), "Playtest");
+    await user.click(screen.getByRole("button", { name: "Choose tag colour" }));
     await user.click(screen.getByRole("button", { name: "Moss" }));
     await user.click(screen.getByRole("button", { name: "Add tag" }));
 
-    // A token, never a hex string: a stored colour has to outlive the theme that chose it.
-    expect(deckTagCreate).toHaveBeenCalledWith(1, "Playtest", "moss");
+    expect(deckTagCreate).toHaveBeenCalledWith(1, "Playtest", "#00733e");
+  });
+
+  /**
+   * A colour outside the six, typed rather than pressed — which is the whole of what the storage
+   * change bought and the one path no palette of swatches can serve.
+   *
+   * The field takes the digits without the `#`, because the `#` is drawn beside the box; the
+   * value is normalised on the keystroke that completes a colour, so nothing has to be pressed
+   * to commit it before Add.
+   */
+  it("takes a colour the palette has never heard of, typed as hex", async () => {
+    deckTagList.mockResolvedValue([]);
+    deckTagSuggestions.mockResolvedValue([]);
+    mount();
+    await screen.findByText(/No tags yet/);
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText("New tag name"), "Playtest");
+    await user.click(screen.getByRole("button", { name: "Choose tag colour" }));
+    const hex = screen.getByLabelText("Tag colour hex");
+    await user.clear(hex);
+    await user.type(hex, "7b2d8e");
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+
+    expect(deckTagCreate).toHaveBeenCalledWith(1, "Playtest", "#7b2d8e");
+  });
+
+  /**
+   * **Recolouring is the swatch's now, and it sends the name back untouched.**
+   *
+   * It used to be reachable only through Rename, which asked a reader who wanted a different red
+   * to open the control for changing the word. `deck_tag_update` still renames *and* recolours in
+   * one command with no patch shape, so each half of the row has to send the other back — this is
+   * the half the rename test above does not cover.
+   *
+   * **Done is the write, and the picker holds a draft until then**: the wheel fires all the way
+   * down a drag through the OS colour dialog, so a row writing on every change would be a
+   * `deck_tag_update` per pixel of travel.
+   */
+  it("recolours from the row's swatch, sending the name back unchanged", async () => {
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+    const li = row("Cut candidate");
+
+    await user.click(within(li).getByRole("button", { name: "Change colour of Cut candidate" }));
+    await user.click(within(li).getByRole("button", { name: "Slate" }));
+    // The draft is on screen and nothing has been written yet.
+    expect(deckTagUpdate).not.toHaveBeenCalled();
+
+    await user.click(within(li).getByRole("button", { name: "Done" }));
+    expect(deckTagUpdate).toHaveBeenCalledWith(10, "Cut candidate", "#c8c4bf");
+  });
+
+  /** Done is also how the panel closes, so it is pressed by readers who opened it to look. A
+   *  write for a colour that did not move is a row's `updated_at` moving for nothing. */
+  it("writes nothing when the picker is closed on the colour it opened with", async () => {
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+    const li = row("Cut candidate");
+
+    await user.click(within(li).getByRole("button", { name: "Change colour of Cut candidate" }));
+    await user.click(within(li).getByRole("button", { name: "Done" }));
+
+    expect(deckTagUpdate).not.toHaveBeenCalled();
   });
 
   it("says why a refusal happened rather than losing it", async () => {

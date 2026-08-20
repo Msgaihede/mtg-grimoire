@@ -353,6 +353,75 @@ fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, Str
     .ok_or_else(|| "a wish needs a card name".to_owned())
 }
 
+/// One line of a bulk import, after TypeScript has decided everything a *wishlist* decision is.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WishlistImportItem {
+    pub oracle_id: Option<String>,
+    /// `None` is a wish for **any printing** — what a wishlist usually means, and what the
+    /// planner writes for a line that named no set. Not a looser version of a pinned wish:
+    /// `WISHLIST_GRAIN` already treats the two as different rows.
+    pub card_id: Option<String>,
+    pub quantity: i64,
+    pub preferred_finish: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// One transaction for the whole file — `collection::commit_import`'s rule, and its reasons.
+///
+/// `removed` is counted in the loop rather than derived, because a delete and an insert in one
+/// file would cancel out in a before/after row count and report neither.
+fn commit_import(
+    conn: &Connection,
+    items: &[WishlistImportItem],
+    mode: &str,
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    if mode != "add" && mode != "set" {
+        return Err(format!(
+            "`{mode}` is not an import mode. Use `add` or `set`."
+        ));
+    }
+    let before: i64 = conn
+        .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let mut removed = 0i64;
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for item in items {
+        let input = WishInput {
+            oracle_id: item.oracle_id.clone(),
+            card_id: item.card_id.clone(),
+            name: None,
+            quantity: item.quantity,
+            preferred_finish: item.preferred_finish.clone(),
+            notes: item.notes.clone(),
+        };
+        if mode == "add" {
+            add_wish(&tx, &input)?;
+            continue;
+        }
+        // `set`: find the row on the grain the add would have folded into, then write the
+        // file's number onto it. `set_quantity` deletes at 0, which is what makes a file
+        // saying `0 Sol Ring` remove that wish.
+        let change = add_wish(&tx, &input)?;
+        let after = set_wish_quantity(&tx, change.id, item.quantity)?;
+        if after.removed {
+            removed += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+
+    let after: i64 = conn
+        .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let added = (after - before) + removed;
+    Ok(crate::collection::ImportCommitOutcome {
+        added,
+        updated: items.len() as i64 - added - removed,
+        removed,
+    })
+}
+
 /// Set an absolute quantity. **Zero removes the row**, unlike the collection's — and a
 /// negative number is refused, exactly like the collection's.
 ///
@@ -560,6 +629,22 @@ pub async fn wishlist_remove(
         .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
+/// One transaction for a whole imported file — see [`commit_import`] for the `set` arm's route
+/// through [`add_wish`] and why `removed` is counted rather than derived.
+#[tauri::command]
+pub async fn wishlist_import_commit(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<WishlistImportItem>,
+    mode: String,
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| commit_import(c, &items, &mode))
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be written: {e}"))?
+}
+
 /// The wishlist. **Read-only** connection, blocking pool — as every read in this app is.
 #[tauri::command]
 pub async fn wishlist_list(
@@ -600,7 +685,58 @@ mod tests {
             )
             .unwrap();
         }
+        // A generic printing for `commit_import`'s tests, whose oracle id (`oracle-1`) is what
+        // the wishlist import lines name directly.
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                prices,raw)
+             VALUES ('card-1','oracle-1','Test Card','tst','1','en','normal',
+                '{\"usd\":\"1.00\"}','{}')",
+            [],
+        )
+        .unwrap();
         conn
+    }
+
+    /// One any-printing line of a bulk import, in the shape [`commit_import`]'s tests use it.
+    fn wish(oracle_id: &str, quantity: i64) -> WishlistImportItem {
+        WishlistImportItem {
+            oracle_id: Some(oracle_id.to_owned()),
+            card_id: None,
+            quantity,
+            preferred_finish: None,
+            notes: None,
+        }
+    }
+
+    /// A wish pinned to one printing.
+    fn pinned_wish(oracle_id: &str, card_id: &str, quantity: i64) -> WishlistImportItem {
+        WishlistImportItem {
+            card_id: Some(card_id.to_owned()),
+            ..wish(oracle_id, quantity)
+        }
+    }
+
+    /// A finish no `CHECK` will take — the refusal that has to roll a whole file back.
+    fn bad_finish_wish(oracle_id: &str, quantity: i64) -> WishlistImportItem {
+        WishlistImportItem {
+            preferred_finish: Some("glitter".into()),
+            ..wish(oracle_id, quantity)
+        }
+    }
+
+    fn quantity_of(conn: &Connection, oracle_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT quantity FROM wishlist_entries WHERE oracle_id = ?1 AND card_id IS NULL",
+            params![oracle_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn wish_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap()
     }
 
     /// The distinction spec §6 draws in one word: `card_id` NULL is "any printing", set is
@@ -1900,5 +2036,86 @@ mod tests {
             names(&format!(r#"{{{sort},"marketplace":"cardkingdom"}}"#)),
             ["cheap-usd", "dear-usd", "etched"]
         );
+    }
+
+    #[test]
+    fn an_add_import_accumulates_on_the_wishlist_grain() {
+        let conn = seeded();
+        let out = commit_import(&conn, &[wish("oracle-1", 2), wish("oracle-1", 1)], "add").unwrap();
+        assert_eq!(out.added, 1);
+        assert_eq!(out.updated, 1);
+        assert_eq!(quantity_of(&conn, "oracle-1"), 3);
+    }
+
+    #[test]
+    fn a_set_of_zero_removes_the_wish_rather_than_leaving_an_empty_one() {
+        // The wishlist's own asymmetry, not a new rule: `wishlist_set_quantity(id, 0)` already
+        // deletes, because a wish for nothing is not a wish.
+        let conn = seeded();
+        commit_import(&conn, &[wish("oracle-1", 2)], "add").unwrap();
+        let out = commit_import(&conn, &[wish("oracle-1", 0)], "set").unwrap();
+        assert_eq!(out.removed, 1);
+        assert_eq!(wish_count(&conn), 0);
+    }
+
+    #[test]
+    fn a_wish_for_any_printing_is_a_different_row_from_a_wish_for_one() {
+        let conn = seeded();
+        commit_import(
+            &conn,
+            &[wish("oracle-1", 1), pinned_wish("oracle-1", "card-1", 1)],
+            "add",
+        )
+        .unwrap();
+        assert_eq!(wish_count(&conn), 2);
+    }
+
+    #[test]
+    fn a_refused_item_rolls_the_whole_file_back() {
+        let conn = seeded();
+        let items = vec![wish("oracle-1", 1), bad_finish_wish("oracle-2", 1)];
+        assert!(commit_import(&conn, &items, "add").is_err());
+        assert_eq!(wish_count(&conn), 0);
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_rather_than_defaulted() {
+        let conn = seeded();
+        assert!(commit_import(&conn, &[wish("oracle-1", 1)], "replace").is_err());
+    }
+
+    /// The trap `removed` being counted explicitly (rather than derived from a before/after row
+    /// count) exists for: one line creates a row and another zeroes an existing one, in the
+    /// *same* `set` call. A row-count delta alone would cancel these two events out and report
+    /// neither — this is the one path where that would still hide.
+    ///
+    /// Worked by hand: before the import, one wish exists (`oracle-1`, any printing, seeded via
+    /// `add`). The first item names that exact grain at quantity `0` — `add_wish`'s own fold
+    /// (which never subtracts) briefly raises it, and the immediate `set_wish_quantity` to `0`
+    /// deletes it: `removed` becomes 1, the row count drops by one. The second item names a
+    /// different grain (pinned to `card-1`) that does not exist yet, so it is created and then
+    /// set to 5 — a genuinely new row, the row count rises by one. Net row count is therefore
+    /// unchanged (1 → 1), which is exactly the case that would read as "nothing happened"
+    /// without the explicit counter: `added = (after - before) + removed = (1 - 1) + 1 = 1`,
+    /// `removed = 1`, `updated = items.len() - added - removed = 2 - 1 - 1 = 0`.
+    #[test]
+    fn a_mixed_set_import_creates_one_row_and_removes_another_without_losing_either_count() {
+        let conn = seeded();
+        commit_import(&conn, &[wish("oracle-1", 2)], "add").unwrap();
+        let out = commit_import(
+            &conn,
+            &[
+                // Same grain as the seeded wish: zeroed by this line.
+                wish("oracle-1", 0),
+                // A different grain (pinned to a printing): a genuinely new row.
+                pinned_wish("oracle-1", "card-1", 5),
+            ],
+            "set",
+        )
+        .unwrap();
+        assert_eq!(out.added, 1, "only the pinned row is genuinely new");
+        assert_eq!(out.removed, 1, "the any-printing wish was zeroed away");
+        assert_eq!(out.updated, 0);
+        assert_eq!(wish_count(&conn), 1);
     }
 }

@@ -338,6 +338,178 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
     })
 }
 
+/// One line of an import, after TypeScript has decided everything a *collection* decision is.
+///
+/// The condition is `Option` rather than defaulted here: an absent one means the file said
+/// nothing, and the **dialog** is where the reader chose what that becomes. Defaulting it in two
+/// places is how the preview and the write come to disagree.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionImportItem {
+    pub card_id: String,
+    pub quantity: i64,
+    pub finish: String,
+    pub condition: Option<String>,
+    pub condition_original: Option<String>,
+    pub purchase_price: Option<f64>,
+    pub purchase_currency: Option<String>,
+    pub acquired_at: Option<String>,
+    pub acquisition_source: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// What a bulk import did. `removed` is the wishlist's alone — a `set` of 0 deletes a wish and
+/// leaves a zero-quantity collection row — and it is 0 here rather than absent, so one shape
+/// covers both commands.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCommitOutcome {
+    pub added: i64,
+    pub updated: i64,
+    pub removed: i64,
+}
+
+/// [`add_entry`] with one clause changed: the grain's quantity is **written**, not accumulated.
+/// A `set` import means "this file's number is the truth", not "add these copies to what is
+/// already there" — the collection's own asymmetry [`set_quantity`] already carries, reused here
+/// for a row the caller named by grain instead of by id.
+///
+/// Every other column keeps `add_entry`'s first-writer-wins rule: a second write of a card the
+/// reader already tracks is not licence to overwrite a purchase story they already recorded, and
+/// a `set` import is still a second write. `tradelist_quantity` follows [`set_quantity`]'s own
+/// clamp — `min(existing, new quantity)` — rather than `add_entry`'s additive cap, because a
+/// written total is not a delta and clamping against the *old* quantity as well would let the
+/// tradelist outlive the very quantity that bounds it.
+fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
+    let finish = valid_finish(&input.finish)?;
+    let condition = valid_condition(input.condition.as_deref())?;
+    valid_quantity(input.quantity, "collection quantity")?;
+    valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
+    let grading = canonical_grading(input.grading.as_deref())?;
+    let (set_code, collector_number, lang) = printing_of(conn, &input.card_id)?;
+
+    // The conflict target is `COLLECTION_GRAIN` verbatim, exactly as [`add_entry`]'s is.
+    let sql = format!(
+        "INSERT INTO collection_entries
+            (card_id, set_code, collector_number, lang, finish, condition, condition_original,
+             quantity, tradelist_quantity, purchase_price, purchase_currency, acquired_at,
+             acquisition_source, serial_number, altered, signed, proxy, misprint, grading,
+             tags, notes, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,min(?9,?8),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
+                 coalesce(?20,'[]'),?21, unixepoch(), unixepoch())
+         ON CONFLICT({COLLECTION_GRAIN}) DO UPDATE SET
+            quantity = excluded.quantity,
+            tradelist_quantity =
+                min(collection_entries.tradelist_quantity, excluded.quantity),
+            purchase_price = coalesce(collection_entries.purchase_price, excluded.purchase_price),
+            purchase_currency =
+                coalesce(collection_entries.purchase_currency, excluded.purchase_currency),
+            acquired_at = coalesce(collection_entries.acquired_at, excluded.acquired_at),
+            acquisition_source =
+                coalesce(collection_entries.acquisition_source, excluded.acquisition_source),
+            notes = coalesce(collection_entries.notes, excluded.notes),
+            updated_at = unixepoch()
+         RETURNING id, quantity"
+    );
+    let (id, quantity): (i64, i64) = conn
+        .query_row(
+            &sql,
+            params![
+                input.card_id,
+                set_code,
+                collector_number,
+                lang,
+                finish,
+                condition,
+                input.condition_original,
+                input.quantity,
+                input.tradelist_quantity,
+                input.purchase_price,
+                input.purchase_currency,
+                input.acquired_at,
+                input.acquisition_source,
+                input.serial_number,
+                input.altered,
+                input.signed,
+                input.proxy,
+                input.misprint,
+                grading,
+                input.tags,
+                input.notes,
+            ],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(friendly)?;
+    Ok(EntryChange {
+        id,
+        quantity,
+        removed: false,
+    })
+}
+
+/// **One transaction for the whole file**, which is the whole reason this exists rather than the
+/// page calling `collection_add` per line: a 500-row CSV would otherwise be 500 transactions, and
+/// a failure halfway through would leave a collection nobody can reason about.
+///
+/// Added and updated are counted by the **row count before and after** rather than by a
+/// grain lookup per item. `COLLECTION_GRAIN` is ten columns and a hand-written `WHERE` matching
+/// it would be a second copy of the index's definition — the thing this module already warns
+/// against at the `ON CONFLICT` target.
+fn commit_import(
+    conn: &Connection,
+    items: &[CollectionImportItem],
+    mode: &str,
+) -> Result<ImportCommitOutcome, String> {
+    if mode != "add" && mode != "set" {
+        return Err(format!(
+            "`{mode}` is not an import mode. Use `add` or `set`."
+        ));
+    }
+    let before: i64 = conn
+        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for item in items {
+        let input = EntryInput {
+            card_id: item.card_id.clone(),
+            finish: item.finish.clone(),
+            condition: item.condition.clone(),
+            condition_original: item.condition_original.clone(),
+            quantity: item.quantity,
+            tradelist_quantity: 0,
+            purchase_price: item.purchase_price,
+            purchase_currency: item.purchase_currency.clone(),
+            acquired_at: item.acquired_at.clone(),
+            acquisition_source: item.acquisition_source.clone(),
+            serial_number: None,
+            altered: false,
+            signed: false,
+            proxy: false,
+            misprint: false,
+            grading: None,
+            tags: None,
+            notes: item.notes.clone(),
+        };
+        if mode == "add" {
+            add_entry(&tx, &input)?;
+        } else {
+            set_entry(&tx, &input)?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+
+    let after: i64 = conn
+        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let added = after - before;
+    Ok(ImportCommitOutcome {
+        added,
+        updated: items.len() as i64 - added,
+        removed: 0,
+    })
+}
+
 /// Set an absolute quantity. **Zero keeps the row.**
 ///
 /// The stepper in the collection table is what sends this, and taking it to zero is the
@@ -498,7 +670,13 @@ fn friendly(e: rusqlite::Error) -> String {
 /// Only on success. A refusal — [`crate::db::BUSY`], [`GONE`], a rejected quantity — changed
 /// nothing, and re-reading after one would be a copy of the whole index to arrive at the same
 /// answer.
-fn with_write_owned<T>(
+///
+/// `pub(crate)` for one caller outside this file: [`crate::reset::collection_clear`], which is
+/// the largest change to `owned` the app can make and would otherwise have to copy these six
+/// lines. It lives over there for the reason `reset`'s own module note gives — a command that
+/// empties the collection does not belong beside the one documented as the only way a
+/// collection row is ever deleted.
+pub(crate) fn with_write_owned<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -557,6 +735,22 @@ pub async fn collection_remove(
     tauri::async_runtime::spawn_blocking(move || with_write_owned(&state, |c| remove_entry(c, id)))
         .await
         .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
+/// One transaction for a whole imported file — see [`commit_import`] for why added/updated are
+/// counted rather than looked up on the grain.
+#[tauri::command]
+pub async fn collection_import_commit(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<CollectionImportItem>,
+    mode: String,
+) -> Result<ImportCommitOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write_owned(&state, |c| commit_import(c, &items, &mode))
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
 /// What one owned card is worth at the reader's marketplace, **by finish** — the entry's own
@@ -1043,6 +1237,16 @@ mod tests {
             [],
         )
         .unwrap();
+        // A generic printing for `commit_import`'s tests, which name their cards `card-1`
+        // rather than a real Lightning Bolt — the import commands operate on ids alone.
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,finishes,prices,raw)
+             VALUES ('card-1','o2','Test Card','tst','1','en','normal','common',
+                '[\"nonfoil\",\"foil\"]','{\"usd\":\"1.00\"}','{}')",
+            [],
+        )
+        .unwrap();
         conn
     }
 
@@ -1053,6 +1257,37 @@ mod tests {
             quantity,
             ..Default::default()
         }
+    }
+
+    /// One line of a bulk import, in the shape [`commit_import`]'s tests use it.
+    fn item(card_id: &str, quantity: i64, finish: &str) -> CollectionImportItem {
+        CollectionImportItem {
+            card_id: card_id.to_owned(),
+            quantity,
+            finish: finish.to_owned(),
+            condition: None,
+            condition_original: None,
+            purchase_price: None,
+            purchase_currency: None,
+            acquired_at: None,
+            acquisition_source: None,
+            notes: None,
+        }
+    }
+
+    /// The one row a grain names, read back for the assertion.
+    fn quantity_of(conn: &Connection, card_id: &str, finish: &str) -> i64 {
+        conn.query_row(
+            "SELECT quantity FROM collection_entries WHERE card_id = ?1 AND finish = ?2",
+            params![card_id, finish],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn entry_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap()
     }
 
     /// The default query, priced somewhere other than the default.
@@ -2684,5 +2919,52 @@ mod tests {
                 "value": 1213.0, "unpriced": 4, "needsReview": 0
             })
         );
+    }
+
+    #[test]
+    fn an_add_import_accumulates_quantities_on_the_grain() {
+        let conn = seeded();
+        let items = vec![item("card-1", 2, "nonfoil"), item("card-1", 3, "nonfoil")];
+        let out = commit_import(&conn, &items, "add").unwrap();
+        // Two items, one row: the file named the same grain twice and the copies add up.
+        assert_eq!(out.added, 1);
+        assert_eq!(out.updated, 1);
+        assert_eq!(quantity_of(&conn, "card-1", "nonfoil"), 5);
+    }
+
+    #[test]
+    fn a_set_import_writes_the_files_quantity_rather_than_adding_to_it() {
+        let conn = seeded();
+        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add").unwrap();
+        commit_import(&conn, &[item("card-1", 1, "nonfoil")], "set").unwrap();
+        assert_eq!(quantity_of(&conn, "card-1", "nonfoil"), 1);
+    }
+
+    #[test]
+    fn a_foil_and_a_regular_copy_are_two_rows_in_both_modes() {
+        let conn = seeded();
+        commit_import(
+            &conn,
+            &[item("card-1", 1, "nonfoil"), item("card-1", 1, "foil")],
+            "add",
+        )
+        .unwrap();
+        assert_eq!(quantity_of(&conn, "card-1", "nonfoil"), 1);
+        assert_eq!(quantity_of(&conn, "card-1", "foil"), 1);
+    }
+
+    #[test]
+    fn a_refused_item_rolls_the_whole_file_back() {
+        let conn = seeded();
+        // A finish no CHECK will take. A half-imported collection is worse than a refused one.
+        let items = vec![item("card-1", 1, "nonfoil"), item("card-1", 1, "glitter")];
+        assert!(commit_import(&conn, &items, "add").is_err());
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_rather_than_defaulted() {
+        let conn = seeded();
+        assert!(commit_import(&conn, &[item("card-1", 1, "nonfoil")], "replace").is_err());
     }
 }

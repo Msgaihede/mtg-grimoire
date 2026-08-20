@@ -10,7 +10,7 @@ import { DeckHistoryDialog } from "./DeckHistoryDialog";
  * app, because a log meant to survive being useful cannot have its wording baked into its rows,
  * and a second day-grouping is a second chance to file a 23:30 edit under tomorrow.
  *
- * **The chrome is `DeckDialog`'s** — the scrim, the centred panel, `aria-modal`, the Tab trap and
+ * **The chrome is `Dialog`'s** — the scrim, the centred panel, `aria-modal`, the Tab trap and
  * the titled header with its ✕. This surface was a right-hand drawer until 2026-08-14, and it
  * gave the deck nothing in exchange for the width it took: a history is *consulted*, never
  * dragged out of. What is left in the component is the list, which is what these stories are of.

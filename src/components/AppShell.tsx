@@ -7,6 +7,7 @@ import {
   LibraryBig,
   Search,
   Settings,
+  Tags,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import {
 } from "@/components/ActivityProvider";
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
+import { TitleBar } from "@/components/TitleBar";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import { readDragData } from "@/features/decks/dnd";
@@ -41,6 +43,10 @@ import { cn } from "@/lib/utils";
 
 const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
   { id: "search", label: "Search", Icon: Search },
+  // Directly after Search, because it is the *other* way into the same corpus: Search asks
+  // "which card is this", Tags asks "what is this card of". Everything below the pair is a
+  // list the reader owns rather than a way into the database.
+  { id: "tags", label: "Tags", Icon: Tags },
   { id: "collection", label: "Collection", Icon: LibraryBig },
   { id: "wishlist", label: "Wishlist", Icon: Heart },
   { id: "decks", label: "Decks", Icon: Layers },
@@ -131,8 +137,21 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg text-text">
-      {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
+    // A column now, where it was a row: the title bar spans the window and the sidebar starts
+    // below it. `min-h-0` on the row underneath is what lets it shrink past its content —
+    // without it the row keeps `min-height: auto`, the sidebar and `main` size to their content
+    // instead of to the window, and the whole shell scrolls the document.
+    <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
+      {/* The window's caption, drawn by the app because `tauri.conf.json` sets
+          `decorations: false`. Outside `min-h-0` and above everything: it is chrome belonging
+          to the *window* rather than to the app, which is why it sits above the sidebar rather
+          than beside it — and why it is the one row here that is never covered by
+          `SyncProgress`'s first-run overlay. A reader on a blank first launch can still close
+          the app. */}
+      <TitleBar />
+
+      <div className="flex min-h-0 flex-1">
+        {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
           bigger in every direction except the obvious one** (2026-08-14). The entries grew —
           44px rows, 16px labels, 20px icons — and the column they sit in did not, because
           `main` is what a wider sidebar takes the width out of and the deck editor is measured
@@ -142,22 +161,22 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           size, which is precisely the failure `DECK_FLOOR`'s two drops (224 → 208 → 192) exist
           to prevent. Widening this column is therefore a change to `DeckEditor`'s arithmetic
           first and a change to the sidebar second. */}
-      <nav
-        aria-label="Views"
-        className="flex w-52 shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3"
-      >
-        {NAV.map(({ id, label, Icon }) => (
-          <NavItem
-            key={id}
-            label={label}
-            Icon={Icon}
-            active={id === activeView}
-            onSelect={() => setActiveView(id)}
-            dragging={drops.dragging}
-            drop={id === "decks" || id === "wishlist" ? drops[id] : null}
-          />
-        ))}
-        {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
+        <nav
+          aria-label="Views"
+          className="flex w-52 shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3"
+        >
+          {NAV.map(({ id, label, Icon }) => (
+            <NavItem
+              key={id}
+              label={label}
+              Icon={Icon}
+              active={id === activeView}
+              onSelect={() => setActiveView(id)}
+              dragging={drops.dragging}
+              drop={id === "decks" || id === "wishlist" ? drops[id] : null}
+            />
+          ))}
+          {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
             entry's report line above.**
 
             That line's subject is narrower than it looks: `SidebarDrop.report` is documented as
@@ -185,45 +204,45 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
             makes every such query in this app ambiguous whether or not it has any text in it.
             The geometry is the report line's, which was measured for exactly this push. */}
-        {cardToDeckRefusal !== null && (
-          <p role="alert" className="px-3 pt-1 text-xs leading-tight text-destructive">
-            {cardToDeckRefusal}
-          </p>
-        )}
-      </nav>
+          {cardToDeckRefusal !== null && (
+            <p role="alert" className="px-3 pt-1 text-xs leading-tight text-destructive">
+              {cardToDeckRefusal}
+            </p>
+          )}
+        </nav>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* The data directory is the app's one piece of hidden state — it silently falls
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* The data directory is the app's one piece of hidden state — it silently falls
             back to AppData when the folder beside the exe is not writable, and spec §3
             asks for an indicator of which one is live. The ribbon hangs it as a tooltip
             on the line that already summarises the database. */}
-        <Ribbon
-          title={title}
-          statusLine={statusLine(status)}
-          dataDir={status?.dataDir}
-          imageStoreFailures={status?.imageStoreFailures}
-          busy={busy}
-          upToDate={upToDate}
-          hasError={error !== null}
-          onRefresh={refresh}
-          activity={activity}
-          activityVisible={activityVisible}
-          updateVersion={update.status?.available?.version ?? null}
-          updateInstallable={update.action !== "unavailable"}
-          onOpenUpdate={() => setActiveView("settings")}
-        />
+          <Ribbon
+            title={title}
+            statusLine={statusLine(status)}
+            dataDir={status?.dataDir}
+            imageStoreFailures={status?.imageStoreFailures}
+            busy={busy}
+            upToDate={upToDate}
+            hasError={error !== null}
+            onRefresh={refresh}
+            activity={activity}
+            activityVisible={activityVisible}
+            updateVersion={update.status?.available?.version ?? null}
+            updateInstallable={update.action !== "unavailable"}
+            onOpenUpdate={() => setActiveView("settings")}
+          />
 
-        {/* Given the whole screen when the database is empty, so it needs the error and
+          {/* Given the whole screen when the database is empty, so it needs the error and
             the retry action too: it covers the ribbon, Refresh button included. */}
-        <SyncProgress
-          progress={progress}
-          cardCount={status?.cardCount ?? null}
-          error={error}
-          busy={busy}
-          onRetry={refresh}
-        />
+          <SyncProgress
+            progress={progress}
+            cardCount={status?.cardCount ?? null}
+            error={error}
+            busy={busy}
+            onRetry={refresh}
+          />
 
-        {/* The banner grows into place rather than shoving the whole view down by its height
+          {/* The banner grows into place rather than shoving the whole view down by its height
             the instant a sync fails.
 
             **Two elements, and the split is load-bearing.** `statusLine` animates `height` to
@@ -233,21 +252,21 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             and the colours live on the child; the animated wrapper is height and
             `overflow-hidden` and nothing else. It is also where `role="alert"` stays, on the
             element that holds the sentence, so nothing about the announcement moved. */}
-        <AnimatePresence initial={false}>
-          {error && (
-            <motion.div {...statusLineMotion} className="shrink-0 overflow-hidden">
-              <div
-                role="alert"
-                className="flex items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-base text-destructive"
-              >
-                <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-                <span className="min-w-0">{error}</span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {error && (
+              <motion.div {...statusLineMotion} className="shrink-0 overflow-hidden">
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-5 py-2 text-base text-destructive"
+                >
+                  <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0">{error}</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {/* **`relative`, because this is a scroll container and a scroll container has to be the
+          {/* **`relative`, because this is a scroll container and a scroll container has to be the
             containing block for its own absolutely positioned content.** Tailwind's `.sr-only` is
             `position: absolute`, and `overflow` clips a descendant only when the scroller sits
             between it and its containing block — so a label with no positioned ancestor resolves
@@ -261,7 +280,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             `relative` *here* moved that phantom scroll from the document into `main` rather than
             removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
             applied to the outermost scroller, so a view that grows cannot reach the document. */}
-        <main className="relative min-h-0 flex-1 overflow-auto p-5">{children}</main>
+          <main className="relative min-h-0 flex-1 overflow-auto p-5">{children}</main>
+        </div>
       </div>
     </div>
   );

@@ -207,6 +207,36 @@ it("re-reads the status on a failed refresh too", async () => {
   expect(oracleTagsStatus).toHaveBeenCalledTimes(2);
 });
 
+/**
+ * The Tags page's rail and type-ahead go stale too, and **this hook is the only thing that can
+ * say so** for the oracle taxonomy: `AppShell` mounts it for the life of the window and the page
+ * mounts no oracle equivalent. Without these two invalidations an oracle ingest landing while the
+ * page is open takes the "Oracle tags have not been downloaded yet" notice down and leaves the
+ * rail empty behind it for the client's whole 30 s `staleTime` — the half of the fix a reader can
+ * actually see, left undone. `TagsPage`'s art hook does the same one taxonomy over.
+ *
+ * Asserted through `getQueryState().isInvalidated` rather than by counting refetches: both keys
+ * are prefixes over queries this hook never mounts, so there is nothing here to refetch and a
+ * call count would be zero whether the invalidation ran or not.
+ */
+it("puts the tag rail and the type-ahead out of date when a refresh lands", async () => {
+  // Two observerless entries standing in for a mounted Tags page, one per taxonomy — the oracle
+  // branch is the one at risk, and the art one proves the prefix is not namespace-specific.
+  client.setQueryData(["tag-children", "oracle", null], []);
+  client.setQueryData(["tag-search", "forest", "both"], []);
+  const { result } = renderHook(() => useOracleTagProgress(), { wrapper });
+  await listening();
+  await waitFor(() => expect(result.current.status).not.toBeNull());
+  expect(client.getQueryState(["tag-children", "oracle", null])?.isInvalidated).toBe(false);
+
+  emit({ phase: "done", done: 0, total: 0 });
+
+  await waitFor(() => {
+    expect(client.getQueryState(["tag-children", "oracle", null])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["tag-search", "forest", "both"])?.isInvalidated).toBe(true);
+  });
+});
+
 /** One registration per call, which is why `AppShell` is the only caller and the ribbon reads
  *  the result rather than starting a second subscription. */
 it("registers exactly one listener per call", async () => {

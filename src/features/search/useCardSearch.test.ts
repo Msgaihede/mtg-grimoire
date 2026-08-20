@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FacetResponse, SearchRequest } from "@/lib/ipc";
+import type { FacetResponse, SearchRequest, SearchSortKey } from "@/lib/ipc";
 
 const searchCards = vi.hoisted(() => vi.fn());
 const facetCards = vi.hoisted(() => vi.fn());
@@ -18,6 +18,7 @@ import {
   cycleTriState,
   formatParams,
   FORMATS,
+  SEARCH_SORT_OPTIONS,
   toggleColor,
   toggleIn,
   useCardSearch,
@@ -611,6 +612,175 @@ describe("the retired one-card mode", () => {
   });
 });
 
+/**
+ * The filter bar's sort picker — the sort state reached from somewhere other than a header.
+ *
+ * Until it landed the table's headers were the only way into `sort`, so the grid, which has
+ * none, could not be ordered at all. Two of the seven keys it offers have no header either,
+ * and that is what the payload test at the bottom is for: `SEARCH_SORTS` in
+ * `src-tauri/src/search.rs` drops a key it does not recognise **silently**, so a spelling that
+ * drifts from Rust's is a row of the picker that quietly reorders nothing, with every other
+ * assertion in this file still green.
+ */
+describe("the filter bar's sort picker", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  /**
+   * A `Record` over the whole union, so a key added to `SearchSortKey` fails to compile here
+   * until somebody decides about it — which is what makes the assertion below a census rather
+   * than a second copy of the list it is checking.
+   */
+  const EVERY_KEY: Record<SearchSortKey, true> = {
+    name: true,
+    set: true,
+    type: true,
+    rarity: true,
+    price: true,
+    manaValue: true,
+    released: true,
+  };
+
+  /**
+   * The claim `sortSelection` rests on, and the reason this picker needs no `Custom…` row
+   * where the collection's has one: every key a header can put in the spec is also a row of
+   * this select, so a `""` selection can only ever mean the empty spec. A key offered by a
+   * header and missing here would leave the select showing a value no `<option>` carries —
+   * which react-dom draws as the *first* row, so the control would read `Mana value` over a
+   * wall sorted by something else rather than looking broken.
+   */
+  it("offers every key the search sorts by", () => {
+    expect(SEARCH_SORT_OPTIONS.map((o): string => o.value).sort()).toEqual(
+      Object.keys(EVERY_KEY).sort(),
+    );
+  });
+
+  /**
+   * The select says "sort by this", not "and also this" — so it replaces, headers and all. A
+   * Shift-built second key left standing under it would order the wall by something the
+   * control is not showing.
+   */
+  it("replaces a multi-term sort with one term at that key's first direction", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleSort("name", false));
+    act(() => result.current.toggleSort("price", true));
+    expect(result.current.sort).toEqual([
+      { key: "name", dir: "asc" },
+      { key: "price", dir: "desc" },
+    ]);
+
+    act(() => result.current.setSortKey("released"));
+
+    // Descending because "newest first" is what pressing a release date means — the key's own
+    // first direction, not whatever direction the term it replaced happened to carry.
+    expect(result.current.sort).toEqual([{ key: "released", dir: "desc" }]);
+    expect(result.current.sortSelection).toBe("released");
+  });
+
+  /**
+   * `Default order` is a real row of that select and the only way back to it: an empty spec is
+   * relevance when there is a query, and nothing else on the page can ask for that again once
+   * a key has been picked.
+   */
+  it("empties the spec on the default row", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setSortKey("manaValue"));
+    expect(result.current.sort).toEqual([{ key: "manaValue", dir: "asc" }]);
+
+    act(() => result.current.setSortKey(""));
+
+    expect(result.current.sort).toEqual([]);
+    expect(result.current.sortSelection).toBe("");
+  });
+
+  /**
+   * The direction button edits the key the select is showing and nothing else. It also has to
+   * edit it **in place**: a first term rewritten by removal and re-append would land behind
+   * `price`, which would hand the order to the money column without moving the control.
+   */
+  it("flips the first term and leaves a second one where it is", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleSort("name", false));
+    act(() => result.current.toggleSort("price", true));
+
+    act(() => result.current.flipSortDir());
+
+    expect(result.current.sort).toEqual([
+      { key: "name", dir: "desc" },
+      { key: "price", dir: "desc" },
+    ]);
+    expect(result.current.sortSelection).toBe("name");
+  });
+
+  /**
+   * There is no other end to the view's own order — relevance runs one way — so the button has
+   * nothing to flip. Seeding a term to have something would be it answering a question nobody
+   * asked, and would take a ranked search off relevance by being pressed.
+   */
+  it("is a no-op on an empty spec", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.sort).toEqual([]);
+
+    act(() => result.current.flipSortDir());
+
+    expect(result.current.sort).toEqual([]);
+    expect(result.current.sortSelection).toBe("");
+  });
+
+  /**
+   * The *first* term rather than a single one, so a Shift-built sort still reads as what it is
+   * primarily ordered by. The empty spec is where this parts company with the collection's
+   * twin, which falls back to `name`: name order is exactly what an empty collection spec
+   * means, and it is not what an empty search spec means under a query.
+   */
+  it("shows the first term's key, and the default row for an empty spec", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.sortSelection).toBe("");
+
+    act(() => result.current.toggleSort("rarity", false));
+    act(() => result.current.toggleSort("set", true));
+
+    expect(result.current.sortSelection).toBe("rarity");
+  });
+
+  /**
+   * **The only test here that can catch a misspelt key.** Everything above would pass just as
+   * well against `manavalue`, because this side never validates the string — Rust does, by
+   * dropping it. So the assertion is on the payload the backend is actually handed.
+   */
+  it("sends the two keys with no column straight through to the backend", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setSortKey("manaValue"));
+    await waitFor(() =>
+      expect(lastSearchRequest().sort).toEqual([{ key: "manaValue", dir: "asc" }]),
+    );
+
+    act(() => result.current.setSortKey("released"));
+    await waitFor(() =>
+      expect(lastSearchRequest().sort).toEqual([{ key: "released", dir: "desc" }]),
+    );
+
+    // And back to the default row the sort is *absent* rather than `[]`, which is the payload
+    // an untouched table has always sent.
+    act(() => result.current.setSortKey(""));
+    await waitFor(() => expect(lastSearchRequest().sort).toBeUndefined());
+  });
+});
+
 describe("the facet request useCardSearch builds", () => {
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -805,5 +975,126 @@ describe("the facet request useCardSearch builds", () => {
       await new Promise((r) => setTimeout(r, COLD_POLL_MS * 3));
     });
     expect(facetCards.mock.calls.length).toBe(settled);
+  });
+});
+
+/**
+ * The two options the Tags page brought, tested here rather than only through that page: both
+ * are on the hook every card list in this app shares, and a change to either is felt by three
+ * callers that pass neither.
+ */
+describe("the tag terms a caller can AND into every request", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  /** A caller that has never heard of tags sends exactly the payload it always did. */
+  it("sends nothing about tags when nobody passes any", async () => {
+    renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(lastSearchRequest().artTags).toBeUndefined();
+    expect(lastSearchRequest().oracleTags).toBeUndefined();
+    expect(lastSearchRequest().artWeightFloor).toBeUndefined();
+  });
+
+  it("rides the chips on the request and on the facet count beside it", async () => {
+    const tagTerms = {
+      artTags: { include: ["landscape"], exclude: [] },
+      artWeightFloor: "strong" as const,
+    };
+    renderHook(() => useCardSearch({ tagTerms }), { wrapper });
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(lastSearchRequest()).toMatchObject(tagTerms);
+    // The counts that grey a chip and the wall that chip filters have to describe one corpus,
+    // or a colour with none of this motif in it would still be offered.
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+    expect(lastFacetRequest()).toMatchObject(tagTerms);
+  });
+
+  /**
+   * **The key is derived from the payload rather than passed beside it**, which is what makes
+   * "same payload, same key" hold by construction. Without this segment a second motif would be
+   * answered out of the first's cached pages — instantly, from local SQLite, with nothing on
+   * screen to notice.
+   */
+  it("mints a new key for a different motif rather than reusing the last one's pages", async () => {
+    const { rerender } = renderHook(
+      ({ slug }: { slug: string }) =>
+        useCardSearch({ tagTerms: { artTags: { include: [slug], exclude: [] } } }),
+      { wrapper, initialProps: { slug: "landscape" } },
+    );
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(1));
+
+    rerender({ slug: "lightning" });
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
+    expect(lastSearchRequest().artTags).toEqual({ include: ["lightning"], exclude: [] });
+  });
+
+  /** A picked tag **is** the reader asking, even though no control on the filter row can set
+   *  one — so an empty answer to it is a search that missed rather than an empty database. */
+  it("counts a picked tag as the reader having asked something", async () => {
+    const { result } = renderHook(
+      () => useCardSearch({ tagTerms: { oracleTags: { include: ["removal"], exclude: [] } } }),
+      { wrapper },
+    );
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.unfiltered).toBe(false);
+  });
+
+  /** An empty list adds no SQL at all (`filters::picked_tags`), so a payload carrying one asked
+   *  nothing and its empty answer is still a statement about the database. */
+  it("does not count an empty tag list as a question", async () => {
+    const { result } = renderHook(
+      () => useCardSearch({ tagTerms: { artTags: { include: [], exclude: [] } } }),
+      { wrapper },
+    );
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.unfiltered).toBe(true);
+  });
+});
+
+describe("the printings mode a caller can open on", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("collapses by default, which is what every caller but the Tags page wants", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.allPrintings).toBe(false);
+    expect(lastSearchRequest().collapse).toBe(true);
+  });
+
+  /**
+   * The Tags page's seed. An art tag is a fact about *this illustration*, so a collapsed row
+   * would be drawn by whichever printing is newest — a picture that need have nothing to do with
+   * the motif the reader searched for.
+   */
+  it("opens uncollapsed when the caller asks, and sends collapse absent rather than false", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultAllPrintings: true }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.allPrintings).toBe(true);
+    expect(lastSearchRequest().collapse).toBeUndefined();
+  });
+
+  /** A seed and not a lock: the toggle on the filter row is still the reader's. */
+  it("lets the reader collapse a page that opened uncollapsed", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultAllPrintings: true }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleAllPrintings());
+
+    await waitFor(() => expect(lastSearchRequest().collapse).toBe(true));
   });
 });

@@ -4,7 +4,6 @@ pub mod collection;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;
-pub mod deck_import;
 pub mod deck_meta;
 pub mod deck_theory;
 pub mod deck_undo;
@@ -12,21 +11,24 @@ pub mod errors;
 pub mod export;
 pub mod filters;
 pub mod images;
+pub mod import;
 pub mod index;
 pub mod ingest;
 pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
-pub mod oracle_tags;
 pub mod paths;
 pub mod reconcile;
+pub mod reset;
 pub mod schema;
 pub mod scryfall;
 pub mod search;
 pub mod sorting;
 pub mod sync;
+pub mod tags;
 pub mod update;
+pub mod window;
 pub mod wishlist;
 
 use std::path::Path;
@@ -231,7 +233,26 @@ pub fn run() {
         // Putting a decklist export on the clipboard, the other way out beside the save
         // dialog. `clipboard-manager:allow-write-text` only — nothing here reads the
         // clipboard, so `:default`'s read half is deliberately not granted.
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        // Windows 11 Snap Layouts for the app's own maximize button. `tauri.conf.json` sets
+        // `decorations: false`, so the flyout Windows raises over a native maximize button is
+        // gone — the OS asks its own frame `WM_NCHITTEST`, never a `<button>` in a webview.
+        // This parks a transparent child window over that button's rectangle and answers
+        // `HTMAXBUTTON`.
+        //
+        // **The id is the whole contract, and it fails silently on both sides.** A typo here
+        // or in `SNAP_BUTTON_ID` creates no overlay, raises no error and logs nothing: the
+        // button keeps working and Snap Layouts simply never appear, which is a regression no
+        // test and no launch can catch. `src/lib/window.ts` holds the frontend's copy and says
+        // the same thing.
+        //
+        // A no-op everywhere else — the crate's dummy implementation on non-Windows, and
+        // documented as inert on Windows 10, where the OS has no Snap Layouts to raise.
+        .plugin(
+            tauri_plugin_snap_layout::init()
+                .button_id("snap-maximize-button")
+                .build(),
+        );
 
     // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
     // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
@@ -295,10 +316,12 @@ pub fn run() {
             collection::collection_remove,
             collection::collection_list,
             collection::collection_summary,
+            collection::collection_import_commit,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
             wishlist::wishlist_list,
+            wishlist::wishlist_import_commit,
             deck::deck_create,
             deck::deck_update,
             deck::deck_delete,
@@ -316,9 +339,9 @@ pub fn run() {
             deck::deck_swap_printing,
             deck::deck_set_card_finish,
             deck::deck_missing_to_wishlist,
-            deck_import::deck_import_resolve,
-            deck_import::deck_import_commit,
-            deck_import::deck_import_read_file,
+            import::import_resolve,
+            import::deck_import_commit,
+            import::import_read_file,
             deck::format_specs_list,
             deck_meta::deck_category_list,
             deck_meta::deck_category_create,
@@ -342,17 +365,29 @@ pub fn run() {
             deck_undo::deck_undo_apply,
             deck_undo::deck_redo_apply,
             deck_theory::deck_theory_diff,
+            deck_theory::deck_theory_slots,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
-            oracle_tags::oracle_tags_refresh,
-            oracle_tags::oracle_tags_status,
-            oracle_tags::oracle_tags_for_cards,
-            oracle_tags::oracle_tags_for_printings,
+            tags::oracle::oracle_tags_refresh,
+            tags::oracle::oracle_tags_status,
+            tags::oracle::oracle_tags_for_cards,
+            tags::oracle::oracle_tags_for_printings,
+            tags::art::art_tags_refresh,
+            tags::art::art_tags_status,
+            tags::query::tag_search,
+            tags::query::tag_children,
+            tags::muted::tag_mute,
+            tags::muted::tag_unmute,
+            tags::muted::tags_muted,
             export::export_write_file,
+            reset::collection_clear,
+            reset::wishlist_clear,
+            reset::decks_clear,
+            reset::cache_clear,
             error_log_list,
             error_log_clear,
             update_status,
@@ -363,6 +398,13 @@ pub fn run() {
             update_open_release_page
         ])
         .setup(|app| {
+            // First, and before anything that can fail: the window is created **hidden**
+            // (`tauri.conf.json`'s `"visible": false`), so until this runs the app has no
+            // window at all. It opens at the largest of 1920×1080 and 1280×720 that the
+            // monitor's *work area* holds — a 1080p desk cannot hold a 1080-tall window once
+            // Windows has taken its taskbar out of it. See `window.rs`.
+            window::open_sized_to_monitor(app.handle());
+
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
             // user as an escaped one-line panic, which turns a multi-line message naming
             // both candidate folders into something unreadable.
@@ -429,7 +471,21 @@ pub fn run() {
             let tags_state = state.clone();
             let tags_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                oracle_tags::refresh_if_due(&tags_state, &tags_app).await;
+                tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
+            });
+
+            // Scryfall's Art Tags, on a fifth task rather than chained onto the oracle one
+            // above. **They are the same shape of job and that is exactly why they must not
+            // share a task**: the art file is 12.5 MB against the oracle file's 5.85 MB, so
+            // awaiting one before the other would make the bigger download the reason the
+            // smaller taxonomy is late — and on a first run, the reason a deck add is still
+            // categorising by card type minutes after launch. They contend for the write
+            // connection a batch at a time, which is the engine's job and not the launch's.
+            // Silent and best-effort, like every one of its siblings.
+            let art_state = state.clone();
+            let art_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tags::art::refresh_if_due(&art_state, &art_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:
@@ -744,5 +800,91 @@ mod tests {
         // Never a :default -- dialog's is five commands, clipboard's includes the read.
         assert!(!caps.contains("dialog:default"));
         assert!(!caps.contains("clipboard-manager:default"));
+    }
+
+    /// The custom title bar's four window verbs, and the two the snap overlay needs.
+    ///
+    /// `core:window:default` grants only the *getters* -- `is-maximized`, the position and
+    /// size reads, the monitor queries -- so every mutator here had to be named. That is also
+    /// what makes this list worth pinning: the four are the whole of what a webview can do to
+    /// this window, and the family they come from contains `allow-set-always-on-top`,
+    /// `allow-set-fullscreen`, `allow-set-position` and thirty more. Reaching for
+    /// `core:window:default` while debugging would not widen it -- the default has no mutators
+    /// at all -- but reaching for `core:window:allow-*` one entry at a time is exactly how a
+    /// window gets an ACL nobody decided on.
+    ///
+    /// The frontend's half of the contract is `src/lib/window.ts`, which exports one function
+    /// per permission and says so.
+    #[test]
+    fn the_title_bar_gets_four_window_verbs_and_the_overlay_two() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let granted: Vec<&str> = caps["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .collect();
+
+        let window: Vec<&str> = granted
+            .iter()
+            .copied()
+            .filter(|p| p.starts_with("core:window:"))
+            .collect();
+        assert_eq!(
+            window,
+            [
+                "core:window:allow-minimize",
+                "core:window:allow-toggle-maximize",
+                "core:window:allow-close",
+                "core:window:allow-start-dragging",
+            ],
+            "the window's permission set changed"
+        );
+
+        let snap: Vec<&str> = granted
+            .iter()
+            .copied()
+            .filter(|p| p.starts_with("snap-layout:"))
+            .collect();
+        assert_eq!(
+            snap,
+            [
+                "snap-layout:allow-update-snap-bounds",
+                "snap-layout:allow-detach-snap-bounds",
+            ],
+            "the snap overlay's permission set changed"
+        );
+
+        // The two commands above are the whole plugin, so `snap-layout:default` grants exactly
+        // the same thing today -- and is still refused, because naming them is what records
+        // that both were looked at. A plugin's default is a promise about *its* future, not
+        // about this app's.
+        assert!(!caps.to_string().contains("snap-layout:default"));
+    }
+
+    /// Without `decorations: false` the app draws two title bars: Windows' and
+    /// `src/components/TitleBar.tsx`'s. With it and without the title bar, the window cannot
+    /// be moved, maximized or closed at all.
+    ///
+    /// `shadow: true` is the other half of an undecorated window on Windows and is easy to
+    /// lose because nothing breaks without it: the window simply renders with square corners
+    /// and no drop shadow on Windows 11, sitting flat against the desktop with no border
+    /// against a dark wallpaper.
+    #[test]
+    fn the_main_window_is_undecorated_and_keeps_its_shadow() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main = &conf["app"]["windows"][0];
+        assert_eq!(
+            main["decorations"],
+            serde_json::Value::Bool(false),
+            "the app draws its own title bar"
+        );
+        assert_eq!(
+            main["shadow"],
+            serde_json::Value::Bool(true),
+            "an undecorated window needs its shadow asked for"
+        );
     }
 }

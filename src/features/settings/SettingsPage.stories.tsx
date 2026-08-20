@@ -4,6 +4,7 @@ import type { UpdateStatus } from "@/lib/ipc";
 import { nextAction, type Update } from "@/lib/useUpdate";
 import { pickAsset } from "../../../.storybook/fake/db";
 import { CURRENT_VERSION, NEXT_VERSION, release } from "../../../.storybook/fake/fixtures";
+import { CONFIRM_WORD } from "./ConfirmDialog";
 import { SettingsPage } from "./SettingsPage";
 
 /**
@@ -73,7 +74,12 @@ const meta = {
     docs: {
       description: {
         component:
-          "Settings, which is three real sections and an honest note about the rest.\n\n" +
+          "Settings, which is five real sections and an honest note about the rest.\n\n" +
+          "**Ordered by what a press costs.** Updates, prices and errors first; then the "  +
+          "local cache, which throws away bytes the app fetches again; then the three "  +
+          "clears that cannot be taken back, alone at the foot in a region of their own. "  +
+          "That distance is the first fence and the typed word inside each dialog is the "  +
+          "second — see `Settings/DangerZonePanel`.\n\n" +
           "**`update` is a prop, and that is the design rather than a convenience.** " +
           "`App.tsx` calls `useUpdate` once and hands the answer to both `AppShell` — for the " +
           "ribbon's gold button — and to this page, for the panel. Two calls would be two " +
@@ -122,6 +128,14 @@ export const Default: Story = {
     await expect(
       canvas.getByRole("heading", { name: "Not here yet", level: 2 }),
     ).toBeInTheDocument();
+    // The page's one undo, high up for the reason `SettingsPage` gives: the rail tells a reader
+    // who has just hidden a tag that this is where it comes back, and until 2026-08-20 the page
+    // it sent them to had no such list.
+    await expect(canvas.getByRole("heading", { name: "Hidden tags", level: 2 })).toBeInTheDocument();
+    // The two new ones, and their order on the page: the reversible sweep above the blurb,
+    // the irreversible clears below it.
+    await expect(canvas.getByRole("heading", { name: "Local cache", level: 2 })).toBeInTheDocument();
+    await expect(canvas.getByRole("heading", { name: "Clear data", level: 2 })).toBeInTheDocument();
     await expect(canvas.getByText(/You’re on the latest version\./)).toBeInTheDocument();
     // The setting an install starts on, read through the real hook rather than passed in.
     await expect(await canvas.findByRole("button", { name: "TCGplayer USD" })).toHaveAttribute(
@@ -203,8 +217,77 @@ export const SomethingFailed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("×617")).toBeInTheDocument();
-    // The panel's own heading, beside the update panel's — three sections now, and each one
-    // named by its own heading rather than by its position on the page.
+    // The panel's own heading, beside the update panel's — each section named by its own
+    // heading rather than by its position on the page.
     await expect(canvas.getByRole("heading", { name: "Errors", level: 2 })).toBeInTheDocument();
+  },
+};
+
+/**
+ * The typed word, driven all the way to the fake.
+ *
+ * `useDangerZone` is hooked up in the page for the error log's reason — nothing else in the
+ * window writes to those tables — so this story is the only place the gate is *real*: the
+ * press opens the dialog, the word arms the button, the fake's `collection_clear` empties its
+ * table and derives the deck reservations that went with it, and the sentence that lands under
+ * the buttons is `clearOutcome`'s over the fake's own numbers.
+ *
+ * The seed is `starter`, which owns cards and holds decks — without both, the second clause of
+ * that sentence would never be exercised, and that clause is the consequence the reader did not
+ * ask for.
+ *
+ * The dialog is a modal over the whole window rather than a child of the story's box, so it is
+ * reached through `document.body`.
+ */
+export const ClearingTheCollection: Story = {
+  parameters: { fake: { seed: "starter" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const page = within(document.body);
+
+    await userEvent.click(canvas.getByRole("button", { name: "Clear collection" }));
+    const dialog = await page.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "Clear collection" });
+
+    // The gate: open, warned, and still not pressable.
+    await expect(dialog).toHaveTextContent("This cannot be undone.");
+    await expect(confirm).toBeDisabled();
+
+    await userEvent.type(within(dialog).getByRole("textbox"), CONFIRM_WORD);
+    await expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
+
+    // The dialog closes itself before the command runs, so the sentence lands on a page the
+    // reader can see rather than under a modal.
+    await waitFor(async () => {
+      await expect(page.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    await waitFor(async () => {
+      await expect(canvas.getByRole("alert")).toHaveTextContent(/Cleared|already empty/);
+    });
+  },
+};
+
+/**
+ * The reversible one, for the contrast: same page, same shape of question, **no typed word**.
+ *
+ * A word typed on every dialog is a word nobody reads — which is what would make it useless on
+ * the three below. So the cache asks once and takes the answer, and the sentence it leaves says
+ * what came back rather than what went.
+ */
+export const ClearingTheCache: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const page = within(document.body);
+
+    await userEvent.click(canvas.getByRole("button", { name: "Clear cache" }));
+    const dialog = await page.findByRole("dialog");
+
+    await expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Clear cache" }));
+
+    await waitFor(async () => {
+      await expect(canvas.getByText(/^Freed /)).toBeInTheDocument();
+    });
   },
 };

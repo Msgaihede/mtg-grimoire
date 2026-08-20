@@ -1,7 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { deckGroups, deckViolations, printing } from "../../../../.storybook/fake/fixtures";
+import {
+  deckGroups,
+  deckTheoryMatches,
+  deckViolations,
+  printing,
+} from "../../../../.storybook/fake/fixtures";
+import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { RAIL_ATTR } from "./columns";
 import { TextView } from "./TextView";
 
@@ -236,3 +242,27 @@ export const SwitchedOffPile: Story = {
  *  curve. The Sideboard is not here at all: it is empty *and* switched on, so a derived grouping
  *  keeps neither a bucket nor a pile for it, and the rail holds one pile instead of two. */
 export const ByManaValue: Story = { args: { groups: deckGroups("manaValue", "manaCost") } };
+
+/**
+ * The **Live** list of a deck that keeps a plan.
+ *
+ * A decklist line is a quantity, a name and its marks, so the tick joins the finish glyph and the
+ * `GC` badge at the end of the line rather than taking a corner it has not got. Decoration here:
+ * the line is a button with an explicit `aria-label`, so the word is `deckCardName`'s — which is
+ * why the assertion below reads the button's name rather than looking for text.
+ */
+export const TheoryMatches: Story = {
+  args: { theoryMatches: deckTheoryMatches() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Four ticked cards. The mark is `aria-hidden` and carries no `title` any more — it is
+    // bound `describes: false`, so `THEORY_MATCH_ATTR` is CardMarks.tsx's own handle for
+    // finding it after the fact. The words below are read off the button instead.
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+
+    // The card that is both in the plan and breaking a rule, in one sentence.
+    const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });
+    expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
+    expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
+  },
+};

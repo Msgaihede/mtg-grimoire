@@ -10,6 +10,7 @@ import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
@@ -53,6 +54,7 @@ function columnsFor(
   onSetQuantity: (row: CollectionRow, quantity: number) => void,
   onRemove: (row: CollectionRow) => void,
   marketplace: Marketplace,
+  tip: TooltipBinder,
 ): TableColumn<CollectionRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
@@ -90,9 +92,10 @@ function columnsFor(
             // remove this entry"). A truncation that eats the instruction and offers no way to
             // read it is half an error message, so the whole sentence rides as the tooltip —
             // and is in the accessible name either way, because a screen reader reads the
-            // text, not the clip.
+            // text, not the clip. `interactive` as well as `whenClipped`: the instruction can
+            // now be selected and copied, rather than only read.
             <span
-              title={row.needsReview}
+              {...tip(row.needsReview, { whenClipped: true, interactive: true })}
               className="absolute inset-x-3 bottom-0.5 truncate text-[0.7rem] text-dim"
             >
               <span className="mr-1 font-medium text-destructive">Needs review:</span>
@@ -110,11 +113,15 @@ function columnsFor(
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
       // — the same rule as the grid caption and the pane.
+      //
+      // No `whenClipped`: the span shows the set *code* and the tip says its *name*, so gating
+      // the panel on the code's own clip gates it on a different string than the one it says —
+      // the rule is stated once at `CardDetailPane.tsx`'s printings row.
       cellClassName: "flex items-center gap-1.5 font-mono text-xs text-dim",
       cell: (row) => (
         <>
           <RarityGem rarity={row.rarity} />
-          <span className="truncate" title={row.setName ?? undefined}>
+          <span className="truncate" {...tip(row.setName)}>
             {row.setCode.toUpperCase()} · {row.collectorNumber}
           </span>
         </>
@@ -132,11 +139,20 @@ function columnsFor(
       cell: (row) => (
         <>
           {finishLabel(row.finish)} ·{" "}
-          {/* The grade as it is printed on the listing the card came from, with the words one
-            hover — or one screen reader — away. */}
-          <abbr title={conditionLabel(row.condition)} className="no-underline">
+          {/* Not like this table's other tooltips (spec §4, "the one site that is not a
+            tooltip"): on `<abbr>`, `title` is the standard HTML expansion mechanism rather
+            than decoration, and `aria-label` on this roleless element is not reliably
+            announced. So the expansion also rides as `sr-only` text right beside the
+            abbreviation — text is the one route to assistive tech that always works — and the
+            hover/focus panel is bound separately, with `describes: false` so it does not also
+            wire `aria-describedby` onto a sentence the accessibility tree already has. */}
+          <abbr
+            className="no-underline"
+            {...tip(conditionLabel(row.condition), { describes: false })}
+          >
             {row.condition}
           </abbr>
+          <span className="sr-only"> ({conditionLabel(row.condition)})</span>
         </>
       ),
     },
@@ -227,7 +243,7 @@ function columnsFor(
             type="button"
             onClick={() => onRemove(row)}
             aria-label={`Remove ${row.name ?? row.cardId} (${finishLabel(row.finish)}, ${row.condition}) from your collection`}
-            title="Remove from your collection"
+            {...tip("Remove from your collection", { describes: false })}
             className={cn(
               REVEAL_ON_HOVER,
               "grid size-6 place-items-center rounded-md border border-border text-dim",
@@ -347,11 +363,12 @@ export function CollectionTable({
   // never has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  const tip = useTooltip();
 
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove, marketplace)}
+      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip)}
       label="Your collection"
       // A collection total is counted in full, so there is no unknown-count case here.
       total={total}

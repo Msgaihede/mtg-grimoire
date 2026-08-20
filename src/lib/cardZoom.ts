@@ -76,6 +76,7 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  */
 export const ZOOM_SECTIONS = [
   "search",
+  "tags",
   "collection",
   "wishlist",
   "deckSearch",
@@ -95,6 +96,11 @@ export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
  */
 export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   search: DEFAULT_ZOOM,
+  // The Tags page's wall. Its own key rather than the search's for the reason every split on
+  // this list has: the two walls are never on screen together, but they are read for different
+  // reasons — one to find a card by name, one to look at what a motif's illustrations *are* —
+  // and a reader who sized the art up to read a picture was not resizing a search by name.
+  tags: DEFAULT_ZOOM,
   collection: DEFAULT_ZOOM,
   // The shopping list's wall. Its own key rather than the collection's for the reason every
   // split on this list has: the two are read one after the other — what is wanted, then what

@@ -74,7 +74,7 @@
  * 10. **Every refusal is its Rust sentence verbatim, with one exception.** A story renders
  *    these, so they are copied rather than paraphrased; the parenthetical *why* inside
  *    {@link canonicalGrading}'s refusal is this parser's wording, because serde's could not be.
- * 11. **The import's fold arm reads the whole fixture, where `deck_import::fold_match` reads
+ * 11. **The import's fold arm reads the whole fixture, where `import::fold_match` reads
  *    200 FTS candidates.** `cards_fts` exists to stop that arm scanning 116 k rows; over 43
  *    it is the scan that is cheap and the index that would be the fiction. Everything the cap
  *    decides — which candidates survive a truncation, and in what order — is therefore
@@ -115,12 +115,15 @@ import { SPECS } from "@/features/decks/validation/fixtures";
 import { IMAGE_VARIANTS } from "@/lib/images";
 import type {
   CardDetail,
+  CacheCleared,
   CardFace,
   CardFilters,
   CardSummary,
   CardTags,
   CategoryKind,
   CategoryOrigin,
+  CollectionCleared,
+  CollectionImportItem,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
@@ -137,6 +140,7 @@ import type {
   DeckInput,
   DeckPatch,
   DeckRow,
+  DecksCleared,
   DeckTag,
   DeckVariant,
   DeckViewState,
@@ -145,6 +149,7 @@ import type {
   EntryPatch,
   FacetResponse,
   FinishPrices,
+  ImportCommitOutcome,
   ImportItem,
   ImportMatch,
   ImportMode,
@@ -153,6 +158,7 @@ import type {
   ImportResolveRow,
   InstallKind,
   MarketplaceFeedStatus,
+  MutedTag,
   OracleTagStatus,
   Printing,
   PrintingTags,
@@ -164,12 +170,18 @@ import type {
   SwapResult,
   SyncOutcome,
   SyncStatus,
+  TagHit,
+  TagNamespace,
+  TagRef,
+  TagStatus,
   TagSuggestion,
   TheoryDiffRow,
+  TransferImportMode,
   UpdateAsset,
   UpdateStatus,
   WishInput,
   WishRow,
+  WishlistImportItem,
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
@@ -619,6 +631,19 @@ export interface FakeUpdate {
  * add, so this is a refusal a story has to be able to show *without* the screen behind it
  * changing at all.
  *
+ * **`artTagsMissing` and `artTagsFetchError`** are that same pair over the *other* taxonomy, and
+ * they are two faults rather than a reuse of the oracle two because the datasets are two files
+ * on two schedules: either may be absent, or failing, while the other is fine, and the Tags page
+ * has to be able to stand in each of those four worlds. `artTagsMissing` is **not a failure** —
+ * it is the art taxonomy having never been ingested, which is what every install is on its first
+ * launch and what a machine that cannot reach Scryfall stays in permanently. `art_tags_status`
+ * **resolves** (every field `null`, `stale: true`), `tag_search` and `tag_children` answer
+ * nothing for `art` while still answering for `oracle`, and a card wall filtered by an art tag
+ * comes back empty rather than refusing. That is the honest floor and it is what the page says
+ * it has nothing yet *for*. `artTagsFetchError` is the wire failing: `art_tags_refresh` refuses,
+ * **the taxonomy already ingested stays exactly where it was**, and the reason goes to
+ * `error_log`.
+ *
  * **`imageUrisMissing`** is `oracleTagsMissing`'s shape one column over, and it is not a failure
  * either: every `cards.image_uris` is NULL, so {@link readHandlers.card_image_uri} answers `null`
  * for every printing at every size and the card menu's "Copy card image" copies nothing. It is
@@ -636,9 +661,17 @@ export interface FakeUpdate {
  * a read-only stick, a directory that has since gone — and **the dialog stays open with the
  * text still in it**, which is the whole of what that refusal has to show: an export the app
  * could not save is one the reader can still copy.
+ *
+ * **`syncing`** is a card update in flight, and it exists for exactly one command:
+ * `cache_clear` refuses outright while one is running, because `data/tmp/` is where the corpus
+ * download puts 77 MB that the ingest then reads back. It is **not** `busy` — that fault is the
+ * write connection being held, and this refusal is checked before the connection is ever asked
+ * for, so the two produce different sentences from different places. Nothing else here reads
+ * it: a sync's *other* effects on a story are already `busy`'s.
  */
 export type Fault =
   | "busy"
+  | "syncing"
   | "syncError"
   | "imageFailures"
   | "gone"
@@ -650,8 +683,22 @@ export type Fault =
   | "feedFetchError"
   | "oracleTagsMissing"
   | "oracleTagsFetchError"
+  | "artTagsMissing"
+  | "artTagsFetchError"
   | "imageUrisMissing"
   | "exportWriteError";
+
+/**
+ * What the picture cache costs, as the Settings page's one button sees it.
+ *
+ * Bytes are the filesystem's, not a per-file average: a story that reports "freed 314 MB" has
+ * to be able to be given that number rather than derive it from a count.
+ */
+export interface FakeImageCache {
+  files: number;
+  bytes: number;
+  rows: number;
+}
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -674,6 +721,21 @@ export interface FakeDb {
    * interaction no story could exercise.
    */
   errorLog: ErrorEntry[];
+  /**
+   * `image_cache` and the two disposable directories beside it, as one number each.
+   *
+   * **The only entry here that stands for files rather than rows**, and the shape is the
+   * concession: this fake has no filesystem, so `data/images/` and `data/tmp/` are a count and
+   * a total size instead of 5 540 paths. What that buys is the property every other table here
+   * has — `cache_clear` *writes* to it, so a story can press the button, watch the panel report
+   * what it freed, and press it again to see the nothing-to-do state. A canned response could
+   * do neither.
+   *
+   * `rows` is separate from `files` because the backend reports them separately, and the two
+   * genuinely differ: a picture fetched while the write connection was held is bytes on disk
+   * with no row vouching for them yet.
+   */
+  imageCache: FakeImageCache;
   /**
    * `app_meta.marketplace` — the one row this whole setting is.
    *
@@ -732,10 +794,41 @@ export interface FakeDb {
    * the one that puts every deck add on the type-line fallback.
    */
   oracleTags: FakeOracleTagCard[];
-  /** `oracle_tag_meta`, or `null` for never ingested — **the two are set together**. A
+  /** `oracle_tags` — the taxonomy itself, which the closure above only names. Filled and
+   *  emptied with the other two, because one ingest writes all three. */
+  oracleTagTaxonomy: FakeTagRow[];
+  /** `oracle_tag_parents` — one row per parent edge. */
+  oracleTagParents: FakeTagEdge[];
+  /** `oracle_tag_meta`, or `null` for never ingested — **the three are set together**. A
    *  watermark with no closure behind it is the one state the backend goes out of its way to
    *  never write (it is what makes the next check 304 past an empty taxonomy). */
-  oracleTagMeta: FakeOracleTagMeta | null;
+  oracleTagMeta: FakeTagMeta | null;
+  /**
+   * `art_tag_illustrations` — the **art** closure, keyed on `illustration_id`.
+   *
+   * {@link FakeDb.oracleTags}' twin over the other taxonomy, and the key is the whole
+   * difference: an art tag is a fact about a *picture*, so it belongs to the printings carrying
+   * that art and to no others. A card printed with five illustrations has five, and the dog is
+   * in one of them.
+   */
+  artTags: FakeArtTagIllustration[];
+  /** `art_tags` — the art taxonomy itself. */
+  artTagTaxonomy: FakeTagRow[];
+  /** `art_tag_parents`. **43 % of real art tags have more than one parent** (4 970 of 11 531,
+   *  measured 2026-08-20), so this is a graph and not a tree. */
+  artTagParents: FakeTagEdge[];
+  /** `art_tag_meta`, or `null` for never ingested. Set with the three tables above it. */
+  artTagMeta: FakeTagMeta | null;
+  /**
+   * `muted_tags` — the tags the reader has switched off.
+   *
+   * **A user table**, and the only one in this group: everything else here is rebuilt on a
+   * schedule and this is the reader's answer rather than Scryfall's. So it survives a card sync
+   * and a taxonomy rebuild, it is on neither swap list, and — like {@link FakeDb.deckUndo} — it
+   * is never seeded and always earned, because muting is a press a story makes rather than a
+   * shape a fixture is in.
+   */
+  mutedTags: FakeMutedTag[];
   fault: Fault | null;
 }
 
@@ -780,11 +873,88 @@ export interface FakeOracleTagCard {
 }
 
 /**
- * `oracle_tag_meta`, the taxonomy's watermark. **`null` on the store means never ingested**,
- * which is a real state and not an error — the app files by card type until the first refresh
- * lands, and every field of `OracleTagStatus` is nullable for exactly that.
+ * One row of `art_tag_illustrations` — the **art closure**, {@link FakeOracleTagCard}'s twin
+ * with two differences that both matter.
+ *
+ * **It is keyed on `illustration_id`, not on an oracle id.** An art tag is a fact about a
+ * picture rather than about a card, so it belongs to the printings carrying that art and to no
+ * others: the four Lightning Bolts in this fixture have four different illustrations and a tag
+ * on one of them reaches exactly one printing, where an *oracle* tag on Lightning Bolt reaches
+ * all four. Ancestral Recall is the other half of the same rule — `lea` and `2ed` share
+ * illustration `d20eda7b…`, so one row here would reach both printings.
+ *
+ * **It carries a `weight`**, which the oracle closure has no column for. Art taggings use
+ * Scryfall's full scale (median 462 008, strong 5 980, weak 4 495, very_strong 2 680, measured
+ * 2026-08-20) where oracle taggings are 99.74 % `median`, so a weight means something here and
+ * nothing there. The stored value is the **folded** one — `tags::write_closure` resolves a
+ * closure row to the strongest tagging it descends from, so a card weak under one slug and
+ * strong under a sibling is strong under their shared parent. See {@link artTagIllustrations},
+ * which does that fold rather than leaving it to be typed in.
  */
-export interface FakeOracleTagMeta {
+export interface FakeArtTagIllustration {
+  illustrationId: string;
+  slug: string;
+  /** One of {@link WEIGHTS}. `NOT NULL` on the real column — there is no unweighted art row. */
+  weight: string;
+}
+
+/**
+ * One row of `art_tags` or of `oracle_tags` — a tag itself, rather than something wearing it.
+ *
+ * One interface for two tables because the two tables have one shape, which is also why
+ * `tags::Dataset` exists in the crate: every read over a taxonomy is written once and pointed
+ * at whichever one was asked for. Which array a row is in is what its namespace is; there is no
+ * namespace column, here or in SQLite.
+ */
+export interface FakeTagRow {
+  slug: string;
+  /**
+   * Scryfall's stable uuid, and the only key a mute may use. Not Scryfall's actual ids here —
+   * see {@link tagId} — but uuid-*shaped*, because the column is opaque to everything that reads
+   * it and a short invented string would let a mirror get away with treating it as a name.
+   */
+  id: string;
+  label: string;
+  description: string | null;
+  /** `tags::normalize(slug)`, written by the ingest and compared against by the search. **The
+   *  one function does both** — see {@link normalizeTag}. */
+  slugNorm: string;
+}
+
+/** One row of `art_tag_parents` or `oracle_tag_parents`: one edge of the taxonomy graph. A tag
+ *  with several parents has several rows, and is listed under every one of them. */
+export interface FakeTagEdge {
+  childSlug: string;
+  parentSlug: string;
+}
+
+/**
+ * One row of `muted_tags` — a tag the reader has switched off.
+ *
+ * **Keyed on `(namespace, tagId)` and never on the slug.** Scryfall's docs: "Do not treat tag
+ * slugs or labels as permanent identifiers." A mute keyed on a slug un-mutes itself the week
+ * Tagger renames the tag, which is exactly the week it mattered. `slug` is stored anyway, for
+ * one reason only: Settings has to be able to name a muted tag without joining a taxonomy that
+ * may have been rebuilt, or emptied, since the mute was made.
+ */
+export interface FakeMutedTag {
+  namespace: string;
+  tagId: string;
+  slug: string;
+  /** Unix seconds. */
+  mutedAt: number;
+}
+
+/**
+ * `oracle_tag_meta` or `art_tag_meta`, a taxonomy's watermark. **`null` on the store means never
+ * ingested**, which is a real state and not an error — the app files by card type until the
+ * first oracle refresh lands and says the Tags page has nothing yet until the first art one, and
+ * every field of `TagStatus` is nullable for exactly that.
+ *
+ * One interface for both tables because Rust has one struct for both, and a second hand-copied
+ * mirror of it is the drift nothing would catch.
+ */
+export interface FakeTagMeta {
   /** Scryfall's own stamp for the file these rows came from. */
   updatedAt: string | null;
   /** Unix seconds. */
@@ -883,6 +1053,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // failed" is a state of the world, not a shape of collection, so every seed can be in
     // either state. `installWorld` is where a fault is applied, so that is where it is filled.
     errorLog: [],
+    // A cache with something in it, unlike `errorLog` beside it: every install that has drawn a
+    // card wall has pictures on disk, so "nothing cached" is the *unusual* state and a story
+    // that wants it passes zeroes. 5 540 files / 314 MB is the dev machine's real cache,
+    // measured 2026-08-20 — a made-up round number would make the panel's formatting untested
+    // at the sizes it actually renders.
+    imageCache: { files: 5_540, bytes: 329_682_302, rows: 5_540 },
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
@@ -905,7 +1081,21 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // a deck story gets shows real piles, and every other seed shows what the app does without
     // one.
     oracleTags: [],
+    oracleTagTaxonomy: [],
+    oracleTagParents: [],
     oracleTagMeta: null,
+    // The art taxonomy's four tables, empty for the same reason and one dataset over — with one
+    // difference worth naming: an install with no *oracle* tags still files decks, by card type,
+    // while an install with no *art* tags has a Tags page with nothing on it at all. That is the
+    // honest floor rather than a broken screen, and it is the state every seed but `starter` is
+    // in.
+    artTags: [],
+    artTagTaxonomy: [],
+    artTagParents: [],
+    artTagMeta: null,
+    // Never seeded, always earned — {@link FakeDb.deckUndo}'s rule: a mute exists only where a
+    // story pressed the control, so a Settings list showing one is about that press.
+    mutedTags: [],
     fault: null,
     ...init,
   };
@@ -1178,19 +1368,24 @@ export function marketplaceFeedMeta(
 }
 
 /**
- * `oracle_tags::REFRESH_INTERVAL_SECS` — **a week**, not the card sync's day and not the price
- * feeds' either. The taxonomy is hand-curated, and a deck's categories should not regroup
- * between two sessions on the same afternoon.
+ * `tags::{oracle,art}::REFRESH_INTERVAL_SECS` — **a week**, not the card sync's day and not the
+ * price feeds' either. Both taxonomies are hand-curated and move in increments, so a deck's
+ * categories should not regroup between two sessions on the same afternoon and neither should
+ * an art theme somebody is building a deck around.
+ *
+ * One constant for both because the crate's two are the same number for the same reason. They
+ * are still two *files* on two schedules — see {@link FakeDb.artTagMeta} — and it is only the
+ * interval they share.
  */
-const ORACLE_TAG_REFRESH_INTERVAL_SECS = 7 * 86_400;
+const TAG_REFRESH_INTERVAL_SECS = 7 * 86_400;
 
-/** `oracle_tags::is_stale`, over **`checked_at`**: a 304 means the rows are current, so asking
+/** `tags::is_stale`, over **`checked_at`**: a 304 means the rows are current, so asking
  *  again because they were *built* a week ago would spend an API call to learn nothing. Never
  *  checked is stale by definition, and a stamp in the future counts as stale rather than
  *  underflowing. */
 function isTaxonomyStale(checkedAt: number | null, now: number): boolean {
   if (checkedAt === null) return true;
-  return checkedAt > now || now - checkedAt >= ORACLE_TAG_REFRESH_INTERVAL_SECS;
+  return checkedAt > now || now - checkedAt >= TAG_REFRESH_INTERVAL_SECS;
 }
 
 /**
@@ -1295,7 +1490,7 @@ export function oracleTagCards(cards: readonly FakeCard[]): FakeOracleTagCard[] 
  * line reading "32 tags" would be describing the fixture while looking like it described the
  * app.
  */
-export function oracleTagMeta(at: number): FakeOracleTagMeta {
+export function oracleTagMeta(at: number): FakeTagMeta {
   return {
     // Scryfall's own stamp for the bulk file, in its own format — the string `OracleTagStatus`
     // carries verbatim and nothing parses.
@@ -1306,6 +1501,405 @@ export function oracleTagMeta(at: number): FakeOracleTagMeta {
     taggingCount: 229_633,
   };
 }
+
+/* ------------------------------------------------------------------ the taxonomies ---- */
+
+/**
+ * `tags::WEIGHTS`, **weakest first** — Scryfall's four, with their own definitions:
+ * `weak` "the subject is a minor detail or background element", `median` "a normal tagging",
+ * `strong` "a primary focus", `very_strong` "exemplary".
+ *
+ * The order is the whole of what this array is for: {@link stronger} indexes into it, and
+ * `art_weight_floor` is a **floor** over it rather than a selection — the predicate is
+ * `weight <> 'weak'`, so it drops the first entry and admits the other three. Nothing built on
+ * it may be labelled "strong matches only": `median` is 462 008 of 475 163 art taggings
+ * (measured 2026-08-20), so what the floor excludes is background detail.
+ */
+export const WEIGHTS = ["weak", "median", "strong", "very_strong"] as const;
+
+/** `tags::ART_WEIGHT_FLOOR_STRONG` — the one `artWeightFloor` value that turns the floor on.
+ *  Anything else, `"any"` included, is no floor at all. */
+const ART_WEIGHT_FLOOR_STRONG = "strong";
+
+/**
+ * `tags::stronger` — the fold {@link artTagIllustrations} resolves a closure row with.
+ *
+ * An unknown weight sorts **below** `weak` rather than throwing, which is the Rust's own
+ * behaviour and the safe direction: a fifth weight Scryfall adds must not be able to make a row
+ * disappear from a floored query before this file has heard of it.
+ */
+function stronger(a: string, b: string): string {
+  return WEIGHTS.indexOf(b as (typeof WEIGHTS)[number]) >
+    WEIGHTS.indexOf(a as (typeof WEIGHTS)[number])
+    ? b
+    : a;
+}
+
+/**
+ * `tags::normalize` — lowercase, and every non-alphanumeric character dropped.
+ *
+ * **One copy, deliberately**, exactly as the crate has one. The ingest writes it into
+ * `slug_norm` ({@link tagRows}) and the search compares a typed needle against that column
+ * ({@link readHandlers.tag_search}); if the two ever normalised differently the search would
+ * match nothing and no test would fail, because each half would still be self-consistent.
+ *
+ * Verified live 2026-08-20: `otag:"spot removal"`, `otag:spot-removal`, `otag:spotremoval` and
+ * `otag:SPOT-REMOVAL` all return exactly 4 907 cards.
+ */
+function normalizeTag(s: string): string {
+  return s.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+/**
+ * A stable stand-in for Scryfall's tag uuid.
+ *
+ * **Not Scryfall's**, and it could not be: the real ids belong to the bulk files and this
+ * fixture has never downloaded one. What matters about the column is what it is *used* for —
+ * `muted_tags` is keyed on it, because slugs and labels are explicitly not permanent
+ * identifiers — so the requirement is that it be opaque, stable across a rebuild, and unique
+ * within its namespace. It is uuid-shaped so nothing downstream can get away with rendering it,
+ * and the two namespaces take different leading digits so a mute filed under the wrong one is
+ * visible in a fixture rather than merely wrong.
+ *
+ * `""` is deliberately unreachable here even though it is a real value in the app — see
+ * {@link writeHandlers.tag_mute}, which refuses one. A blank id in a *shared seed* would put an
+ * unmutable tag in front of every story on the page; the refusal is exercised from `db.test.ts`
+ * against a store built to hold one.
+ */
+function tagId(namespace: string, index: number): string {
+  const family = namespace === "art" ? "a71a" : "07ac";
+  return `${family}0000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+}
+
+/**
+ * A tag's display label, derived from its slug: hyphens to spaces, each word capitalised.
+ *
+ * **Derived rather than transcribed, and that is a simplification worth naming.** Scryfall
+ * publishes a `label` of its own and this fixture has no copy of it, so `removal-creature`
+ * reads "Removal Creature" here where the file may well say "Creature Removal". What a story
+ * about the Tags page is ever about is the *shape* of a label — that it is title-case prose
+ * rather than a slug, that it wraps, that it is what the list sorts by — and a hand-typed table
+ * of 40 labels would be 40 more strings to drift from a taxonomy nothing here downloads.
+ */
+function tagLabel(slug: string): string {
+  return slug
+    .split("-")
+    .map((word) => (word === "" ? word : word[0].toUpperCase() + word.slice(1)))
+    .join(" ");
+}
+
+/** `art_tags` / `oracle_tags` rows for a list of `[slug, description]` pairs, in slug order —
+ *  the tables' own key order. Ids follow the **declaration** order rather than the sort, so
+ *  adding a tag in the middle of the list does not renumber the ones after it. */
+function tagRows(
+  namespace: string,
+  tags: readonly (readonly [string, string | null])[],
+): FakeTagRow[] {
+  return tags
+    .map(([slug, description], i) => ({
+      slug,
+      id: tagId(namespace, i + 1),
+      label: tagLabel(slug),
+      description,
+      slugNorm: normalizeTag(slug),
+    }))
+    .sort((a, b) => cmp(a.slug, b.slug));
+}
+
+/**
+ * The **art** taxonomy this fixture holds: thirteen tags over four roots.
+ *
+ * **Every one of them is true of the picture it is put on.** That is the same standard
+ * {@link ORACLE_TAGGINGS} is written to and it costs the same thing — the motifs are the ones
+ * these 43 illustrations actually carry, so there is no `dog` here and no `hound` under it,
+ * because nobody in this corpus is a dog. The crate's own fixture
+ * (`tags::query::tests`) is where that branch lives; a wall of cats filed under "Dog" would
+ * teach a reader that the page's whole subject — *what the art depicts* — is decorative.
+ *
+ * The descriptions are this file's, not Scryfall's, for {@link tagLabel}'s reason. Oracle tags
+ * get `null` instead, so both states reach the UI: **most tags have no description**, and a
+ * panel that only ever renders one would be untested at the shape it usually gets.
+ *
+ * Declaration order decides the ids and nothing else; the rows come out in slug order.
+ */
+const ART_TAG_DESCRIPTIONS: readonly (readonly [string, string | null])[] = [
+  ["creature", "A living subject of any kind — the root every creature motif hangs under."],
+  ["animal", "A creature that is not a person: beasts, birds, vermin."],
+  ["cat", "A cat, of any size."],
+  ["monkey", "A monkey or an ape."],
+  ["angel", "A winged humanoid drawn as an angel."],
+  ["elf", "An elf."],
+  ["sphinx", "A sphinx."],
+  ["plant", "Growing things — trees, flowers, undergrowth."],
+  ["flower", "A flower, in bloom."],
+  ["landscape", "The setting itself, rather than anything standing in it."],
+  ["forest", "Woodland. Both a landscape and a stand of plants, and filed under each."],
+  ["water", "Open water: sea, lake, river."],
+  ["lightning", "A bolt of lightning."],
+];
+
+/**
+ * `art_tag_parents` — the edges of the art graph.
+ *
+ * **`forest` has two parents on purpose.** A forest really is a landscape *and* a stand of
+ * plants, and 43 % of Scryfall's art tags sit under more than one heading (4 970 of 11 531,
+ * measured 2026-08-20) — so a rail, a breadcrumb or a closure walk that followed the first
+ * parent and stopped would be wrong for two tags in five, and this fixture has to be able to
+ * catch that.
+ */
+const ART_TAG_EDGES: readonly FakeTagEdge[] = [
+  { childSlug: "animal", parentSlug: "creature" },
+  { childSlug: "cat", parentSlug: "animal" },
+  { childSlug: "monkey", parentSlug: "animal" },
+  { childSlug: "angel", parentSlug: "creature" },
+  { childSlug: "elf", parentSlug: "creature" },
+  { childSlug: "sphinx", parentSlug: "creature" },
+  { childSlug: "flower", parentSlug: "plant" },
+  { childSlug: "forest", parentSlug: "plant" },
+  { childSlug: "forest", parentSlug: "landscape" },
+  { childSlug: "water", parentSlug: "landscape" },
+];
+
+/**
+ * The **direct** art taggings: which printing's illustration carries which tag, and how
+ * strongly.
+ *
+ * By `(name, setCode)` rather than by illustration id, for {@link ORACLE_TAGGINGS}' reason one
+ * column over: `cards.ts` is generated, so a table of 10 UUIDs would be a table nobody can
+ * check, and checking it is the entire value. A pair this corpus no longer holds contributes
+ * nothing and `db.test.ts` fails on it rather than letting the taxonomy quietly shrink.
+ *
+ * **Direct taggings, not the closure** — the opposite of {@link ORACLE_TAGGINGS}, which is
+ * written out already closed. The reason is the weight: `art_tag_illustrations.weight` is the
+ * *folded* strongest, and a hand-typed closure would be a hand-typed fold — the one rule a story
+ * about the weight control is actually standing on. {@link artTagIllustrations} does the walk and
+ * the fold, and `db.test.ts` pins what comes out.
+ *
+ * What each row is here to make reachable:
+ *
+ * * **Lightning Bolt `lea` and nothing else.** Four Bolts, four illustrations, one oracle id —
+ *   so `lightning` answers one printing where the *oracle* tag `burn` answers all four. That is
+ *   the whole of "an art tag is a fact about a picture", and it is only visible with the other
+ *   three left untagged.
+ * * **Lurrus, Ragavan and Forest carry only a leaf.** Nothing is tagged `animal`, `creature` or
+ *   `plant` directly, so those three answer cards *only* through the closure — the same shape as
+ *   the real `removal`, which has zero direct taggings and reaches 6 686 cards.
+ * * **Llanowar Elves' `forest` is `weak`.** The elf is the subject and the wood behind her is
+ *   the background element Scryfall's definition of `weak` names — so an art query for
+ *   `landscape` answers three illustrations, and the same query with the floor on answers two.
+ *   Without a `weak` row anywhere the control would be a switch a story could not photograph.
+ * * **Island `lea` is tagged twice, `water` strong and `landscape` median.** Two true taggings
+ *   at two weights whose closure rows collide on `landscape`, which is the fold: the row comes
+ *   out `strong`, not `median` and not the last one written. A single-tagging fixture passes a
+ *   last-write-wins fold by luck.
+ * * **Both Black Lotus printings, at different weights.** Two illustrations of one card, so the
+ *   art taxonomy reaches both — the mirror image of the Lightning Bolt row above.
+ *
+ * Ancestral Recall is the case deliberately left empty: `lea` and `2ed` share illustration
+ * `d20eda7b…`, so one row here would reach two printings. `db.test.ts` covers that join against
+ * a store built for it rather than by inventing a motif for a picture nobody checked.
+ */
+const ART_TAGGINGS: readonly (readonly [
+  string,
+  string,
+  readonly (readonly [string, string])[],
+])[] = [
+  ["Lightning Bolt", "lea", [["lightning", "median"]]],
+  ["Black Lotus", "lea", [["flower", "very_strong"]]],
+  ["Black Lotus", "vma", [["flower", "strong"]]],
+  ["Forest", "unf", [["forest", "median"]]],
+  [
+    "Island",
+    "lea",
+    [
+      ["water", "strong"],
+      ["landscape", "median"],
+    ],
+  ],
+  ["Bruna, the Fading Light", "emn", [["angel", "median"]]],
+  ["Avacyn, Angel of Hope", "avr", [["angel", "strong"]]],
+  ["Consecrated Sphinx", "mp2", [["sphinx", "median"]]],
+  ["Lurrus of the Dream-Den", "iko", [["cat", "median"]]],
+  ["Ragavan, Nimble Pilferer", "mh2", [["monkey", "median"]]],
+  [
+    "Llanowar Elves",
+    "dom",
+    [
+      ["elf", "median"],
+      ["forest", "weak"],
+    ],
+  ],
+];
+
+/** The `"name setCode"` keys above, for a test that wants to prove every one of them still
+ *  resolves against the generated corpus — {@link ORACLE_TAGGED_NAMES}, one taxonomy over, and
+ *  with the set code because four Lightning Bolts share a name and only one carries the tag. */
+export const ART_TAGGED_PRINTINGS: readonly string[] = ART_TAGGINGS.map(
+  ([name, setCode]) => `${name} ${setCode}`,
+);
+
+/**
+ * `oracle_tag_parents` — the edges {@link ORACLE_TAGGINGS}' already-closed lists imply.
+ *
+ * Every one of them is *checked* rather than asserted: that fixture writes each card's ancestors
+ * out beside its leaves, so an edge here is a claim that no card in it carries the child without
+ * the parent, and `db.test.ts` walks every tagged card to hold this table to it. **Two edges the
+ * names beg for are absent because the corpus refuses them** — `repeatable-token-generator` to
+ * `token-generator` (Ragavan carries the first without the second) and `ramp` to `mana-producer`
+ * (Kenrith ramps by putting lands onto the battlefield). Both were written, and both failed that
+ * test rather than shipping as a hierarchy the taxonomy does not have.
+ */
+const ORACLE_TAG_EDGES: readonly FakeTagEdge[] = [
+  { childSlug: "removal-creature", parentSlug: "removal" },
+  { childSlug: "removal-permanent", parentSlug: "removal" },
+  { childSlug: "mass-removal", parentSlug: "removal" },
+  { childSlug: "spot-removal", parentSlug: "removal" },
+  { childSlug: "mass-recursion", parentSlug: "recursion" },
+  { childSlug: "draw-multiple", parentSlug: "draw" },
+  { childSlug: "draw", parentSlug: "card-advantage" },
+  { childSlug: "card-selection", parentSlug: "card-advantage" },
+  // `ramp` is deliberately **not** a child of `mana-producer`, and the temptation is real:
+  // five of the six cards carrying it carry both. Kenrith is the sixth — it ramps by putting
+  // lands onto the battlefield rather than by tapping for mana — so the edge does not hold and
+  // the test below is what said so.
+  { childSlug: "fast-mana", parentSlug: "ramp" },
+  { childSlug: "burn", parentSlug: "damage" },
+  { childSlug: "tax", parentSlug: "hate" },
+];
+
+/** Every parent of `slug`, and every parent of those, following **all** edges rather than the
+ *  first — `tags::ancestor_closures`. Depth-capped rather than cycle-checked for the reason
+ *  `folderPath` is: a fixture cannot make a cycle, and a walk that hangs on one would hang
+ *  Storybook rather than fail a test. */
+function ancestorsOf(slug: string, edges: readonly FakeTagEdge[]): string[] {
+  const found = new Set<string>();
+  let frontier = [slug];
+  for (let depth = 0; depth < 16 && frontier.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const child of frontier) {
+      for (const edge of edges) {
+        if (edge.childSlug === child && !found.has(edge.parentSlug)) {
+          found.add(edge.parentSlug);
+          next.push(edge.parentSlug);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return [...found];
+}
+
+/** `art_tags` for this fixture, in slug order. */
+export function artTagRows(): FakeTagRow[] {
+  return tagRows("art", ART_TAG_DESCRIPTIONS);
+}
+
+/** `art_tag_parents` for this fixture. A copy per call, because it lands on a mutable store. */
+export function artTagEdges(): FakeTagEdge[] {
+  return ART_TAG_EDGES.map((e) => ({ ...e }));
+}
+
+/**
+ * `oracle_tags` for this fixture: **every distinct slug {@link ORACLE_TAGGINGS} names**, in slug
+ * order, with no description.
+ *
+ * Derived rather than listed for one reason: a hand-written tag table could name a tag no card
+ * carries, and a search that offered one would answer a wall of nothing. Derived, every tag in
+ * the box reaches at least one card — which is a property of the real table too, since the
+ * ingest writes tags and taggings from one file.
+ */
+export function oracleTagRows(): FakeTagRow[] {
+  const slugs = new Set<string>();
+  for (const [, tagSlugs] of ORACLE_TAGGINGS) for (const slug of tagSlugs) slugs.add(slug);
+  return tagRows(
+    "oracle",
+    [...slugs].sort(cmp).map((slug) => [slug, null] as const),
+  );
+}
+
+/** `oracle_tag_parents` for this fixture. */
+export function oracleTagEdges(): FakeTagEdge[] {
+  return ORACLE_TAG_EDGES.map((e) => ({ ...e }));
+}
+
+/**
+ * `art_tag_illustrations` for a corpus — {@link ART_TAGGINGS} walked up the graph and folded,
+ * which is what `tags::ancestor_closures` and `tags::write_closure` do between them.
+ *
+ * **Keyed on the illustration, so a printing that shares an art shares the tags** and one that
+ * does not gets none of them. A `(name, setCode)` pair the corpus does not hold, or a printing
+ * with no `illustration_id` (three of the 43 have none — Delver of Secrets, Agadeem's Awakening
+ * and Prismatic Ending), contributes nothing rather than throwing: `cards.ts` is generated, and
+ * a regenerated corpus that dropped a printing should shrink the taxonomy and fail a test, not
+ * break every story on the page.
+ *
+ * **The weight is folded to the strongest tagging the row descends from**, never the last one
+ * written. That is the rule a card weak under one slug and strong under a sibling rests on: it
+ * is genuinely a strong match for their shared parent, and a per-tagging weight would put the
+ * same card in one view of one hierarchy and out of the other.
+ *
+ * Sorted `(illustration_id, slug)`, which is the closure table's own `WITHOUT ROWID` key order.
+ */
+export function artTagIllustrations(cards: readonly FakeCard[]): FakeArtTagIllustration[] {
+  const byPrinting = new Map(
+    ART_TAGGINGS.map(([name, setCode, taggings]) => [`${name} ${setCode}`, taggings]),
+  );
+  /** `illustrationId` → `slug` → the strongest weight seen for it so far. */
+  const folded = new Map<string, Map<string, string>>();
+  for (const card of cards) {
+    const taggings = byPrinting.get(`${card.name} ${card.setCode}`);
+    if (!taggings || card.illustrationId === null) continue;
+    let rows = folded.get(card.illustrationId);
+    if (!rows) {
+      rows = new Map<string, string>();
+      folded.set(card.illustrationId, rows);
+    }
+    for (const [slug, weight] of taggings) {
+      for (const reached of [slug, ...ancestorsOf(slug, ART_TAG_EDGES)]) {
+        const held = rows.get(reached);
+        rows.set(reached, held === undefined ? weight : stronger(held, weight));
+      }
+    }
+  }
+  const out: FakeArtTagIllustration[] = [];
+  for (const [illustrationId, rows] of folded) {
+    for (const [slug, weight] of rows) out.push({ illustrationId, slug, weight });
+  }
+  return out.sort((a, b) => cmp(a.illustrationId, b.illustrationId) || cmp(a.slug, b.slug));
+}
+
+/**
+ * `art_tag_meta` for an ingest that has just landed.
+ *
+ * `tagCount` and `taggingCount` are **the real file's** figures, measured by `tags::art` on
+ * 2026-08-20 — 11 531 tags over 475 163 taggings, which flatten into 951 499 closure rows, 2.0×
+ * the taggings. {@link oracleTagMeta}'s reason: a settings line reading "13 tags" would be
+ * describing this fixture while looking like it described the app.
+ *
+ * `updatedAt` is the **one** value here that is not measured, and it is the only one that could
+ * not be: it is Scryfall's own stamp for the bulk file, it changes daily, and nothing in this
+ * repo has a record of the one the 2026-08-20 download carried. It is written in the format the
+ * manifest publishes, on the day the rest of these numbers were taken, and nothing parses it —
+ * `TagStatus.updatedAt` is carried verbatim to be rendered.
+ */
+export function artTagMeta(at: number): FakeTagMeta {
+  return {
+    updatedAt: "2026-08-20T09:12:44.207+00:00",
+    ingestedAt: at,
+    checkedAt: at,
+    tagCount: 11_531,
+    taggingCount: 475_163,
+  };
+}
+
+/**
+ * What the Art Tags file weighs — 12 544 874 bytes gzipped, measured 2026-08-20.
+ *
+ * {@link ORACLE_TAG_BYTES}' reason, and the figure is 2.1× it: a `downloading` event needs a
+ * real denominator, and the ribbon prints whole megabytes, so a story stands in `0 / 12 MB` and
+ * that is what the app will actually show.
+ */
+const ART_TAG_BYTES = 12_544_874;
 
 /**
  * `oracle_tags::read_tags_keyed`'s first half: the ids actually asked about, **deduped, blanks
@@ -1345,13 +1939,12 @@ function slugsByOracleId(db: FakeDb): Map<string, string[]> {
   return grouped;
 }
 
-/** `oracle_tags::read_status`. **Total and unfailing**: a store with no watermark answers every
- *  field null with `stale: true` rather than refusing, which is what lets every caller read it
- *  with no guard. `refreshing` is always false here — the fake's refresh is synchronous, so
- *  nothing is ever in flight *between* two commands; a story that wants that state emits
- *  `oracle-tags:progress` itself. */
-function toOracleTagStatus(db: FakeDb): OracleTagStatus {
-  const meta = db.oracleTagMeta;
+/** `tags::status_of`, over either watermark. **Total and unfailing**: a store with no row
+ *  answers every field null with `stale: true` rather than refusing, which is what lets every
+ *  caller read it with no guard. `refreshing` is always false here — the fake's refresh is
+ *  synchronous, so nothing is ever in flight *between* two commands; a story that wants that
+ *  state emits the dataset's own progress event itself. */
+function toTagStatus(meta: FakeTagMeta | null): TagStatus {
   return {
     updatedAt: meta?.updatedAt ?? null,
     ingestedAt: meta?.ingestedAt ?? null,
@@ -1361,6 +1954,127 @@ function toOracleTagStatus(db: FakeDb): OracleTagStatus {
     stale: isTaxonomyStale(meta?.checkedAt ?? null, CLOCK_BASE),
     refreshing: false,
   };
+}
+
+/* ------------------------------------------------------------------ tag reads --------- */
+
+/**
+ * One taxonomy's three tables under one name — `tags::Dataset`, which is why the crate can write
+ * every tag read once and point it at whichever was asked for.
+ *
+ * `reach` is the closure count, and it is a function rather than a table because the two closures
+ * are keyed on different columns: illustrations on one side, oracle ids on the other. What both
+ * answer is "how many *subjects*", and neither answers "how many printings" — see
+ * {@link readHandlers.tag_search}.
+ */
+interface FakeTagDataset {
+  namespace: TagNamespace;
+  tags: readonly FakeTagRow[];
+  parents: readonly FakeTagEdge[];
+  reach: (slug: string) => number;
+}
+
+/**
+ * The taxonomies a caller may name, **art first**.
+ *
+ * `tags::query::namespaces_for`. Art leads because that is what the page is for: the reader is
+ * building a deck around a motif and types `dog` meaning the picture, and the oracle taxonomy
+ * rides along.
+ *
+ * **An unknown namespace throws rather than answering an empty list**, exactly as the crate
+ * refuses it: a typo'd namespace and a taxonomy that has never been fetched would otherwise be
+ * the same answer, and only one of them is a bug.
+ */
+function tagDatasets(db: FakeDb, namespace: string): FakeTagDataset[] {
+  const art: FakeTagDataset = {
+    namespace: "art",
+    tags: db.artTagTaxonomy,
+    parents: db.artTagParents,
+    reach: (slug) => db.artTags.filter((r) => r.slug === slug).length,
+  };
+  const oracle: FakeTagDataset = {
+    namespace: "oracle",
+    tags: db.oracleTagTaxonomy,
+    parents: db.oracleTagParents,
+    reach: (slug) => db.oracleTags.filter((r) => r.slug === slug).length,
+  };
+  if (namespace === "art") return [art];
+  if (namespace === "oracle") return [oracle];
+  if (namespace === "both") return [art, oracle];
+  throw refuse(`unknown tag namespace: ${namespace}`);
+}
+
+/**
+ * Is this tag still offered? — `tags::query::not_muted`.
+ *
+ * **`id !== ""` prevents one mute from hiding an entire taxonomy, silently.** `oracle_tags.id`
+ * is `NOT NULL DEFAULT ''` in the app, because the rung that added it used `ALTER TABLE` and
+ * that cannot add a `NOT NULL` column without a default — so every row that predates a refresh
+ * by a build new enough to write ids still carries `''`. Without this clause one `muted_tags`
+ * row whose `tagId` happened to be empty would equal every one of those rows, and the whole
+ * oracle taxonomy would leave the search box and the rail with no error raised, nothing in
+ * `error_log`, and a page that simply looks like it has no data. With it, a tag whose id was
+ * never written is *unmutable* — visible, wrong in a way the reader can see and report, and
+ * repaired by the next refresh.
+ */
+function tagVisible(db: FakeDb, namespace: TagNamespace, row: FakeTagRow): boolean {
+  if (row.id === "") return true;
+  return !db.mutedTags.some((m) => m.namespace === namespace && m.tagId === row.id);
+}
+
+/**
+ * A tag row as the page draws it, with its counts and its parents — `tags::query::hit_select`
+ * plus `attach_parents`.
+ *
+ * `childCount` counts only children that **exist and are not muted**, so a disclosure triangle
+ * drawn from it never opens onto nothing. `parents` is **every** parent rather than the first,
+ * for the same reason and a bigger one: 43 % of real art tags have more than one, so a
+ * single-parent breadcrumb would be wrong for two tags in five.
+ */
+function toTagHit(db: FakeDb, ds: FakeTagDataset, row: FakeTagRow): TagHit {
+  const named = (slug: string): FakeTagRow | undefined => ds.tags.find((t) => t.slug === slug);
+  const parents: TagRef[] = ds.parents
+    .filter((e) => e.childSlug === row.slug)
+    .map((e) => named(e.parentSlug))
+    .filter((t): t is FakeTagRow => t !== undefined && tagVisible(db, ds.namespace, t))
+    .map((t) => ({ slug: t.slug, label: t.label, namespace: ds.namespace }))
+    .sort((a, b) => cmp(a.label, b.label) || cmp(a.slug, b.slug));
+  const childCount = ds.parents.filter((e) => {
+    if (e.parentSlug !== row.slug) return false;
+    const child = named(e.childSlug);
+    return child !== undefined && tagVisible(db, ds.namespace, child);
+  }).length;
+  return {
+    slug: row.slug,
+    id: row.id,
+    label: row.label,
+    namespace: ds.namespace,
+    description: row.description,
+    // **Over the closure, never the direct taggings** — see {@link matchesCardFilters}, which
+    // reads the same two tables for the same reason.
+    cardCount: ds.reach(row.slug),
+    childCount,
+    parents,
+  };
+}
+
+/**
+ * `tags::query::rank` — match quality, then reach, then **art before oracle**, then the label.
+ *
+ * Art wins an equal-rank tie because the page's primary job is an art theme: a reader who types
+ * `dog` wants the illustrations, and the oracle tag of the same name is the secondary reading.
+ * The trailing slug is only there so the order is total — two tags with the same label would
+ * otherwise come back in whatever order the two passes happened to produce, and a list that
+ * reshuffles between identical keystrokes looks broken.
+ */
+function byTagRank(a: { band: number; hit: TagHit }, b: { band: number; hit: TagHit }): number {
+  return (
+    a.band - b.band ||
+    b.hit.cardCount - a.hit.cardCount ||
+    Number(a.hit.namespace !== "art") - Number(b.hit.namespace !== "art") ||
+    cmp(a.hit.label, b.hit.label) ||
+    cmp(a.hit.slug, b.hit.slug)
+  );
 }
 
 /** A filter the user actually set — `filters::nonblank`. A picker's "Any set" sends `""`,
@@ -1545,6 +2259,7 @@ const MANA_VALUE_OPEN_ENDED = 8;
  * of date for colour. This follows the SQL.
  */
 function matchesCardFilters(
+  db: FakeDb,
   card: FakeCard | null,
   f: CardFilters,
   rowSetCode: string | null,
@@ -1636,7 +2351,73 @@ function matchesCardFilters(
     const values = Object.values(legalities as Record<string, unknown>);
     if (!values.some((v) => v === "legal" || v === "restricted")) return false;
   }
+
+  // **Both taxonomies are matched against the CLOSURE, never the direct taggings.** The bulk
+  // files store direct taggings only and a category tag has none of its own — `dog` is directly
+  // tagged on 137 illustrations and reaches 439, `removal` has zero direct taggings and answers
+  // 6 686 cards — so a predicate over the taggings would return 31 % of the dogs and none of the
+  // removal, which looks like a data problem rather than a query one. Here that is the whole of
+  // it: {@link FakeDb.artTags} and {@link FakeDb.oracleTags} *are* the closures.
+  //
+  // **An orphan and a printing with no `illustration_id` fail every include and pass every
+  // exclude**, and that is SQL's own rule rather than a choice: the real predicate correlates on
+  // `c.illustration_id`, `NULL = NULL` is not true, so an `EXISTS` finds nothing and the
+  // `NOT EXISTS` around the same subquery is satisfied. Three of the 43 printings here have no
+  // illustration id (4 977 of 116 712 live ones do not), and there is **no `rows` fallback** the
+  // way `setCode` has one — a tag is a claim only a card row can answer.
+  if (f.artTags) {
+    const illustrationId = card?.illustrationId ?? null;
+    // `<> 'weak'` rather than a list of the three weights above it, so a fifth weight Scryfall
+    // adds is kept rather than silently hidden. It reads the **closure's** folded weight — the
+    // strongest tagging the row descends from — so a card weak under one slug and strong under a
+    // sibling survives the floor under their shared parent, because it is genuinely a strong
+    // match for the motif.
+    const floored = nonblank(f.artWeightFloor) === ART_WEIGHT_FLOOR_STRONG;
+    for (const slug of pickedTags(f.artTags.include)) {
+      const held = db.artTags.some(
+        (r) =>
+          r.illustrationId === illustrationId &&
+          r.slug === slug &&
+          (!floored || r.weight !== WEIGHTS[0]),
+      );
+      if (!held) return false;
+    }
+    // **The exclude arm ignores the floor, deliberately**: "not a dog" means not a dog at all,
+    // including weakly. A floor here would let weak dogs back into a result the reader asked to
+    // have none in.
+    for (const slug of pickedTags(f.artTags.exclude)) {
+      if (db.artTags.some((r) => r.illustrationId === illustrationId && r.slug === slug)) {
+        return false;
+      }
+    }
+  }
+
+  // The oracle twin, on `oracle_tag_cards` / `oracle_id` and **with no weight clause**: that
+  // closure has no `weight` column, so a copied floor would be a `no such column` error in the
+  // app rather than a wrong answer, and it would have nothing to say either way — oracle
+  // taggings are 99.7 % `median`, with `strong` occurring once in the whole file.
+  if (f.oracleTags) {
+    const oracleId = card?.oracleId ?? null;
+    for (const slug of pickedTags(f.oracleTags.include)) {
+      if (!db.oracleTags.some((r) => r.oracleId === oracleId && r.slug === slug)) return false;
+    }
+    for (const slug of pickedTags(f.oracleTags.exclude)) {
+      if (db.oracleTags.some((r) => r.oracleId === oracleId && r.slug === slug)) return false;
+    }
+  }
   return true;
+}
+
+/**
+ * `filters::picked_tags` — trimmed, blanks dropped, sorted and deduplicated.
+ *
+ * **An empty answer means "no tag filter", never "match nothing"**, which is `filters::picked_sets`'
+ * rule one filter over and the same trap: a cleared chip row sends `[]` and some send `[""]`, and
+ * a blank taken literally would be a slug no tag has and an empty wall with no chip drawn to
+ * explain it.
+ */
+function pickedTags(slugs: readonly string[] | undefined): string[] {
+  return [...new Set((slugs ?? []).map((s) => s.trim()).filter((s) => s !== ""))].sort(cmp);
 }
 
 /* ------------------------------------------------------------------ facet helpers ----- */
@@ -2011,7 +2792,7 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     // A text filter is a statement about a card, so it narrows to rows that still have one.
     if (text !== null && !cardMatchesText(card, text)) return false;
     // `paperOnly` forced off: the user owns what the user owns.
-    if (!matchesCardFilters(card, { ...q, text: undefined, paperOnly: false }, e.setCode)) {
+    if (!matchesCardFilters(db, card, { ...q, text: undefined, paperOnly: false }, e.setCode)) {
       return false;
     }
     if (!inList(e.finish, q.finishes, FINISHES)) return false;
@@ -2095,7 +2876,7 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
   const text = nonblank(q.text);
   return db.wishlistEntries.filter((w) => {
     const card = wishCard(db, w);
-    if (!matchesCardFilters(card, { ...q, text: undefined, paperOnly: false }, w.setCode)) {
+    if (!matchesCardFilters(db, card, { ...q, text: undefined, paperOnly: false }, w.setCode)) {
       return false;
     }
     // Matched against the **stored name**, not through the card: a wish may have no card row
@@ -2602,9 +3383,16 @@ function toDeckCard(
 /**
  * `search::SEARCH_SORTS`.
  *
- * **There is no `released` key**, and that is not an omission this fake made: the search
- * table has no Released column to press and the frontend has never sent one, so the order
- * `search.rs` used to carry is gone rather than renamed.
+ * **Two of the seven have no column to press.** `manaValue` and `released` are reached from
+ * the filter bar's sort picker instead — the trade the collection's `added` already made,
+ * because the search table has no room for a seventh header (`SearchSortKey` in
+ * `src/lib/ipc.ts` is where that room went). This used to say there was no `released` key at
+ * all, and that was true of the order `search.rs` had lost: SQL nothing could reach. The one
+ * added on 2026-08-20 has a control, so a story can order by it and this file has to answer.
+ *
+ * A `Record` over the whole union rather than the `Partial` {@link orderBy} accepts, so a key
+ * added to `SearchSortKey` and forgotten here is a compile error rather than a picker row
+ * that quietly answers in browse order.
  */
 function searchSorts(
   db: FakeDb,
@@ -2628,6 +3416,19 @@ function searchSorts(
     // the same number: this is what the `currency` sort parameter used to guard, now made
     // structural.
     price: nullsLast((c) => priceColumnAt(db, c, mp), numeric),
+    // `c.cmc`, which is REAL and **nullable**: a card with no printed cost has no mana value,
+    // and `nullsLast` keeps those holes at the bottom in *both* directions rather than letting
+    // a reversal float them to the top. Sorting the printings and grouping afterwards is exact
+    // here rather than a simplification — mana value is a fact about the oracle card, so every
+    // printing in a collapsed group carries the same one, which is the same argument that lets
+    // `search.rs` answer this key with `min(c.cmc)` in its group step.
+    manaValue: nullsLast((c) => c.cmc, numeric),
+    // `c.released_at`, which is ISO `YYYY-MM-DD` — so byte order *is* date order and {@link cmp}
+    // is the whole comparison, exactly as {@link SEARCH_BROWSE_ORDER} below already reads it.
+    // `nullsLast` although {@link FakeCard.releasedAt} is never null: `cards.released_at` is,
+    // `search.rs` spells NULLS LAST in both directions for that reason, and a `reversible` here
+    // would agree with it only for as long as this fixture stayed lucky.
+    released: nullsLast((c) => c.releasedAt, cmp),
   };
 }
 
@@ -2962,7 +3763,7 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
 /* ------------------------------------------------------------------ the import -------- */
 
 /**
- * `deck_import::IMPORT_MODES` — what an import may do to the variant it lands in.
+ * `import::IMPORT_MODES` — what an import may do to the variant it lands in.
  *
  * A list rather than a union type for the Rust's reason: the refusal below **quotes it**, so
  * the two spellings a caller can name and the two the sentence offers are one array. Read
@@ -2971,12 +3772,12 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
 const IMPORT_MODES = ["merge", "replace"] as const;
 const IMPORT_REPLACE = IMPORT_MODES[1];
 
-/** `deck_import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
+/** `import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
  *  "clear the deck and put nothing back" are the same call with the same arguments. */
 const NOTHING_TO_IMPORT = "There is nothing to import.";
 
 /**
- * What {@link readHandlers}'s `deck_import_read_file` says instead of inventing a decklist.
+ * What {@link readHandlers}'s `import_read_file` says instead of inventing a decklist.
  *
  * **Not a Rust sentence, and the only handler in this file that has none.** The real command
  * takes a path the OS file picker answered, and there is no picker in a browser — so a fake
@@ -2986,7 +3787,7 @@ const NOTHING_TO_IMPORT = "There is nothing to import.";
 const NO_FILE_PICKER = "No file picker in Storybook.";
 
 /**
- * `deck_import::fold_name`'s table, transcribed — every character it maps and no other.
+ * `import::fold_name`'s table, transcribed — every character it maps and no other.
  *
  * Keyed on the **lower-case** half of each pair only, because {@link foldName} lowercases
  * before it looks anything up where the Rust lowercases in its fallthrough arm. The two agree
@@ -3032,7 +3833,7 @@ const FOLD_LETTERS: Readonly<Record<string, string>> = {
 };
 
 /**
- * `deck_import::fold_name` — a card name reduced to what two people typing it would agree on:
+ * `import::fold_name` — a card name reduced to what two people typing it would agree on:
  * lowercase, no diacritics, one kind of apostrophe, single spaces.
  *
  * Anything not in {@link FOLD_LETTERS} passes through, so a name in a script the table has
@@ -3048,7 +3849,7 @@ export function foldName(raw: string): string {
 }
 
 /**
- * `deck_import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
+ * `import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
  * the whole name, `1` for the front face only, `null` for neither.
  *
  * **A rank rather than a bool**, and that is what keeps an art series from winning: the SQL
@@ -3063,7 +3864,7 @@ function foldRank(cardName: string, wanted: string): number | null {
 }
 
 /**
- * `deck_import::MATCH_ORDER` — a printing you own, then the newest, then the id.
+ * `import::MATCH_ORDER` — a printing you own, then the newest, then the id.
  *
  * The `id` tie-break is not decoration: it is what makes an import **deterministic**, so the
  * same list pasted twice puts the same printings in the deck. `releasedAt` needs no coalesce
@@ -3077,7 +3878,7 @@ function importOrder(db: FakeDb): Compare<FakeCard> {
 }
 
 /**
- * `deck_import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
+ * `import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
  * money**, plus the two facts only an import asks for.
  *
  * `everUncommon` is read off its column for {@link toDeckCard}'s reason, where the SQL
@@ -3134,7 +3935,7 @@ function bestOf(db: FakeDb, candidates: FakeCard[]): ImportMatch | null {
 }
 
 /**
- * `deck_import::fold_match` — fold both sides and compare, the arm the three exact ones fall
+ * `import::fold_match` — fold both sides and compare, the arm the three exact ones fall
  * through to.
  *
  * The candidate set is the whole paper fixture rather than `cards_fts`' 200; simplification 11
@@ -3159,7 +3960,7 @@ function foldMatch(db: FakeDb, name: string): ImportMatch | null {
   return toImportMatch(db, kept[0].card, kept.length);
 }
 
-/** `deck_import::given` — a hint the caller actually gave: trimmed, and absent when blank.
+/** `import::given` — a hint the caller actually gave: trimmed, and absent when blank.
  *  `""` and `"   "` reach here from real exports (a trailing tab in a Moxfield paste is
  *  enough), and either bound into `set_code = ?1` turns every line into a missed hint. */
 function givenHint(hint: string | null): string | null {
@@ -3206,12 +4007,19 @@ export function readHandlers(db: FakeDb) {
        * to exactly `""`, and a blank taken literally would bind `oracle_id = ''` and match
        * nothing — an empty wall with no chip drawn to explain it, which is the direction
        * `filters.rs` names as failing closed.
+       *
+       * **The tag filters are the contrasting case and went the other way**: `artTags`,
+       * `oracleTags` and `artWeightFloor` *are* on `CardFilters`, because the collection and the
+       * wishlist can honestly be narrowed to a motif, so they live in the helper with every other
+       * card claim — and `facet_cards` drops them from its own bases explicitly rather than by
+       * being unable to see them. Which of the two a new filter is depends on whether a list
+       * other than the search could ever mean it.
        */
       const oracleId = nonblank(req.oracleId);
       const matched = db.cards.filter((c) => {
         if (text !== null && !cardMatchesText(c, text)) return false;
         if (oracleId !== null && c.oracleId !== oracleId) return false;
-        if (!matchesCardFilters(c, { ...req, text: undefined }, null)) return false;
+        if (!matchesCardFilters(db, c, { ...req, text: undefined }, null)) return false;
         // An **entry**, not a copy: a row emptied to zero is a row the collection keeps, and
         // this filter counts it as owned. The wishlist's `fulfilled` is the one that counts
         // copies, because a wish is filled by copies rather than by paperwork.
@@ -3266,6 +4074,16 @@ export function readHandlers(db: FakeDb) {
      * high. Mirrored rather than improved on: a fake that counted better than the backend
      * would hide the divergence instead of the app showing it. Nothing sends it today; the
      * search view's filter bar has no rarity control.
+     *
+     * **The tag filters used to sit in that same position and no longer do.** The index still
+     * has no tag dimension — it cannot, since a tag is a fact about an illustration or an
+     * oracle card rather than about a printing — but `run_facets` resolves each picked slug
+     * through its closure into a bitset, intersects those with the FTS one and hands `compute`
+     * the single narrowing set it takes. So a wall narrowed to a motif is faceted over the
+     * motif, and this mirror narrows with it: {@link matchesCardFilters} already reads all
+     * three fields for `search_cards`, so the whole of the change was to stop stripping them
+     * out of the base below. A fake that had kept counting over the whole corpus would make
+     * the workbench disagree with the window about which sets a tagged search can still reach.
      */
     facet_cards: (args: { req: SearchRequest }): FacetResponse => {
       // A cold index is an answer and never an error, and **every map is empty on it** —
@@ -3302,6 +4120,18 @@ export function readHandlers(db: FakeDb) {
       const text = nonblank(req.text);
       /** The result set under every filter except `skip`'s. */
       const base = (skip: FacetSkip | null): FakeCard[] => {
+        // `rarity` leaves because the in-memory index has no dimension for it, so `facets::base`
+        // cannot narrow by one and a request carrying it is faceted as though it did not —
+        // **every count reads high**. Mirrored rather than improved on, and the direction is what
+        // makes that safe: over-counting leaves a control live, where under-counting would grey
+        // out options that would have worked and hide cards nobody reports missing. A fake that
+        // counted better than the backend would hide the divergence instead of the app showing
+        // it.
+        //
+        // **The three tag fields stay**, since 2026-08-20: `run_facets` resolves each picked slug
+        // through its closure into a bitset and ANDs it into every base, so the counts describe
+        // the tag-narrowed wall. They are in **every** base including their own for the reason
+        // `text` is — none of them is a facet, and there is no tag control on this row to grey.
         const f: CardFilters = { ...req, text: undefined, rarity: undefined };
         if (skip === "colors") f.colors = undefined;
         // Both halves of the chip row leave together, because they are one OR group and
@@ -3320,7 +4150,7 @@ export function readHandlers(db: FakeDb) {
           // Text is in every base **including its own**: it is not a facet, and a facet
           // describes the search the reader is looking at.
           if (text !== null && !cardMatchesText(c, text)) return false;
-          if (!matchesCardFilters(c, f, null)) return false;
+          if (!matchesCardFilters(db, c, f, null)) return false;
           // An entry and not a copy, exactly as `search_cards` reads it.
           if (skip !== "owned" && req.owned !== undefined) {
             const has = db.collectionEntries.some((e) => e.cardId === c.id);
@@ -3342,7 +4172,7 @@ export function readHandlers(db: FakeDb) {
        * back a narrowing the base already made. The base is where the request's value lives.
        */
       const countWith = (rows: FakeCard[], f: CardFilters) =>
-        rows.filter((c) => matchesCardFilters(c, { ...f, paperOnly: false }, null)).length;
+        rows.filter((c) => matchesCardFilters(db, c, { ...f, paperOnly: false }, null)).length;
 
       // **Every code in the corpus, zeros included.** A set the search narrowed away arrives
       // as an explicit 0, which is what lets the picker grey a row rather than drop it.
@@ -3739,6 +4569,27 @@ export function readHandlers(db: FakeDb) {
         .map(toDeckAudit);
     },
 
+    /**
+     * `deck_theory::theory_slots` — every card the plan asks for, as `group_key` strings.
+     *
+     * The deck editor's theory tick. **Not the diff and not derivable from it**: a card the
+     * reader has fully acquired is absent from the shopping list and is still in the plan.
+     *
+     * Same two exclusions {@link theoryDiff} states — inactive categories out, the pile
+     * otherwise invisible — and duplicates left in, because the caller builds a set.
+     */
+    deck_theory_slots: (args: { deckId: number }): string[] => {
+      refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
+      return db.deckCards
+        .filter(
+          (dc) =>
+            dc.deckId === args.deckId &&
+            dc.variant === "theory" &&
+            categoryById(db, dc.categoryId)?.isActive === true,
+        )
+        .map((dc) => `${dc.cardId}|${dc.finish ?? ""}`);
+    },
+
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
      *  {@link theoryDiff} for the direction, the grouping and the two exclusions. */
     deck_theory_diff: (args: { deckId: number; marketplace?: string }): TheoryDiffRow[] => {
@@ -3747,7 +4598,7 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::resolve_lines` — every name in a parsed decklist, resolved to a printing
+     * `import::resolve_lines` — every name in a parsed decklist, resolved to a printing
      * this app has. **Read-only**, and one call for the whole list.
      *
      * Six arms, tried in the order the reader's own intent runs out — **narrowest first, and
@@ -3778,11 +4629,11 @@ export function readHandlers(db: FakeDb) {
      * upper-cases `(MH2)` is the ordinary source of one. The collector number keeps its
      * case-insensitivity, which is the one place `COLLATE NOCASE` survives.
      */
-    deck_import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
+    import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
       // `is_paper = 1` is on every arm, so it is applied once here.
       const paper = db.cards.filter((c) => c.isPaper);
       // `c.name >= "{name} // " AND c.name < "{name} //!"`, which over a byte-wise comparison
-      // is exactly "carries that prefix" — see `deck_import::front_face_range` for the proof.
+      // is exactly "carries that prefix" — see `import::front_face_range` for the proof.
       const fronts = (name: string) => paper.filter((c) => c.name.startsWith(`${name} // `));
 
       return args.lines.map((line, index) => {
@@ -3838,7 +4689,7 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::read_import_file`, which **throws here and always will**.
+     * `import::read_import_file`, which **throws here and always will**.
      *
      * The real command takes a path `@tauri-apps/plugin-dialog`'s `open()` answered — a native
      * window CDP cannot drive and a browser does not have. So there is no gesture in a story
@@ -3847,7 +4698,7 @@ export function readHandlers(db: FakeDb) {
      * it would be the wrong one. A story that wants a list pastes one, which is the same string
      * travelling the same path from one line later.
      */
-    deck_import_read_file: (): string => {
+    import_read_file: (): string => {
       throw refuse(NO_FILE_PICKER);
     },
 
@@ -3987,7 +4838,7 @@ export function readHandlers(db: FakeDb) {
      * So it honours no fault — not `busy` (it is a read), and not the two of its own: those
      * change the *rows*, which is what a status is supposed to report.
      */
-    oracle_tags_status: (): OracleTagStatus => toOracleTagStatus(db),
+    oracle_tags_status: (): OracleTagStatus => toTagStatus(db.oracleTagMeta),
 
     /**
      * `oracle_tags::read_printing_tags` — the read every categorising call site makes, because
@@ -4019,6 +4870,114 @@ export function readHandlers(db: FakeDb) {
       const byOracle = slugsByOracleId(db);
       return wanted.map((oracleId) => ({ oracleId, slugs: byOracle.get(oracleId) ?? [] }));
     },
+
+    /**
+     * `tags::art::art_tags_status` — {@link readHandlers.oracle_tags_status} over the other
+     * taxonomy, and it cannot fail for the same reason: one small table, no network call, safe
+     * before the first refresh has ever run. It honours no fault, `artTagsMissing` included —
+     * that one changes the *rows*, which is what a status is supposed to report.
+     */
+    art_tags_status: (): TagStatus => toTagStatus(db.artTagMeta),
+
+    /**
+     * `tags::query::tag_search` — type-ahead over one taxonomy or both.
+     *
+     * **Substring, and the exact hit ranked first.** That is a deliberate departure from
+     * Scryfall, verified live 2026-08-20: `otag:remov` 404s and `otag:*spot*` answers nothing
+     * because `*` is stripped as punctuation, so there is nothing to borrow and a reader told
+     * "no such tag" until they spell `dogs-of-war` exactly is not using a search box. The three
+     * bands are exact, prefix, substring, and they are compared against `slugNorm` — the column
+     * the ingest wrote with {@link normalizeTag} and the needle goes through the same function,
+     * because two copies that must agree will not.
+     *
+     * **An empty or all-punctuation `text` matches everything rather than nothing**, so an
+     * untouched box answers the tags with the widest reach. That is a usable starting page; an
+     * empty list would make the box look broken before it had been typed in.
+     *
+     * **`limit` caps the *merged* answer**, and each taxonomy is asked for its own top `limit`
+     * first — which is exact rather than approximate, since the global top `limit` can hold at
+     * most `limit` rows from either side.
+     *
+     * A muted tag is absent from this, from a parent's `childCount` and from anyone's `parents`.
+     * It is **not** a card filter: a visible tag's `cardCount` is still its full reach, and
+     * nothing in {@link matchesCardFilters} consults the mute table. Hiding a card because one of
+     * its tags was muted would be a silent loss of results.
+     */
+    tag_search: (args: { text: string; namespace: string; limit: number }): TagHit[] => {
+      const needle = normalizeTag(args.text);
+      const scored: { band: number; hit: TagHit }[] = [];
+      for (const ds of tagDatasets(db, args.namespace)) {
+        const own = ds.tags
+          .filter((row) => row.slugNorm.includes(needle) && tagVisible(db, ds.namespace, row))
+          .map((row) => ({
+            band: row.slugNorm === needle ? 0 : row.slugNorm.startsWith(needle) ? 1 : 2,
+            hit: toTagHit(db, ds, row),
+          }))
+          .sort(byTagRank)
+          .slice(0, args.limit);
+        scored.push(...own);
+      }
+      return scored.sort(byTagRank).slice(0, args.limit).map((s) => s.hit);
+    },
+
+    /**
+     * `tags::query::tag_children` — one level of the tree: the children of `slug`, or the
+     * **roots** when it is absent.
+     *
+     * A root is a tag with no parent edge at all. A tag with several parents is listed under
+     * every one of them, which is the honest reading of a graph rather than a tree — picking one
+     * branch to show `forest` in would hide it from the other — and its `parents` name the rest
+     * so the rail can say so.
+     *
+     * **Unlimited, deliberately**: this draws one level of a tree (3 219 art roots in the real
+     * taxonomy) and an arbitrary cut would silently lose branches.
+     *
+     * **A muted tag takes its subtree off the rail with it**, since its children are not roots
+     * and no other path reaches them unless they have a second parent. That is the cost of muting
+     * a category, it is recoverable by unmuting, and the children stay findable through
+     * {@link readHandlers.tag_search}.
+     *
+     * `"both"` looks the **same slug** up in each taxonomy, which is right for the roots and is
+     * two unrelated questions for a named parent — the two share plenty of slugs and mean
+     * different things by them. A rail that has descended into one namespace should be asking
+     * about that namespace.
+     */
+    tag_children: (args: { namespace: string; slug: string | null }): TagHit[] => {
+      const scored: { band: number; hit: TagHit }[] = [];
+      for (const ds of tagDatasets(db, args.namespace)) {
+        for (const row of ds.tags) {
+          if (!tagVisible(db, ds.namespace, row)) continue;
+          const wanted =
+            args.slug === null
+              ? !ds.parents.some((e) => e.childSlug === row.slug)
+              : ds.parents.some((e) => e.childSlug === row.slug && e.parentSlug === args.slug);
+          // No band to compute: every row here is the same kind of match.
+          if (wanted) scored.push({ band: 0, hit: toTagHit(db, ds, row) });
+        }
+      }
+      return scored.sort(byTagRank).map((s) => s.hit);
+    },
+
+    /**
+     * `tags::muted::list` — everything the reader has hidden, for the Settings list that gives it
+     * back.
+     *
+     * Ordered by taxonomy then by the **stored** slug rather than by `mutedAt`, because the list
+     * exists to be searched by eye for the tag to give back; `tagId` breaks the tie so the order
+     * is total even after a rename has left two rows sharing a slug.
+     */
+    tags_muted: (): MutedTag[] =>
+      [...db.mutedTags]
+        .map((m) => ({
+          namespace: m.namespace as TagNamespace,
+          tagId: m.tagId,
+          slug: m.slug,
+          mutedAt: m.mutedAt,
+        }))
+        .sort(
+          (a, b) =>
+            cmp(a.namespace, b.namespace) || cmp(a.slug, b.slug) || cmp(a.tagId, b.tagId),
+        ),
 
     /**
      * `error_log_list` — newest first, clamped exactly as the Rust does.
@@ -4060,6 +5019,9 @@ export function readHandlers(db: FakeDb) {
  * thing that holds it.
  */
 const BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
+
+/** `reset::SYNCING`, verbatim — the one refusal `cache_clear` has. */
+const CACHE_SYNCING = "a card update is running — clear the cache once it has finished";
 /** `collection::GONE` — what an *adjustment* says when the row it names is not there. */
 const ENTRY_GONE = "That collection entry is not there any more.";
 /** `wishlist::set_wish_quantity`'s twin of the above. */
@@ -4368,8 +5330,10 @@ function validMetaName(name: string, what: string): string {
 }
 
 /** `deck_meta::valid_color` — non-empty, and **nothing more**. `deck_tags.color` carries no
- *  CHECK: it names a token from the app's fixed palette, and picking from that palette is the
- *  webview's job (`features/decks/tagColors.ts`), not the backend's. */
+ *  CHECK: it holds `#rrggbb` (a palette token, before 2026-08-20), and deciding what a colour
+ *  *is* is the webview's job (`features/decks/tagColors.ts`), not the backend's. The seeds below
+ *  still hold the retired token words on purpose — a database older than the build is a shape
+ *  the workbench should be able to draw. */
 function validColor(color: string): string {
   const trimmed = color.trim();
   if (trimmed !== "") return trimmed;
@@ -4865,6 +5829,139 @@ function cardGone(category: string): string {
 }
 
 /**
+ * `collection::add_entry`, as a function rather than only a handler — the quick-add, folding
+ * into the row that already holds this grain. `collection_add` and `collection_import_commit`'s
+ * `add` mode both write through here, so the grain's fold rule lives in one place.
+ */
+function addEntry(db: FakeDb, input: EntryInput): EntryChange {
+  const finish = validFinish(input.finish);
+  const condition = validCondition(input.condition);
+  // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
+  // conjure a row out of a card the user never said they had. Zero is a state a row is
+  // moved to, never one it is created in.
+  if (input.quantity <= 0) throw refuse(ZERO_ADD);
+  const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+  const grading = canonicalGrading(input.grading);
+  const card = requireCard(db, input.cardId);
+
+  const row: FakeEntry = {
+    id: 0,
+    cardId: input.cardId,
+    finish,
+    condition,
+    quantity: input.quantity,
+    // A tradelist bigger than the pile it is drawn from is not a promise anyone can
+    // keep, and the importer is the caller that will send one.
+    tradelistQuantity: Math.min(tradelist, input.quantity),
+    // Read from `cards` at write time and never from the caller: letting a caller supply
+    // these would let a caller disagree with the card it named.
+    lang: card.lang,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    purchasePrice: input.purchasePrice ?? null,
+    purchaseCurrency: input.purchaseCurrency ?? null,
+    acquiredAt: input.acquiredAt ?? null,
+    acquisitionSource: input.acquisitionSource ?? null,
+    serialNumber: input.serialNumber ?? null,
+    altered: input.altered ?? false,
+    signed: input.signed ?? false,
+    proxy: input.proxy ?? false,
+    misprint: input.misprint ?? false,
+    grading,
+    conditionOriginal: input.conditionOriginal ?? null,
+    // The column's own `DEFAULT '[]'`: a tags string is never null.
+    tags: input.tags ?? "[]",
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+
+  const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
+  if (existing) {
+    // The quantities add; everything else is first-writer-wins. A second add of a card
+    // you already own is "one more of these", not "and here is what I paid this time".
+    // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
+    // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
+    // provenance of the condition already there, which a later add cannot retroactively
+    // change. The entry editor is where both change.
+    existing.quantity += row.quantity;
+    existing.tradelistQuantity = Math.min(
+      existing.tradelistQuantity + tradelist,
+      existing.quantity,
+    );
+    existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+    existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+    existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+    existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.collectionEntries);
+  db.collectionEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
+ * `collection::set_entry` — `addEntry` with one clause changed: the grain's quantity is
+ * **written**, not accumulated, which is what a `set` import means. Every other column keeps
+ * `addEntry`'s first-writer-wins rule, and `tradelistQuantity` follows `collection_set_quantity`'s
+ * own clamp (`min(existing, new quantity)`) rather than the additive cap, because a written
+ * total is not a delta.
+ */
+function setEntry(db: FakeDb, input: EntryInput): EntryChange {
+  const finish = validFinish(input.finish);
+  const condition = validCondition(input.condition);
+  validQuantity(input.quantity, "collection quantity");
+  const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
+  const grading = canonicalGrading(input.grading);
+  const card = requireCard(db, input.cardId);
+
+  const row: FakeEntry = {
+    id: 0,
+    cardId: input.cardId,
+    finish,
+    condition,
+    quantity: input.quantity,
+    tradelistQuantity: Math.min(tradelist, input.quantity),
+    lang: card.lang,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    purchasePrice: input.purchasePrice ?? null,
+    purchaseCurrency: input.purchaseCurrency ?? null,
+    acquiredAt: input.acquiredAt ?? null,
+    acquisitionSource: input.acquisitionSource ?? null,
+    serialNumber: input.serialNumber ?? null,
+    altered: input.altered ?? false,
+    signed: input.signed ?? false,
+    proxy: input.proxy ?? false,
+    misprint: input.misprint ?? false,
+    grading,
+    conditionOriginal: input.conditionOriginal ?? null,
+    tags: input.tags ?? "[]",
+    notes: input.notes ?? null,
+    needsReview: null,
+    updatedAt: stamp(db),
+  };
+
+  const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
+  if (existing) {
+    existing.quantity = row.quantity;
+    existing.tradelistQuantity = Math.min(existing.tradelistQuantity, row.quantity);
+    existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
+    existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
+    existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
+    existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
+    existing.notes = existing.notes ?? row.notes;
+    existing.updatedAt = row.updatedAt;
+    return { id: existing.id, quantity: existing.quantity, removed: false };
+  }
+  row.id = nextId(db.collectionEntries);
+  db.collectionEntries.push(row);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
  * `wishlist::add_wish`, as a function rather than only a handler.
  *
  * `deck::missing_to_wishlist` writes **through** this for the reason the Rust does: the
@@ -4965,75 +6062,7 @@ export function writeHandlers(db: FakeDb) {
      *  grain. */
     collection_add: (args: { entry: EntryInput }): EntryChange => {
       refuseIfBusy(db);
-      const input = args.entry;
-      const finish = validFinish(input.finish);
-      const condition = validCondition(input.condition);
-      // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
-      // conjure a row out of a card the user never said they had. Zero is a state a row is
-      // moved to, never one it is created in.
-      if (input.quantity <= 0) throw refuse(ZERO_ADD);
-      const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
-      const grading = canonicalGrading(input.grading);
-      const card = requireCard(db, input.cardId);
-
-      const row: FakeEntry = {
-        id: 0,
-        cardId: input.cardId,
-        finish,
-        condition,
-        quantity: input.quantity,
-        // A tradelist bigger than the pile it is drawn from is not a promise anyone can
-        // keep, and the importer is the caller that will send one.
-        tradelistQuantity: Math.min(tradelist, input.quantity),
-        // Read from `cards` at write time and never from the caller: letting a caller supply
-        // these would let a caller disagree with the card it named.
-        lang: card.lang,
-        setCode: card.setCode,
-        collectorNumber: card.collectorNumber,
-        purchasePrice: input.purchasePrice ?? null,
-        purchaseCurrency: input.purchaseCurrency ?? null,
-        acquiredAt: input.acquiredAt ?? null,
-        acquisitionSource: input.acquisitionSource ?? null,
-        serialNumber: input.serialNumber ?? null,
-        altered: input.altered ?? false,
-        signed: input.signed ?? false,
-        proxy: input.proxy ?? false,
-        misprint: input.misprint ?? false,
-        grading,
-        conditionOriginal: input.conditionOriginal ?? null,
-        // The column's own `DEFAULT '[]'`: a tags string is never null.
-        tags: input.tags ?? "[]",
-        notes: input.notes ?? null,
-        needsReview: null,
-        updatedAt: stamp(db),
-      };
-
-      const existing = db.collectionEntries.find(
-        (e) => collectionGrain(e) === collectionGrain(row),
-      );
-      if (existing) {
-        // The quantities add; everything else is first-writer-wins. A second add of a card
-        // you already own is "one more of these", not "and here is what I paid this time".
-        // `tags` and `conditionOriginal` are not in the DO UPDATE at all, for opposite
-        // reasons: tags are a set the user curates on the row, and `conditionOriginal` is the
-        // provenance of the condition already there, which a later add cannot retroactively
-        // change. The entry editor is where both change.
-        existing.quantity += row.quantity;
-        existing.tradelistQuantity = Math.min(
-          existing.tradelistQuantity + tradelist,
-          existing.quantity,
-        );
-        existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
-        existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
-        existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
-        existing.acquisitionSource = existing.acquisitionSource ?? row.acquisitionSource;
-        existing.notes = existing.notes ?? row.notes;
-        existing.updatedAt = row.updatedAt;
-        return { id: existing.id, quantity: existing.quantity, removed: false };
-      }
-      row.id = nextId(db.collectionEntries);
-      db.collectionEntries.push(row);
-      return { id: row.id, quantity: row.quantity, removed: false };
+      return addEntry(db, args.entry);
     },
 
     /** `collection::set_quantity` — the stepper. **Zero keeps the row**, with its condition,
@@ -5112,6 +6141,55 @@ export function writeHandlers(db: FakeDb) {
       return { id: args.id, quantity: 0, removed: true };
     },
 
+    /**
+     * `collection::commit_import` — one transaction for a whole imported file, mirrored here as
+     * one loop over the same `addEntry`/`setEntry` operations `collection_add` performs one
+     * line at a time. A refused item must roll the whole file back, and there is no real
+     * transaction in an in-memory array to do that for us — so the array is snapshotted first
+     * and restored if anything throws, which is this fake's stand-in for it.
+     *
+     * `added`/`updated` are counted by row-count before and after, exactly as the backend
+     * does: a hand-written lookup on the ten-column grain here would be a second copy of
+     * `collectionGrain`'s own definition.
+     */
+    collection_import_commit: (args: {
+      items: CollectionImportItem[];
+      mode: TransferImportMode;
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.mode !== "add" && args.mode !== "set") {
+        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+      }
+      const before = db.collectionEntries.length;
+      const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+      try {
+        for (const item of args.items) {
+          const entry: EntryInput = {
+            cardId: item.cardId,
+            finish: item.finish,
+            quantity: item.quantity,
+            condition: item.condition,
+            conditionOriginal: item.conditionOriginal,
+            purchasePrice: item.purchasePrice,
+            purchaseCurrency: item.purchaseCurrency,
+            acquiredAt: item.acquiredAt,
+            acquisitionSource: item.acquisitionSource,
+            notes: item.notes,
+          };
+          if (args.mode === "add") {
+            addEntry(db, entry);
+          } else {
+            setEntry(db, entry);
+          }
+        }
+      } catch (e) {
+        db.collectionEntries = snapshot;
+        throw e;
+      }
+      const added = db.collectionEntries.length - before;
+      return { added, updated: args.items.length - added, removed: 0 };
+    },
+
     /** `wishlist::add_wish`. */
     wishlist_add: (args: { wish: WishInput }): EntryChange => {
       refuseIfBusy(db);
@@ -5136,6 +6214,62 @@ export function writeHandlers(db: FakeDb) {
     wishlist_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
       return removeWish(db, args.id);
+    },
+
+    /**
+     * `wishlist::commit_import` — one transaction for a whole imported file,
+     * `collection_import_commit`'s rule and the same snapshot/restore stand-in for it.
+     *
+     * The `set` arm reaches its row through `addWish` first, exactly as the backend does — it
+     * is the only code that knows the wishlist grain — and then corrects the quantity: `0`
+     * **deletes** the wish rather than leaving an empty one, `wishlist_set_quantity`'s own
+     * asymmetry with the collection's zero. `removed` is counted in the loop rather than
+     * derived from a row count, because a delete and an insert in one file would cancel out in
+     * a before/after count and report neither.
+     */
+    wishlist_import_commit: (args: {
+      items: WishlistImportItem[];
+      mode: TransferImportMode;
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.mode !== "add" && args.mode !== "set") {
+        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+      }
+      const before = db.wishlistEntries.length;
+      const snapshot = db.wishlistEntries.map((w) => ({ ...w }));
+      let removed = 0;
+      try {
+        for (const item of args.items) {
+          const wish: WishInput = {
+            oracleId: item.oracleId,
+            cardId: item.cardId,
+            quantity: item.quantity,
+            preferredFinish: item.preferredFinish,
+            notes: item.notes,
+          };
+          if (args.mode === "add") {
+            addWish(db, wish);
+            continue;
+          }
+          const change = addWish(db, wish);
+          validQuantity(item.quantity, "wishlist quantity");
+          if (item.quantity === 0) {
+            removeWish(db, change.id);
+            removed += 1;
+            continue;
+          }
+          const row = db.wishlistEntries.find((w) => w.id === change.id);
+          if (row) {
+            row.quantity = item.quantity;
+            row.updatedAt = stamp(db);
+          }
+        }
+      } catch (e) {
+        db.wishlistEntries = snapshot;
+        throw e;
+      }
+      const added = db.wishlistEntries.length - before + removed;
+      return { added, updated: args.items.length - added - removed, removed };
     },
 
     /**
@@ -5937,7 +7071,7 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::commit_import` — a whole decklist into one deck, in one transaction.
+     * `import::commit_import` — a whole decklist into one deck, in one transaction.
      *
      * **The command exists for the allocator.** Looping {@link deck_add_card} would be correct
      * in every other respect and would rebuild the deck's claims once per line. In the app it
@@ -6555,6 +7689,79 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `reset::collection_clear` — the whole table, and the cascade with it.
+     *
+     * **`allocations` is derived rather than read**, because simplification 2 says there is no
+     * allocations table here: `allocate` works out a deck's claims at read time from its live
+     * rows. So the number reported is the claims that *were* standing — one per live deck row
+     * whose card the reader owned — which is what the Rust counts before its `DELETE` and what
+     * the panel's sentence is about.
+     */
+    collection_clear: (): CollectionCleared => {
+      refuseIfBusy(db);
+      const owned = new Set(db.collectionEntries.map((e) => e.cardId));
+      const allocations = db.deckCards.filter(
+        (dc) => dc.variant === LIVE && owned.has(dc.cardId),
+      ).length;
+      const entries = db.collectionEntries.length;
+      db.collectionEntries = [];
+      return { entries, allocations };
+    },
+
+    /** `reset::wishlist_clear`. Nothing references the wishlist, so nothing else moves. */
+    wishlist_clear: (): number => {
+      refuseIfBusy(db);
+      const gone = db.wishlistEntries.length;
+      db.wishlistEntries = [];
+      return gone;
+    },
+
+    /**
+     * `reset::decks_clear` — every deck, everything that cascades from one, and the folders.
+     *
+     * The folders are the half a reader does not predict and the half this handler exists to
+     * make visible: `decks.folder_id` is `ON DELETE SET NULL`, so the crate clears
+     * `deck_folders` in a *second* statement, and a fake that stopped at the cascade would draw
+     * a gallery with an empty folder tree still standing in it.
+     *
+     * `covers` counts the decks showing a custom picture, which is what has a file in the app.
+     * A `card_art` deck has none, so counting decks would report pictures that were never there.
+     */
+    decks_clear: (): DecksCleared => {
+      refuseIfBusy(db);
+      const decks = db.decks.length;
+      const folders = db.deckFolders.length;
+      const covers = db.decks.filter((d) => d.coverKind === COVER_CUSTOM).length;
+      db.decks = [];
+      db.deckFolders = [];
+      db.deckCards = [];
+      db.deckCategories = [];
+      db.deckTags = [];
+      db.deckAudit = [];
+      db.deckUndo = [];
+      return { decks, folders, covers };
+    },
+
+    /**
+     * `reset::cache_clear` — the one button on this page that destroys nothing.
+     *
+     * Refuses mid-sync in the backend's own words, which is the state worth a story: the corpus
+     * download puts 77 MB in `data/tmp/` and reads it back, so the crate fences the whole
+     * command rather than skipping that one directory. That check happens *before* the write
+     * connection is asked for, so it is `syncing` that produces it here and not `busy`.
+     *
+     * `failed` is always 0: it counts files Windows would not unlink, which needs a second
+     * process holding one open and has no representation here.
+     */
+    cache_clear: (): CacheCleared => {
+      if (db.fault === "syncing") throw refuse(CACHE_SYNCING);
+      refuseIfBusy(db);
+      const { files, bytes, rows } = db.imageCache;
+      db.imageCache = { files: 0, bytes: 0, rows: 0 };
+      return { files, bytes, rows, failed: 0 };
+    },
+
+    /**
      * `marketplace::set_marketplace` — choose one, and refuse anything else.
      *
      * The refusal is what keeps `app_meta` from collecting junk: the read side falls back on an
@@ -6715,7 +7922,7 @@ export function writeHandlers(db: FakeDb) {
      */
     oracle_tags_refresh: (args: { force: boolean }): OracleTagStatus => {
       if (!args.force && !isTaxonomyStale(db.oracleTagMeta?.checkedAt ?? null, CLOCK_BASE)) {
-        return toOracleTagStatus(db);
+        return toTagStatus(db.oracleTagMeta);
       }
       emitFake("oracle-tags:progress", { phase: "checking", done: 0, total: 0 });
       if (db.fault === "oracleTagsFetchError") {
@@ -6754,10 +7961,142 @@ export function writeHandlers(db: FakeDb) {
       // whole ingest because there is genuinely no number, and a fixture that invented one here
       // would be storying a bar the app cannot draw.
       emitFake("oracle-tags:progress", { phase: "ingesting", done: 0, total: 0 });
+      // All four tables together, because one file writes all four and the swap is atomic: a
+      // watermark with no taxonomy behind it is the state the backend goes out of its way never
+      // to leave, since it is what makes the next check 304 past an empty database.
       db.oracleTags = oracleTagCards(db.cards);
+      db.oracleTagTaxonomy = oracleTagRows();
+      db.oracleTagParents = oracleTagEdges();
       db.oracleTagMeta = oracleTagMeta(CLOCK_BASE);
       emitFake("oracle-tags:progress", { phase: "done", done: 0, total: 0 });
-      return toOracleTagStatus(db);
+      return toTagStatus(db.oracleTagMeta);
+    },
+
+    /**
+     * `tags::art::art_tags_refresh` — {@link writeHandlers.oracle_tags_refresh} over the other
+     * taxonomy, phase for phase and refusal for refusal.
+     *
+     * Two of its neighbour's properties are worth restating rather than assumed, because they are
+     * what make this safe to call from a launch: **it does not honour `busy`** (the refresh opens
+     * with a read and a network call, and only its ingest takes the write lock, so a running sync
+     * delays it rather than refusing it at the door), and **`force` skips the weekly throttle and
+     * nothing else** — a run that is not due answers the status it already had and emits no event,
+     * which is why a story that wants the phases has to send `force: true`.
+     *
+     * The one figure that differs is the size: 12.5 MB against the oracle file's 5.85 MB, which is
+     * the reason `tags::art::refresh_if_due` is emphatic that neither the launch, the card sync
+     * nor the *oracle* refresh may ever wait on it.
+     */
+    art_tags_refresh: (args: { force: boolean }): TagStatus => {
+      if (!args.force && !isTaxonomyStale(db.artTagMeta?.checkedAt ?? null, CLOCK_BASE)) {
+        return toTagStatus(db.artTagMeta);
+      }
+      emitFake("art-tags:progress", { phase: "checking", done: 0, total: 0 });
+      if (db.fault === "artTagsFetchError") {
+        // **The rows stay.** A failed fetch leaves the previous taxonomy exactly where it was —
+        // an art theme somebody is mid-deck on must not evaporate because a download timed out —
+        // so this writes to `error_log` and to nothing else. `operation` names the dataset, which
+        // is what lets a reader tell an art tag failure from an oracle one in the same log.
+        db.errorLog = [
+          ...db.errorLog,
+          {
+            id: db.errorLog.length + 1,
+            firstAt: CLOCK_BASE,
+            lastAt: CLOCK_BASE,
+            source: "scryfall_api",
+            operation: "art_tags",
+            kind: "timeout",
+            message: "timed out after 30s",
+            detail: null,
+            count: 1,
+          },
+        ];
+        emitFake("art-tags:progress", { phase: "error", done: 0, total: 0 });
+        throw refuse(
+          "The art tags could not be downloaded. The Tags page will show what it already had " +
+            "until the next refresh.",
+        );
+      }
+      emitFake("art-tags:progress", { phase: "downloading", done: 0, total: ART_TAG_BYTES });
+      emitFake("art-tags:progress", {
+        phase: "downloading",
+        done: ART_TAG_BYTES,
+        total: ART_TAG_BYTES,
+      });
+      emitFake("art-tags:progress", { phase: "ingesting", done: 0, total: 0 });
+      db.artTags = artTagIllustrations(db.cards);
+      db.artTagTaxonomy = artTagRows();
+      db.artTagParents = artTagEdges();
+      db.artTagMeta = artTagMeta(CLOCK_BASE);
+      emitFake("art-tags:progress", { phase: "done", done: 0, total: 0 });
+      return toTagStatus(db.artTagMeta);
+    },
+
+    /**
+     * `tags::muted::tag_mute` — stop offering a tag anywhere.
+     *
+     * A write on `AppState.db`, so it is refusable by a running sync like every other, and the
+     * refusal comes **before** the two validations — that is the order the Rust has, because the
+     * connection is taken before the arguments are looked at.
+     *
+     * **Keyed on `(namespace, tagId)` and idempotent by it**: muting an already-muted tag
+     * refreshes the stored slug and the timestamp rather than adding a second row, which is what
+     * makes a rename harmless.
+     *
+     * **A blank `tagId` is refused, and that refusal is load-bearing.** One `muted_tags` row with
+     * an empty id would equal every un-refreshed `oracle_tags` row and take the entire oracle
+     * taxonomy off the page, with no error raised and nothing in `error_log`. {@link tagVisible}
+     * guards the read side against exactly that; this is the same fence at the only place the row
+     * can be created, which is the honest place to stop it. Both sentences are the crate's,
+     * verbatim.
+     */
+    tag_mute: (args: { namespace: string; tagId: string; slug: string }): void => {
+      refuseIfBusy(db);
+      if (args.namespace !== "art" && args.namespace !== "oracle") {
+        throw refuse(
+          `"${args.namespace}" is not a tag taxonomy this app knows. Expected "art" or "oracle".`,
+        );
+      }
+      if (args.tagId === "") {
+        throw refuse(
+          "That tag has no Scryfall id yet, so it cannot be muted. Refresh the tag data first.",
+        );
+      }
+      const held = db.mutedTags.find(
+        (m) => m.namespace === args.namespace && m.tagId === args.tagId,
+      );
+      if (held) {
+        held.slug = args.slug;
+        held.mutedAt = CLOCK_BASE;
+        return;
+      }
+      db.mutedTags = [
+        ...db.mutedTags,
+        {
+          namespace: args.namespace,
+          tagId: args.tagId,
+          slug: args.slug,
+          mutedAt: CLOCK_BASE,
+        },
+      ];
+    },
+
+    /**
+     * `tags::muted::tag_unmute` — give a tag back.
+     *
+     * A tag that was never muted is **not** an error: the row is gone either way, and a Settings
+     * list that raced a second window is not something to shout about.
+     *
+     * **Unlike {@link writeHandlers.tag_mute} this accepts a blank `tagId`**, and the asymmetry is
+     * the point: a row with an empty id is unreachable by any tag it was meant to name, so the
+     * only thing it can ever be is junk to delete. Refusing here would make the Settings list show
+     * a row nothing could remove. It validates no namespace either, for the same reason.
+     */
+    tag_unmute: (args: { namespace: string; tagId: string }): void => {
+      refuseIfBusy(db);
+      db.mutedTags = db.mutedTags.filter(
+        (m) => !(m.namespace === args.namespace && m.tagId === args.tagId),
+      );
     },
 
     /**
@@ -6848,7 +8187,7 @@ export function writeHandlers(db: FakeDb) {
      * so a sync running underneath it cannot refuse it. A story that seeded `busy` to watch an
      * export fail would be watching a refusal the app cannot produce.
      *
-     * **Nothing is stored, for {@link deck_import_read_file}'s reason turned around.** There is
+     * **Nothing is stored, for {@link import_read_file}'s reason turned around.** There is
      * no disk here and no table this belongs in — the fake stores `cards` and the user's rows,
      * and an export is neither — so what a story can observe is exactly what the app can: that
      * the write was accepted, or the sentence it was refused with. `ExportDialog` draws no
@@ -6886,7 +8225,7 @@ const SAVE_DIR = "D:\\Storybook\\";
  * them holds a connection.
  *
  * **`plugin:dialog|save` answers a path, and that is not the same decision as
- * `deck_import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
+ * `import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
  * difference is what would be invented: `open` + `read_import_file` would invent a *decklist*,
  * which is the entire subject of the screen it feeds, so a story built on one would be a story
  * about a thing that cannot happen. All this dialog produces is a **string naming a file**, and

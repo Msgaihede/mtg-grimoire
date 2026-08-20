@@ -41,6 +41,7 @@
  */
 import { Eraser, FileInput, FileOutput, Pencil, Power, PowerOff, Trash2 } from "lucide-react";
 import type { MenuItem } from "@/components/menu/types";
+import { fromDeckCard, type TransferCard } from "@/features/transfer/TransferCard";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
 
 /**
@@ -55,9 +56,9 @@ export interface CategoryExport {
   categoryId: number;
   /** The pile's name — `ExportDialog`'s `subject`, which titles it and names the file. */
   subject: string;
-  /** This pile's cards, and no other pile's. A whole {@link DeckCard} satisfies `ExportCard`,
-   *  so nothing is adapted on the way. */
-  cards: readonly DeckCard[];
+  /** This pile's cards, and no other pile's — as `TransferCard`s, through `fromDeckCard`, which
+   *  is the shape `ExportDialog` and `formatExport` speak now. */
+  cards: readonly TransferCard[];
 }
 
 /** Everything the category menu does that is not the category. Built once per surface, not
@@ -73,7 +74,7 @@ export interface CategoryMenuDeps {
    *  name the heading is showing. */
   startRename: (category: DeckCategory) => void;
   /** Open the importer with every line aimed at this pile — `buildImportPlan`'s trailing
-   *  argument, threaded through `ImportDeckDialog`. */
+   *  argument, threaded through `ImportDialog`. */
   openImport: (request: { forcedCategoryName: string }) => void;
   openExport: (request: CategoryExport) => void;
   /**
@@ -142,7 +143,9 @@ export function buildCategoryMenu(category: DeckCategory, deps: CategoryMenuDeps
         deps.openExport({
           categoryId: category.id,
           subject: category.name,
-          cards: deps.cards.filter((card) => card.categoryId === category.id),
+          cards: deps.cards
+            .filter((card) => card.categoryId === category.id)
+            .map(fromDeckCard),
         }),
     },
     // The two below change what the deck *counts*, so they sit under a rule. Switching a pile

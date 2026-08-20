@@ -51,8 +51,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **A trap this pass walked into**: `setDeviceMetricsOverride` survives the socket that set it,
   so a `size 1024 768` earlier in the run had the _next_ check reading a railed panel at what
   looked like 1280 — a regression that was not one. Read `innerWidth` in the same expression as
-  anything width-dependent; the harness contract says to end a run with an explicit `size 1280 800`
-  and this is the failure that rule is about.
+  anything width-dependent; the harness contract says to end a run by restoring the
+  `innerWidth`/`innerHeight` you read before the first override — the window's own size, which
+  since 2026-08-20 depends on the monitor — and this is the failure that rule is about.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats
@@ -855,7 +856,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
   `CategoriesDialog` and `TagsDialog` — two sections of one drawer that each cost a press and a
   scroll are two dialogs one press apart, each sized for what it draws. All of them and
-  `DeckSettingsDialog` are now built on **one shell, `src/features/decks/DeckDialog.tsx`**, so
+  `DeckSettingsDialog` are now built on **one shell, `src/components/Dialog.tsx`**, so
   "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
   `scrim` preset, `aria-modal`, `trapTab`, the `"inner"` Escape rung registered on the open flag
   (the panel outlives that flag by the length of its fade), and **nothing mounted while closed**,
@@ -1381,6 +1382,49 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
+## The theory tick, and the four things a photograph settled
+
+Added 2026-08-20 with `TheoryMatchMark` — the mark a deck card wears on the **Live** list when the
+deck's plan asks for it too. The rule and the data are in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); this is what looking at it
+changed, and every one of the four was a decision the suite could not have made.
+
+**How it was looked at.** Both locks were held by other worktrees all afternoon, so this was the
+lock-free path: a `file://` page linking the **built** `dist/assets/index-*.css`, with card art
+out of the image cache, the components' own class strings pasted onto the markup, and
+`msedge --headless=new --screenshot`. Before and after in one frame, and candidates side by side —
+which is the whole reason it can settle a question a test cannot. **The shipped-window pass was
+not run** and is still owed.
+
+- **The fill is `--color-pie-u`, not `bg-accent`.** Gold was the obvious first choice — a chip on
+  a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
+  gold marks in one 27px strip meaning two unrelated things. `--color-ok`, the green the format
+  check draws its clean-deck `CircleCheck` in, is legible and says the one sentence a tick must
+  not ("nothing is wrong here"). The neutral count paint was no distinction at all — a grey chip
+  at each end of the strip. Azure is none of those. It **is** one of the six tag colours, which is
+  the accepted cost: the quantity tag at the other end draws a *number*, so the two are still told
+  apart by content and position.
+- **The slant is mirrored** — `COUNT_TAG_SLANT_MIRRORED`. `CountTag`'s cut takes its bite out of
+  the edge *away* from the corner it is pinned to, which is what makes it read as a banner tucked
+  into that corner. Reused unmirrored on the right, the bite lands against the card's own edge and
+  leaves a notch. The mirrored pair read as bookends of the marks strip; the unmirrored one read
+  as a mistake. Same idea `GameChangerBanner` already states about its forked tail.
+- **The Grid tile gets a second drawing, not the same one.** One `CountTag` banner for both card
+  faces was the first cut: 22px on a 210px stacked card is 7.5 % of it and the same 22px on a
+  150px tile is **15 %**, so a wall of tiles read as a wall of blue flags with cards behind them.
+  `variant="chip"` echoes the tile's own 9px copy count instead — which is the honest reading of
+  "the same badge as the quantity" anyway, since the two views do not draw the same quantity badge.
+- **The row views get no box.** `GameChangerBadge`'s outlined box around a **tick** is a
+  **checkbox** — the one control every reader already knows — and a decklist of them reads as
+  something to click. `GC` survives the box because it contains letters. So `TheoryMatchBadge` is
+  the glyph alone, at `DeckFinishMark`'s 12px rather than `GC`'s 9px type.
+
+**One thing the frame shows and nobody has decided:** at the bottom-left of a stacked card the
+`RULE BREAK` mark lands **over the card's own printed set/collector/artist line**. `GridView` has
+drawn it in that corner all along, so this is existing shipped behaviour rather than something the
+move introduced — but the stacked card is 210px against a tile's 150 and covers proportionally
+more of it. Worth a look if the illustrator-credit rule above is ever read strictly.
+
 ## The two marks a deck card carries: picked, and just landed
 
 Added 2026-08-14. The rules and the routing live in
@@ -1696,7 +1740,7 @@ the 580 MB dev database).** Every figure below is a reading from that window.
 `activeView`, `selectedCardId`, `paneDeckContext`, `openDeckId` and `returnToDeckId` in one `set`,
 so a reader on the Collection lost their place and a reader in the deck editor lost the deck.
 Inside the editor the row went to the 384px card pane instead, which is the right content at the
-wrong width. Both are one `AllPrintingsDialog` now, on the `DeckDialog` shell.
+wrong width. Both are one `AllPrintingsDialog` now, on the `Dialog` shell.
 
 - **It opens over the view and moves nothing.** From a Search tile: `activeView` stayed `search`,
   `openDeckId` and `selectedCardId` stayed `null`, and the search box still read `lightning bolt`
@@ -1847,7 +1891,7 @@ would have parted company with them the first time either moved.
 
 ### One thing this pass did not fix
 
-Escape out of the modal drops the caret to `<body>`. That is `DeckDialog`'s behaviour for **every**
+Escape out of the modal drops the caret to `<body>`. That is `Dialog`'s behaviour for **every**
 dialog on the shell rather than anything this work introduced — the shell focuses its panel on
 mount and restores nothing on close — so it is recorded here and left alone. It is more visible now
 than it was: a reader who walks the deck from inside the modal and then closes it has to Tab back
@@ -1916,3 +1960,212 @@ clicked tile keeps the caret and ArrowRight then ArrowDown step 2 → 3 → 6 at
 pile's only card, and ArrowDown on the last card of a pile. Both are `null` from
 `nextStackPosition` and therefore a press left alone — worth writing down, because "nothing
 happened" looks identical to a dead handler and cost this pass two wrong diagnoses.
+
+## The window's own title bar, and the two questions only a live pass could answer
+
+**2026-08-20, `npm run tauri dev`, a debug build, at 1280×800.** `tauri.conf.json` sets
+`decorations: false` and `src/components/TitleBar.tsx` draws the caption instead.
+
+Two things research could not settle, and both are settled here by measurement rather than by
+reading an issue tracker. Tauri's tracker has "cannot resize an undecorated window on Windows"
+reported, closed, and reported again (#8519, #11975, #12207), and whether a plugin's injected
+script clears this app's `script-src 'self'` was a guess either way.
+
+**Edge-resize survives `decorations: false`.** The window keeps `WS_THICKFRAME` — its style
+reads `0x14CF0000`, and `WS_CAPTION` is still set too — and every border answers the hit-test
+that makes it draggable. Sent `WM_NCHITTEST` at each edge of the window rect:
+
+| Point | Answer |
+| --- | --- |
+| left / right edge | `HTLEFT` (10) / `HTRIGHT` (11) |
+| top / bottom edge | `HTTOP` (12) / `HTBOTTOM` (15) |
+| top-left / bottom-left nub | `HTTOPLEFT` (13) / `HTBOTTOMLEFT` (16) |
+| bottom-right nub | `HTBOTTOMRIGHT` (17) |
+| the drag region, and all three buttons | `HTCLIENT` (1) |
+
+The mechanism is a child window of its own: `EnumChildWindows` shows a
+**`TAURI_DRAG_RESIZE_BORDERS`** at 1280×800, which **collapses to 0×0 when the window is
+maximized** — correct, since a maximized window has no borders to drag. The window rect is
+**1296×809** for a **1280×800** client, so there is an 8px invisible grab margin on each side.
+
+**The buttons all read `HTCLIENT` from the parent, and that is not the whole answer** — the snap
+overlay is a *child* HWND, so asking the parent about that point is asking the wrong window. The
+overlay is a **`Static` child, 46×33, at the maximize button's exact screen rect**, and it answers
+**`HTMAXBUTTON` (9)** — which is what raises the Windows 11 Snap Layouts flyout. It tracked a
+maximize precisely: the button moved to DOM `2468,0` and the overlay to screen `2468,0`, same
+46×33, still answering 9.
+
+**The injected script is not governed by the page's CSP.** `tauri-plugin-snap-layout` injects
+through `js_init_script`, which the webview runs before the page exists, so `script-src 'self'`
+never applies — all five `__SNAP_LAYOUT_*` globals are present and `__SNAP_LAYOUT_IS_ATTACHED__()`
+answers `true`. **No CSP change was needed**, which was the deciding argument against
+`tauri-plugin-decoration`: that one renders its own HTML controls and wants a stylesheet source
+added. The console over a full session held 13 lines and one error, a `502` on an uncached card
+image (this worktree has no copied `data/`) — nothing about the caption.
+
+**Geometry, and what the 34px comes out of.**
+
+| | Before (2026-08-14) | After |
+| --- | --- | --- |
+| title bar | — | **1280×34** at `y: 0` |
+| `nav` | 208×800 at `y: 0` | **208×766** at `y: 34` |
+| `main` | 1072×742 at `y: 58` | **1072×708** at `y: 92` |
+
+**It comes off height, not width**, which is the one thing that made it affordable: the deck
+editor is measured against `main`'s *width* to the pixel (`DECK_FLOOR`, the docked panel, the
+602px desk row), and none of that arithmetic moves. The editor loses 34px of a scroll it already
+had — the same trade the ribbon's 48 → 56 made, four times over. `documentElement.scrollWidth`
+**1280** and `scrollHeight` **800** against a `clientHeight` of 800: nothing scrolls in either
+axis, so the column swap did not reintroduce the phantom scroll that section further up is about.
+
+A caption button is **46×33** — 46 is Windows' own caption-button width, and the 33 is 34 less the
+row's 1px `border-b`, since the button is `h-full` inside it. The close button's right edge is
+**exactly 1280**: flush, which is the whole reason these three have no radius and no margin.
+The wordmark computes to **Cinzel, 13px, `letter-spacing: 2.6px`** (0.2em) in
+`oklch(0.65 0.01 90)`, which is `--color-dim`.
+
+**All three buttons drive the window**, checked one at a time. Maximize took it 1280×800 →
+**2560×1392** and flipped the label to `Restore Down` and the glyph from `Square` (one child) to
+`Copy` (two); a second press restored both. Minimize left `IsIconic` **true**. Close ended the
+process. **What a CDP click cannot check is the path a real pointer takes**: CDP delivers input
+straight to the renderer, so it exercises the React `onClick` — a real cursor lands on the native
+overlay instead, which swallows the click and sends `SC_MAXIMIZE` itself. Both paths exist on
+purpose, and only the fallback one is drivable from here.
+
+## The app draws its own tooltips, and the sweep off `title` is done
+
+Full design: `docs/superpowers/specs/2026-08-20-tooltip-component-design.md`. `useTooltip()`
+(`src/components/tooltip/useTooltip.ts`) is the one door: `{...tip(words, options)}` on the
+element that already carries the hint. **A hint is that spread, never a `title` attribute and
+never an SVG `<title>` element.** Every real tooltip in the app is `useTooltip()`'s now; one
+native `title` survives on purpose (below), and everything else `title=` still matches in the
+tree is a component prop — a heading or a prop a component turns into a `useTooltip()` binding
+itself — never a native attribute a call site wrote. `title` and an SVG `<title>` still *work* in
+the sense the browser still honours either if one is ever written back in, which is exactly why
+this rule has to be stated rather than left to a linter: neither would go red.
+
+**One panel, `fixed`, mounted at the app root — because a virtualised row is both
+`position: absolute` and transformed, which caps every `z-index` inside it *and* makes that row
+the containing block for a `position: fixed` descendant.** A panel anchored inside a row inherits
+both traps at once; a panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
+(`z-46`, above `overlay`'s 45 because a hint can be shown over the deck editor's dialogs, below
+`gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
+something the reader cannot see), needs neither raised further nor clipped by an
+`overflow-hidden` scroller. `PrintingPreview` is what paying the alternative costs today: it
+places its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
+it has to stay inside its scroller's transform. `TooltipProvider` mounts in `src/App.tsx` and
+`.storybook/preview.tsx`, both above `ContextMenuProvider`, for that provider's own reason — its
+panel is a sibling of `children`, so a context nested inside it would wrap every view and none of
+the menu's own rows.
+
+**Each site is classified by what its words *are*, not run through a regex** — a regex cannot
+tell an icon-only button's only name from a description of an already-named one, and the sweep
+had to read every site rather than pattern-match it:
+
+| The words are… | What the site does |
+| --- | --- |
+| the element's **only** name | add `aria-label`, bind with `describes: false` — otherwise a reader hears "Duplicate, Duplicate" |
+| a **description** of something already named | the default: `aria-describedby` while the panel is open |
+| **redundant** — `whenClipped`, or a mark whose words are already visible text | `describes: false`; the panel is `aria-hidden` |
+
+**No shipped site is an example of the first row yet** — every converted site that carried an
+`aria-label` already had one before this task touched it. `CollectionTable.tsx`'s remove button
+is the shipped example of the *third* row instead: `title="Remove from your collection"` sat
+beside `aria-label="Remove {name} ({finish}, {condition}) from your collection"` from the day the
+file was written (`3a66119`, 2026-08-05, confirmed by `git show`) — never the button's only name,
+always redundant with a longer one it already had. It now binds
+`{...tip("Remove from your collection", { describes: false })}` and keeps the `aria-label`
+untouched. (This corrects an earlier version of this paragraph, which claimed the button had no
+`aria-label` before this task and would have lost its name outright — checked against source
+history and found false; the design doc's own §4 carried the same error and is corrected there.)
+
+**One second-row site was left native on purpose, and it is the only one left at all:
+`AppShell.tsx`'s drag-inert sidebar entry.** `DeckSearchPanel.tsx`'s "no room to search" hint and
+`DeckStats.tsx`'s "already on your wishlist" hint were both later converted like every other
+conditional description in the app — plain `useTooltip()` swaps, nothing left to say about
+either. `AppShell.tsx`'s is a sharper case than a missing `aria-label` would have been, which is
+why it stayed `title`: its own comment records that the sentence is never actually *shown* as a
+native tooltip at all, because Chromium freezes `:hover` at a drag's origin for the whole gesture,
+so mid-drag a reader gets the words only through the accname spec's description fallback rather
+than through the tooltip mechanism either API offers. `useTooltip()` opens on a hover the reader
+is equally not producing during that same gesture, so converting it would trade one hint that is
+never *seen* mid-drag (but is still read, through the fallback) for one that is never seen and
+never read either — a native `title` is strictly the better of the two here, not merely the one
+nobody got round to.
+
+**`whenClipped` never describes, on principle rather than as a default that happens to be set.**
+The text a `whenClipped` tooltip repeats is already complete in the DOM, and therefore in the
+accessibility tree — only the *paint* is cut off by `truncate` — so wiring `aria-describedby` for
+it would make a screen reader announce the same words twice.
+
+**Escape closes the open tooltip without calling `preventDefault()`, and it deliberately does not
+join `useDismissOnEscape`'s capture-phase ladder** — the handshake `src/CLAUDE.md`'s "Escape
+closes one layer per press" rule describes for every other dismissible layer in the app. That
+stack is for a layer the reader navigated *into*; its top rung consumes the press. A tooltip that
+opened because a pointer drifted over a control is not such a layer, and if it consumed Escape it
+would swallow the press meant for whatever dialog is open underneath it.
+
+**`pointer-events` inherits, so a tooltip bound to anything inside a `pointer-events-none`
+subtree can never be shown — and nothing goes red for it.** Unchanged from the `title`/SVG-
+`<title>` era this replaces (`FoilOverlay`'s chip needed `pointer-events-auto` against its
+wrapper's `none` for exactly this reason, above); a hit target invisible to the DOM is invisible
+to a test too, which is why it is worth restating at the new API rather than assuming the old
+lesson carries over on its own.
+
+**`useTooltip()` returns a no-op when no `TooltipProvider` is above it, and a dropped provider is
+silent** — every hint in the app, or every hint in Storybook, simply stops appearing, with no
+error and no red test at the call site that lost it. `src/lib/tokens.test.ts` pins both mounts
+(`App.tsx`, `.storybook/preview.tsx`) **and their ordering above `ContextMenuProvider`**, which is
+the one thing a source sweep can catch here — the same no-op trade `NO_MENU` makes in
+`menu/useContextMenu.ts`, for the same reason: after the sweep, most surfaces in the app bind a
+tooltip and each is also a story rendered on its own, so throwing on a missing provider would fail
+every one of them rather than the one call site that forgot.
+
+**The sweep off `title` is done, and this file will still not carry a running count of it.** It
+went in waves — a first proof slice (a truncated table cell, an interactive band, an icon-only
+button, `SortableHeader`'s shared description so the change reached every sortable table at once,
+one drawn inside a `DeckDialog` to prove `z-46` actually clears a real `z-45` scrim), then the
+rest of the app's surfaces, then a final whole-branch review's own fix wave (dropping four
+wrongly-`whenClipped` sites, unwrapping a `<span>` that had cost a control its keyboard path, and
+fixing the binder those wrapped sites still need). **The shape that survives all of that, rather
+than a count of it**: one native `title` left on purpose (`AppShell.tsx`'s drag-inert sidebar
+entry, stated above), and every other `title=` in the tree a component prop rather than a native
+attribute. A count here was wrong four separate times across this section and the design doc's
+own — a scan that sliced source at the wrong `>`, a stale figure days out from a moving chrome, a
+five-sites number that stopped being current the moment the next wave landed — and each wrongness
+looked exactly like every other line in this file until someone re-ran the scan. Grep `title=` for
+the actual number on the tree in front of you; do not write it down here a fifth time.
+
+**`whenClipped` only works on an element with a real layout box.** It measures `scrollWidth`
+against `clientWidth` on `event.currentTarget` — the element `tip()` is spread onto — and a
+`display: inline` span reports both as `0`, so the comparison is always `0 > 0`, the hint never
+opens, and **nothing goes red**: not jsdom, which has no layout engine and could not have caught it
+either way; not CI; not a story. The five-way sweep found this latent in the search table's set
+column (`SearchPage.tsx`): `truncate` sat on the cell wrapper, which is a grid item and blockifies
+for free, while the span carrying `{...tip(card.setName, { whenClipped: true })}` was a bare
+inline element with nothing of its own to clip. The fix is `block` on the bound span itself, not on
+an ancestor — the measurement happens on the anchor, so the box has to belong to the anchor. A
+`<p>`, a flex item and a grid item all have a layout box already; a bare `<span>` inside a
+non-flex, non-grid parent does not, and every `whenClipped` call site is worth checking against
+that question rather than assumed safe because the surrounding markup "looks like" a block. (The
+`block truncate` span survives this call site's own final-review fix, which found a second,
+unrelated defect there and dropped `whenClipped` from it entirely — the words shown are the set's
+*name* while the span's own text is its *code*, so gating the panel on the code's clip was gating
+it on the wrong string, not merely on an unmeasurable one. `block` still earns its keep: `truncate`
+needs the layout box regardless of what decides whether the panel opens.)
+
+**A tooltip bound `describes: false` — including every `whenClipped` one — carries no
+`role="tooltip"` and is `aria-hidden`.** `TooltipPanel.tsx` sets `role={open.describes ? "tooltip"
+: undefined}` and `aria-hidden` the other way, and `whenClipped` forces `describes: false` for the
+reason two paragraphs up — the text it repeats is already in the accessibility tree, so describing
+it too would be a screen reader saying the set name twice. A play or a test that reaches for
+`findByRole("tooltip")` on one of these sites does not fail fast: `findBy*` retries until its
+timeout, so the wrong query burns the full wait and then reports "unable to find", which reads like
+a hang rather than a wrong query — `SearchPage.stories.tsx`'s `GameChangerRow` reported a clean
+5000ms timeout for exactly this reason before it was traced back to `GameChangerMark.tsx`'s own
+`{...tip(GAME_CHANGER_HINT, { describes: false })}`. The correct query for a `describes: false` or
+`whenClipped` panel is by id — `TOOLTIP_PANEL_ID`, exported from `TooltipPanel.tsx` (the element is
+`#app-tooltip`) — the way `CardStack.test.tsx`'s `openTooltip` helper and `CountTag.stories.tsx`
+already do. `findByRole("tooltip")` stays correct, and is the faster failure, for a *describing*
+site (the default `describes: true`), because there the panel really does carry that role once
+open.

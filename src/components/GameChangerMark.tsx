@@ -1,4 +1,6 @@
+import type { SVGProps } from "react";
 import { Crown } from "lucide-react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
 /** The fact, in as few words as a screen reader can be asked to hear it. */
@@ -36,8 +38,10 @@ export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commande
  * **Two strings because there are two readers.** `aria-label` is the accessible name and stays
  * to the point — a screen reader announcing "crown" beside a card would be describing the icon
  * rather than the card, and announcing the whole sentence beside forty of them would be worse
- * than either. `<title>` is what a browser shows on hover, where there is room to say *which*
- * rules count it. The same split `FinishMark` makes, for the same reason.
+ * than either. The tooltip is what a pointer gets on hover, where there is room to say *which*
+ * rules count it — bound `describes: false`, since {@link GAME_CHANGER_LABEL} already names the
+ * glyph and a wired `aria-describedby` would repeat it. The same split `FinishMark` makes, for
+ * the same reason.
  *
  * The mark names itself; it does not hide itself. A caller that draws it inside a button whose
  * name is computed from its contents is the caller that must hide it — see `FoilOverlay`, which
@@ -50,16 +54,22 @@ export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commande
  * fallback keeps it exactly where it is anywhere the variable is not set.
  */
 export function GameChangerMark({ className }: { className?: string }) {
+  const tip = useTooltip();
   return (
     <Crown
       role="img"
       aria-label={GAME_CHANGER_LABEL}
+      // `TooltipBinding`'s four handlers are typed against `HTMLElement`, because every other
+      // anchor in the app is one; a lucide glyph is an `<svg>`, so the event objects the browser
+      // actually delivers here carry an `SVGSVGElement` `currentTarget` — which has every DOM
+      // method `TooltipProvider` calls on it (`getBoundingClientRect`, `isConnected`,
+      // `setAttribute`, `contains`), just not under the `HTMLElement` type. The cast says only
+      // that; it changes nothing about which events fire.
+      {...(tip(GAME_CHANGER_HINT, { describes: false }) as SVGProps<SVGSVGElement>)}
       className={cn(
         "inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-pie-gold",
         className,
       )}
-    >
-      <title>{GAME_CHANGER_HINT}</title>
-    </Crown>
+    />
   );
 }

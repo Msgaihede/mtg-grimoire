@@ -1,8 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { TagsDialog } from "./TagsDialog";
 
-/** How long a `waitFor` will wait for `DeckDialog`'s first frame — the shell's panel carries its
+/** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
  *  and why the number is seconds; each file keeps its own copy because CSF would index an
  *  exported one as a story. */
@@ -52,17 +53,19 @@ export const Default: Story = {
 /**
  * A deck with not one tag.
  *
- * The empty state is the one that has to invite: "No tags yet." over a field, and the names
- * other decks have used right under it.
+ * The empty state is the one that has to invite, and since the redesign it says what to do rather
+ * than only what is absent — the field it points at is now the first thing in the dialog rather
+ * than the last.
  */
 export const FirstOpen: Story = {
   args: { deckId: 2 },
   play: async ({ canvas }) => {
     // The panel's arrival, waited out once — everything under it is visible in the same tick,
     // which is why the suggestion below needs no wait of its own. See {@link FRAME_WAIT}.
-    await waitFor(async () => await expect(await canvas.findByText("No tags yet.")).toBeVisible(), {
-      timeout: FRAME_WAIT,
-    });
+    await waitFor(
+      async () => await expect(await canvas.findByText(/No tags yet/)).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
     // The palette is global, so a deck with no tags of its own is still offered every name the
     // reader has typed into another one.
     await expect(await canvas.findByRole("button", { name: "Add tag Cut candidate" })).toBeVisible();
@@ -77,8 +80,13 @@ export const Closed: Story = {
   },
 };
 
-/** A tag renamed and recoloured in one press — `deck_tag_update` has no patch shape, so the
- *  field sends both whichever one the reader touched. */
+/**
+ * A tag renamed — the word only, since the redesign.
+ *
+ * `deck_tag_update` still renames **and** recolours in one command with no patch shape, so this
+ * field sends the row's existing colour back untouched. The other half is `RecolouringATag`
+ * below, which sends the name back the same way.
+ */
 export const RenamingATag: Story = {
   play: async ({ canvas }) => {
     const tag = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;
@@ -87,12 +95,44 @@ export const RenamingATag: Story = {
     const field = await within(tag).findByLabelText("Rename Cut candidate");
     await userEvent.clear(field);
     await userEvent.type(field, "On the block");
-    await userEvent.click(within(tag).getByRole("button", { name: "Slate" }));
     await userEvent.click(within(tag).getByRole("button", { name: "Save" }));
 
     await waitFor(async () => {
       await expect(canvas.getByText("On the block")).toBeInTheDocument();
     });
+  },
+};
+
+/**
+ * The colour, reached from the swatch that is already showing it.
+ *
+ * **This is what the redesign moved.** Recolouring used to be reachable only by pressing Rename,
+ * which asked a reader who wanted a different red to open the control for changing the word. The
+ * swatch is a button now: it opens the picker under the row, and Done is the write.
+ */
+export const RecolouringATag: Story = {
+  play: async ({ canvas }) => {
+    const tag = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;
+    await userEvent.click(
+      within(tag).getByRole("button", { name: "Change colour of Cut candidate" }),
+    );
+
+    // The six the app sanctions, one press each — the wheel and the hex field beside them are
+    // what a colour outside the six arrives through.
+    await userEvent.click(within(tag).getByRole("button", { name: "Slate" }));
+    await userEvent.click(within(tag).getByRole("button", { name: "Done" }));
+
+    // The colour is a tooltip on the swatch now, not a `title` — hover it and read the panel.
+    // It describes the button (default `describes: true`) and mounts as a sibling of the whole
+    // story, not inside `tag`, so it is read off `canvas` rather than `within(tag)`.
+    const swatch = await waitFor(() =>
+      within(tag).getByRole("button", { name: "Change colour of Cut candidate" }),
+    );
+    await userEvent.hover(swatch);
+    const swatchTooltip = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(swatchTooltip).toHaveTextContent("#C8C4BF");
   },
 };
 

@@ -71,6 +71,58 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   used to cost +36 ms now costs +390 ms. The earlier claim that this was a "fraction more"
   survived one rewrite of this bullet on nothing but plausibility; it was false when written.
 
+- **Two keys joined that list on 2026-08-20 — `manaValue`, which orders by `c.cmc`, and
+  `released`, which orders by `c.released_at`.** Both are reachable only from the search filter
+  bar's sort picker: there is no column to press, the same way the collection's `added` has
+  none. Collapsed, both are answered **in the group step** rather than after the join, which is
+  why neither is in `REPRESENTATIVE_SORTS` — and both halves of that were checked exhaustively
+  against the corpus rather than argued. `min(c.cmc)` is that group's one mana value, exactly:
+  mana value is a fact about the _oracle_ card and the group key is
+  `coalesce(c.oracle_id, c.id)`, so every printing in a group should agree — and
+  **0 of 31 894 groups disagree**. And
+  `max(c.released_at)` _is_ the representative printing's own date rather than an aggregate
+  standing in for it, because `collapse_rep` picks the representative by `released_at` DESC
+  before it reaches price or `id` — **0 of 31 894 groups** have the two differ. Both counts are
+  of the corpus named in the next bullet, on the day it was read: strong evidence for a claim
+  about the SQL's structure, not a proof of it.
+- **Both new orders land in the _cheap_ class, and the four known ones were re-measured in the
+  same process to place them.** Measured 2026-08-20 through read-only `node:sqlite`
+  (Node v24.16.0) against the **debug** database at `src-tauri/target/debug/data/mtg.db`,
+  Windows, over **98 323 paper printings legal somewhere / 31 894 collapse groups**
+  (`is_paper = 1 AND legal_mask != 0` — the default browse). Prepared statement, two warm-ups,
+  median of nine, first page of 50 at offset 0.
+
+  | order                            | collapsed    | uncollapsed | path       |
+  | -------------------------------- | ------------ | ----------- | ---------- |
+  | `name` (control, index-covered)  | 105.0 ms     | 1.8 ms      | group step |
+  | `price` (control, index-covered) | 96.8 ms      | 20.7 ms     | group step |
+  | `set` (control, uncovered)       | 578.6 ms     | 748.3 ms    | after join |
+  | `rarity` (control, uncovered)    | 797.3 ms     | 767.7 ms    | after join |
+  | **`manaValue`**                  | **147.2 ms** | **28.7 ms** | group step |
+  | **`released`**                   | **152.2 ms** | **29.8 ms** | group step |
+
+  Collapsed, the two new orders are **~1.4–1.5×** the `name` control, against **~5.5–7.6×**
+  for the pair that runs after the join: pressing `Mana value` or `Released` costs tens of
+  milliseconds where a `set` or `rarity` press costs hundreds. Uncollapsed they are ~29 ms
+  against the control's 1.8 ms — both columns ride in `idx_cards_collapse` but **neither leads
+  it**, so neither order can be read off an index and each is a sort pass — and still ~25×
+  under the uncovered pair. So it is the **group step** that puts them in the cheap class, not
+  the "is the sort's column in the index" split above — the two rules agree on these two keys
+  only because both columns happen to be in the index as well.
+
+  **These figures do not belong in the table above and must not be compared to its numbers row
+  by row.** The SQL was rebuilt from `search.rs` by hand — the same `collapse_rep`, the same
+  group step, both correlated status subqueries — but it is **not** `run_search`: a different
+  SQLite build, no IPC hop, no DTO serialisation, a debug database, and a different corpus day
+  from the 2026-08-11 release session above. They were also taken on the **pre-fix** statement
+  shape, the join still re-sorting every page by name — the defect the collapsed-sort bullet
+  further down records — and whether restating the sort there moves them is unmeasured. The
+  controls are the whole reason this session answers anything: it was taken to place two
+  orders in a class, and it does that _internally_, against its own
+  `name`/`price`/`set`/`rarity` numbers and nothing else. **The rows in the table above are
+  still owed**, end to end through `invoke` on a release build, the way every row in it was
+  earned.
+
 - **"A text filter makes every sort cheap" is only true of a _narrow_ term**, and the old
   12–15 ms figure named none. Measured the same way, collapsed, over three breadths:
   `bolt` (45 matches) **4.4–4.5 ms** and the three orders indistinguishable; `dragon` (722)
@@ -213,12 +265,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   app's 10× name weighting. The CTE is built **only for ranked searches** — wrapping an
   unranked browse in a `MATERIALIZED` CTE would materialise all 107 k paper rows.
 - Collapsed, `set`/`rarity`/`type` are the **representative's** columns, so the group step
-  gives up its `LIMIT` and the sort runs after the join; name and price are answered by the
-  grouping itself. The mechanism stands; **its numbers are superseded and must not be quoted**
-  — the 670 ms unfiltered figure by the end-to-end table above (collapsed `set` 524.2 ms,
-  `rarity` 489.7 ms), and "88 ms with any text" by the breadth bullet above, which is the
-  finding that a text filter's help scales with how far it narrowed (4.4 ms on `bolt`, 69–78 ms
-  on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is not "any text".
+  gives up its `LIMIT` and the sort runs after the join; name, price and — since 2026-08-20 —
+  `manaValue` and `released` are answered inside the grouping. **But the grouping answers only
+  _which_ groups reach the page, never the order they arrive in** — the outer join carries its
+  own `ORDER BY`, and unless that restates the sort the page comes back in name order. It did
+  not restate it until 2026-08-20, and the older wording here ("name and price are answered by
+  the grouping itself") read as though it did: **right rows, wrong order**, on every collapsed
+  search the group step answered but name-ascending. Reproduced against the live database
+  2026-08-20 — price DESC returned the ten dearest groups listed alphabetically, and name DESC
+  the Z-end of the corpus presented ascending. The mechanism stands; **its numbers are
+  superseded and must not be quoted** — the 670 ms unfiltered figure by the end-to-end table
+  above (collapsed `set` 524.2 ms, `rarity` 489.7 ms), and "88 ms with any text" by the
+  breadth bullet above, which is the finding that a text filter's help scales with how far it
+  narrowed (4.4 ms on `bolt`, 69–78 ms on `dragon`, 2.1–2.4 s on `a`). One mid-breadth term is
+  not "any text".
 - **Art series outrank the card they depict, and collapse does not fix it.**
   `Lightning Bolt // Lightning Bolt` (`astx 76s`, `layout='art_series'`) held the phrase twice
   in its name field and bm25 rewarded it; art series carry their own `oracle_id`, so grouping
@@ -264,19 +324,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   of the switch opens their decks and finds them grouped exactly as they left them, and there is
   no backfill because there is nothing to compute. Nullable would have been three states for a
   two-state switch and a `coalesce` at every read site. It touches `cards` not at all, so it takes
-  the same free pass v8, v9, v11 and v12 take below: **v10 keeps the title of newest creator**, and
-  no `cards_fts` rebuild is owed. **It was written as v12 and renumbered to v13 on the merge** —
-  main's view-state step claimed the same number the same day — which is the ordinary weather of
-  this ladder rather than an accident; v10's paragraph below is the standing warning. What the
-  column _means_ is [decks-storage.md](decks-storage.md); nothing about the grouping it controls
-  is in Rust.
+  the same free pass v8, v9, v11 and v12 take below: it neither needs the `CARDS_INDEXES` replay
+  nor takes it over, and no `cards_fts` rebuild is owed. **It was written as v12 and renumbered
+  to v13 on the merge** — main's view-state step claimed the same number the same day — which
+  is the ordinary weather of this ladder rather than an accident; v10's paragraph below is the
+  standing warning. What the column _means_ is [decks-storage.md](decks-storage.md); nothing
+  about the grouping it controls is in Rust.
   v12 adds three columns to `decks` — `last_variant`, `last_group_by` and
   `last_sort_by`, all `TEXT NOT NULL` with defaults `live`, `category` and `alphabetical` — so
   the deck editor reopens on whatever the reader was last looking at, per deck. Like v8, v9 and
   v11 it touches `cards` not at all, so it neither needs the `CARDS_INDEXES` replay nor takes it
-  from v11, and it owes no `cards_fts` rebuild. None of the three is constrained in SQL — **and not because
+  over, and it owes no `cards_fts` rebuild. None of the three is constrained in SQL — **and not because
   `ALTER TABLE … ADD COLUMN` cannot add a CHECK**, which is what this said until 2026-08-17 and
-  is false (v18's `deck_cards.finish` adds one and it is enforced). The fence sits where the
+  is false (v19's `deck_cards.finish` adds one and it is enforced). The fence sits where the
   vocabulary is owned:
   `last_variant` against `schema::DECK_VARIANTS` in Rust, the other two narrowed in TypeScript on
   read — [decks-storage.md](decks-storage.md) has the reasoning.
@@ -288,7 +348,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   recovery plan; `card_id` is a _soft_ reference with **no foreign key**, since a feed and the
   corpus are collected on different days and a price for a printing this database has never
   seen is the expected case. The step touches `cards` not at all, so — like v8 and v9 — it
-  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
+  neither needs the `CARDS_INDEXES` replay nor takes it over, and it owes no `cards_fts`
   rebuild. See
   [the price-feed spec](../superpowers/specs/2026-08-12-marketplace-price-feeds-design.md).
   v10 adds `cards.legal_mask`, backfills it, and widens
@@ -304,13 +364,58 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   user-owned category and added the deck's four new tables —
   [decks-storage.md](decks-storage.md) describes it.
   v7 is the collapse index's version and has **no statements of its own**: `CARDS_INDEXES`
-  describes the table _at head_ and now names `legal_mask`, so **only the newest step may
-  create from that list**, and every step below v10 creates no index at all. Every statement
-  in it is `IF NOT EXISTS`, which is what makes v10's replay "bring the index list up to date"
-  rather than a rebuild — but a step that _changes_ a definition must `DROP` it first, or the
+  describes the table _at head_ and now names `legal_mask` and `illustration_id`, so **only the
+  newest step may create from that list**, and every step below the current holder creates no
+  index at all. Every statement in it is `IF NOT EXISTS`, which is what makes that replay "bring
+  the index list up to date" rather than a rebuild — but a step that _changes_ a definition must
+  `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v19.** v19 adds one column and rebuilds one index — `deck_cards.finish`
+- **Schema is v20**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+  whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
+  ladder entry rots.
+  v20 adds **six tables, two columns, five indexes and a replay that moved**, and every one of
+  them is named below — a bare count is the thing that rots here, and a list is not.
+  Five of them: `art_tags`, `art_tag_parents`, `art_taggings`, the closure `art_tag_illustrations`
+  and the watermark `art_tag_meta` — Scryfall Tagger's *art* taxonomy, a parallel set rather than
+  a `kind` column on the oracle five, because an art tag is a fact about an **illustration** and a
+  single table would need a key that is an `oracle_id` on some rows and an `illustration_id` on
+  others. The sixth is the user table `muted_tags` (`namespace, tag_id, slug, muted_at`),
+  deliberately outside both `*_TAG_TABLES` lists: those are what a refresh drops and rebuilds
+  wholesale, and a reader's mutes must survive one.
+  The two columns are `oracle_tags.id` and `oracle_tags.slug_norm`, both
+  `TEXT NOT NULL DEFAULT ''` — the default is what makes `ADD COLUMN` legal on a `NOT NULL`
+  column, and it is why `tags::query`'s not-muted clause is `{alias}.id <> ''`: without that
+  fence one `muted_tags` row with an empty `tag_id` would equal every un-refreshed row and take
+  the whole oracle taxonomy off the page silently. Neither staging twin carries the default.
+  The five indexes are `idx_cards_illustration`, which joins `CARDS_INDEXES`, plus the **four**
+  in `TAG_INDEXES_SQL`: `idx_art_tags_norm` and `idx_oracle_tags_norm` over the two `slug_norm`
+  columns the type-ahead matches against, and `idx_art_tag_illustrations_slug` and
+  `idx_oracle_tag_cards_slug` over the two closures the reach count scans. **Those two
+  constants are the census** — read them rather than this sentence. The arithmetic that keeps
+  the number honest is `UNDO_V20`'s: three of the five come down by hand and two ride along on
+  the `art_*` tables being dropped. The four sit beside the tables rather than in them, because
+  both live tag tables are renamed over by a swap.
+  **This sentence said *three* on the day it was written**, and it is worth leaving the scar:
+  the paragraph below it already said four, `UNDO_V20` already said five, and the count still
+  went in wrong — inside the entry that opens by warning about exactly this. A number nobody
+  can go red over is a number to name a constant instead of writing down.
+  **And v20 takes the `CARDS_INDEXES` replay over from v10** — the ladder's standing rule, since
+  the list describes `cards` at head and v20 is the newest step to touch it. A database sitting
+  anywhere above v10 would otherwise never be handed `idx_cards_illustration`.
+  **`TAG_INDEXES_SQL` is also replayed at the tail of `migrate`, outside the ladder and from every
+  version, and that one is fatal** where `prepare_database`'s other repairs merely log. The reason
+  is a measurement rather than caution: `tags::query` counts a tag's reach with a correlated
+  `count(*)` over the closure — **49 ms** with `idx_art_tag_illustrations_slug` and **531 seconds**
+  without it, 11 531 candidate tags against a 951 499-row scan each, on a release build
+  2026-08-20. A database missing it does not get a slow Tags page; it gets a window that stops
+  responding on the first keystroke in the tag box, and nothing about that symptom points here.
+  A rung fires once and in one direction; an interrupted swap, a restored older data folder or a
+  future rename all lose an index a rung already spent. Every statement is
+  `CREATE INDEX IF NOT EXISTS`, so an ordinary launch pays four catalog lookups.
+  The corpus figures behind all of it:
+  [the art-tags research](../superpowers/research/2026-08-20-scryfall-art-tags.md).
+- v19 adds one column and rebuilds one index — `deck_cards.finish`
   (`NULL | 'foil' | 'etched'`, CHECKed) and `idx_deck_cards_grain` widened with
   `coalesce(finish, '')`. **A deck card names a finish**, which reverses the rule that had held
   since v5: foil is a *finish of a printing* in Scryfall's model rather than a printing, so
@@ -385,7 +490,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   id must name a category **of this deck** (`category_of_deck`), since nothing in the DDL says so —
   and knows nothing about what Auto _does_: `autoCategoryFor` reads Oracle tags and is TypeScript's.
   The step touches `cards` not at all, so like v8, v9, v11, v12, v13, v14 and v15 it neither needs
-  the `CARDS_INDEXES` replay nor takes it from v10, and owes no `cards_fts` rebuild.
+  the `CARDS_INDEXES` replay nor takes it over, and owes no `cards_fts` rebuild.
 - v15 adds `deck_categories.origin`
   (`TEXT NOT NULL DEFAULT 'user'`) — **who made the pile**: `'auto'` is the app, filing a card it
   had to invent a column for, `'user'` is the reader pressing "New category", and the four seeded
@@ -413,7 +518,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the v8 migration's own pile, holding real cards. Both ways of being wrong are mild and
   self-correcting: a mis-marked pile either hides until a card is added or draws until the reader
   deletes it, and neither loses a card. The step touches `cards` not at all, so like v8, v9, v11,
-  v12, v13 and v14 it neither needs the `CARDS_INDEXES` replay nor takes it from v10, and owes no
+  v12, v13 and v14 it neither needs the `CARDS_INDEXES` replay nor takes it over, and owes no
   `cards_fts` rebuild.
 - v14 adds Scryfall's Oracle Tags: `oracle_tags` (`slug` PK, label,
   description), `oracle_tag_parents` (`child_slug, parent_slug` — **many parents per child**,
@@ -431,7 +536,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   229 633 taggings over 35 969 distinct oracle ids · `weight` is `median` on 99.74 % of them
   and nothing branches on it. `oracle_id` is a **soft** reference like every other reference to
   `cards` in this schema, and the step touches `cards` not at all — so, like v8, v9 and v11, it
-  neither needs the `CARDS_INDEXES` replay nor takes it from v10, and it owes no `cards_fts`
+  neither needs the `CARDS_INDEXES` replay nor takes it over, and it owes no `cards_fts`
   rebuild. The four tables are filled through `oracle_tag_*_staging` and promoted by one rename
   transaction that carries the watermark with it: a half-populated closure is the one state a
   reader must never see, because a card whose ancestors landed and whose siblings did not
@@ -481,19 +586,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
-  **`v15_database`**, v17 to **`v16_database`** and v18 to **`v17_database`**. The fixtures it
+  **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
+  **`v18_database`** and v20 to **`v19_database`**. The fixtures it
   passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
   actually run over, and `v10_database` to 10 before it, for
   `the_v11_step_creates_the_marketplace_price_tables`. `v9_database` is a _different_ claim again
-  and is pinned to the literal 9: it is the last version **below the `CARDS_INDEXES` replay**,
-  which is the only thing that can prove a machine entering the ladder under v10 still ends up
-  with every index a fresh install has.
+  and is pinned to the literal 9: it **was** the last version below the `CARDS_INDEXES` replay,
+  and it kept its number when v20 took that replay over rather than following it — what only a
+  pre-v10 database can show is a *narrow* `idx_cards_collapse` being replaced, which is a fact
+  about version 9 and no other. `v19_database` is the last version below the replay now, and
+  proving that a machine entering the ladder below it still ends up with every index a fresh
+  install has is that fixture's job.
   **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
   for every one of them whose DDL is not idempotent.** Every rewind fixture —
   `v9_database`, `v10_database`, `v11_database`, `v12_database`, `v13_database`, `v14_database`,
-  `v15_database`, `v16_database`, `v17_database` — is built the same way, because
+  `v15_database`, `v16_database`, `v17_database`, `v18_database`, `v19_database` — is built the
+  same way, because
   only version 1's DDL is frozen and there is no way to _build_ a later database forwards:
   migrate to head, undo by hand, renumber. `migrate` then reads `user_version` once and walks
   every step above it, so each of those steps is **replayed** over the fixture.
@@ -506,14 +616,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   argument its own comment already made about the five `cards` columns it replays: a fixture that
   stopped at an earlier shape is a pre-v5 database wearing a v6 label.
   `CREATE TABLE IF NOT EXISTS` survives a replay; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
-  answers `duplicate column name`. That is why v18's two columns have to come back out in every
-  fixture below it, v16's `decks.default_category_id` in all six below **it**, v15's
-  `deck_categories.origin` in the five below that, v13's
-  `separate_x_group` in the four below that, and v12's three
-  view-state columns in the three below that, `v9_database` and
-  `v10_database` included — the three travel together as one `UNDO_V12` constant, so they cannot
-  drift apart fixture by fixture — while v11's `CREATE TABLE IF NOT EXISTS` tables need no line in
-  `v9_database` at all. **One named `UNDO_V…` constant per rung** is the shape that keeps this
+  answers `duplicate column name`. That is why **every non-idempotent rung has to come back out of
+  every rewind fixture below it** — v20's two `oracle_tags` columns, v19's `deck_cards.finish`
+  (index first: SQLite refuses `DROP COLUMN` on an indexed column), v18's two game columns, v16's
+  `decks.default_category_id`, v15's `deck_categories.origin`, v13's `separate_x_group`, and v12's
+  three view-state columns, which travel together as one `UNDO_V12` constant so they cannot drift
+  apart fixture by fixture — while v11's `CREATE TABLE IF NOT EXISTS` tables need no line in
+  `v9_database` at all.
+  **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
+  "all six below it" and "the five below that" against a fixture set that has grown twice since,
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V20}" src-tauri/src/schema.rs` is the
+  census of how many fixtures the newest rung reaches, and it answers for the tree you are
+  actually in. **One named `UNDO_V…` constant per rung** is the shape that keeps this
   cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
   whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to
   be a v10 must not already hold what the v11 step is being tested for creating.) Rewinding

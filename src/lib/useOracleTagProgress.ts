@@ -80,7 +80,9 @@ const RUNNING: OracleTagPhase[] = ["checking", "downloading", "ingesting"];
  *
  * A terminal event invalidates {@link ORACLE_TAGS_KEY}, which is what makes a refresh nobody in
  * this window started visible: the flag goes false on the refetched status, and every tag read
- * cached under that prefix asks again against a taxonomy that has just been swapped.
+ * cached under that prefix asks again against a taxonomy that has just been swapped. **It also
+ * invalidates the Tags page's two lists**, which are keyed elsewhere and would otherwise sit
+ * stale behind a notice that had already healed — see the handler.
  */
 export function useOracleTagProgress(): OracleTagRefresh {
   const queryClient = useQueryClient();
@@ -122,6 +124,17 @@ export function useOracleTagProgress(): OracleTagRefresh {
         // true on the status this window last read, and only a refetch takes it down.
         if (event.phase === "done" || event.phase === "error") {
           void queryClient.invalidateQueries({ queryKey: ORACLE_TAGS_KEY });
+          // **The two lists the Tags page draws, invalidated from here because this hook is the
+          // only thing listening on the oracle channel.** `AppShell` mounts it for the life of
+          // the window; the Tags page mounts no oracle equivalent, so without these an oracle
+          // ingest that lands while that page is open heals the "Oracle tags have not been
+          // downloaded yet" notice and leaves the rail and the type-ahead empty for the client's
+          // whole 30 s `staleTime` — half a fix, and the more visible half left undone.
+          // `TagsPage`'s `useArtTagStatus` does exactly this one taxonomy over; the keys are
+          // shared by both namespaces (`["tag-children", ns, slug]`, `["tag-search", text, ns]`),
+          // so a prefix is the only thing that reaches the oracle branch of either.
+          void queryClient.invalidateQueries({ queryKey: ["tag-children"] });
+          void queryClient.invalidateQueries({ queryKey: ["tag-search"] });
         }
       })
       .then((unlisten) => {

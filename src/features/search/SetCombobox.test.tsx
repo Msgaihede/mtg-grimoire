@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { SetSummary } from "@/lib/ipc";
 
 // `vi.hoisted`, because `vi.mock` is hoisted above every `const` in this file and the
@@ -49,15 +50,27 @@ const manySets = (n: number): SetSummary[] =>
     cardCount: 10,
   }));
 
+/**
+ * `TooltipProvider` is here for `useTooltip`'s own no-op reason: the greyed-set row's count
+ * below would bind a tooltip that can never open without it.
+ */
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const view = render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const view = render(
+    <QueryClientProvider client={qc}>
+      <TooltipProvider>{ui}</TooltipProvider>
+    </QueryClientProvider>,
+  );
   return {
     ...view,
     // Testing Library's `rerender` replaces the *whole* tree, provider included, so it has
     // to be handed the wrapper again or the second render finds no QueryClient.
     rerender: (next: ReactElement) =>
-      view.rerender(<QueryClientProvider client={qc}>{next}</QueryClientProvider>),
+      view.rerender(
+        <QueryClientProvider client={qc}>
+          <TooltipProvider>{next}</TooltipProvider>
+        </QueryClientProvider>,
+      ),
   };
 }
 
@@ -584,7 +597,12 @@ describe("SetCombobox", () => {
 
     const alpha = await screen.findByRole("option", { name: /Alpha/ });
     expect(alpha).toHaveAttribute("aria-disabled", "true");
-    expect(alpha).toHaveAttribute("title", "Limited Edition Alpha — nothing in this search");
+    await userEvent.hover(alpha);
+    const tooltip = await screen.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(tooltip).toHaveTextContent("Limited Edition Alpha — nothing in this search");
+    await userEvent.unhover(alpha);
     expect(screen.getByRole("option", { name: /Kamigawa/ })).not.toHaveAttribute("aria-disabled");
 
     await userEvent.click(alpha);

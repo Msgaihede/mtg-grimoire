@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { MotionGlobalConfig } from "motion/react";
+import { frame, frameData, MotionGlobalConfig } from "motion/react";
 import { afterEach } from "vitest";
 
 /**
@@ -26,6 +26,53 @@ import { afterEach } from "vitest";
  * browser, where the whole point is that a reader can watch the motion.
  */
 MotionGlobalConfig.skipAnimations = true;
+
+/**
+ * …and lands it **synchronously**, because "one frame" was still one frame too many.
+ *
+ * `skipAnimations` shortens an animation; it does not remove the hop through the frame loop.
+ * `motion-dom`'s `animateMotionValue` applies the skipped animation's final keyframe inside
+ * `frame.update(...)` (see `animation/interfaces/motion-value.mjs`), and that batch is
+ * scheduled on `requestAnimationFrame`. A `motion` element therefore paints its `initial` —
+ * for every preset in `lib/motion.ts` that is `opacity: 0` — and only reaches `opacity: 1` on
+ * the next frame.
+ *
+ * **That one frame is a flake, and it is the one that has been biting CI.** `findBy*` resolves
+ * the moment the element lands in the DOM, which is the render *before* the frame; the
+ * assertion that follows then runs against an ancestor still at `opacity: 0`. It fails as
+ * `expect(element).toBeVisible()`, and the two things that make it hard to read are worth
+ * writing down:
+ *
+ * * **`byRole` and `toBeVisible` disagree about opacity, and only about opacity.**
+ *   `isSubtreeInaccessible` tests `hidden`, `aria-hidden` and `display: none`; `toBeVisible`
+ *   tests those *and* `opacity`. So the query finds the element and the assertion then refuses
+ *   it — which reads like nonsense until you know that only an ancestor's opacity can do it.
+ * * **The failure prints the element with no children**, because jest-dom prints
+ *   `element.cloneNode(false)` — a *shallow* clone. An empty `<button />` in the message is the
+ *   printer, never evidence that the content had not arrived.
+ *
+ * Two CI runs pin it, and the pair is the proof it was never anyone's diff: run 32337273661
+ * failed `CardDetailPane.test.tsx > the foil view > is a view again…` on a feature branch, and
+ * run 32330052897 failed `CardDetailPane.stories.tsx > Legalities plays` on **`main`**.
+ *
+ * Running the batch inline closes the gap: the final keyframe is applied during the layout
+ * effect that starts the animation, so a `motion` element's `initial` is never observable
+ * after the commit and no assertion can lose the race. `keepAlive` work — the continuous
+ * loops, which are the ones that would recurse forever — is left on the real frame loop.
+ * Verified by delaying every `requestAnimationFrame` in the suite to **500ms**, 30× worse than
+ * a starved runner: with this the whole class passes, without it eight tests fail.
+ */
+const inline =
+  (scheduled: typeof frame.update): typeof frame.update =>
+  (process, keepAlive = false, immediate = false) => {
+    if (keepAlive) return scheduled(process, keepAlive, immediate);
+    process(frameData);
+    return process;
+  };
+// The two steps a skipped animation passes through: `update` carries the final keyframe onto
+// the motion value, `render` is what writes it to the element.
+frame.update = inline(frame.update);
+frame.render = inline(frame.render);
 
 // Testing Library only registers its own `afterEach(cleanup)` when Vitest runs with
 // `globals: true`, which this project does not. Without it every render stacks up in the

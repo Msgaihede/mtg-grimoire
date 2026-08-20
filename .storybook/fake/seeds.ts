@@ -32,12 +32,18 @@
 import { CARDS, type FakeCard } from "./cards";
 import {
   CLOCK_BASE,
+  artTagEdges,
+  artTagIllustrations,
+  artTagMeta,
+  artTagRows,
   makeDb,
   marketplaceFeedMeta,
   marketplaceFeedPrices,
   neverCheckedUpdate,
   oracleTagCards,
+  oracleTagEdges,
   oracleTagMeta,
+  oracleTagRows,
 } from "./db";
 import type {
   FakeDb,
@@ -956,24 +962,39 @@ function starterFeeds(cards: readonly FakeCard[]) {
 const FETCHED_AT = CLOCK_BASE - HOUR;
 
 /**
- * The Oracle tag taxonomy, already ingested — which is the state a reader who has had the app
- * open once is in, and the only one a deck story about *piles* can be written against. Without
- * it every add files by card type, and a story showing "Creature", "Instant", "Land" would be
- * showing the fallback rather than the feature.
+ * **Both** tag taxonomies, already ingested — which is the state a reader who has had the app
+ * open once is in, and the only one a deck story about *piles* or a Tags-page story about a
+ * *motif* can be written against. Without the oracle half every add files by card type, and a
+ * story showing "Creature", "Instant", "Land" would be showing the fallback rather than the
+ * feature; without the art half the Tags page has nothing on it at all.
  *
  * **`empty` and `large` deliberately go without**, exactly as they go without price feeds:
  * `empty` is a first launch and has no cards to tag, and `large`'s 5 243 synthetic printings
- * carry oracle ids the taxonomy has never heard of — they would all answer an empty list
- * anyway, which is honest and is what a seed about virtualisation should show. The
- * `oracleTagsMissing` fault is how a story stands in the never-ingested state on a *full*
- * corpus.
+ * carry oracle ids and illustration ids neither taxonomy has ever heard of — they would all
+ * answer an empty list anyway, which is honest and is what a seed about virtualisation should
+ * show. The `oracleTagsMissing` and `artTagsMissing` faults are how a story stands in the
+ * never-ingested state on a *full* corpus, one taxonomy at a time — which matters, because they
+ * are two files on two schedules and either can be absent while the other is there.
  *
- * Ingested at the same instant the feeds were fetched, which is well inside the taxonomy's own
- * seven-day window: `oracle_tags_status` answers `stale: false`, so nothing here is due for a
+ * Both ingested at the same instant the feeds were fetched, which is well inside the taxonomies'
+ * shared seven-day window: each status answers `stale: false`, so nothing here is due for a
  * refresh until a story forces one.
+ *
+ * **Four tables per taxonomy and they land together**, because one ingest writes all four: the
+ * tags, their parent edges, the flattened closure and the watermark. A watermark with no
+ * taxonomy behind it is the one state the backend goes out of its way never to write.
  */
 function starterTaxonomy(cards: readonly FakeCard[]) {
-  return { oracleTags: oracleTagCards(cards), oracleTagMeta: oracleTagMeta(FETCHED_AT) };
+  return {
+    oracleTags: oracleTagCards(cards),
+    oracleTagTaxonomy: oracleTagRows(),
+    oracleTagParents: oracleTagEdges(),
+    oracleTagMeta: oracleTagMeta(FETCHED_AT),
+    artTags: artTagIllustrations(cards),
+    artTagTaxonomy: artTagRows(),
+    artTagParents: artTagEdges(),
+    artTagMeta: artTagMeta(FETCHED_AT),
+  };
 }
 
 function starterSeed(): FakeDb {

@@ -1,6 +1,7 @@
 import { CircleArrowUp, RefreshCw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { ManaLine } from "@/components/ManaLine";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { Activity } from "@/lib/activity";
 import { PRESS, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,7 @@ export function Ribbon({
   updateInstallable = false,
   onOpenUpdate,
 }: RibbonProps) {
+  const tip = useTooltip();
   // Two sentences about one folder, in the tooltip that already names it. Not a banner:
   // every affected image still *displays* — the bytes were in hand when the write failed
   // — so nothing is broken on screen and interrupting the reader would overstate it. What
@@ -106,15 +108,14 @@ export function Ribbon({
   return (
     <div className="shrink-0">
       <div className="flex h-14 items-center gap-4 bg-surface px-5">
-        {/* The mark, not the product name: the window title bar already says that in full,
-            and 56px of vertical space is not where a five-word name earns its keep. Dim
-            rather than gold — gold means "you can act on this, or this is where you are",
-            and a wordmark is neither. Quiet, it reads as the first step of app › view. */}
-        <span aria-hidden="true" className="font-heading text-xl leading-none text-dim">
-          MTG
-        </span>
-        <span aria-hidden="true" className="h-5 w-px bg-border" />
-        {/* Cinzel's only job in the chrome, and never below 18px — the direction is
+        {/* **The dim `MTG` mark and its divider stood here until 2026-08-20, and what removed
+            them was the thing that justified them.** The comment on that mark read: "not the
+            product name: the window title bar already says that in full" — an argument resting
+            on Windows' caption, which `decorations: false` deleted. `TitleBar` says
+            `MTG GRIMOIRE` one row up now, in the same face and the same dim grey, so an
+            abbreviation of it 34px below was the name twice and app › app › view. The rung it
+            used to supply is supplied by the row above it. */}
+        {/* Cinzel's only job in this row, and never below 18px — the direction is
             explicit that the display face is for titles, not for interface text. 20px now,
             which moves it further from that floor rather than nearer it. */}
         <h1 className="truncate font-heading text-xl leading-none">{title}</h1>
@@ -172,7 +173,7 @@ export function Ribbon({
           <p
             role="status"
             className={said ? "min-w-0 truncate text-sm text-dim" : "sr-only"}
-            title={tooltip}
+            {...tip(tooltip)}
           >
             {said}
             {/* Hidden from the announcement, not from the eye: the label changes about four

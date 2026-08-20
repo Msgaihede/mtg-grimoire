@@ -15,6 +15,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the DDL rather than trusting either copy. CASCADE is also right at the app's one **non-user**
   delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
   _before_ the DELETE, so that cascade fires over nothing.
+- **`reset::decks_clear` is the one delete-site that clears `deck_folders` too, and it needs a
+  second statement to do it** (added 2026-08-20 with the Settings page's danger zone).
+  `DELETE FROM decks` takes `deck_cards`, `deck_categories`, `deck_tags`, `deck_audit`,
+  `deck_undo` and `deck_allocations` by cascade — but `decks.folder_id` is SET NULL for the
+  reason above, so a wipe that stopped there hands the reader an empty folder tree to delete by
+  hand. The covers are a third step and are swept **whole** rather than removed one id at a
+  time, which `deck::delete_deck` must not do: after this command there are no decks left, so
+  every `<id>.webp` in `data/covers/` is an orphan by construction — including one left by the
+  seam `set_cover_image` documents, a commit that failed after the bytes landed. The sweep runs
+  **after the commit**, because the other order costs a deck whose cover vanished for a
+  transaction that rolled back.
+- **`reset::collection_clear` is the largest cascade in the app**, and the number it reports is
+  counted *before* the DELETE for the reason that sounds obvious and is easy to get wrong: after
+  it, `deck_allocations` is empty whether it held ten rows or none, so counting afterwards would
+  report 0 in exactly the case the reader cares about. It goes through
+  `collection::with_write_owned` — the only caller of that helper outside `collection.rs` —
+  because the facet index's `owned` bitset is built from `collection_entries`.
 - **Schema v8 replaced the zone with a category the user owns.** `deck_cards.category_id`
   points at a `deck_categories` row they name, reorder, switch off and delete; the fixed word
   survives only as that row's **`kind`** — `main | side | commander | companion | maybe`,
@@ -43,7 +60,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `variant` widens it again: `live` is what is sleeved up, `theory` is what the deck is being
   built toward (`schema::DECK_VARIANTS`), so a change tried out in Theory can never silently
   overwrite the deck as it stands. Every card command takes all of them.
-- **`finish` is the fifth part, and it is v18's** (2026-08-17). `deck_cards.finish` is
+- **`finish` is the fifth part, and it is v19's** (2026-08-17). `deck_cards.finish` is
   `NULL | 'foil' | 'etched'`, so a pile holds `1 × Sol Ring (foil)` beside `3 × Sol Ring` as two
   rows — which is what a reader means by picking the foil printing, since Scryfall models foil as
   a _finish of a printing_ rather than as a printing and 53 224 of 107 337 paper printings carry
@@ -138,7 +155,7 @@ preferred_finish`'s nullability one table over.
 - **`last_variant` is validated in Rust and the other two are not, which is the boundary rather
   than an omission.** None of the three carries a CHECK in SQL, and the fence has to
   sit somewhere. **Not because `ALTER TABLE … ADD COLUMN` cannot add one** — that is what this
-  said until 2026-08-17 and it is false, as v18's `deck_cards.finish` demonstrates. `last_variant` is checked against
+  said until 2026-08-17 and it is false, as v19's `deck_cards.finish` demonstrates. `last_variant` is checked against
   `schema::DECK_VARIANTS`, because that is a word the crate owns — the same word
   `deck_cards.variant` holds. `last_group_by` and `last_sort_by` hold a **TypeScript**
   vocabulary (`category|manaValue|type` and `alphabetical|manaCost|price|type`) the crate
@@ -322,7 +339,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `coverCardId`, `folderId` and `theoryEnabled`, because the "New deck" dialog now hosts the same
   settings form the settings dialog does and would otherwise be create-then-patch-then-setFolder:
   three transactions, and a half-made deck to roll back by hand the way
-  `useDeckImport.importIntoNewDeck` has to. Four things about it that are **not** `deck_update`'s
+  `useImport.importIntoNewDeck` has to. Four things about it that are **not** `deck_update`'s
   rules, each of which a reader who knows the patch will get wrong:
   **(1)** nothing here is written with `coalesce(?n, column)` — this is an INSERT, so an absent
   `folderId` genuinely is the top level and means it, where `DeckPatch.folderId` cannot un-file a
@@ -518,7 +535,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   deliberately — the same variant and `touch_deck` fences, the same `DECK_CARD_GRAIN`
   `ON CONFLICT` fold (so a list naming a card twice is one row with the sum), the same
   `category_for_name` find-or-create (so a `Sideboard` section lands on the seeded `side` row
-  and makes nothing). `mode` is `merge` or `replace` (`deck_import::IMPORT_MODES`), and
+  and makes nothing). `mode` is `merge` or `replace` (`import::IMPORT_MODES`), and
   **`replace` clears the cards of the one variant it was given and leaves every category
   standing** — a category is the reader's filing, not the list's. An empty item list is refused
   in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
@@ -541,7 +558,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   deserialising, and absent means the ordinary counted pile an import has always made. Rust records
   the flag and concludes nothing from it: which lines carry it is `parse.ts`'s reading of the
   bracket's **first** entry, carried to the item by `plan.ts`.
-- **`deck_import_resolve` is the import's read half, and it answers the one question TypeScript
+- **`import_resolve` is the import's read half, and it answers the one question TypeScript
   cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
   reused down the list, tried narrowest first — a set **and** a collector number; the set with the
   name; the set with the name as a **front face**; the name, exactly; the name as a front face of
@@ -579,7 +596,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   (`Dakkon, Shadow Slayer` is the mechanism — `mh2` and `amh2` share a release date and the art
   series wins the `id` tie-break). Asked in sequence the exact name always answers first. A
   `MULTI-INDEX OR` **is** indexed, measured — and still wrong.
-- **`deck_import_read_file` takes a path, not bytes**, which is the same contract
+- **`import_read_file` takes a path, not bytes**, which is the same contract
   `deck_set_cover_image` uses and the whole reason `dialog:allow-open` is sufficient and **no
   `fs:` permission is granted anywhere**: a webview that can only _name_ a file needs none. The
   1 MB cap (`MAX_IMPORT_BYTES`, shared with the paste path so the two cannot disagree) is read off
@@ -588,8 +605,8 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   card name should cost that one name, not the other hundred lines — the `U+FFFD` it leaves bears
   no card's name, so the damaged line comes back quoted in the preview while everything else
   resolves. A `from_utf8` would answer `Err` for the whole file and name no line.
-- **The TypeScript half decides everything a _deck_ decision is** (`src/features/decks/import/`,
-  and its own [CLAUDE.md](../../src/features/decks/CLAUDE.md) carries the binding rules): one
+- **The TypeScript half decides everything a _deck_ decision is** (`src/features/transfer/import/`,
+  and its own [CLAUDE.md](../../src/features/transfer/CLAUDE.md) carries the binding rules): one
   parser with per-line rules only, the pile from `autoCategoryFor`, the commander from
   `commanderIneligibility`. The one type that crosses for it is **`CardIdentity`, the card-level
   half of `CardFacts`** — everything true of a printing and nothing true only of a row in a deck —
@@ -598,7 +615,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `quantity`, so a card in a deck is more than a card, and every existing caller passes a whole
   `DeckCard`, which satisfies a `Pick` of itself.
 - **The corpus the format work was designed against is three real exports of _one_ deck**, held
-  verbatim in `src/features/decks/import/fixtures.ts`. **Most of this table is asserted rather than
+  verbatim in `src/features/transfer/import/fixtures.ts`. **Most of this table is asserted rather than
   remembered**: `parse.test.ts`'s `the format fixtures` block counts the rows, the card lines, the
   copies, the 17 first-entry `{noDeck}` lines and the decoration columns off the fixture **text**
   rather than off the parser's reading of it, so a tidied fixture is a failing assertion rather
@@ -624,7 +641,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   what makes preferring the bracket safe.
 
 - **What the TypeScript side learnt for those exports**, each rule with the failure behind it in
-  [the deck folder's own CLAUDE.md](../../src/features/decks/CLAUDE.md): four per-line decorations
+  [the transfer feature's own CLAUDE.md](../../src/features/transfer/CLAUDE.md): four per-line decorations
   (an **empty** `()` hint, an Archidekt `^Tag,#colour^`, the `[Category]` bracket, the existing
   `*F*`) plus one heading rule that is **the only lookahead in the parser**; a bracket's first
   entry as the pile with `{flag}`s stripped, `{noDeck}` there meaning `is_active = 0` and `{noDeck}`
@@ -637,26 +654,27 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `resolve_lines` sets `hint_missed` for a collector number with no set beside it without trying it
   at all, so `EMPTY_HINT_LIST` previews **33 hint misses** where it previewed 33 unresolved cards.
   That is the honest trade and the alternative was 33 cards nothing found.
-- **The export side is the mirror, and `src/features/decks/decklists.test.ts` is what holds the two
-  writers and the parser to each other**: three real decklists crossed with every format
+- **The export side is the mirror, and `src/features/transfer/decklists.test.ts` is what holds the
+  two writers and the parser to each other**: three real decklists crossed with every format
   (`plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`), driven text → planner →
   writer → parser, with **every readable format a fixed point** — export → import → export
-  byte-identical. **Two of them are write-only and are excluded from that table by name**, so a
-  format dropped out of it by accident fails rather than shrinking the matrix quietly. `csv`,
-  because nothing in `parse.ts` reads a comma-separated decklist and teaching it one would be a
-  second grammar rather than a rule inside the one there is. `tcgplayer` (added 2026-08-18),
-  because its line is addressed to a shopping cart rather than to us: TCGplayer Mass Entry's most
-  specific shape is `2 Lightning Bolt [2X2] 117`, and `parse.ts`'s `BRACKET` is anchored to the
-  end of the line — so a bracket with a collector number after it is not a bracket to that parser
-  and the whole tail lands in the card's name. `format.test.ts` measures that (`Lightning Bolt
-[LEA] 161` comes back as one card _name_) rather than leaving the exclusion as a claim. It is
-  also the one flat format that keeps a switched-off pile: Arena and MTGO cut theirs because a
-  maybeboard is an illegal import at the other end, while a Mass Entry list is a cart and the pile
-  a reader switched off is usually what they still have to buy. Rust's only part in any of it is
-  `export_write_file` taking the path `save()` answered, for `deck_import_read_file`'s reason one
+  byte-identical. **One of them is write-only and is excluded from that table by name**, so a
+  format dropped out of it by accident fails rather than shrinking the matrix quietly. `tcgplayer`
+  (added 2026-08-18), because its line is addressed to a shopping cart rather than to us:
+  TCGplayer Mass Entry's most specific shape is `2 Lightning Bolt [2X2] 117`, and `parse.ts`'s
+  `BRACKET` is anchored to the end of the line — so a bracket with a collector number after it is
+  not a bracket to that parser and the whole tail lands in the card's name. `format.test.ts`
+  measures that (`Lightning Bolt [LEA] 161` comes back as one card _name_) rather than leaving the
+  exclusion as a claim. It is also the one flat format that keeps a switched-off pile: Arena and
+  MTGO cut theirs because a maybeboard is an illegal import at the other end, while a Mass Entry
+  list is a cart and the pile a reader switched off is usually what they still have to buy.
+  **`csv` carried the same write-only label through Tasks 1–9 and stopped being true in Task
+  10** — `parse.ts` reads a CSV by its header row now, so `decklists.test.ts` drives it over the
+  same three decklists as every other readable format. Rust's only part in any of it is
+  `export_write_file` taking the path `save()` answered, for `import_read_file`'s reason one
   shelf up: **no `fs:` permission is granted anywhere**.
 - **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
-  native window CDP cannot reach, so `deck_import_read_file` was exercised by invoking the command
+  native window CDP cannot reach, so `import_read_file` was exercised by invoking the command
   with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;
   the **click → path half is not**.
 - **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
@@ -668,13 +686,13 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   **That `6 categories` is the tally bug being measured, not the shipped behaviour**: the pile
   count was computed before the commander was chosen and never recomputed, so the same press
   today reads **7 categories** with a `Commander` row — see
-  [the frontend's own rules](../../src/features/decks/CLAUDE.md) for the fix and the numbers.
+  [the transfer feature's own rules](../../src/features/transfer/CLAUDE.md) for the fix and the numbers.
   Read back through `deck_get`: **105 of 105 lines resolved** against the live corpus — 0
   unmatched, 0 hint misses, 0 parse issues — **105 rows carrying 117 copies**, and ten categories:
   the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,
   `Artifact` 7, `Instant` 7, `Enchantment` 5, `Sorcery` 4) and `Commander` 1.
 - **The two timings, both through `invoke` from the webview on that debug build**, medians with
-  the first two runs dropped: `deck_import_resolve` over the 105-line reference list **120.4 ms**
+  the first two runs dropped: `import_resolve` over the 105-line reference list **120.4 ms**
   (116.9–141.3, 9 warm of 11), and `deck_import_commit` over its 105 items **7.9 ms** (7.1–8.0, 5
   warm of 7, `replace` into a deck already holding them; outcome `added 117, removed 117,
 categoriesCreated 0`). **That resolve figure does not contradict `resolve_lines`' 11.5 ms
@@ -802,7 +820,7 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   category list to translate an id through). It refuses same-printing, a missing from-row
   (naming the category), a raced sync (the to-printing has left `cards`), and a **different
   oracle card** — the guard is inside the transaction, because "swap this printing" must never
-  become "swap this card". Since v18 it also carries the row's **finish** across, and
+  become "swap this card". Since v19 it also carries the row's **finish** across, and
   deliberately does _not_ check it against the target printing's `finishes`: a swap onto a
   printing sold in no foil would then be refused outright, where what a reader wants is the
   printing they picked.

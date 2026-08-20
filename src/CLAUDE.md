@@ -52,10 +52,21 @@ Every one of these has its measurement and its story in
   views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
   never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
   the whole chip off, crown included, for a frame that names these somewhere else.
-  **Top-right is that chip's and no other mark's**, on every surface that draws a card as a face.
-  The deck's Grid view put its copy count there too, in a full-width strip, and the two overlapped
-  on any foil card in a deck — invisible to jsdom, invisible to a fixture set with no foil in it.
-  A surface's own marks go in the corners the chip leaves: top-left, bottom-left.
+  **Top-right is that chip's**, on every surface that draws a card as a face, and a surface's own
+  marks go in the corners it leaves: top-left, bottom-left. The deck's Grid view put its copy count
+  there too, in a full-width strip, and the two overlapped on any foil card in a deck — invisible
+  to jsdom, invisible to a fixture set with no foil in it.
+  **One mark shares that corner rather than avoiding it, and the exception is worth the rule it
+  bends** (2026-08-20): `TheoryMatchMark`, the tick a deck card wears when the deck's *plan* also
+  asks for it (`features/decks/theoryMatch.ts`). It has to be one corner across both card-face
+  views, and on the stack that corner is free — `CardStack` draws `FoilOverlay mark={false}` and
+  says the finish in its foot — so honouring the rule on the Grid tile would have put one fact in
+  two different corners of one deck. The chip still wins the corner: on Grid the tick **stacks
+  under it**, offset by the chip's own measured box (`1.5rem × --mark-scale`) on the cards that
+  draw one. A *third* mark wanting this corner is a sign the corner is full, not a precedent.
+  What moved to make room is the `RULE BREAK` mark, which held the stack's top-right until then
+  and is now bottom-left on both views — a tick and a red box adjacent in one corner is exactly
+  the confusion `CardMarks.tsx`'s four separations exist to prevent.
 - **A bare number laid _on_ a card is `components/CountTag`, and it draws that number with no
   `×`** — filled and cut off at a slant, since a square chip on art reads as something to press;
   **grey unless something colours it**, so gold stays a thing a deck _tag_ means. It is
@@ -81,6 +92,21 @@ Every one of these has its measurement and its story in
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is
   `pointer-events-auto` against its wrapper's `none` for exactly this reason; it is inside the
   enclosing button, so a click on it still opens the card.
+- **A hint is `useTooltip()`'s spread, never a `title` attribute or an SVG `<title>`.** One
+  `fixed` panel mounts at the app root (`LAYER.tooltip`) because a virtualised row is both
+  `position: absolute` and transformed, which caps a nested `z-index` *and* makes the row the
+  containing block for a `fixed` descendant — root-mounting is what escapes both at once. **The
+  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **One native
+  `title` survives on purpose** — `AppShell.tsx`'s drag-inert sidebar entry, because Chromium
+  freezes `:hover` at a drag's origin for the whole drag, so the attribute's sentence is never
+  seen mid-drag and is read instead through the accname spec's description fallback. Everything
+  else `title=` still finds in the tree is a component **prop** — drawn as a heading
+  (`DeckDialog`, `Notice`, `SettingsSection`) or turned into a `useTooltip()` binding internally
+  by the component it names (`Figure`, `CountTag`, `ToggleChip`, `Marker`, `SortableHeader`) —
+  never a native attribute a call site wrote itself. Grep `title=` to see the shape rather than
+  trusting a count written here. Full rule, the three ways a site is classified, and the
+  `pointer-events`/Escape/no-op-provider traps carried into the new API:
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
   credited** (Scryfall's image policy). A `grid`/`thumb`/`display` image carries the printed
   credit itself and needs nothing. Never distort, blur, recolour or watermark a card image, and
@@ -116,18 +142,18 @@ Every one of these has its measurement and its story in
   docked, so a 384px docked column leaves the deck **202px** — one stack column — and it is
   subtracted from the work whether or not it is being used. A surface that is _consulted_
   (history, categories, tags, deck settings) is therefore a
-  **`src/features/decks/DeckDialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
+  **`src/components/Dialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
   the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
   because the panel outlives the flag by the length of its fade. **A new modal in the deck
   surface is built _on_ that file rather than beside it, and since 2026-08-16 it is the only
-  definition of one** — `ImportDeckDialog`, `TheoryDiffDialog` and `CreateDeckDialog` were the
+  definition of one** — `ImportDialog`, `TheoryDiffDialog` and `CreateDeckDialog` were the
   last three carrying their own copy of that chrome and are on the shell now. A change to
   modality here — a focus restore, a different `trapTab`, a change to when the rung is enabled —
   is one edit to one file. **What the copies cost while they lasted is the argument for keeping
   it that way**: between them one editor drew two scrim darknesses, the ✕ at two geometries and
   two speeds, and the panel at three `max-h` values, none of which anybody had decided — a
   resemblance is N independent decisions that happen to agree today. Each of those is settled
-  once in `DeckDialog.tsx` with the reason at its own site, and the shell's three optional
+  once in `Dialog.tsx` with the reason at its own site, and the shell's three optional
   header props (`title: ReactNode`, `ariaLabel`, `subtitle`) exist because folding the last
   three in needed exactly that much and no more. **Clamping the panel to the window takes two
   classes and they only work together** (2026-08-18): the panel's `max-h-full` is a percentage
@@ -138,7 +164,7 @@ Every one of these has its measurement and its story in
   asked for, and the dialog's buttons sat at y≈2930 — off the window, reachable by neither pointer
   nor wheel. `minmax(0,` is load-bearing: a bare `1fr` is `minmax(auto, 1fr)`, whose `auto` floor
   is the content again. **jsdom has no layout engine, so nothing in the suite can see any of it** —
-  `DeckDialog.test.tsx` pins the two classes and the numbers come from a browser. `DeckEditor.test.tsx`'s Tab sweep is still
+  `Dialog.test.tsx` pins the two classes and the numbers come from a browser. `DeckEditor.test.tsx`'s Tab sweep is still
   driven per surface rather than pointed at the shell, and it is what would go red if a modality
   fix reached one dialog and stopped there. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
@@ -153,8 +179,8 @@ Every one of these has its measurement and its story in
   ugly, because the way out of a modal is a control it has just scrolled away. A body carries
   `min-h-0 flex-1 overflow-y-auto`, and **that is inert on its own**: it scrolls nothing until
   the panel above it is bounded, which takes the two classes and the reason given in the
-  `DeckDialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
-  for this** — build a modal on `DeckDialog` rather than beside it, and check a new one in the
+  `Dialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
+  for this** — build a modal on `Dialog` rather than beside it, and check a new one in the
   running window at a short viewport with more content than fits.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
@@ -398,6 +424,42 @@ Every one of these has its measurement and its story in
   `MIN_PANEL_WIDTH_PX` plus the gap) and every pixel the sidebar takes is a pixel off that.
   Widening the sidebar is a change to `DECK_FLOOR`'s arithmetic first. Both, with every figure:
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **The window's caption is the app's, not Windows'** — `tauri.conf.json` sets
+  `decorations: false` and `components/TitleBar.tsx` draws a 34px row above the sidebar and the
+  ribbon (2026-08-20). Four rules it does not share with the rest of the chrome, each because the
+  window's edge is not the page's: **the caption buttons are square and flush** (a radius or a
+  margin puts window between the button and the corner, and a corner button's whole value is that
+  a throw of the mouse cannot overshoot it), **they do not take `PRESS`** (a target that shrinks
+  away at the moment of the press reads as a misclick, and at the screen's edge there is nowhere
+  to correct to), their focus ring is **`ring-inset`** (an outset ring on a flush element is drawn
+  outside the window), and the wordmark is the one **Cinzel below 18px** in the app — 13px with
+  `tracking-[0.2em]`, which the display face's own floor forbids and a 34px row cannot honour. It
+  is paid for by being a *wordmark* rather than interface text. **`Ribbon` gave up its `MTG` mark
+  to it**: that mark's comment justified the abbreviation on the grounds that "the window title
+  bar already says that in full", so the two would have been the name twice.
+- **`data-tauri-drag-region` does not inherit, so every element that should move the window
+  carries its own** — Tauri reads the attribute off the element under the pointer and nothing
+  else. A child without it is a hole in the grab area; an element *with* it that also handles a
+  click is a button that drags the window instead of pressing. The row and the wordmark have it,
+  the three buttons deliberately do not.
+- **The maximize button's hover is state, never `:hover`, and the reason is native.**
+  `tauri-plugin-snap-layout` parks a transparent Win32 child window over that button's rectangle
+  so Windows 11 can answer `HTMAXBUTTON` to its own `WM_NCHITTEST` and raise the Snap Layouts
+  flyout — which means the pointer is over a native child and never over the webview. Its CSS
+  `:hover` cannot fire, and its `onClick` never runs either (the overlay sends `SC_MAXIMIZE`
+  itself). The plugin emits `tauri-snap://snap/mouseenter`/`mouseleave` instead, and
+  `src/lib/window.ts`'s `onSnapHover` subscribes to both as one thing — a caller that took only
+  `enter` would leave the button lit for the rest of the session. **The button's `id` is the whole
+  contract with Rust and fails silently at both ends**: a typo creates no overlay, raises no
+  error and logs nothing, so `SNAP_BUTTON_ID` is shared and `TitleBar.test.tsx` pins it. The
+  `onClick` still stands, because everywhere but Windows 11 the plugin is a documented no-op.
+- **Every window verb goes through `src/lib/window.ts`, for `lib/ipc.ts`'s reason.** One module
+  names them, so a story and a test have one thing to fake — and its four exports match the four
+  `core:window:allow-*` permissions in `capabilities/default.json` exactly, in both directions: a
+  fifth verb needs its permission, and a granted permission nothing here calls is a widening
+  nobody asked for. `TitleBar` importing `@tauri-apps/api/event` directly is what made every
+  existing `AppShell` and `App` test reach the real module and print **336** unhandled rejections
+  while still passing green, which is the shape of a mock boundary in the wrong place.
 - **The ribbon's status line is one permanently mounted `role="status"`** — a live region that
   first appears with its sentence already inside announces nothing — and the number inside it is
   `aria-hidden`.
@@ -430,7 +492,7 @@ markup of its own. Every rule below has a failure behind it that shipped or near
   is `z-30` and `overlay` is `z-45`: the panel is invisible and unreachable, and **nothing goes
   red**, because jsdom has no opinion about a z-index. That is why the deck editor's category menu
   is wired onto **the view's own group element and never onto `GroupHeader`** — `CategoriesDialog`
-  draws that same header inside a `DeckDialog`. `layers.ts` names this overlap as the one that must
+  draws that same header inside a `Dialog`. `layers.ts` names this overlap as the one that must
   not exist; keeping it non-existent is a placement decision at each call site, not something the
   primitive can enforce. Do not tidy a menu handler onto a shared row component.
 - **A menu opener has to be able to take focus, and `focus()` on a node with no `tabIndex` is a
@@ -519,10 +581,22 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   `grep active:scale-100` is the census. The settings panels' button box is
   `src/features/settings/controls.ts`.
 - **Under jsdom the animations are real and timing-dependent**, which is why
-  `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. Even so, **a
-  `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false for
-  everything inside an animated surface until the next frame** — assertions about content inside
-  a newly opened overlay need `waitFor`.
+  `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. **The flag alone was
+  not enough and the gap it left was a CI flake** (fixed 2026-08-20): `skipAnimations` applies
+  the final keyframe inside `frame.update(...)`, which is scheduled on `requestAnimationFrame`,
+  so a `motion` element's first painted frame carried its `initial` — `opacity: 0` for every
+  preset here — and `toBeVisible` was false for everything inside an animated surface until the
+  next frame. `findBy*` resolves on the render *before* that frame, so
+  `expect(await findBy…).toBeVisible()` was a race it lost on a loaded runner. The setup file now
+  runs motion's non-`keepAlive` batch inline, and `motion.test.ts` asserts the *behaviour* — a
+  `dialog` preset at `opacity: 1` on its first render — rather than that the patch is installed,
+  so a `motion` upgrade that reschedules the keyframe fails there rather than on CI.
+  **Two things made it unreadable and both are worth keeping**: `byRole` and `toBeVisible`
+  disagree about **opacity and nothing else** (the accessibility tree tests `hidden`,
+  `aria-hidden` and `display: none`), so the query finds an element the assertion then refuses;
+  and jest-dom prints `element.cloneNode(false)`, a **shallow** clone, so the failure shows an
+  empty `<button />` and reads exactly like content that never arrived. An empty element in a
+  `toBeVisible` message is the printer, never evidence about the content.
 - **The old `\btransition-(?!none)` sweep is blind to JS motion** — a file animated entirely
   through `motion` matches nothing and passes trivially.
 
@@ -531,6 +605,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 | Path | What lives there |
 | --- | --- |
 | `components/` | Shared UI — `CardImage`, `CardArt`, `table/VirtualTable`, `menu/` (the one context menu) |
-| `features/` | `card`, `collection`, `decks`, `search`, `settings`, `wishlist` |
+| `features/` | One directory per surface — **`ls src/features` is the census.** This row named six while the tree held eight; a prose-only edit routes to neither CI job |
 | `lib/` | `ipc.ts` (the Rust mirror), `layers.ts`, `activity.ts`, `sort.ts`, `tokens.test.ts` |
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |
+| `features/tags/` | Browse by what a card **is of**. Storied under `Tags/*`; the wall is `features/search`'s, reused with collapse off |

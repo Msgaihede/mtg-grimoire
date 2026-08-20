@@ -281,16 +281,27 @@ describe("the create deck dialog", () => {
     });
     wrap(<Harness />);
 
-    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    // `delay: null` on every field here: this test is about the payload of one write, not about
+    // per-keystroke behaviour, so it should not pay ~80 sequential keystroke awaits for coverage
+    // it never asserts. Dispatches the same key/input events, just without the inter-key await —
+    // that awaiting is what pushed this test past its 5000ms budget under `verify`'s build+lint
+    // load (measured: reproducibly 5000ms+ under `verify`, 21/21 and ~1.9s standalone).
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn", { delay: null });
     await userEvent.selectOptions(screen.getByLabelText("Format"), "modern");
-    await userEvent.type(screen.getByLabelText("Description"), "Twenty damage, quickly.");
-    await userEvent.type(screen.getByLabelText("Notes"), "Sideboard plan lives in the maybeboard.");
+    await userEvent.type(screen.getByLabelText("Description"), "Twenty damage, quickly.", {
+      delay: null,
+    });
+    await userEvent.type(
+      screen.getByLabelText("Notes"),
+      "Sideboard plan lives in the maybeboard.",
+      { delay: null },
+    );
     await userEvent.click(screen.getByRole("switch", { name: /Theory deck/ }));
     await userEvent.selectOptions(screen.getByLabelText("Folder"), "2");
 
     // The cover comes from the picker's **search** arm, which is the one that works before the
     // deck exists — a deck being made has no cards of its own to offer.
-    await userEvent.type(screen.getByLabelText("Search every card"), "dragon");
+    await userEvent.type(screen.getByLabelText("Search every card"), "dragon", { delay: null });
     const results = await screen.findByRole("list", { name: "Pick art from any card" });
     await userEvent.click(within(results).getByRole("button", { name: "Shivan Dragon" }));
 

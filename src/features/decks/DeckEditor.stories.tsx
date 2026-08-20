@@ -77,10 +77,10 @@ const meta = {
   render: (args) => <Editor key={`${args.deckId}:${args.pane}:${args.formatKey}`} {...args} />,
   decorators: [
     // The editor is `h-full`, so it needs a parent with a height or its views have none.
-    // 1032px is exactly the content column at the 1280×800 window `tauri.conf.json` opens: 1280
-    // less the sidebar's `w-52` (208px) and less `main`'s `p-5` on both sides (40px). 720px of
-    // height is chosen rather than derived — the ribbon above it is not a fixed number of
-    // pixels.
+    // 1032px is exactly the content column at the app's narrow rung — the 1280-wide window
+    // `src-tauri/src/window.rs` opens on a 1080p desk: 1280 less the sidebar's `w-52` (208px)
+    // and less `main`'s `p-5` on both sides (40px). 720px of height is chosen rather than
+    // derived — the ribbon above it is not a fixed number of pixels.
     (Story) => (
       <div className="h-[720px] w-[1032px]">
         <Story />
@@ -142,7 +142,7 @@ const meta = {
           "list or a number on this page**: this paragraph carried both, and both had stopped " +
           "being true by the next thing that landed, with nothing going red — which is exactly " +
           "what a prose-only edit costs.\n\n" +
-          "**The shell is `DeckDialog`** (2026-08-14), and the exception list is the thing worth " +
+          "**The shell is `Dialog`** (2026-08-14), and the exception list is the thing worth " +
           "carrying rather than the count: the scrim, the centring, `aria-modal`, the tab trap, " +
           "the ✕ and the Escape rung are written once and every host passes a title, a close " +
           "label and a width, so Categories, Tags, History, Deck settings, the export dialog, " +

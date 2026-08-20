@@ -12,6 +12,14 @@ const wishlistList = vi.hoisted(() => vi.fn());
 const deckList = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+// The shell's title bar is the one part of it that does not go through `@/lib/ipc`: it reads
+// the window itself, through `@/lib/window`. Pointed at the workbench's fakes rather than
+// stubbed by hand, so this file and Storybook agree about what a window does. Left off, the
+// real `@tauri-apps/api` reaches for `window.__TAURI_INTERNALS__`, which jsdom does not have —
+// and because both calls are in a mount effect the rejection is unhandled rather than caught,
+// so **every test in this file still passes** while the run prints hundreds of errors.
+vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -45,6 +53,25 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       refreshing: false,
     }),
     oracleTagsForPrintings: vi.fn().mockResolvedValue([]),
+    // The Tags view's three reads. Routing to it fires all of them on the way up, so an
+    // unmocked one is a rejected query rather than a compile error — and `art_tags_status`
+    // answers the honest never-ingested row for the reason `oracleTagsStatus` above does.
+    artTagsStatus: vi.fn().mockResolvedValue({
+      updatedAt: null,
+      ingestedAt: null,
+      checkedAt: null,
+      tagCount: null,
+      taggingCount: null,
+      stale: true,
+      refreshing: false,
+    }),
+    tagChildren: vi.fn().mockResolvedValue([]),
+    tagSearch: vi.fn().mockResolvedValue([]),
+    // The Tags page subscribes to the art taxonomy's progress channel so a finished ingest takes
+    // its notice down without a reload. Mocked for `onSyncProgress`'s reason: the registration is
+    // a bare call inside a mount effect, so a `vi.fn()` that is not there is a synchronous
+    // `TypeError` rather than a rejection anything can catch.
+    onArtTagProgress: vi.fn().mockResolvedValue(() => {}),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -480,6 +507,24 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
 
   const tile = await screen.findByRole("button", { name: /^Burn/ });
   await waitFor(() => expect(tile).toHaveFocus());
+});
+
+/**
+ * The sixth view, and the second way into the corpus. The sidebar entry has to reach the real
+ * page: `TagsPage`'s own tests render it directly, so nothing there can see whether `ViewId`,
+ * `NAV` and `ActiveView` actually agree about the word `tags`.
+ */
+it("opens the tag browser on the tags entry", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Tags" }));
+
+  expect(
+    await screen.findByRole("heading", { name: "Browse cards by tag", level: 2 }),
+  ).toBeInTheDocument();
+  // And the honest empty state, since this file's database has never ingested either taxonomy.
+  expect(await screen.findByText(/art tags have not been downloaded/i)).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
 
 /** The second live view. The sidebar entry has to reach the real thing, not the blurb that

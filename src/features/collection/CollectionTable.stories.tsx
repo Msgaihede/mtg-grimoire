@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { CONDITION_LABEL } from "@/lib/conditions";
 import { finishPrice, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
@@ -270,11 +271,12 @@ export const NeedsReview: Story = {
     await expect(row.getByText(usdPrice(42.19))).toBeInTheDocument();
     // **Six cells, not seven.** The band is drawn *inside* the name's cell rather than beside
     // it, because a `<p>` among a row's cells is not a cell and what is not a cell is never
-    // announced. Found by its `title`, which is the same sentence: the band's own element also
-    // holds the "Needs review:" prefix, so its text is not the sentence on its own.
+    // announced. Found by its own text: Testing Library's `getNodeText` concatenates only
+    // *direct* text-node children, so the "Needs review:" prefix `<span>` beside it is excluded
+    // and this matches the band's element exactly, the same element the tooltip is bound to.
     const cells = row.getAllByRole("cell");
     await expect(cells).toHaveLength(6);
-    await expect(canvas.getByTitle(UNFOLDABLE).closest('[role="cell"]')).toBe(cells[0]);
+    await expect(row.getByText(UNFOLDABLE).closest('[role="cell"]')).toBe(cells[0]);
     // The sentence reaches anything that reads text, clip or no clip — the band is one line and
     // this one is 182 characters, of which the *second* half is what to do about it. The
     // tooltip is what makes that half reachable by eye; `toHaveTextContent` is what proves it
@@ -379,10 +381,27 @@ export const EveryFinish: Story = {
     // The grade's word is one hover — or one screen reader — away, which is what the `<abbr>`
     // buys over a bare "LP". Spelled the way `CONDITION_LABEL` spells it, not the way a
     // pricing site would.
-    await expect(canvas.getByText("LP").closest("abbr")).toHaveAttribute(
-      "title",
-      CONDITION_LABEL.LP,
-    );
+    //
+    // Not a `title` assertion any more (spec §4, "the one site that is not a tooltip"):
+    // `aria-label` on a roleless `<abbr>` is not reliably announced, so the expansion rides as
+    // `sr-only` text right beside it — what a screen reader actually gets — and the hover panel
+    // is a separate `useTooltip()` binding with no attribute of its own to query.
+    const abbr = canvas.getByText("LP").closest("abbr") as HTMLElement;
+    await expect(abbr).not.toHaveAttribute("title");
+    await expect(abbr.nextElementSibling).toHaveTextContent(CONDITION_LABEL.LP);
+
+    // The hover affordance itself: `describes: false`, so nothing doubles the `sr-only` text
+    // above — the panel carries no `role="tooltip"` and is found by `TOOLTIP_PANEL_ID` instead,
+    // the one stable id the provider ever draws (rule carried from `CollectionPage.test.tsx`'s
+    // needs-review band).
+    await userEvent.hover(abbr);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    const panel = document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
+    await expect(panel).toHaveTextContent(CONDITION_LABEL.LP);
+    await expect(panel).not.toHaveAttribute("role", "tooltip");
+    await userEvent.unhover(abbr);
   },
 };
 

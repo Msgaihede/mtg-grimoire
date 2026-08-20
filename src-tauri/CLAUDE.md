@@ -66,8 +66,10 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v18** — see
-  [the ladder's history](../docs/reference/data-and-sync.md).
+  never reuse one. Schema is at **v20** — `schema::SCHEMA_VERSION` is the answer, and
+  [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
+  **v18** for two whole rungs, because a prose-only edit routes to neither CI job: v19 added
+  `deck_cards.finish` and v20 the art-tag tables, and nothing went red for either.)
 - **A step that writes to a table an older *forward-built* fixture never created fails on that
   fixture alone**, and v18 is the first one to do it. `schema.rs`'s `v1_database` and
   `v6_deck_database` are hand-written old schemas rather than rewinds, so they carry only what
@@ -79,8 +81,10 @@ both plus the frontend.
 - **A deck's platform is `decks.game_key` and a format's is `format_specs.games`** (schema v18),
   and neither is a rule Rust applies. `game_key` is one of `schema::DECK_GAMES`
   (`any|paper|arena|mtgo`, `'any'` a **sentinel** for `default_category_id`'s reason — `DeckPatch`'s
-  `coalesce` reads a bound NULL as "leave it"), fenced by `deck::valid_game` because `ADD COLUMN`
-  cannot carry a CHECK. `games` is a comma-joined list of `schema::GAMES` written **only by
+  `coalesce` reads a bound NULL as "leave it"), fenced by `deck::valid_game` in Rust rather
+  than by a CHECK — **not because `ADD COLUMN` cannot carry one**, which is what this said until
+  v19 added a checked `deck_cards.finish`, but because a command parameter reaches it and a
+  refusal in Rust can say why. `games` is a comma-joined list of `schema::GAMES` written **only by
   `FORMAT_SPECS_SEED`**, so it needs no fence and gets a test instead. Rust supplies both facts;
   narrowing the format picker by them is TypeScript's, and **nothing in the crate compares the
   two** — a Modern deck may say Arena, and refusing that pair would be refusing a deck over a
@@ -101,7 +105,7 @@ shared_cell` walks both into two databases and compares them column by column.
   `deck::duplicate_deck`, which **copies** the source pile's answer — a copy has the same shape as
   its original, and defaulting there would make every auto pile in the duplicate draw empty. No
   CHECK — **not because `ADD COLUMN` cannot carry one**, which is what this line claimed until
-  2026-08-17 and is false: v18's `finish` column adds one and it is enforced
+  2026-08-17 and is false: v19's `finish` column adds one and it is enforced
   (`the_deck_card_finish_column_refuses_nonfoil` is the proof, and SQLite's documented ADD COLUMN
   restrictions are PRIMARY KEY, UNIQUE, a non-constant DEFAULT, NOT NULL without a default,
   REFERENCES without a NULL default, and GENERATED STORED). It has none because no command
@@ -114,12 +118,28 @@ shared_cell` walks both into two databases and compares them column by column.
   plus the 22 names the rule could answer with on the day it shipped) and is deliberately not kept
   in step with TypeScript's list; **"Main deck" is not on it** — that is the v8 migration's pile
   and it holds real cards.
-- **Scryfall's Oracle Tags live in four tables plus a watermark** (schema v14), keyed on the
-  tag **slug** and on `cards.oracle_id` — both soft, no foreign key anywhere.
-  `src/oracle_tags.rs` is the only writer: it streams the `oracle_tags` bulk file, flattens
-  the hierarchy **once** into `oracle_tag_cards` (every tag a card holds *and* every ancestor
-  of those tags), and swaps four staging tables into place with the watermark in the same
-  transaction. **Rust stores slugs and nothing else** — no category names, no priority order,
+- **Each Tagger taxonomy lives in four tables plus a watermark, and there are two of them** —
+  Oracle Tags at schema v14 (`oracle_tags`, `oracle_tag_parents`, `oracle_taggings`, the closure
+  `oracle_tag_cards`, `oracle_tag_meta`) and Art Tags at **v20** (`art_tags`, `art_tag_parents`,
+  `art_taggings`, the closure `art_tag_illustrations`, `art_tag_meta`). Keyed on the tag **slug**
+  and on `cards.oracle_id` / `cards.illustration_id` respectively — all soft, no foreign key
+  anywhere.
+  **Two table sets rather than a `kind` column, because the join column differs**: an art tag is
+  a fact about a *picture*, so a card with five arts has five illustrations and the dog is in one
+  of them. One table would need a key that is an `oracle_id` on some rows and an
+  `illustration_id` on others — a column no index can serve and no join can trust.
+  `src/tags/` is the only writer, and it is **one engine with two bindings**: `mod.rs` holds the
+  fetch, the parse, the graph walk, the staged write and the swap, parameterised over a
+  `Dataset`; `oracle.rs` and `art.rs` are each a `const Dataset` plus that namespace's commands,
+  and are the one place a taxonomy's tables, columns and weekly schedule are named. (It replaced a
+  standalone `oracle_tags.rs` when the second dataset landed.) `query.rs` and `muted.rs` are
+  shared and serve both. Each ingest streams its bulk file, flattens the hierarchy **once** into
+  its closure (every tag a subject holds *and* every ancestor of those tags), and swaps four
+  staging tables into place with the watermark in the same transaction.
+  **`Dataset::carries_weight` is the one behavioural difference and `write_closure` is its only
+  reader**: an art tagging's `weight` survives the fold — to the *strongest* weight the row
+  descends from — because Scryfall means something by it there, and an oracle one's does not.
+  **Rust stores slugs and nothing else** — no category names, no priority order,
   no whitelist; that is TS's half. Two read commands answer a whole decklist in one round
   trip: `oracle_tags_for_cards` keyed on `oracle_id`, and **`oracle_tags_for_printings` keyed
   on `cards.id`**, which is the one most call sites want — a quick add, every drag source and
@@ -127,9 +147,33 @@ shared_cell` walks both into two databases and compares them column by column.
   all. Both answer one entry **per requested id, in request order**, with an empty slug list
   for an unknown id, a NULL `oracle_id` and an untagged card alike: all three mean "fall back
   to the type line", and **nothing about categorising a card may fail a deck add**.
-  **684 of 4 521 tags have more than one parent**, so
-  `oracle_tags::ancestor_closures` follows *every* `parent_ids` entry and is the one place
-  that decision is written down.
+  Multiple parents are the normal case, not an edge: **684 of 4 521 oracle tags and 4 970 of
+  11 531 art tags (43%) have more than one**, so `tags::ancestor_closures` follows *every*
+  `parent_ids` entry and is the one place that decision is written down.
+- **`oracle_tags` gained `id` and `slug_norm` at v20, and both are `NOT NULL DEFAULT ''` for a
+  reason that reaches the read side.** `ALTER TABLE` cannot add a `NOT NULL` column without a
+  default, so every row predating a refresh new enough to write ids carries `''` — which is why
+  `tags::query`'s `not_muted` clause is `{alias}.id <> ''` and `tag_mute` refuses a blank id
+  outright. Without both fences one `muted_tags` row with an empty `tag_id` would equal every
+  un-refreshed row and take the **whole** oracle taxonomy off the page, with no error raised and
+  nothing in `error_log`. **Neither staging twin carries the default** — both are bare `NOT NULL`,
+  so an ingest that forgets a column fails at its first insert rather than writing a table of
+  empty strings that indexes one value and matches nothing. The two spellings are on purpose: the
+  live table needs the default to make the `ALTER` legal at all, and the staging table must not
+  have one.
+- **`muted_tags` is a user table and sits outside both `*_TAG_TABLES` lists** (schema v20) — it is
+  the reader's answer about which tags they never want offered, and those two lists are what a
+  refresh drops and rebuilds wholesale. It carries the namespace rather than being two tables,
+  and it stores the `slug` it was given at mute time without ever joining the live taxonomy: a tag
+  muted before a rename still lists, which is exactly what that column is for.
+- **The tag indexes are replayed on every launch, outside the ladder, and that is not belt and
+  braces.** `tags::query` counts a tag's reach with a correlated `count(*)` over the closure:
+  **49 ms** with `idx_art_tag_illustrations_slug` and **531 seconds** without it — 11 531
+  candidate tags against a 951 499-row scan each, measured 2026-08-20 on a release build. A
+  database missing them does not get a slow Tags page, it gets a window that stops responding on
+  the first keystroke in the tag box, and nothing about that symptom points at an index. So
+  `migrate` ends with `TAG_INDEXES_SQL` (`CREATE INDEX IF NOT EXISTS` throughout) **from every
+  version**, and it is fatal where `prepare_database`'s other repairs merely log.
 - **Marketplace prices live in `marketplace_prices`, never on `cards`** (schema v11). `cards`
   is dropped on every sync, so a price column would be destroyed by the next refresh —
   and `card_id` there is a **soft** reference with no foreign key, because a feed and the
@@ -149,6 +193,14 @@ shared_cell` walks both into two databases and compares them column by column.
   `ON CONFLICT` target must match verbatim. The `coalesce(…, '')`s are load-bearing: NULLs in
   a UNIQUE index are distinct. `grading` enters identity as **raw text**, so it is only ever
   written through the one fixed-field struct that owns its key order.
+- **`reset.rs` holds the only writes in the crate with no subject, and they belong there.**
+  `collection_clear`, `wishlist_clear`, `decks_clear` and `cache_clear` name a *table* rather
+  than a row: none takes an id and none can be scoped. Filing one beside the reads of its table
+  would put it next to the rule it contradicts — `remove_entry` is documented as the only way a
+  collection row is ever deleted. **Nothing there writes history and nothing is undoable**:
+  `deck_audit` and `deck_undo` are per-deck and cascade away with the decks they describe, so a
+  wipe has nowhere to be recorded. The confirmation is the **webview's** and the commands take
+  no `confirm` argument — a fence passed as a parameter is a fence a caller can forget.
 - **Quantity 0 keeps the collection row** — the condition, purchase price, tags and
   acquisition story survive the day the user owns none of the card. Deleting is
   `remove_entry` and only ever `remove_entry`. The wishlist is the opposite by table CHECK
@@ -233,7 +285,7 @@ Full detail, with the measurements and the traps behind each rule, is in
   decks in it and deleting a tag must never delete a card.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`). `variant` is `live` (sleeved up) or `theory` (being built toward)
-  and `finish` is `NULL | 'foil' | 'etched'` (schema v18); every card command takes all of them.
+  and `finish` is `NULL | 'foil' | 'etched'` (schema v19); every card command takes all of them.
   `deck_cards` has `CHECK (quantity > 0)`, so zero removes the row.
 - **`deck_cards.finish` is NULL for the regular copy and `'nonfoil'` is never stored.**
   `deck::normalise_finish` is the one place the word becomes NULL and the column's CHECK is what
@@ -255,6 +307,13 @@ Full detail, with the measurements and the traps behind each rule, is in
   plan already started is not something a re-press may pour the live deck over. The move sets
   `last_variant = 'theory'` and **reallocates in the same transaction**, because claims are held
   for `live` only and cards that just left it must release them.
+  `deck_theory_slots` is the third read of the pair and the only one that is not a comparison:
+  every card the plan asks for, as `group_key` strings and nothing else, for the deck editor's
+  theory tick. **It answers `group_key` itself rather than a pair**, which is what stops the tick
+  and the shopping list drifting apart — "the same planned card" is one function in `deck_theory`,
+  and both surfaces spell it with that code. Two columns, one indexed scan, inactive categories
+  excluded on `diff_select`'s rule; deliberately **not** a `deck_get` of the other variant, which
+  prices every row and rolls up allocations for a mark that needs neither.
   `deck_theory_copy_from_live` still means "copy what is sleeved up into the plan" and is no
   longer what the switch does.
 - **`decks.default_category_id` says where an add that names no pile lands, and `0` is `Auto`**
@@ -276,7 +335,7 @@ Full detail, with the measurements and the traps behind each rule, is in
 viewState)` — absent field means "leave it". It moves **no `updated_at`**, records **no
   `deck_audit` row**, reallocates nothing, and refuses an unknown deck by name (`GONE`).
   None of the three carries a CHECK — **not because `ALTER TABLE … ADD COLUMN` cannot add
-  one**, which is what this said until 2026-08-17 and is false (v18's `deck_cards.finish` adds
+  one**, which is what this said until 2026-08-17 and is false (v19's `deck_cards.finish` adds
   one and it is enforced); it is that the vocabulary of two of them is not the crate's to own.
   `last_variant` is fenced against
   `DECK_VARIANTS` here (through the one `deck_meta::valid_variant`) while the other two hold a
@@ -294,7 +353,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   **`create_deck` is the only writer**. It records the key `valid_format` produced, so a blank
   input is remembered as `casual` — what the deck actually is — and a refused **create** records
   nothing, because the write is inside that create's own transaction. **That guarantee is about
-  the create and no wider, and the exception is known**: `useDeckImport`'s `importIntoNewDeck` is
+  the create and no wider, and the exception is known**: `useImport`'s `importIntoNewDeck` is
   `deck_create` then `deck_import_commit` — two commands, so two transactions, with a hand-rolled
   rollback — and a refused *commit* deletes the deck while the create's `last_deck_format` stands.
   The next New deck then opens on the format of a deck that never survived. **Left that way
@@ -342,7 +401,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
 - **Two fences every deck write opens with, neither enforced by the DDL**: the variant must be
   one the schema knows, and the category must belong to _this_ deck — `deck_cards.category_id`'s
   FK only asks that the category exist, not whose it is.
-- **`deck_import.rs`: every resolution arm is one indexed lookup, and a `COLLATE NOCASE` or an
+- **`import.rs`: every resolution arm is one indexed lookup, and a `COLLATE NOCASE` or an
   `OR` is what stops it being one.** `cards.name`/`set_code`/`collector_number` are plain `TEXT`,
   so their indexes are BINARY and a comparison naming another collation plans as `SCAN c` — a full
   table scan **per line**. Splitting the arms took a 105-line list from **46 123 ms to 11.5 ms**
@@ -350,17 +409,17 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   `"N // N"` rows outranked the real card on 3 of those 105 lines. Case-insensitivity lives in the
   fold arm, in Rust, over `cards_fts`. **Do not restore the collation here** — it reads like a
   regression and is not one.
-- **`deck_import.rs`: a printing hint narrows which _printing of the named card_ to take, never
+- **`import.rs`: a printing hint narrows which _printing of the named card_ to take, never
   which card** (`hint_names_the_card`). `BY_SET_AND_NUMBER` consults no name in its SQL, so the row
   it finds is folded against the line's name in Rust and a disagreement is treated as exactly a
   hint that named nothing — `hint_missed`, and fall through. Before that guard,
   `1 Captain Sisay (brc) 132` silently imported **Arcane Signet** with `hint_missed: false`. Same
   reasoning as `deck_swap_printing`'s different-oracle guard.
-- **`deck_import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
+- **`import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
   language key is the decision: a copy you own in any language is still a copy you own, while
   "newest" is exactly the key that put 5 of the reference list's 105 lines on a `ja`/`dw`/`ph`
   printing. `fold_match` repeats the same keys in Rust and may never disagree.
-- **`deck_import.rs`: `ImportItem.inactive` switches off _only a pile this import creates_.**
+- **`import.rs`: `ImportItem.inactive` switches off _only a pile this import creates_.**
   Archidekt's `{noDeck}` says a pile counts toward nothing, which is exactly `is_active = 0` here;
   without it a reference deck's 17 maybeboard cards land in a counted pile and a 100-card commander
   deck reports 117. **A name the reader already has keeps whatever they set** — an import may not
@@ -390,13 +449,19 @@ The rules, and where each is enforced, are in
   5xx/timeouts only — **never a 429** (the docs forbid exactly that) and never a 404.
 - **Bulk data is the only card source**, gzipped **JSONL** (one object/line; old JSON-array
   endpoints 404). There is no per-card API lookup anywhere.
-- **Two bulk datasets, one client.** `default_cards` (the corpus) and `oracle_tags` (~5.85 MB,
-  4 521 tags) both go through `Client::check_bulk_dataset` and so share the one pacing gate
+- **Three bulk datasets, one client.** `default_cards` (the corpus), `oracle_tags` (~5.85 MB,
+  4 521 tags) and `art_tags` (~12.5 MB, 11 531 tags over 475 163 taggings, measured 2026-08-20)
+  all go through `Client::check_bulk_dataset` and so share the one pacing gate
   and the one 429 lockout — a second `reqwest::Client` would be a second application as far
   as the rate limiter can tell. The price feeds are the deliberate exception: they are not
-  Scryfall and must not spend its budget. The tag file is checked **weekly**, not daily; the
-  taxonomy is hand-curated and a deck's categories should not regroup between two sessions on
-  the same afternoon.
+  Scryfall and must not spend its budget. **Both tag files are checked weekly while Scryfall
+  regenerates them daily**, and the two cadences must not be blurred: the week is
+  `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, this app's own answer to how often to ask, because
+  the taxonomies are hand-curated and a deck's categories should not regroup between two sessions
+  on the same afternoon. Art is the larger file by 2.1× — 12 544 874 B against 5 852 962 B, both
+  read on 2026-08-20, because a ratio across two runs is not a ratio — which is why
+  `tags::art::refresh_if_due` is emphatic that neither the launch, the card sync nor the
+  **oracle** refresh may wait on it.
 - Scryfall's shapes: `cards.oracle_id`/`cmc`/`type_line` are NULLABLE, `collector_number` is
   TEXT, prices are decimal strings, `legalities` is JSON (23 keys, grows), finishes are an enum
   and never a boolean.
@@ -430,7 +495,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   read by the story runner.
 - **A dialog verb answers a _path_, and a path is not permission to touch what is at it — which is
   why every one of them has a Rust command behind it.** `deck_set_cover_image` takes the path
-  `open()` gave and Rust reads the image; `deck_import_read_file` (`deck_import.rs`) takes a path
+  `open()` gave and Rust reads the image; `import_read_file` (`import.rs`) takes a path
   from the same picker and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
   path `save()` gave and Rust writes the text. Doing any of that from the page would need an `fs:`
   permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
@@ -470,9 +535,58 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   What keeps that honest is the CSP: `script-src 'self'`, no remote origin, and no
   `dangerouslySetInnerHTML` anywhere in `src/`, so no foreign script runs in the page to find
   it. Adding any one of those three back is what would make a dev-only config worth its cost.
+- **The window's four verbs are granted one by one, because `core:window:default` grants none of
+  them.** That default is the *getters* — `is-maximized`, the position and size reads, the monitor
+  queries — so `decorations: false` and `components/TitleBar.tsx` needed
+  **`core:window:allow-minimize`**, **`-toggle-maximize`**, **`-close`** and
+  **`-start-dragging`** naming themselves (2026-08-20). Worth pinning rather than trusting, and
+  `the_title_bar_gets_four_window_verbs_and_the_overlay_two` does: the family those four come from
+  also holds `allow-set-always-on-top`, `allow-set-fullscreen`, `allow-set-position` and thirty
+  more, and a window acquires an ACL nobody decided on one `allow-*` at a time. The frontend's
+  half is `src/lib/window.ts`, which exports one function per permission and says so.
+- **`tauri-plugin-snap-layout` gets its two commands and not its `:default`, even though today
+  they are the same set.** The plugin is the whole of what an undecorated window needs to keep
+  Windows 11's Snap Layouts: it creates a transparent Win32 child over the maximize button's rect
+  and answers `HTMAXBUTTON` to `WM_NCHITTEST`, which is a question the OS asks its own frame and
+  never asks a `<button>` in a webview. `allow-update-snap-bounds` and `allow-detach-snap-bounds`
+  are named because naming them records that both were looked at — a plugin's default is a promise
+  about *its* future, not about this app's. **It draws nothing**, which is why it was chosen over
+  `tauri-plugin-decoration`: that one renders its own HTML controls (replacing ours) and wants a
+  CSP loosened for its stylesheet. **This one needs no CSP change at all** — it injects through
+  `js_init_script`, which the webview runs before the page and the page's CSP therefore does not
+  govern. It is also a **plain dependency rather than a `cfg(windows)` one**, for the reason the
+  mcp-bridge paragraph gives: `tauri-build` discovers a plugin's ACL through the dependency graph,
+  so target-gating it would leave those two entries unresolvable on the Linux half of the CI
+  matrix. The crate compiles to a dummy everywhere but Windows, and is a documented no-op on
+  Windows 10.
+- **The button id is the contract, and it is silent at both ends.**
+  `snap_layout::init().button_id("snap-maximize-button")` in `lib.rs` must equal `SNAP_BUTTON_ID`
+  in `src/lib/window.ts`. A mismatch creates no overlay, raises no error and logs nothing: the
+  button keeps working and Snap Layouts simply never appear, which is a regression neither a test
+  nor a launch can catch. `TitleBar.test.tsx` pins the frontend half.
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
-  load-bearing; re-enabling it kills all in-app drag-and-drop on Windows.
+  load-bearing; re-enabling it kills all in-app drag-and-drop on Windows. **So are the window's
+  other two flags**: `"decorations": false` is what makes `TitleBar` the only way to move,
+  maximize or close the app — turning it back on draws two title bars, turning it off without
+  that component leaves a window the reader cannot put down — and `"shadow": true` is easy to
+  lose because nothing breaks without it, the window simply rendering with square corners and no
+  drop shadow, flat against the desktop with no border of its own on a dark wallpaper. Both are
+  pinned by `the_main_window_is_undecorated_and_keeps_its_shadow`.
+- **The window's opening size is decided in Rust, not by the config** (`window.rs`, first call in
+  `setup`). The config's 1920×1080 is the top rung and the fallback; `open_sized_to_monitor` takes
+  the largest of 1920×1080 and 1280×720 that the monitor's **work area** holds, then centres and
+  shows. A 1920×1080 desk takes the lower rung — Windows leaves 1920×**1032** after its taskbar,
+  and a window sized to the whole screen puts the deck editor's action row behind it. **The
+  window is created hidden (`"visible": false`) and `open_sized_to_monitor` is the only thing
+  that shows it**, so it runs before anything in `setup` that can fail — an early `?` above it
+  would leave a running app with no window, which is exactly what the single-instance guard
+  looks like. Nothing is remembered between launches: no window-state plugin is registered, so
+  a size the reader chose is theirs until they close it. **`decorations: false` does not change
+  that arithmetic**: `open_sized_to_monitor` sizes the *window*, and an undecorated window's
+  outer rect is 16px wider and 9px taller than its client area for the invisible grab margin —
+  which is inside the work-area check either way, since both rungs are chosen against the work
+  area rather than against the screen.
 
 ## Further reading
 

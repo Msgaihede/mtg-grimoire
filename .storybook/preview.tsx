@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import type { Decorator, Preview } from "@storybook/react-vite";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
 import { setArtMode } from "./fake/images";
@@ -117,7 +118,7 @@ function FakeWorld({
  * then `storybook-static/index.json`.
  *
  * **The other files carrying the same parameter do so for reasons of their own**, and the reasons
- * are what is worth writing down: `DeckSettingsDialog`, `CreateDeckDialog`, `ImportDeckDialog` and
+ * are what is worth writing down: `DeckSettingsDialog`, `CreateDeckDialog`, `ImportDialog` and
  * `ExportDialog` each draw a `fixed inset-0` scrim that rendered inline would cover the whole docs
  * page rather than its own block; `ContextMenu` draws a `fixed` panel at `LAYER.popup` for the
  * same reason, and needs the frame twice over, since a per-story iframe is also a fake world per
@@ -162,14 +163,20 @@ const withFake: Decorator = (Story, context) => {
   // comes along because a workbench where no story can open a menu is the wrong workbench;
   // `ContextMenu.stories.tsx` keeps its own local pair, which nests harmlessly and is that file's
   // actual subject.
+  //
+  // `TooltipProvider` stands in for `src/App.tsx`'s the same way and sits outside both, for the
+  // reason that file gives: the menu provider draws its rows as a sibling of its children, so a
+  // tooltip context mounted inside it would not reach them.
   return (
     <MotionConfig reducedMotion="user">
       <FakeWorld params={(context.parameters.fake ?? {}) as FakeParams} viewMode={context.viewMode}>
-        <CardToDeckProvider>
-          <ContextMenuProvider>
-            <Story />
-          </ContextMenuProvider>
-        </CardToDeckProvider>
+        <TooltipProvider>
+          <CardToDeckProvider>
+            <ContextMenuProvider>
+              <Story />
+            </ContextMenuProvider>
+          </CardToDeckProvider>
+        </TooltipProvider>
       </FakeWorld>
     </MotionConfig>
   );

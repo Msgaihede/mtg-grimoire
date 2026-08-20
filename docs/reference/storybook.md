@@ -49,12 +49,19 @@ it says `tags: ["autodocs"]`.
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **twelve** faults — `busy`/`syncError`/
-  `imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/`errorLog`/
-  `feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`. Saying nothing gets `starter` with no
+  seeds `empty`/`starter`/`needsReview`/`large`, **seventeen** faults — `busy`/`syncing`/
+  `syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/
+  `errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/`artTagsMissing`/
+  `artTagsFetchError`/`imageUrisMissing`/
+  `exportWriteError`. (Re-counted 2026-08-20: this line said _twelve_ while `imageUrisMissing`
+  and `exportWriteError` had both been in the union for a feature each, which is the third time
+  this number has rotted; the art taxonomy's pair took it to seventeen the same day.) Saying
+  nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
-  refusal rather than what one mocked call returns. **`indexCold` is one of the two that are not
-  a failure at all**: it is the search index mid-build, which `facet_cards` answers `ready: false`
+  refusal rather than what one mocked call returns. **`indexCold` is one of the four that are not
+  a failure at all** (`oracleTagsMissing`, `artTagsMissing` and `imageUrisMissing` are the
+  others — this said "two" while the last of those had been in the union for a feature, the same
+  rot the count above has): it is the search index mid-build, which `facet_cards` answers `ready: false`
   with every map **empty** rather than zeroed, and the filter row leaves every control live on
   it. The fake has no warm-up of its own, so it is the only way a story can stand there.
   **One field of that response is not a map and has no empty to send**: `manaX` — the mana row's
@@ -78,14 +85,30 @@ it says `tags: ["autodocs"]`.
   the state that has prices _and_ a failure, which is the one the panel's wording is hardest to
   get right in. The backend refuses a feed that parses to zero rows for the same reason, so an
   error page cannot wipe a working table.
-  **The last two arrived with the Oracle tags**, and they are the other pair that is not one
-  thing. **`oracleTagsMissing` is the second fault that is no failure at all**: the taxonomy has
+  **`artTagsMissing` and `artTagsFetchError` are the Oracle pair below, one dataset over**, and
+  they are two more faults rather than a reuse of those two because the taxonomies are two files
+  on two schedules: either can be absent, or failing, while the other is fine, and the Tags page
+  has to be able to stand in all four of those worlds. `artTagsMissing` empties `art_tags`, its
+  parents, its closure and its watermark together — one ingest writes all four, and a watermark
+  with no taxonomy behind it is the state the backend goes out of its way never to leave.
+  `art_tags_status` resolves with every field `null`, `tag_search` answers nothing for `art`
+  while still answering for `oracle`, and a card wall filtered by an art tag comes back empty
+  rather than refusing.
+  **The pair before them arrived with the Oracle tags**, and they are the other pair that is not
+  one thing. **`oracleTagsMissing` is the second fault that is no failure at all**: the taxonomy has
   never been ingested, which is every install's first launch and the permanent state of one that
   cannot reach Scryfall Tagger. `oracle_tags_status` **resolves** — every field `null`,
   `stale: true` — and both tag reads answer an empty slug list for every id, so `autoCategoryFor`
   files by type line. It is applied by emptying the *rows* in `installWorld` (the `errorLog`
   fault's shape, inverted) rather than by branching in the handlers, which is what lets a story
-  press Refresh in that state and watch the piles regroup. **`oracleTagsFetchError`** is
+  press Refresh in that state and watch the piles regroup.
+  **`syncing` arrived last, with the Settings page's four clears**, and it is the narrowest fault
+  here: it reaches `cache_clear` and nothing else. That command sweeps `data/images/` and
+  `data/tmp/`, and the second of those is where the corpus download puts 77 MB that the ingest
+  reads back — so the crate refuses the whole command rather than skipping one directory, and
+  refuses it *before* the write connection is asked for, which is why a mid-sync story cannot be
+  told with `busy`. The three destructive clears beside it are unaffected by it, deliberately.
+  **`oracleTagsFetchError`** is
   `feedFetchError` one dataset over: `oracle_tags_refresh` refuses, the taxonomy already ingested
   **stays**, and the reason goes to `error_log` — a refusal a story has to be able to show
   without the screen behind it changing at all, because nothing about categorising a card may
@@ -102,6 +125,23 @@ it says `tags: ["autodocs"]`.
   Both reads answer **one entry per requested id, in request order, deduped, `slugs: []` for
   anything unknown** — a fake that answered only the matches, or that reordered, would look fine
   in Storybook and break every caller that matches by id.
+- **`starter` seeds the _art_ taxonomy beside it, and it is keyed on the illustration** —
+  **eleven tagged printings over thirteen tags and four roots** (`creature`, `plant`,
+  `landscape`, `lightning`). The key is the whole difference from the paragraph above: an art tag
+  is a fact about a *picture*, so `lightning` is on the `lea` Lightning Bolt alone and the other
+  three printings of that card carry nothing, where the oracle tag `burn` reaches all four.
+  Ancestral Recall is the mirror case and is deliberately left untagged — `lea` and `2ed` share
+  one illustration, so `db.test.ts` proves that join against a store built for it rather than by
+  inventing a motif for a picture nobody has looked at. **Every tag in the fixture is true of the
+  picture it is on**, which is why there is no `dog` and no `hound`: nobody in these 43
+  illustrations is a dog, and the `dog`/`hound`/`bulldog` branch lives in the crate's own fixture
+  in `tags/query.rs`. What the seed carries instead is the shape every story needs — `animal`
+  with no direct taggings of its own (reached only through `cat` and `monkey`, the same shape as
+  the real `removal`, which has zero of its own and answers 6 686 cards), `forest` under **two**
+  parents (43 % of real art tags have more than one), one `weak` tagging so the weight floor
+  visibly changes a wall, and Island `lea` tagged twice at two weights so the closure's fold to
+  the *strongest* has something to fold. `muted_tags` is never seeded: it is a user table, so a
+  muted tag in a story is a press that story made.
 - **A world belongs to a story, not to the module — because a docs page mounts every story on
   it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
   so a fake built on module globals looks right and answers all ten stories of a docs page as
@@ -121,7 +161,7 @@ it says `tags: ["autodocs"]`.
   `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckDialog`, `DeckSettingsDialog`,
-  `CreateDeckDialog` and `import/ImportDeckDialog` — **four** files — carry the same parameter for
+  `CreateDeckDialog` and `import/ImportDialog` — **four** files — carry the same parameter for
   an unrelated reason: their scrim is `fixed inset-0`, so inline it would cover the docs page
   rather than its own block. **A third kind arrived 2026-08-14 with the zoom work**:
   `CardZoomIndicator` sets the parameter on **one story** rather than in its meta, because that
@@ -135,7 +175,7 @@ it says `tags: ["autodocs"]`.
   per-section-zoom branch, sweeping `inline: false` under `src/**/*.stories.tsx`: **eight** frame
   wholesale in a meta, four of them because they write `useAppStore` during render (`AppShell`,
   `CardDetailPane`, `CollectionPage`, `SearchPage`) and four because of the scrim (`DeckDialog`,
-  `DeckSettingsDialog`, `CreateDeckDialog`, `import/ImportDeckDialog`), and `CardZoomIndicator`
+  `DeckSettingsDialog`, `CreateDeckDialog`, `import/ImportDialog`), and `CardZoomIndicator`
   frames a single story. **`DeckDialog` was missing from this list** and is the correction that
   found the rot below: the shell arrived with the deck-dialog work, framed from the day it landed,
   and no prose-only edit routes to a CI job that would have said so.

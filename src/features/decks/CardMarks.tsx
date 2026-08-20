@@ -1,5 +1,5 @@
 /**
- * The three marks a card in a deck can carry, in one place because five surfaces draw them.
+ * The marks a card in a deck can carry, in one place because five surfaces draw them.
  *
  * The stack, the table, the text columns, the grid and the categories panel all say the same
  * three things about a card, and the spec is explicit that **a rule break and a game changer
@@ -11,6 +11,12 @@
  * the card's art against its title bar) and the card's own edge, which only a rule break
  * changes. The place is the caller's — a 150px grid tile and a 224px stacked card put them in
  * different corners — so it rides in `className`; the other three are here.
+ *
+ * **{@link TheoryMatchMark} joined them on 2026-08-20 and made that rule load-bearing rather
+ * than merely observed**, because it is a *tick* — the one glyph a reader could take for "this
+ * card is fine". It is why `RULE BREAK` is now in the bottom-left corner of a stacked card
+ * instead of the top-right one it had held: the four separations are cheap to keep while the
+ * marks are apart and impossible to trust while they are adjacent. See that component.
  *
  * ## Every one of these is `aria-hidden`, and that is deliberate
  *
@@ -24,9 +30,10 @@
  *
  * Adding a mark here means asking which of those two says it in words.
  */
-import { Crown } from "lucide-react";
-import { CountTag } from "@/components/CountTag";
+import { Check, Crown } from "lucide-react";
+import { COUNT_TAG_BOX, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { playedFinish } from "@/lib/finish";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -54,10 +61,15 @@ export function TagDot({
   color: string | null;
   className?: string;
 }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={name}
+      // Redundant with the button's own name: the tag's word is already one of
+      // `deckCardName`'s clauses (`card.tagName`), so the hint here is for the pointer only —
+      // `describes: false` leaves `aria-describedby` unset, which an `aria-hidden` span could
+      // not usefully carry anyway.
+      {...tip(name, { describes: false })}
       style={{ backgroundColor: tagColorCss(color) }}
       className={cn(
         "size-[calc(0.5rem*var(--mark-scale,1))] shrink-0 rounded-[2px]",
@@ -114,6 +126,10 @@ export function QuantityTag({
       // Both facts, because the count alone would make the colour a riddle and the name alone
       // would make the number one. The words themselves are in `deckCardName`, which is the
       // only text inside a labelled button anyone hears.
+      //
+      // Still a `title` **prop** — `CountTag` (`components/CountTag.tsx`) owns turning it into
+      // a `useTooltip()` binding internally, since that component's file is outside this
+      // sweep's list. The prop's name and shape are unchanged, so this call site needed no edit.
       title={name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`}
       // Nothing for an untagged card, which is how it lands on the neutral grey — see above.
       paint={name === null ? undefined : { css: tagColorCss(color), fg: tagFgCss(color) }}
@@ -132,6 +148,186 @@ export function QuantityTag({
 }
 
 /**
+ * What the check means, in words, said once so that the chip's tooltip, the table's `sr-only`
+ * twin and `deckCardName`'s clause cannot drift apart.
+ *
+ * "In the theory list" and not "Planned", "Matches theory" or a tick's worth of nothing: the
+ * reader has a tab called **Theory** two inches above the card, and the sentence that costs them
+ * no learning is the one naming it. It is also the sentence that does *not* read as a verdict —
+ * "matches" invites the question *matches what, and is that good* — which matters more here than
+ * anywhere else on the card, because the glyph is a tick and a tick beside a red mark is the one
+ * thing this mark must never be mistaken for. See {@link TheoryMatchMark}.
+ */
+export const THEORY_MATCH_LABEL = "In the theory list";
+
+/**
+ * How the tick says which one it is, for anything that has to find it **after the fact**.
+ *
+ * The same problem `STACK_OPEN_ATTR` and `LANDED_ATTR` solve one file over: the mark used to be
+ * addressable by its `title`, and the tooltip sweep moved that text off the DOM attribute a
+ * `getByTitle` could read. It is `aria-hidden` and carries no visible text of its own (unlike
+ * `RuleBreakMark`'s `RULE BREAK` or `GameChangerBanner`'s spelled-out words), so a test or a
+ * live probe needs its own handle rather than `getByText`. On both {@link TheoryMatchMark} and
+ * {@link TheoryMatchBadge} — one fact, two drawings, one attribute.
+ */
+export const THEORY_MATCH_ATTR = "data-theory-match";
+
+/**
+ * A card the plan also asks for, as a tick in the shape of that surface's own quantity badge.
+ *
+ * Drawn only on the **Live** list of a deck that keeps a plan — `theoryMatch.ts` has the whole of
+ * when, and the grain it matches on. The statement is "the card in front of you is the one you
+ * planned for", which on a live list is the difference between the real thing and the proxy
+ * standing in until it arrives.
+ *
+ * ## It is the surface's own quantity badge, which is two drawings rather than one
+ *
+ * The quantity is the mark a reader's eye already goes to on a deck card, so a second fact drawn
+ * in a *different* shape beside it reads as a second kind of object. The catch is that the two
+ * card-face views do not draw the *same* quantity badge: the stack draws {@link CountTag}'s
+ * 22px slanted banner, and the Grid tile draws a flat 9px chip of its own. So this echoes
+ * whichever one it is standing next to — `"banner"` and `"chip"` — and `COUNT_TAG_BOX` and
+ * `COUNT_TAG_SLANT_MIRRORED` are exported for the first of them and nothing else.
+ *
+ * **One drawing was tried first and the tile is why it did not survive.** The banner is 22px on a
+ * 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card against 15 % of it —
+ * so a wall of tiles read as a wall of blue flags with cards behind them. Photographed
+ * 2026-08-20; it is the same argument {@link GameChangerBadge} and {@link GameChangerBanner}
+ * already settle the other way round, that one fact may be drawn twice when the two surfaces have
+ * different room.
+ *
+ * ## The four separations, and the one this mark has to work hardest for
+ *
+ * A tick is a **verdict-shaped glyph**, and this file's founding rule is that a mark saying a
+ * card is fine must never be confusable with {@link RuleBreakMark}, which says a card is a
+ * problem. The four separations hold and were the condition of drawing a tick at all: the
+ * **place** (this in the top-right corner, the rule break moved to the bottom-left on
+ * 2026-08-20 precisely so the two are never adjacent), the **colour** (azure against
+ * destructive), the **shape** (a filled mark against a hairline box), and the card's own
+ * **edge**, which only a rule break changes. A card can be both, and on that card the two marks
+ * are in opposite corners saying two unrelated things — which is the arrangement, not an
+ * accident of it.
+ *
+ * ## The fill is `pie-u`, and every other candidate was ruled out by looking at one
+ *
+ * Photographed 2026-08-20 against the built stylesheet, over real card art, beside the gold
+ * banner (`docs/reference/frontend-design.md` has the pass). **Gold** — the obvious first choice,
+ * since `bg-accent` is what a chip on a card usually is — put two gold marks in one 27px strip
+ * meaning two unrelated things, and read as an extension of {@link GameChangerBanner}.
+ * **`--color-ok`**, the green the format check draws its `CircleCheck` in, is legible and says
+ * exactly the wrong sentence: it is this app's "nothing is wrong here" colour, which is the one
+ * reading a tick must not have. **The neutral count paint** was invisible as a distinction — a
+ * grey chip at one end of the strip and a grey chip at the other read as two of the same thing.
+ * Azure is none of those, and it is a colour the reader has no other meaning for on a card face.
+ *
+ * It **is** one of the six tag colours, and that is the one cost. A card tagged Azure draws an
+ * azure {@link QuantityTag} at the other end of this strip — but that mark is a *number* at the
+ * opposite end, so the pair are still told apart by content and position, which is the same
+ * argument that lets two gold things (a Gold tag and the banner) already coexist.
+ *
+ * ## `aria-hidden`, like every mark here
+ *
+ * The surfaces that draw this draw a card as a **button with an explicit `aria-label`**, and a
+ * label replaces the element's content for naming — so the words are `deckCardName`'s, where
+ * {@link THEORY_MATCH_LABEL} is joined to the rest of the sentence. `TableView` is the exception
+ * this file always makes: a cell's text is really read, so there the badge below gets an
+ * `sr-only` twin.
+ */
+export function TheoryMatchMark({
+  variant = "banner",
+  className,
+}: {
+  /**
+   * Which surface's quantity badge to echo. `"banner"` is the stack's {@link CountTag} box;
+   * `"chip"` is the Grid tile's smaller flat chip — see the "two drawings" note above.
+   */
+  variant?: "banner" | "chip";
+  className?: string;
+}) {
+  const banner = variant === "banner";
+  const tip = useTooltip();
+  return (
+    <span
+      aria-hidden="true"
+      {...{ [THEORY_MATCH_ATTR]: "" }}
+      // Redundant with `deckCardName`'s own clause (`inTheory && THEORY_MATCH_LABEL`) — the
+      // words are already the whole of what a keyboard reader gets from the button this sits
+      // inside, so `describes: false` leaves `aria-describedby` unset.
+      {...tip(THEORY_MATCH_LABEL, { describes: false })}
+      // Mirrored, because this sits in the card's **right**-hand corner — see the constant. The
+      // chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a 14px
+      // box is most of the box.
+      style={banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : undefined}
+      className={cn(
+        banner
+          ? COUNT_TAG_BOX
+          : // The Grid tile's copy count, verbatim but for the fill: `rounded-sm`, the mono face
+            // and the same two scaled sizes. Written out rather than imported because that chip is
+            // `GridView`'s own inline markup and not a component — if it ever becomes one, both
+            // should take it.
+            cn(
+              "flex shrink-0 items-center rounded-sm font-mono tabular-nums",
+              "px-[calc(0.25rem*var(--mark-scale,1))]",
+              "text-[calc(0.5625rem*var(--mark-scale,1))]",
+            ),
+        "bg-pie-u text-text",
+        className,
+      )}
+    >
+      {/* 12px on the stack is the size {@link FinishMark} is drawn at, because the two are marks
+          on one card face and a tick larger than the foil sparkle would read as the more important
+          of the two. 9px on a tile, which is the cap height of the digit this chip is standing in
+          for. `strokeWidth` above lucide's 2 default at both sizes: a tick is three strokes and no
+          fill, so on art it needs the weight the crown gets from its body. */}
+      <Check
+        className={cn(
+          "block shrink-0",
+          banner
+            ? "size-[calc(0.75rem*var(--mark-scale,1))]"
+            : "size-[calc(0.5625rem*var(--mark-scale,1))]",
+        )}
+        strokeWidth={3}
+        aria-hidden="true"
+      />
+    </span>
+  );
+}
+
+/**
+ * The same fact for the two views that draw **no art** — the table's rows and the text columns.
+ *
+ * A row of type has no corner to lay a banner in, so this is the glyph alone, in the same azure
+ * {@link TheoryMatchMark} is filled with. One colour for the mark on every surface; only the size
+ * and the box change.
+ *
+ * ## It is deliberately **not** {@link GameChangerBadge}'s outlined box, and that is a finding
+ *
+ * The first draft was, on the obvious reasoning that the marks inline beside a card's name should
+ * be one family. Drawn, it was a **checkbox**: a hairline box with a tick inside it is the one
+ * control every reader already knows, and a row of them down a decklist reads as something to
+ * click. `GC` gets away with the box because it contains *letters*. So the box goes and the tick
+ * stands on its own, which is what {@link DeckFinishMark} beside it already does.
+ *
+ * No `--mark-scale` anywhere in it: neither surface is a card face, so neither zooms.
+ */
+export function TheoryMatchBadge({ className }: { className?: string }) {
+  const tip = useTooltip();
+  return (
+    <span
+      aria-hidden="true"
+      {...{ [THEORY_MATCH_ATTR]: "" }}
+      // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
+      {...tip(THEORY_MATCH_LABEL, { describes: false })}
+      // 12px, matching `DeckFinishMark`'s glyph on the same line rather than `GC`'s 9px type —
+      // a stroked tick needs the height that two letters in a box do not.
+      className={cn("flex shrink-0 items-center text-pie-u", className)}
+    >
+      <Check className="block size-3" strokeWidth={3} aria-hidden="true" />
+    </span>
+  );
+}
+
+/**
  * A game changer, as two gold letters.
  *
  * Gold and abbreviated on purpose: it is a fact about the card, not a problem with the deck,
@@ -139,10 +335,13 @@ export function QuantityTag({
  * nothing about one is a finding.
  */
 export function GameChangerBadge({ className }: { className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title="Game changer"
+      // Redundant with `deckCardName`'s own "game changer" clause — the words are already the
+      // whole of what a keyboard reader gets from the button this sits inside.
+      {...tip("Game changer", { describes: false })}
       className={cn(
         "shrink-0 rounded-[2px] border border-pie-gold px-0.5 font-mono text-[0.5625rem]",
         "leading-3 text-pie-gold",
@@ -196,10 +395,14 @@ export function GameChangerBadge({ className }: { className?: string }) {
  * that doubles reads as the banner lifting off the card.
  */
 export function GameChangerBanner({ className }: { className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title="Game changer"
+      // Redundant twice over: the words are `deckCardName`'s "game changer" clause **and**
+      // already spelled out on the ribbon itself ("Game Changer", below) — a hint repeating
+      // visible text is the other half of the `describes: false` rule.
+      {...tip("Game changer", { describes: false })}
       style={{
         // The ribbon's forked tail. The notch is cut into the *right* edge, so the banner
         // points away from the tag it emerges from rather than back into it.
@@ -252,10 +455,13 @@ export function GameChangerBanner({ className }: { className?: string }) {
  * where they are: all three are one pixel or three, and a hairline is a hairline at every size.
  */
 export function RuleBreakMark({ text, className }: { text: string; className?: string }) {
+  const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      title={text}
+      // Redundant with `deckCardName`'s own `rule break: ${text}` clause — the button beside
+      // this mark already says the finding in full to a keyboard reader.
+      {...tip(text, { describes: false })}
       className={cn(
         "rounded-[3px] border border-destructive/50 bg-bg/85 py-px",
         "px-[calc(0.25rem*var(--mark-scale,1))]",

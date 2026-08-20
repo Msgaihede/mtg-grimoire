@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 
@@ -58,7 +59,7 @@ const meta = {
           "Two gestures, one handler. A plain press replaces the sort; **Shift** adds this " +
           "column to it. Chromium reports `shiftKey` on the click it synthesises from " +
           "Shift+Enter, so the keyboard needs no second path — which is why the hint is a " +
-          "`title` and not a caption: the reader who needs it is already pointing at a header, " +
+          "tooltip and not a caption: the reader who needs it is already pointing at a header, " +
           "and a permanent line under the table would cost 20px of every list to say it.",
       },
     },
@@ -155,10 +156,11 @@ export const SecondOfTwoKeys: Story = {
  * The collection's Value column, verbatim — the one header in the app that carries a sentence
  * of its own.
  *
- * Every prop here is copied from `CollectionTable.tsx:163-165`. Spec §5 says a price is never
+ * Every prop here is copied from `CollectionTable.tsx`'s Value column. Spec §5 says a price is never
  * shown without saying how old it is, and a 36px header row has nowhere to write it, so
- * `PRICES_AS_OF` rides in two places: the `title`, which the sort hint is **appended** to
- * rather than replacing, and `headerLabel`, which becomes the header's `aria-label`.
+ * `PRICES_AS_OF` rides in two places: the `title` prop, whose words the sort hint is
+ * **appended** to (as a tooltip now, not a native `title`) rather than replacing, and
+ * `headerLabel`, which becomes the header's `aria-label`.
  *
  * The label is on the *header* and not on the button, and that was measured: name-from-content
  * does not reach into a descendant's `aria-label`, so a column whose whole description lived on
@@ -178,11 +180,20 @@ export const RightAligned: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Appended, never replaced — both sentences are on the one tooltip, in that order.
-    await expect(canvas.getByRole("button")).toHaveAttribute(
-      "title",
+    const button = canvas.getByRole("button");
+    // Appended, never replaced — both sentences are on the one tooltip, in that order, joined
+    // by a literal `\n` rather than a space: this is the one site the brief chose to prove the
+    // panel's `whitespace-pre-line` keeps that break. `normalizeWhitespace: false` is load-bearing
+    // — the default collapses the `\n` to a space, and a binder that joined with `" "` instead
+    // (or a panel that lost `whitespace-pre-line`) would pass the default form identically.
+    await userEvent.hover(button);
+    const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    await expect(panel).toHaveTextContent(
       `${PRICES_AS_OF}\nSort by Value — Shift-click to add to the sort`,
+      { normalizeWhitespace: false },
     );
+    await expect(button).toHaveAttribute("aria-describedby", panel.id);
+    await userEvent.unhover(button);
     await expect(canvas.getByRole("columnheader")).toHaveAttribute(
       "aria-label",
       `Value. ${PRICES_AS_OF}`,

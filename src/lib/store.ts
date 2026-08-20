@@ -1,9 +1,13 @@
 import { create } from "zustand";
 import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
+import type { Condition } from "./conditions";
+import { defaultFields } from "@/features/transfer/fields";
+import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
+import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
-/** The five top-level destinations in the sidebar. */
-export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
+/** The six top-level destinations in the sidebar. */
+export type ViewId = "search" | "tags" | "collection" | "wishlist" | "decks" | "settings";
 
 /**
  * The deck row the open card was opened *from* — which is the whole of what the card pane
@@ -83,6 +87,19 @@ interface AppState {
    *  their collection in a table was not saying anything about their shopping list. */
   wishlistView: SearchView;
   setWishlistView: (view: SearchView) => void;
+  /**
+   * How the Tags page's wall is laid out. A fourth field rather than a fourth reader of
+   * `searchView`, for the reason the other three split: a reader who put the search in a table
+   * to compare prices was not saying anything about a wall they browse *by motif*, and the two
+   * pages are read one after the other rather than instead of each other.
+   *
+   * The Tags page draws `FilterBar`, whose layout pair is bound to a stored preference — so
+   * without a field of its own that pair would move the **search's** while changing nothing the
+   * reader can see on the search page, which is the "control that lies" the deck panel's
+   * `layoutToggle={false}` exists to avoid.
+   */
+  tagsView: SearchView;
+  setTagsView: (view: SearchView) => void;
   /**
    * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
    * own — one of `ZOOM_STEPS` per section, all starting at `DEFAULT_ZOOM`.
@@ -224,75 +241,160 @@ interface AppState {
    * addressed by — every one of the five parts of `DECK_CARD_GRAIN`, for the reason that type's
    * own doc gives. Null is "there is no deck row to write to", and a press then opens the card
    * pane on that printing instead.
+   *
+   * **`cardId` is the printing the reader asked *from*, and it does two things a deck slot used
+   * to do alone.** It is the wall's "you are here" mark — the tile the question was asked about,
+   * which on a deck row is the printing that row plays and on every other surface is the row the
+   * menu was opened on; and it is how the modal finds its place on {@link cardWalk} where the
+   * stops are not deck rows, because a list of search results has no `DECK_CARD_GRAIN` to be
+   * addressed by. It is **not** derived from `deck` even where there is one: `PaneDeckContext`
+   * carries the same id, and one of the two would have to be the definition — this is the one
+   * every surface can answer, so it is the one the modal reads.
    */
-  printingsRequest: { oracleId: string; name: string; deck: PaneDeckContext | null } | null;
+  printingsRequest: PrintingsRequest | null;
   /** Open the printings modal. Writes one field — see {@link printingsRequest} for why. */
-  openAllPrintings: (request: {
-    oracleId: string;
-    name: string;
-    deck: PaneDeckContext | null;
-  }) => void;
+  openAllPrintings: (request: PrintingsRequest) => void;
   /** Close it. */
   closeAllPrintings: () => void;
   /**
-   * The open deck's cards in the order the desk draws them, or `[]` when no deck editor is open.
+   * **The list the reader is standing in**, in the order it is drawn — the open deck's cards,
+   * the search results, the collection, the wishlist — or an empty walk when whatever is on
+   * screen has no list of cards on it.
    *
    * The printings modal's left/right keys walk this. It is here for the same reason
    * {@link paneDeckContext} is, one size up: `AllPrintingsDialog` renders at `App` level, a
-   * sibling of the shell and therefore *outside* `DeckEditor`, so no React context reaches it —
+   * sibling of the shell and therefore *outside* every view, so no React context reaches it —
    * and unlike a slot, this cannot be handed over at the moment the menu row is pressed either,
    * because it changes underneath the open modal every time the reader types in the deck's
-   * filter box.
+   * filter box or the search's.
    *
    * **The whole list rather than a cursor and a pair of neighbours.** Where the reader is in it
-   * is derived by *finding* {@link printingsRequest}'s own slot, through `sameDeckSlot` — so the
-   * two fields cannot disagree about which card the modal is on, which a stored index and a
-   * stored request could and would the first time a write reordered the deck under them.
+   * is derived by *finding* {@link printingsRequest}'s own stop — through `sameDeckSlot` for a
+   * deck row and through `cardId` for everything else — so the two fields cannot disagree about
+   * which card the modal is on, which a stored index and a stored request could and would the
+   * first time a write reordered the list under them.
    *
-   * **Only the editor writes it, and it is the editor's order rather than the deck's.** It is
-   * `deckWalkStops(groups, deckId)` — the piles as `splitRail` lays them out, each pile's cards
-   * as `sortBy` ordered them, narrowed by whatever the toolbar's text box and tag chips are
-   * narrowing. That is what the reader is looking at, and it is knowable nowhere else: `groupBy`
-   * and `sortBy` are `useState` inside that component.
+   * **One writer at a time, and `ActiveView` is what guarantees it**: exactly one of the five
+   * views is mounted, so the deck editor and the three card lists can never publish over each
+   * other. The order is the drawing surface's own and is knowable nowhere else — the editor's
+   * `groupBy` and `sortBy` are `useState` inside that component, and a page's rows are a query
+   * narrowed by a filter bar.
    *
-   * `[]` is "there is no walk", written on the editor's unmount. A stale walk through a deck
-   * that is no longer open would step a modal opened from the Collection into somebody's
-   * Sideboard.
+   * **The deck editor's docked search panel deliberately publishes nothing.** The editor already
+   * owns the walk while it is open, and a panel that overwrote it would step a modal opened from
+   * a *deck row* through a list of search results. A modal opened from that panel finds no stop
+   * and gets no chevrons, which is the honest answer rather than a wrong walk.
+   *
+   * Empty is "there is no walk", written on the publishing surface's unmount. A stale walk
+   * through a deck that is no longer open would step a modal opened from the Collection into
+   * somebody's Sideboard.
    */
-  deckWalk: DeckWalkStop[];
+  cardWalk: CardWalk;
   /** Publish the walk. One field, like {@link openAllPrintings} — nothing about the open card,
    *  the open deck or the view is this write's business. */
-  setDeckWalk: (stops: DeckWalkStop[]) => void;
+  setCardWalk: (walk: CardWalk) => void;
+  /**
+   * The format and field set each surface was last exported with.
+   *
+   * **Per surface rather than globally**: a deck export wants Moxfield's printing line and a
+   * collection export wants a CSV with a condition column, and one remembered setting would
+   * make each of them wrong half the time.
+   */
+  exportPrefs: Record<TransferSurface, { format: ExportFormat; fields: TransferFieldId[] }>;
+  setExportPrefs: (
+    surface: TransferSurface,
+    prefs: { format: ExportFormat; fields: TransferFieldId[] },
+  ) => void;
+  /**
+   * What a bulk import line that says nothing becomes — the collection's condition and finish,
+   * and the wishlist's finish alone (it draws the same field and ignores `condition`, which is
+   * this app's collection-only vocabulary).
+   *
+   * **One shared pair rather than one per surface**, unlike {@link exportPrefs}: a reader who has
+   * just told the collection's import "assume Near Mint, foil" is answering a question about
+   * *their box*, not about the collection screen — so a wishlist import opened next re-reads the
+   * same answer rather than asking again. `NM` matches Rust's `DEFAULT_CONDITION`.
+   */
+  importDefaults: { condition: Condition; finish: DeckFinish };
+  setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
 }
 
 /**
- * One stop on {@link AppState.deckWalk}: **exactly the shape {@link AppState.openAllPrintings}
- * takes**, so a step is one call and nothing between the deck editor and the modal has to
+ * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is
+ * the only field of this shape and where every part of it is argued.
+ *
+ * Named and exported rather than written inline three times, because it is written down in three
+ * places that must not drift: the store's field, the card menu's `openAllPrintings` dependency,
+ * and the modal body's own prop.
+ */
+export interface PrintingsRequest {
+  /** The printing the question was asked *from*. */
+  cardId: string;
+  /** The oracle card whose printings are listed. */
+  oracleId: string;
+  /** What the modal captions itself with. */
+  name: string;
+  /** The deck row a press writes to, or `null` where there is none. */
+  deck: PaneDeckContext | null;
+}
+
+/**
+ * One stop on {@link AppState.cardWalk}: **exactly the shape {@link AppState.openAllPrintings}
+ * takes**, so a step is one call and nothing between the drawing surface and the modal has to
  * reassemble a request.
  *
- * `deck` is non-nullable where {@link AppState.printingsRequest}'s own `deck` is not, and that
- * difference is the whole of what this type is: that field is `null` for every surface which is
- * not a deck row, and a walk is made of nothing but deck rows.
+ * `deck` carries the same meaning it does on {@link AppState.printingsRequest} — the row a press
+ * inside the modal *writes to*, or `null` on a surface whose rows are not deck rows. It is what
+ * tells the two kinds of stop apart, and the modal needs them told apart at both ends: a step
+ * onto a deck stop re-anchors the card pane to that row (`openCardFromDeck`), and a step onto a
+ * plain one opens the card the way every non-deck surface in this app does (`setSelectedCardId`,
+ * which clears the context — see there).
  *
- * **Here rather than in `features/decks/deckWalk.ts`, where the stops are built**, for
+ * **Here rather than in `features/decks/deckWalk.ts`, where the deck's stops are built**, for
  * {@link PaneDeckContext}'s reason: it is an address this store carries between two surfaces that
  * cannot see each other, and `lib` sits underneath `features`. `deckWalk.ts` re-exports it, so
  * the callers who reach for it beside `deckWalkStops` still find it there.
  */
-export interface DeckWalkStop {
-  /** Non-null, unlike `DeckCard.oracleId` — a row with no oracle id is not a stop at all, since
-   *  an orphan whose printing has left the corpus has no printings to walk to. */
+export interface CardWalkStop {
+  /**
+   * The printing this stop is: what the card pane opens on, what the wall rings, and — for a
+   * plain stop — how the modal finds its place on the walk.
+   *
+   * On a deck stop it is the same id as `deck.cardId` and is written from that one field, so
+   * the two cannot drift. It is spelled out here anyway because it is the only part of a stop
+   * every surface can answer, and the modal reads it without asking which kind of stop it has.
+   */
+  cardId: string;
+  /** Non-null, unlike `DeckCard.oracleId` and `CardSummary.oracleId` — a row with no oracle id
+   *  is not a stop at all, since an orphan whose printing has left the corpus has no printings
+   *  to walk to. */
   oracleId: string;
-  /** `deck_cards.name`, denormalized at write time, so an orphaned row still has one. The modal
-   *  captions itself with this rather than fetching a card to say one word. */
+  /** The card's name. On a deck row that is `deck_cards.name`, denormalized at write time, so an
+   *  orphaned row still has one. The modal captions itself with this rather than fetching a card
+   *  to say one word. */
   name: string;
-  /** The row this stop *is*, as every write to it is addressed — all five parts of the grain
-   *  plus the category's name. See {@link PaneDeckContext}. */
-  deck: PaneDeckContext;
+  /** The deck row this stop *is*, as every write to it is addressed — all five parts of the
+   *  grain plus the category's name (see {@link PaneDeckContext}) — or `null` where the surface
+   *  drawing the list is not a deck. */
+  deck: PaneDeckContext | null;
 }
 
-/** The one empty walk — see {@link AppState.setDeckWalk} for why there is only one of it. */
-const NO_WALK: DeckWalkStop[] = [];
+/**
+ * A list of cards a reader can be walked along, and what to call it.
+ *
+ * **`label` is a noun phrase and it is the surface's own**: it is read straight into the step
+ * chevrons' names — `Next card in your collection, Lightning Bolt` — and a chevron that said
+ * "in the deck" over the wishlist would be the one part of this feature that lies. Each
+ * publishing surface says its own once; there is no default, because a default is exactly how
+ * one of them would come to say somebody else's noun.
+ */
+export interface CardWalk {
+  label: string;
+  stops: CardWalkStop[];
+}
+
+/** The one empty walk — see {@link AppState.setCardWalk} for why there is only one of it. */
+const NO_WALK: CardWalk = { label: "", stops: [] };
 
 /**
  * UI state that outlives a single component tree.
@@ -331,6 +433,12 @@ export const useAppStore = create<AppState>((set) => ({
   // for the trip where the question is what it all costs.
   wishlistView: "grid",
   setWishlistView: (wishlistView) => set({ wishlistView }),
+  // Art by default, and this is the one of the four where the grid is not merely the better
+  // opening but the whole point: the page's question is "what does this illustration show",
+  // and a table of set codes and prices answers none of it. The table is still a press away
+  // for the trip where the question is what a themed deck would cost.
+  tagsView: "grid",
+  setTagsView: (tagsView) => set({ tagsView }),
   // A copy, not the constant itself. `Readonly<>` is a compile-time fence and nothing more, so an
   // in-place `state.cardZoom.deck = …` would write *through* the initial state into the exported
   // `DEFAULT_SECTION_ZOOMS` — and several suites reset this store from it, so the damage would
@@ -388,17 +496,30 @@ export const useAppStore = create<AppState>((set) => ({
   // here has an opinion about the view, the open card or the open deck behind it.
   openAllPrintings: (printingsRequest) => set({ printingsRequest }),
   closeAllPrintings: () => set({ printingsRequest: null }),
-  // No walk until a deck editor publishes one, and back to this the moment it unmounts.
-  deckWalk: NO_WALK,
-  // **An empty walk is always the same empty array**, which is what makes clearing one that is
+  // No walk until a surface with a list of cards on it publishes one, and back to this the
+  // moment that surface unmounts.
+  cardWalk: NO_WALK,
+  // **An empty walk is always the same object**, which is what makes clearing one that is
   // already clear free: zustand compares a subscriber's selected slice with `Object.is`, so a
-  // fresh `[]` on every teardown is a new identity and re-renders whoever is reading the walk —
-  // including the closed modal, which selects this field to decide nothing at all. Collapsed
-  // here rather than at the call site so that it holds for every caller rather than for the one
-  // that remembered.
+  // fresh `{ label, stops: [] }` on every teardown is a new identity and re-renders whoever is
+  // reading the walk — including the closed modal, which selects this field to decide nothing at
+  // all. Collapsed here rather than at the call site so that it holds for every caller rather
+  // than for the one that remembered — and the label goes with the stops, because a walk with no
+  // stops has no list to name.
   //
   // Deliberately not cleared in `setOpenDeckId` or `setActiveView` beside `paneDeckContext`:
-  // those two are *navigations*, and this is a fact about what is drawn, which only the editor
+  // those two are *navigations*, and this is a fact about what is drawn, which only the surface
   // drawing it knows. A second writer would be a second place for the two to disagree.
-  setDeckWalk: (stops) => set({ deckWalk: stops.length === 0 ? NO_WALK : stops }),
+  setCardWalk: (walk) => set({ cardWalk: walk.stops.length === 0 ? NO_WALK : walk }),
+  // A collection opens on CSV because that is the only format that can carry a condition, and a
+  // collection without conditions is a card list rather than a record of what the reader owns.
+  exportPrefs: {
+    deck: { format: "plain", fields: defaultFields("plain", "deck") },
+    collection: { format: "csv", fields: defaultFields("csv", "collection") },
+    wishlist: { format: "plain", fields: defaultFields("plain", "wishlist") },
+  },
+  setExportPrefs: (surface, prefs) =>
+    set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
+  importDefaults: { condition: "NM", finish: null },
+  setImportDefaults: (importDefaults) => set({ importDefaults }),
 }));

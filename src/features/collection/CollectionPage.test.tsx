@@ -4,10 +4,22 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
-import type { CollectionQuery, CollectionRow, CollectionSummary, DeckRow } from "@/lib/ipc";
+import type {
+  CollectionQuery,
+  CollectionRow,
+  CollectionSummary,
+  DeckRow,
+  ImportMatch,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -35,6 +47,11 @@ const deckFolderList = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+// The collection's own bulk-import entry point (Task 14): one resolved line and the commit it
+// feeds, so `resolve` and `collectionImportCommit` both have a real answer rather than a
+// rejection about a missing Tauri runtime.
+const importResolve = vi.hoisted(() => vi.fn());
+const collectionImportCommit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -52,6 +69,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     oracleTagsForPrintings,
+    importResolve,
+    collectionImportCommit,
   },
 }));
 
@@ -92,6 +111,34 @@ const BOLT: CollectionRow = {
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
+};
+
+/** The one printing `import_resolve` answers with for the import test below — everything the
+ *  collection's planner does not read filled in as nothing, `DeckEditor.test.tsx`'s own
+ *  `SOL_RING` cut to what this file needs. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: null,
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  printingCount: 1,
+  ownedQuantity: 0,
 };
 
 /** One deck for the menu's "Add to → Deck" to reach. No theory list, so it is one row. */
@@ -148,21 +195,38 @@ const lastQuery = () =>
   collectionList.mock.calls[collectionList.mock.calls.length - 1][0] as CollectionQuery;
 
 /**
+ * How many **sweep** requests (`limit: 500`, `scope.ts`'s `SWEEP_PAGE`) have gone out at a given
+ * marketplace — as opposed to the ordinary paged list's own `limit: 100` requests, which also
+ * carry `marketplace` in their key and legitimately refetch on a feed switch regardless of this
+ * task. A cache-key test on the export sweep has to filter those out, or a marketplace switch
+ * reads as "a fresh sweep went out" when it was really just the list behind the table doing what
+ * it always does.
+ */
+const sweepCallsAt = (marketplace: string) =>
+  collectionList.mock.calls.filter(
+    ([q]) => (q as CollectionQuery).limit === 500 && (q as CollectionQuery).marketplace === marketplace,
+  ).length;
+
+/**
  * The filter bar's sort control.
  *
- * By role and exact name, because every sortable column header carries a `title` reading
- * "Sort by …" — and `getByLabelText` falls back to `title`, so a loose `/sort/i` matches
- * the whole header row as well.
+ * By role and exact name, not a loose label match. Every sortable column header carries a
+ * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
+ * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Value. Prices as of…"),
+ * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
+ * only the control this file means.
  */
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
 /**
- * The page, under the two providers `App` mounts above it.
+ * The page, under the providers `App` mounts above it.
  *
  * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider
  * is above it (so that every surface offering a right-click stays renderable on its own), which
  * means a page
  * rendered bare would open nothing and pass every menu assertion below by never being asked.
+ * `TooltipProvider` is the same trade, for `useTooltip` — the needs-review band's hover
+ * assertion below would bind a tooltip that can never open without it.
  */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -170,7 +234,9 @@ function wrap(ui: ReactElement) {
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <ContextMenuProvider>{ui}</ContextMenuProvider>
+        <TooltipProvider>
+          <ContextMenuProvider>{ui}</ContextMenuProvider>
+        </TooltipProvider>
       </QueryClientProvider>,
     ),
   };
@@ -219,7 +285,16 @@ beforeEach(() => {
   prewarmCollection.mockReset().mockResolvedValue(0);
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
-  useAppStore.setState({ collectionView: "table", selectedCardId: null });
+  // One printing, so a one-line paste resolves to something the collection's own preview can
+  // plan and commit. `resetImportDefaults` below is what keeps a written default from bleeding
+  // between tests, since `importDefaults` lives in the store rather than in this component.
+  importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+  useAppStore.setState({
+    collectionView: "table",
+    selectedCardId: null,
+    importDefaults: { condition: "NM", finish: null },
+  });
 });
 
 describe("CollectionPage", () => {
@@ -308,11 +383,14 @@ describe("CollectionPage", () => {
 
     // Spec §5: no price on screen without saying how old it is — and, with five marketplaces
     // in the picker, whose it is. The header has no room for the sentence beside the figures,
-    // so it rides on the figure it is about.
-    expect(screen.getByText("Value (USD)").closest("div")).toHaveAttribute(
-      "title",
-      pricesAsOf(MARKETPLACES.tcgplayer),
-    );
+    // so it rides on the figure it is about — `Figure`'s own `title` prop, bound through
+    // `useTooltip()` since the tooltip sweep rather than a native attribute.
+    const figure = screen.getByText("Value (USD)").closest("div") as HTMLElement;
+    await userEvent.hover(figure);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
+    expect(figure).toHaveAttribute("aria-describedby", panel.id);
+    await userEvent.unhover(figure);
   });
 
   /**
@@ -332,10 +410,11 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
 
     await waitFor(() => expect(screen.getByText("€8,100.00")).toBeInTheDocument());
-    expect(screen.getByText("Value (EUR)").closest("div")).toHaveAttribute(
-      "title",
-      pricesAsOf(MARKETPLACES.cardmarket),
-    );
+    const figure = screen.getByText("Value (EUR)").closest("div") as HTMLElement;
+    await userEvent.hover(figure);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
+    await userEvent.unhover(figure);
   });
 
   /**
@@ -656,8 +735,42 @@ describe("CollectionPage", () => {
     expect(within(row).getByText("Needs review:")).toBeInTheDocument();
     // The band is one line and the sentence is 175 characters, so what is on screen is the
     // half that says what happened and not the half that says what to do about it. The whole
-    // of it is one hover away — and a screen reader reads the text, never the clip.
-    expect(band).toHaveAttribute("title", REVIEW_NOTE);
+    // of it is one hover away — and a screen reader reads the text, never the clip (proven by
+    // `getByText` above, since a screen reader reads text and not `title`).
+    //
+    // `whenClipped` pinned, the direction that stays shut: jsdom lays nothing out, so the
+    // band's `scrollWidth`/`clientWidth` are both `0` here by default — unclipped — and
+    // `TooltipProvider.enter()`'s `whenClipped` guard returns before arming the open timer at
+    // all. Waiting past `TOOLTIP_OPEN_MS` and finding nothing is what actually pins the option:
+    // a plain `tip(row.needsReview, { interactive: true })` with `whenClipped` dropped would
+    // open here identically, just 400ms later, so asserting immediately would not tell the two
+    // apart.
+    fireEvent.pointerEnter(band);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 150));
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull();
+    fireEvent.pointerLeave(band);
+
+    // The hover affordance itself, `whenClipped` pinned the other direction: `scrollWidth`/
+    // `clientWidth` are faked the way `tooltip.test.tsx` stands in for a real clip.
+    // `whenClipped` wins over `interactive`'s own default, so the open panel is
+    // `describes: false` and carries no `role="tooltip"` (it would double what a screen reader
+    // already has from the band's own text) — found by `TOOLTIP_PANEL_ID` instead, the one
+    // stable id the provider ever draws.
+    Object.defineProperty(band, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(band, "clientWidth", { value: 100, configurable: true });
+    fireEvent.pointerEnter(band);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    const panel = document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
+    expect(panel).toHaveTextContent(REVIEW_NOTE);
+    // `interactive` pinned: the panel takes its own pointer events and its text can be
+    // selected, which a bare `whenClipped` tooltip does not — without this option a
+    // `pointer-events-none` panel would still pass every assertion above unchanged.
+    expect(panel).toHaveClass("select-text");
+    expect(panel).not.toHaveClass("pointer-events-none");
+    fireEvent.pointerLeave(band);
+
     // A price the data does not have is a dash, never an invented `$0.00`.
     expect(within(row).queryByText(/\$/)).not.toBeInTheDocument();
     expect(within(row).getAllByText("—").length).toBeGreaterThanOrEqual(2);
@@ -836,6 +949,169 @@ describe("CollectionPage", () => {
     // of unowned tiles is not a wall of empty chips. (`CardGrid`'s own test pins the rule.)
     expect(container.querySelector('[class*="bg-bg/85"]')).toBeEmptyDOMElement();
   });
+
+  /**
+   * **Task 11's first export entry point outside the deck editor.** The list here is a
+   * `useInfiniteQuery` at 100 rows a page, so what is in memory is a scroll position rather
+   * than a decision — exporting it would silently truncate a filtered collection to whatever
+   * page the reader happened to have loaded. The sweep asks for the whole filtered set at 500
+   * a page instead, which is what the `limit: 500` assertion below is pinning.
+   */
+  it("exports every row the filter matches, not the page that happens to be loaded", async () => {
+    // 250 rows, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
+    const rows250 = Array.from({ length: 250 }, (_, i) => ({
+      ...BOLT,
+      id: i + 1,
+      cardId: `c${i + 1}`,
+      name: `Card ${i + 1}`,
+    }));
+    collectionList.mockImplementation(async ({ limit, offset }: CollectionQuery) =>
+      page(rows250.slice(offset, offset + limit), rows250.length),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Card 1");
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
+    // **251, not 250.** A collection opens on CSV (see the store's defaults) and CSV writes a
+    // header row. Asserting the row count here is how a correct implementation reads as red.
+    expect(await screen.findByText(/251 lines/)).toBeInTheDocument();
+  });
+
+  /**
+   * **Task 14's entry point: the Import button, over `collectionDestination`.** Wired the same
+   * way Export is — one press, one dialog, one destination — so the round trip that matters here
+   * is that a paste reaches `collectionImportCommit` with the plan `planCollectionImport` builds,
+   * in the mode the reader picked, through the shell `ImportDialog` mounts without knowing which
+   * destination it is holding.
+   */
+  it("imports a pasted list into the collection", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    await user.click(within(dialog).getByLabelText("Decklist"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+
+    // The collection's own preview: a condition/finish default pair the deck's importer has
+    // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
+    expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Condition when the file doesn't say")).toHaveValue("NM");
+
+    // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
+    // same accessible name.
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(collectionImportCommit).toHaveBeenCalledWith(
+        [
+          {
+            cardId: "sol-ring",
+            quantity: 1,
+            finish: "nonfoil",
+            condition: "NM",
+            conditionOriginal: undefined,
+            purchasePrice: undefined,
+            purchaseCurrency: undefined,
+            acquiredAt: undefined,
+            acquisitionSource: undefined,
+            notes: undefined,
+          },
+        ],
+        "add",
+      ),
+    );
+    // The dialog closes on its own report — `onDone` — the same precedent `DeckEditor` and
+    // `DecksPage` set for their own import dialogs.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * **Fix round 1's marketplace ruling.** `marketplace` sits inside the same `filters` object as
+   * every row-narrowing field (`useCollection.ts`), but it decides which *price* a row is quoted
+   * at rather than which rows match, and it is not one of the filter bar's own controls — so
+   * "Export everything, ignoring the filters" must not also silently reprice the export at the
+   * backend's default (TCGplayer) for a reader who had picked another marketplace. A regression
+   * to `scope.ts`'s old `{}` for the "everything" case fails this the moment `getMarketplace`
+   * answers anything but the default.
+   */
+  it("keeps the reader's marketplace when Export everything is ticked, and drops only the filters", async () => {
+    getMarketplace.mockResolvedValue("cardmarket");
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
+
+    // A filter switched on, so there is something real for "everything" to have dropped — the
+    // marketplace assertion below is not just "the field was never set to begin with".
+    await user.click(screen.getByRole("button", { name: "Foil" }));
+    await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    collectionList.mockClear();
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    const asked = lastQuery();
+    // The marketplace survives the toggle...
+    expect(asked.marketplace).toBe("cardmarket");
+    // ...and the filter that was on does not: "everything" really does ignore the filters.
+    expect(asked.finishes).toBeUndefined();
+  });
+
+  /**
+   * **Fix round 2's cache-key ruling.** `scope.ts`'s "everything" branch used to key its query
+   * as the literal `[surface, "export", "everything"]`, with no `marketplace` in it — so a
+   * reader who exported everything, then switched marketplace, and exported everything again
+   * could be served the *first* sweep straight back out of cache, priced at the feed they had
+   * left. That is Important 1's wrong-prices symptom again, arriving through the cache instead
+   * of through the request this time. `marketplace` is part of the `everything` key now, so a
+   * feed switch is a different query and issues a fresh request.
+   *
+   * The switch is driven the way `useMarketplace`'s own `select` mutation actually makes it —
+   * `queryClient.setQueryData(MARKETPLACE_KEY, id)` on success — rather than through a Settings
+   * control this page does not have. That is the one write the real code path performs, so
+   * reaching for the query client directly here exercises the same mechanism a Settings press
+   * would, without needing a second page mounted in this suite.
+   */
+  it("issues a fresh sweep when the marketplace changes while Export everything is on", async () => {
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(lastQuery().marketplace).toBe("tcgplayer"));
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    );
+    // The first sweep, at the marketplace the reader had when they ticked the box.
+    await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(0));
+
+    client.setQueryData(MARKETPLACE_KEY, "cardmarket");
+
+    // A genuinely new **sweep** request (`limit: 500`) at the new marketplace — filtered to
+    // that limit specifically, because the ordinary paged list behind the table also carries
+    // `marketplace` in its own key and refetches on a feed switch regardless of this fix; that
+    // refetch alone must not make this assertion pass. Without the cache-key fix this `waitFor`
+    // times out: the "everything" query's key never changes, so nothing at `limit: 500` goes
+    // out a second time and the previous sweep's cards are served back at the new marketplace.
+    await waitFor(() => expect(sweepCallsAt("cardmarket")).toBeGreaterThan(0));
+  });
 });
 
 /**
@@ -947,6 +1223,9 @@ describe("the card menu", () => {
     await user.click(printings);
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      // The printing the menu was opened on: the modal's "you are here" ring, and how it finds
+      // the reader's place on the walk this page publishes.
+      cardId: "c1",
       oracleId: "o1",
       name: "Lightning Bolt",
       // A collection row is not a row of an open deck, so there is no slot for a press in the
@@ -1237,5 +1516,65 @@ describe("the arrow-key walk", () => {
 
     expect(useAppStore.getState().selectedCardId).toBe("c2");
     expect(screen.getByRole("button", { name: "Ancestral Recall" })).toHaveFocus();
+  });
+});
+
+/**
+ * The list the printings modal's own arrow keys walk, published to the store by this page.
+ *
+ * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, outside every
+ * view, and the order is this page's — a query narrowed by its filter bar. What the modal *does*
+ * with a walk belongs to `AllPrintingsDialog.test.tsx`; what this file owes is that a walk of the
+ * right shape is published at all, and taken back when the page goes.
+ */
+describe("the walk it publishes for the printings modal", () => {
+  const walk = () => useAppStore.getState().cardWalk;
+
+  // The walk is derived from the rows rather than from either layout, so which one is on screen
+  // is not this suite's business — but the store is one global and the suite above it leaves the
+  // wall on, so say which and read the same page both ways.
+  beforeEach(() => useAppStore.setState({ collectionView: "table" }));
+
+  /**
+   * **Deduplicated by printing, and it is the *tiles* this is built from.** Two entries of one
+   * printing — a foil and a played nonfoil — are two rows of the table, one tile of the wall, and
+   * one wall with one ring from the modal. A stop for each would be a press that moved nothing on
+   * screen. This is the case that discriminates the tiles from the rows: the table draws three
+   * rows here and the walk has two stops.
+   */
+  it("publishes one stop per printing, in the order the list is drawn", async () => {
+    collectionList.mockResolvedValue(
+      page([
+        BOLT,
+        { ...BOLT, id: 8, finish: "nonfoil" },
+        { ...BOLT, id: 9, cardId: "c2", name: "Ancestral Recall", oracleId: "o2" },
+      ]),
+    );
+    wrap(<CollectionPage />);
+
+    await waitFor(() =>
+      expect(walk().stops).toEqual([
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Ancestral Recall", deck: null },
+      ]),
+    );
+  });
+
+  /** The noun the modal's chevrons read into their own names — `Next card in your collection`. */
+  it("says which list it is", async () => {
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(walk().label).toBe("your collection"));
+  });
+
+  /** And it goes when the page does: a walk left behind would step a modal opened somewhere else
+   *  through a list nobody is looking at. */
+  it("clears the walk when the page goes", async () => {
+    const view = wrap(<CollectionPage />);
+    await waitFor(() => expect(walk().stops).toHaveLength(1));
+
+    view.unmount();
+
+    expect(walk().stops).toEqual([]);
   });
 });

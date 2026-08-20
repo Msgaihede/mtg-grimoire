@@ -2,7 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
-import { deckGroups, deckViolations } from "../../../../.storybook/fake/fixtures";
+import {
+  deckGroups,
+  deckTheoryMatches,
+  deckViolations,
+} from "../../../../.storybook/fake/fixtures";
+import { THEORY_MATCH_ATTR, THEORY_MATCH_LABEL } from "../CardMarks";
 import { deckCardSlot } from "../dnd";
 import { TableView } from "./TableView";
 
@@ -74,3 +79,26 @@ export const WithSelectedRow: Story = {
 
 /** Grouped by type: the bands change, the columns do not. */
 export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
+
+/**
+ * The **Live** list of a deck that keeps a plan — the tick, and the one surface that says it in
+ * words as well.
+ *
+ * A row is not an `aria-label`-ed button, so a cell's text is really read: this view draws
+ * `TheoryMatchBadge` beside the name **and** an `sr-only` twin, exactly as it already does for
+ * the `GC` badge. The other three views fold the same word into `deckCardName` instead, because
+ * a label replaces everything inside the control it names. `CardMarks.tsx` has the rule.
+ */
+export const TheoryMatches: Story = {
+  args: { theoryMatches: deckTheoryMatches() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Four rows carry the badge, and each one says the words beside it — the pairing this view
+    // exists to keep. Virtualised, so these are the rows currently mounted. The badge itself is
+    // `aria-hidden` and bound `describes: false` (no `title` any more); `THEORY_MATCH_ATTR` is
+    // its own handle, and the `sr-only` twin beside it is what makes the words in `getAllByText`
+    // honest — this view is the one place `TheoryMatchBadge` gets one at all.
+    expect(canvas.getAllByText(THEORY_MATCH_LABEL)).toHaveLength(4);
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+  },
+};

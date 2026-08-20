@@ -212,6 +212,12 @@ export function useWishlist() {
      * is part of the key of.
      */
     marketplace,
+    /**
+     * Every filter as one object, without the paging — `useCollection`'s `filters` for the same
+     * reason: `useExportScope`'s sweep asks for the whole filtered list, and that needs this
+     * object plus a page size of its own (`SWEEP_PAGE`) rather than the 100-row page on screen.
+     */
+    filters,
     query,
     rows,
     /** Wishes matching the filters, counted in full. `0` until the first page answers. */

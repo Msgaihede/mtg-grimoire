@@ -568,6 +568,44 @@ impl Cache {
         crate::sync::lock_plain(&self.pending).len()
     }
 
+    /// Throw the owed rows away, and answer how many went.
+    ///
+    /// **The one caller is [`crate::reset::clear_cache`], and this exists because that sweep
+    /// deletes the files these rows vouch for.** Every entry in the queue says "bytes for this
+    /// key are on disk, write the row when the connection frees up" — which stops being true
+    /// the moment the sweep passes, and the next served image would flush the queue and assert
+    /// it anyway. A row claiming bytes that are gone costs a permanent re-fetch of that key
+    /// (`get` reads `cached` from the row, fails the file read, and re-fetches — every time),
+    /// which is the exact leak [`Cache::flush_records`] was written to close.
+    ///
+    /// Dropping rather than flushing, and only ever after the files have gone: what is lost is
+    /// bookkeeping for pictures that no longer exist.
+    pub fn forget_pending(&self) -> usize {
+        let mut pending = crate::sync::lock_plain(&self.pending);
+        let owed = pending.len();
+        pending.clear();
+        owed
+    }
+
+    /// Put a row in the owed queue without a fetch, for the sweep's test.
+    ///
+    /// [`Cache::queue_record`] is private and reached only from the store path, which needs a
+    /// network round trip to get to. `reset`'s test needs a *populated* queue and nothing else,
+    /// so this is the one line of it — `#[cfg(test)]`, so it does not exist in the shipped
+    /// binary and cannot become a second way to enqueue.
+    #[cfg(test)]
+    pub fn queue_record_for_test(&self, card_id: &str, uri: &str, bytes: usize) {
+        self.queue_record(
+            &ImageKey {
+                card_id: card_id.to_owned(),
+                face: 0,
+                variant: Variant::Thumb,
+            },
+            uri,
+            bytes,
+        );
+    }
+
     /// How many owed rows were abandoned because the queue was full.
     pub fn dropped_records(&self) -> u64 {
         self.dropped_records.load(Ordering::Relaxed)

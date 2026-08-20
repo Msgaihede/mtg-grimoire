@@ -245,6 +245,17 @@ mod tests {
     /// Tests run in parallel and share the temp directory, so the file name is keyed
     /// on the content — two fixtures with the same line count must not race each
     /// other for the same path.
+    ///
+    /// **That is only half the race, and the other half bit `oracle_tags`' copy of this
+    /// function on 2026-08-20.** Keying on content also guarantees that two fixtures with the
+    /// *same* content share a path, which in a test module is the likely case rather than the
+    /// unlikely one — and `File::create` truncates, so one test empties the file another is
+    /// still streaming and that one dies with `Io(Kind(UnexpectedEof))`. No test here has
+    /// collided yet; nothing about this helper made it safe, so it takes the same fix.
+    ///
+    /// Write a private file and move it into place: nothing ever opens the shared path for
+    /// writing. Losing the move is fine — the name is the content's hash, so whoever won wrote
+    /// the same bytes.
     fn gz_fixture(lines: &[&str]) -> std::path::PathBuf {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let mut h = DefaultHasher::new();
@@ -254,12 +265,20 @@ mod tests {
             lines.len(),
             h.finish()
         ));
-        let mut enc = GzEncoder::new(std::fs::File::create(&p).unwrap(), Compression::fast());
-        for l in lines {
-            enc.write_all(l.as_bytes()).unwrap();
-            enc.write_all(b"\n").unwrap();
+        if !p.exists() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let tmp = p.with_extension(format!("{}.tmp", NEXT.fetch_add(1, Ordering::Relaxed)));
+            let mut enc = GzEncoder::new(std::fs::File::create(&tmp).unwrap(), Compression::fast());
+            for l in lines {
+                enc.write_all(l.as_bytes()).unwrap();
+                enc.write_all(b"\n").unwrap();
+            }
+            enc.finish().unwrap();
+            if std::fs::rename(&tmp, &p).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
         }
-        enc.finish().unwrap();
         p
     }
 

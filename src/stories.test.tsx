@@ -48,6 +48,10 @@ import * as DecksPageStories from "./features/decks/DecksPage.stories";
  */
 vi.mock("@tauri-apps/api/core", () => import("../.storybook/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
+// The third boundary, mirroring `.storybook/main.ts`'s third alias. `TitleBar` reaches it
+// through `src/lib/window.ts`, which is in this file's graph, so the specifier is rewritten
+// and the paragraph below about `node_modules` does not apply.
+vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
 
 /**
  * The three Tauri **plugin** wrappers, re-pointed at the same fake — because **the two mocks
@@ -65,7 +69,7 @@ vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
  * `Could not save that export — Cannot read properties of undefined (reading 'invoke')` — the
  * app's own refusal banner reporting the workbench's plumbing. The five component tests that
  * touch a plugin all mock the **plugin package** rather than relying on the core mock
- * (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`, `ImportDeckDialog`,
+ * (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`, `ImportDialog`,
  * `ExportDialog`); a story cannot, because CSF indexes every non-default export and a `vi.mock`
  * belongs to a test file. So it belongs here, once, for every story.
  *
@@ -217,8 +221,31 @@ function playsIn(stories: Record<string, unknown>): [string, Played][] {
  * need it nor notice it. Measured: the three CSS side-effect imports load fine under Vitest,
  * and `context.globals.art` being `undefined` in a portable story is already handled (the
  * decorator narrows anything that is not the literal `"live"` to synthetic art).
+ *
+ * ## `testingLibraryRender`, which is what **unmounts** a story
+ *
+ * Without it a story is mounted by `@storybook/react`'s own `renderToCanvas`, which calls
+ * `createRoot` and hands the unmount function back to a caller that never runs it. Storybook's
+ * `runStory` does clean up — but only at the *start of the next* run, and all it does is
+ * `removeChild` the container. **Detaching a container does not unmount React.** So every play
+ * below left a live root behind: effects still mounted, queries still subscribed, timers still
+ * armed, for the whole length of the file.
+ *
+ * Passing RTL's `render` puts those roots under this suite's `afterEach(cleanup)`
+ * (`src/test-setup.ts`), so each story is torn down when its `it` ends.
+ *
+ * **What that was costing is a red CI run with `Tests 0 failed`.** Vitest fails a run on an
+ * unhandled error even when every test passed, and the error was
+ * `ReferenceError: window is not defined` from the debounce `setState` at
+ * `features/wishlist/useWishlist.ts` — a 300ms timer armed on *mount* (not on typing) by a
+ * story whose root was never unmounted, firing after jsdom had been torn down.
+ * `features/wishlist/WishlistPage.stories.tsx` sorts **last** of every story file, which is why
+ * it is that hook and not one of the others: its timer is the one still in flight at the end of
+ * the file. Measured here by counting 300ms debounce timers left armed at `afterAll` — **1**
+ * under a full-suite run before this, **0** after, and 0 either way when the file runs alone,
+ * which is why it only ever went red on CI.
  */
-setProjectAnnotations([preview]);
+setProjectAnnotations([preview, { testingLibraryRender: render }]);
 
 const SCANNED = Object.entries(MODULES)
   .map(([path, mod]) => ({

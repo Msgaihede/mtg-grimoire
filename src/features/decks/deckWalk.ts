@@ -8,7 +8,7 @@
  * things that decide it are all the editor's own. `groupBy` and `sortBy` are `useState` in that
  * component, and the rows are `shown` — the deck narrowed by a live text box and a set of tag
  * chips. Only the editor knows the order the reader is actually looking at. So the editor
- * publishes this and the modal reads it, through `useAppStore.deckWalk`, exactly as
+ * publishes this and the modal reads it, through `useAppStore.cardWalk`, exactly as
  * `paneDeckContext` already carries the one row a card was opened from.
  *
  * **The order is `splitRail`'s and is derived nowhere else here.** That is the same function
@@ -26,20 +26,21 @@
  * different order in those two. The reader asked for "all cards from stack 1, then all cards
  * from stack 2", which is the stacks' order, and the stacks are what `splitRail` answers for.
  */
-import type { DeckWalkStop, PaneDeckContext } from "@/lib/store";
+import type { CardWalkStop, PaneDeckContext } from "@/lib/store";
 import type { CardGroup } from "./grouping";
 import { splitRail } from "./views/columns";
 
 /**
- * One stop on the walk — re-exported here because this is where a stop is *made*, and every
- * caller but the store reaches for it beside {@link deckWalkStops}.
+ * One stop on the walk — re-exported here because this is where a **deck's** stops are made, and
+ * every caller but the store reaches for the type beside {@link deckWalkStops}. The three card
+ * lists build theirs in `features/card/cardWalk.ts`, out of rows that are not deck rows.
  *
  * **Defined in `src/lib/store.ts`**, next to {@link PaneDeckContext}, which is the same shape of
  * fact: an address the store carries between two surfaces that cannot see each other. Putting it
  * there rather than here is what keeps the dependency one-way — `lib` is underneath `features`,
  * and a `lib` module importing a type out of a feature is an edge nothing else in this app has.
  */
-export type { DeckWalkStop };
+export type { CardWalkStop };
 
 
 /**
@@ -75,9 +76,9 @@ export type { DeckWalkStop };
  * are two `deck_cards` rows with two addresses, and a press inside the modal writes to one of
  * them.
  */
-export function deckWalkStops(groups: readonly CardGroup[], deckId: number): DeckWalkStop[] {
+export function deckWalkStops(groups: readonly CardGroup[], deckId: number): CardWalkStop[] {
   const { command, flow, rail } = splitRail(groups);
-  const stops: DeckWalkStop[] = [];
+  const stops: CardWalkStop[] = [];
 
   // A plain loop rather than a `filter` and a `map`, for `splitRail`'s own reason one file over:
   // two passes are two places for the rule about which rows survive to be stated, and the second
@@ -88,6 +89,10 @@ export function deckWalkStops(groups: readonly CardGroup[], deckId: number): Dec
       // own `oracleId` a `string` with no assertion.
       if (card.oracleId === null) continue;
       stops.push({
+        // The same id as `deck.cardId` below and written from the same field, which is what
+        // `CardWalkStop.cardId`'s own doc asks for: one of the two has to be the definition, and
+        // this reads it off the row rather than off the address built beside it.
+        cardId: card.cardId,
         oracleId: card.oracleId,
         name: card.name,
         deck: {

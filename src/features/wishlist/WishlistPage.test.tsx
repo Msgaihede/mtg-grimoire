@@ -4,8 +4,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
-import type { WishlistQuery, WishRow } from "@/lib/ipc";
+import type { ImportMatch, WishlistQuery, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
@@ -20,6 +21,10 @@ const getMarketplace = vi.hoisted(() => vi.fn());
 // rejection about a missing Tauri runtime rather than a call anything here could read.
 const collectionAdd = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+// The wishlist's own bulk-import entry point (Task 14) — `CollectionPage.test.tsx`'s pair.
+const importResolve = vi.hoisted(() => vi.fn());
+const wishlistImportCommit = vi.hoisted(() => vi.fn());
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -29,12 +34,42 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistAdd,
     collectionAdd,
     getMarketplace,
+    importResolve,
+    wishlistImportCommit,
+    oracleTagsForPrintings,
   },
 }));
 
 import { WishlistPage } from "./WishlistPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useAppStore } from "@/lib/store";
+
+/** The one printing `import_resolve` answers with for the import test below —
+ *  `CollectionPage.test.tsx`'s own `SOL_RING`, copied rather than shared for its reason. */
+const SOL_RING: ImportMatch = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  setCode: "ltc",
+  collectorNumber: "285",
+  lang: "en",
+  oracleId: "o-sol-ring",
+  manaCost: null,
+  cmc: null,
+  typeLine: "Artifact",
+  oracleText: null,
+  colors: null,
+  colorIdentity: null,
+  legalities: null,
+  power: null,
+  toughness: null,
+  layout: null,
+  rarity: null,
+  faces: null,
+  gameChanger: false,
+  everUncommon: false,
+  printingCount: 1,
+  ownedQuantity: 0,
+};
 
 /** A wish pinned to one printing, one copy of four already in the binder. */
 const BOLT: WishRow = {
@@ -98,9 +133,11 @@ const lastQuery = () =>
 /**
  * The filter bar's sort control.
  *
- * By role and exact name, because every sortable column header carries a `title` reading
- * "Sort by …" — and `getByLabelText` falls back to `title`, so a loose `/sort/i` matches the
- * whole header row as well.
+ * By role and exact name, not a loose label match. Every sortable column header carries a
+ * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
+ * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Cost. Prices as of…"),
+ * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
+ * only the control this file means.
  */
 const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
 
@@ -127,6 +164,10 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  * `ContextMenuProvider` and not inside it: the menu panel is drawn as a *sibling* of that
  * provider's children, so a provider around this page is around none of the menu's rows.
  * `CollectionPage.test.tsx` has the wiring, and `App.tsx` uses the same nesting.
+ *
+ * `TooltipProvider` is the same trade as `ContextMenuProvider`, for `useTooltip` — the
+ * needs-review band's and the printing cell's hover assertions below would bind a tooltip that
+ * can never open without it.
  */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -134,7 +175,9 @@ function wrap(ui: ReactElement) {
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <ContextMenuProvider>{ui}</ContextMenuProvider>
+        <TooltipProvider>
+          <ContextMenuProvider>{ui}</ContextMenuProvider>
+        </TooltipProvider>
       </QueryClientProvider>,
     ),
   };
@@ -170,11 +213,20 @@ beforeEach(() => {
   wishlistRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
+  // One printing, so a one-line paste resolves to something the wishlist's own preview can
+  // plan and commit — `CollectionPage.test.tsx`'s pair.
+  importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
   // first block below is about the list view and says so by asking for it; `the wall` block at
   // the end switches to the grid, and one test there holds the default itself. The same
   // arrangement `CollectionPage.test.tsx` uses from the other end.
-  useAppStore.setState({ wishlistView: "table", selectedCardId: null });
+  useAppStore.setState({
+    wishlistView: "table",
+    selectedCardId: null,
+    importDefaults: { condition: "NM", finish: null },
+  });
 });
 
 describe("WishlistPage", () => {
@@ -309,7 +361,13 @@ describe("WishlistPage", () => {
 
     // Three of the four Bolts at $400.50, plus the Recall.
     expect(await within(await total()).findByText("$1,213.50")).toBeInTheDocument();
-    expect(await total()).toHaveAttribute("title", pricesAsOf(MARKETPLACES.tcgplayer));
+    // `Figure`'s own `title` prop, bound through `useTooltip()` since the tooltip sweep
+    // rather than a native attribute.
+    const figure = await total();
+    await userEvent.hover(figure);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
+    await userEvent.unhover(figure);
     // One figure, not the pair this header drew before the marketplace setting existed: two
     // totals over one shopping list is two answers to the question it is open to ask.
     expect(screen.queryByText("Still to buy (EUR)")).not.toBeInTheDocument();
@@ -363,7 +421,10 @@ describe("WishlistPage", () => {
     const eur = await total("EUR");
     expect(await within(eur).findByText("€960.00")).toBeInTheDocument();
     expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
-    expect(eur).toHaveAttribute("title", pricesAsOf(MARKETPLACES.cardmarket));
+    await userEvent.hover(eur);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
+    await userEvent.unhover(eur);
     expect(screen.queryByText("Still to buy (USD)")).not.toBeInTheDocument();
   });
 
@@ -435,17 +496,43 @@ describe("WishlistPage", () => {
   /**
    * The wishlist is flagged by the same reconciler pass as the collection
    * (`reconcile::sweep_orphans` walks both tables), so it renders the sentence the same way:
-   * inside the name's cell, so a screen reader reads it with the row it belongs to, and with
-   * the whole of it on the `title` because one line holds ~110 of its 175 characters and the
-   * half that goes over the edge is the half that says what to do.
+   * inside the name's cell, so a screen reader reads it with the row it belongs to, and one
+   * line holds ~110 of its 175 characters — the half that goes over the edge is the half that
+   * says what to do, so the whole of it rides as a `whenClipped` + `interactive` tooltip
+   * (`CollectionPage.test.tsx`'s needs-review band, converted the same way).
    */
   it("prints what a sync left against a flagged wish, without clipping the instruction", async () => {
     wishlistList.mockResolvedValue(page([{ ...BOLT, needsReview: REVIEW_NOTE }]));
     wrap(<WishlistPage />);
 
     const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]') as HTMLElement;
+    const band = within(row).getByText(REVIEW_NOTE);
     expect(within(row).getByText("Needs review:")).toBeInTheDocument();
-    expect(within(row).getByText(REVIEW_NOTE)).toHaveAttribute("title", REVIEW_NOTE);
+
+    // `whenClipped` pinned shut: jsdom lays nothing out, so the band's `scrollWidth`/
+    // `clientWidth` both read `0` by default — unclipped — and the provider's `whenClipped`
+    // guard returns before arming the open timer.
+    fireEvent.pointerEnter(band);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 150));
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull();
+    fireEvent.pointerLeave(band);
+
+    // The hover affordance, `whenClipped` pinned open: a screen reader already has the text
+    // (asserted above via `getByText`), so the panel is `describes: false` and carries no
+    // `role="tooltip"` — found by `TOOLTIP_PANEL_ID` instead.
+    Object.defineProperty(band, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(band, "clientWidth", { value: 100, configurable: true });
+    fireEvent.pointerEnter(band);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    const panel = document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
+    expect(panel).toHaveTextContent(REVIEW_NOTE);
+    // `interactive` pinned: the panel takes its own pointer events and its text can be
+    // selected.
+    expect(panel).toHaveClass("select-text");
+    expect(panel).not.toHaveClass("pointer-events-none");
+    fireEvent.pointerLeave(band);
   });
 
   /** An empty wishlist is not a failed search: it says how to fill one. */
@@ -659,6 +746,83 @@ describe("WishlistPage", () => {
     const again = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(again.started).toBe(true);
     await again.cancel();
+  });
+
+  /**
+   * **Task 11's first export entry point outside the deck editor, the wishlist's own.** This
+   * list pages at 100 too, so what is loaded in memory is a scroll position rather than a
+   * decision — the sweep asks for the whole filtered set at 500 a page instead, which is what
+   * the `limit: 500` assertion pins.
+   *
+   * Wishlist opens on the **plain** format (the store's default), which writes one line per
+   * card and no header — unlike the collection's CSV, so this is 150 lines for 150 rows with
+   * no header to add. No correction needed here; the brief's own correction is the collection
+   * page's CSV case.
+   */
+  it("exports every wish the filter matches, not the page that happens to be loaded", async () => {
+    // 150 wishes, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
+    const wishes150 = Array.from({ length: 150 }, (_, i) => ({
+      ...BOLT,
+      id: i + 1,
+      cardId: `c${i + 1}`,
+      artCardId: `c${i + 1}`,
+      name: `Wish ${i + 1}`,
+    }));
+    wishlistList.mockImplementation(async ({ limit, offset }: WishlistQuery) =>
+      page(wishes150.slice(offset, offset + limit), wishes150.length),
+    );
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Wish 1");
+
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(wishlistList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
+    );
+    await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
+    expect(await screen.findByText(/150 lines/)).toBeInTheDocument();
+  });
+
+  /**
+   * **Task 14's entry point: the Import button, over `wishlistDestination`.** A line naming no
+   * printing is a wish for *any* printing — `WISHLIST_GRAIN`'s own distinction — so the round
+   * trip that matters here is that `cardId` reaches `wishlistImportCommit` as `undefined` rather
+   * than the pinned printing `import_resolve` answered with.
+   */
+  it("imports a pasted list into the wishlist", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
+    await user.click(within(dialog).getByLabelText("Decklist"));
+    await user.paste("1 Sol Ring");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+
+    expect(await screen.findByText(/will be added to your wishlist/)).toBeInTheDocument();
+
+    // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
+    // same accessible name.
+    await user.click(within(dialog).getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(wishlistImportCommit).toHaveBeenCalledWith(
+        [
+          {
+            oracleId: "o-sol-ring",
+            cardId: undefined,
+            quantity: 1,
+            preferredFinish: undefined,
+            notes: undefined,
+          },
+        ],
+        "add",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
+    );
   });
 });
 
@@ -942,5 +1106,63 @@ describe("the wall", () => {
 
     await user.click(screen.getByRole("button", { name: "Card view" }));
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The list the printings modal's own arrow keys walk, published to the store by this page.
+ *
+ * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, outside every
+ * view, and the order is this page's — a query narrowed by its filter bar. What the modal *does*
+ * with a walk belongs to `AllPrintingsDialog.test.tsx`; what this file owes is that a walk of the
+ * right shape is published at all, and taken back when the page goes.
+ */
+describe("the walk it publishes for the printings modal", () => {
+  const walk = () => useAppStore.getState().cardWalk;
+
+  /**
+   * **`artCardId`, not `cardId`** — the printing each tile is *drawn as*, which for a pinned wish
+   * is the one it names and for an any-printing wish is the newest printing of its oracle card.
+   * {@link ANY} is that second kind, and it is a stop rather than a hole: it is a tile the reader
+   * can see, the modal lists its oracle card's printings, and the card pane behind the scrim
+   * opens on the printing the wall was already showing. A walk built from `cardId` would drop it.
+   */
+  it("publishes the wishes in their drawn order, by the printing each is drawn as", async () => {
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    wrap(<WishlistPage />);
+
+    await waitFor(() =>
+      expect(walk().stops).toEqual([
+        { cardId: "c1", oracleId: "o-bolt", name: "Lightning Bolt", deck: null },
+        { cardId: "c-recall", oracleId: "o-bolt", name: "Ancestral Recall", deck: null },
+      ]),
+    );
+  });
+
+  /** An orphan has no oracle card, so there are no printings to list and nothing to step onto —
+   *  the same rule the deck's own walk drops a row whose printing has left the corpus by. */
+  it("steps over a wish whose card has left the corpus", async () => {
+    wishlistList.mockResolvedValue(page([{ ...BOLT, oracleId: null }, ANY]));
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(walk().stops.map((stop) => stop.cardId)).toEqual(["c-recall"]));
+  });
+
+  /** The noun the modal's chevrons read into their own names — `Next card in your wishlist`. */
+  it("says which list it is", async () => {
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(walk().label).toBe("your wishlist"));
+  });
+
+  /** And it goes when the page does: a walk left behind would step a modal opened somewhere else
+   *  through a list nobody is looking at. */
+  it("clears the walk when the page goes", async () => {
+    const view = wrap(<WishlistPage />);
+    await waitFor(() => expect(walk().stops).toHaveLength(1));
+
+    view.unmount();
+
+    expect(walk().stops).toEqual([]);
   });
 });

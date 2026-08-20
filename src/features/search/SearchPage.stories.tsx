@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { GAME_CHANGER_HINT, GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { useAppStore, type SearchView } from "@/lib/store";
 import { SearchPage } from "./SearchPage";
 
@@ -35,10 +36,11 @@ const meta = {
   render: (args) => <Page key={args.view} {...args} />,
   decorators: [
     // The page is `h-full`, so it needs a parent with a height or the virtualiser is handed a
-    // 0px window. 1032px is exactly the content column at the 1280×800 window
-    // `tauri.conf.json:16-17` opens: 1280 less the sidebar's `w-52` (208px) and less `main`'s
-    // `p-5` on both sides (40px), from `AppShell.tsx:92` and `AppShell.tsx:144`. The height is
-    // chosen rather than derived — the ribbon above it is not a fixed number of pixels.
+    // 0px window. 1032px is exactly the content column at the app's narrow rung — the 1280-wide
+    // window `src-tauri/src/window.rs` opens on a 1080p desk: 1280 less the sidebar's `w-52`
+    // (208px) and less `main`'s `p-5` on both sides (40px), from `AppShell.tsx:92` and
+    // `AppShell.tsx:144`. The height is chosen rather than derived — the ribbon above it is
+    // not a fixed number of pixels.
     (Story) => (
       <div className="h-[640px] w-[1032px]">
         <Story />
@@ -545,23 +547,25 @@ export const GameChangerRow: Story = {
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Rhystic");
 
-    // The whole check inside one `waitFor`, because the results are replaced wholesale when the
-    // query lands and a row captured before that is stale.
-    await waitFor(
-      async () => {
+    // The row lookup inside its own `waitFor`, because the results are replaced wholesale when
+    // the query lands and a row captured before that is stale.
+    const mark = await waitFor(
+      () => {
         const rows = canvas.getAllByRole("row").filter((r) => r.textContent?.includes("Rhystic"));
-        await expect(rows).toHaveLength(1);
-        await expect(
-          within(rows[0]).getByRole("img", { name: GAME_CHANGER_LABEL }),
-        ).toBeInTheDocument();
-        // The pointer's half of the same fact: a `<title>` inside the glyph, which is what a
-        // hover surfaces. `getByTitle` matches an SVG `<title>` element, not the attribute —
-        // and the sentence it holds is longer than the name, because a tooltip has room to say
-        // what a game changer *is*.
-        await expect(within(rows[0]).getByTitle(GAME_CHANGER_HINT)).toBeInTheDocument();
+        expect(rows).toHaveLength(1);
+        return within(rows[0]).getByRole("img", { name: GAME_CHANGER_LABEL });
       },
       { timeout: 5000 },
     );
+    // The pointer's half of the same fact: bound `describes: false`, since the glyph's own
+    // `aria-label` already names it — so hovering opens a panel with no `role="tooltip"`,
+    // found by its one stable id, and the hover sentence has room to say what a game changer
+    // *is*, longer than the name.
+    await userEvent.hover(mark);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(GAME_CHANGER_HINT);
   },
 };
 

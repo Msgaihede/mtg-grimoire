@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect } from "storybook/test";
+import { expect, userEvent } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { CountTag } from "./CountTag";
 
 const meta = {
@@ -23,7 +24,7 @@ const meta = {
           "many”; the sign is a second glyph in a 22px box spending the room the digits need. " +
           "`OwnedBadge` keeps its `×`, because that one is inline text in a caption where the " +
           "sign is what tells a count from a set number.\n\n" +
-          "It is `aria-hidden`, so the `title` is the whole of what a pointer user gets and the " +
+          "It is `aria-hidden`, so the tooltip is the whole of what a pointer user gets and the " +
           "words belong to whatever names the card.",
       },
     },
@@ -41,13 +42,19 @@ type Story = StoryObj<typeof meta>;
 export const Neutral: Story = {
   args: { count: 132, title: "132 in this pile" },
   play: async ({ canvasElement }) => {
-    const tag = canvasElement.querySelector<HTMLElement>("[title]");
-    await expect(tag).toHaveAttribute("aria-hidden", "true");
+    const tag = canvasElement.querySelector<HTMLElement>("[aria-hidden='true']");
     await expect(tag).toHaveTextContent("132");
     await expect(tag).not.toHaveTextContent("×");
     // The declaration rather than the computed value: this play also runs under jsdom
     // (`src/stories.test.tsx`), which has no stylesheet to resolve a custom property against.
     await expect(tag?.style.backgroundColor).toBe("var(--color-pie-c)");
+    // `describes: false`: the tag is `aria-hidden`, so there is nothing here for
+    // `aria-describedby` to point at — the tooltip is the words for a pointer alone.
+    await userEvent.hover(tag!);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
+    await expect(panel).toHaveTextContent("132 in this pile");
+    await expect(tag).not.toHaveAttribute("aria-describedby");
   },
 };
 

@@ -21,7 +21,12 @@
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
- * `CardTags`/`PrintingTags`/`OracleTagStatus`    — `src-tauri/src/oracle_tags.rs`
+ * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
+ * `TagStatus`/`TagProgressEvent`                 — `src-tauri/src/tags/mod.rs`, aliased per
+ *                                                  dataset by `tags/oracle.rs`/`tags/art.rs`
+ * `TagHit`/`TagRef`                              — `src-tauri/src/tags/query.rs`
+ * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
+ * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
  * **Two settings carry no struct at all.** Each is one `app_meta` row answered as a bare
  * string: `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
@@ -47,10 +52,17 @@ import type { ImageVariant } from "./images";
 import type { SortSpec } from "./sort";
 
 /**
- * The search table's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`;
- * a key that is not there is dropped at the far end, which is a header that does nothing.
+ * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key
+ * that is not there is dropped at the far end, which is a control that does nothing.
+ *
+ * The first five are the table's headers. `manaValue` and `released` have **no column to
+ * press** and are reachable only from the filter bar's sort picker — the trade the
+ * collection's `added` and `price` already made. There is no room for a column: the search
+ * table shares its squeeze between two flexible tracks and already reaches 1280px with the
+ * card pane open (see `columnsFor` in `SearchPage.tsx`), so a seventh and an eighth would come
+ * out of the Name column, which is what identifies a row.
  */
-export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price";
+export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price" | "manaValue" | "released";
 
 /**
  * The collection's sortable columns.
@@ -128,6 +140,26 @@ export interface SearchRequest {
    * control that decides this flag and {@link format} together (`formatParams`).
    */
   playableOnly?: boolean;
+  /**
+   * Scryfall **art** tags — what the picture shows, which is what a Tags-page deck is built
+   * around. Matched against the closure on `cards.illustration_id`, so this is a fact about an
+   * *illustration*: a card printed with five arts matches under the one that holds the motif and
+   * not under the other four. See {@link TagTerms}.
+   */
+  artTags?: TagTerms;
+  /**
+   * Scryfall **oracle** tags — what the card does (`removal`, `ramp`, `recursion`). {@link
+   * artTags}' shape over the other taxonomy, matched on `cards.oracle_id`; the two AND with each
+   * other, so "a dog that ramps" is one request.
+   */
+  oracleTags?: TagTerms;
+  /**
+   * `"strong"` drops the art matches Scryfall called `weak`; absent or `"any"` keeps them.
+   * **Nothing else on this request is affected** — not {@link artTags}' excludes, and not
+   * {@link oracleTags}, whose closure has no weight at all. See {@link ArtWeightFloor}, which
+   * is also where the wording a control may not use is written down.
+   */
+  artWeightFloor?: ArtWeightFloor;
   /**
    * `true` narrows to printings the collection has an entry for, `false` to those it does
    * not.
@@ -508,6 +540,27 @@ export interface CardFilters {
    *  the only place anything sends it. A collection lists what the user owns, and an art
    *  card in a binder is still in the binder. */
   playableOnly?: boolean;
+  /**
+   * Scryfall art tags, on the closure keyed by `cards.illustration_id` — see
+   * {@link SearchRequest.artTags}.
+   *
+   * **Declared here as well as on the search, because `filters::push_card_filters` emits it for
+   * all three lists** — the collection's and the wishlist's queries flatten this struct, so an
+   * owned-cards wall can be narrowed to a motif without a second filter path. `oracleId` above
+   * is the field that is deliberately *not* here, and the asymmetry is Rust's own.
+   *
+   * **A tag is a claim only a card row can answer**, so unlike `setCode` there is no fallback to
+   * the row's own columns: an orphaned collection entry fails every `include` and passes every
+   * `exclude`, exactly as `cards.illustration_id` being NULL does (4 977 of 116 712 live
+   * printings, measured 2026-08-20).
+   */
+  artTags?: TagTerms;
+  /** Scryfall oracle tags, on the closure keyed by `cards.oracle_id` — see
+   *  {@link SearchRequest.oracleTags}. */
+  oracleTags?: TagTerms;
+  /** `"strong"` drops the `weak` art matches; absent or `"any"` keeps them. Art includes only —
+   *  see {@link ArtWeightFloor}. */
+  artWeightFloor?: ArtWeightFloor;
 }
 
 /**
@@ -593,6 +646,48 @@ export interface EntryChange {
   id: number;
   quantity: number;
   removed: boolean;
+}
+
+/**
+ * What a bulk import writes into the collection or the wishlist. `add` folds onto the grain like
+ * a quick-add repeated per line; `set` writes each line's number as the truth rather than adding
+ * to what is already there. There is deliberately no `replace`: the deck's `replace` clears one
+ * variant of one deck, and the same word over a collection would empty a 3,000-card record from
+ * a 40-line paste with the file that caused it looking completely ordinary. An unknown mode is
+ * refused by the backend rather than defaulted.
+ */
+export type TransferImportMode = "add" | "set";
+
+/**
+ * One line of a bulk import, after this side has decided everything a *collection* decision is.
+ *
+ * `condition` is `undefined` rather than defaulted here: an absent one means the file said
+ * nothing, and the **dialog** is where the reader chose what that becomes. Defaulting it in two
+ * places is how the preview and the write come to disagree.
+ */
+export interface CollectionImportItem {
+  cardId: string;
+  quantity: number;
+  finish: Finish;
+  condition?: Condition;
+  conditionOriginal?: string;
+  purchasePrice?: number;
+  purchaseCurrency?: string;
+  acquiredAt?: string;
+  acquisitionSource?: string;
+  notes?: string;
+}
+
+/**
+ * What a bulk import did. `removed` is the wishlist's alone — a `set` of 0 deletes a wish and
+ * leaves a zero-quantity collection row — and it is `0` here rather than absent, so one shape
+ * covers both commands.
+ */
+export interface ImportCommitOutcome {
+  added: number;
+  updated: number;
+  /** The wishlist's alone: a `set` of 0 deletes a wish. Always 0 from the collection. */
+  removed: number;
 }
 
 /** A collection list, as the UI asks for it. */
@@ -726,6 +821,18 @@ export interface WishInput {
   quantity: number;
   /** A wish *for the foil* is a different wish from one for the nonfoil, and is not filled
    *  by it. Absent means no preference. */
+  preferredFinish?: Finish;
+  notes?: string;
+}
+
+/** One line of a bulk import, after this side has decided everything a *wishlist* decision is. */
+export interface WishlistImportItem {
+  oracleId?: string;
+  /** Absent is a wish for **any printing** — what a wishlist usually means, and what the
+   *  planner writes for a line that named no set. Not a looser version of a pinned wish: the
+   *  storage grain already treats the two as different rows. */
+  cardId?: string;
+  quantity: number;
   preferredFinish?: Finish;
   notes?: string;
 }
@@ -961,17 +1068,21 @@ export interface DeckCategory {
 }
 
 /**
- * A tag's stored colour: a **token** from the app's palette (`gold`, `ember`, …), never a
- * CSS colour and never a hex string.
+ * A tag's stored colour: `#rrggbb`, the colour itself.
+ *
+ * **It was a palette token — `gold`, `ember`, … — until 2026-08-20**, and rows written before
+ * then still hold one. `features/decks/tagColors.ts` owns both ends of that: what the picker
+ * writes, and the six retired words it still reads. Nothing here changed shape, because nothing
+ * here ever described one.
  *
  * **Deliberately `string` and not a union**, which is the one place this file declines to
  * narrow a Rust `String`. `deck_tags.color` carries no CHECK — the backend validates only
  * that it is non-empty, because picking what a colour *is* belongs to the webview
- * (CLAUDE.md's Rust/TS boundary), and `features/decks/tagColors.ts` owns the palette. A union
- * here would make a tag written by a newer build a **type error at the read**, when the
- * behaviour that was actually designed is a fallback: `tagColorCss` answers the default for
- * any token it has never heard of, so an unknown colour is a visible dot rather than a
- * crash. The alias exists to say all of that at every field that holds one.
+ * (CLAUDE.md's Rust/TS boundary). A union here would make a colour written by a newer build a
+ * **type error at the read**, when the behaviour that was actually designed is a fallback:
+ * `tagColorCss` answers the default for any string it cannot read, so an unknown colour is a
+ * visible dot rather than a crash. The alias exists to say all of that at every field that
+ * holds one.
  */
 export type TagColor = string;
 
@@ -1843,7 +1954,7 @@ export interface SwapResult {
 /**
  * One line of a parsed decklist, on its way to be turned into a printing.
  *
- * **The quantity is deliberately not here.** {@link ipc.deckImportResolve} answers *which
+ * **The quantity is deliberately not here.** {@link ipc.importResolve} answers *which
  * printing a name means* — the one question this side cannot answer, because it is a question
  * about 116 k rows of card data — and how many copies the line asked for is this side's
  * arithmetic all the way to {@link ImportItem}. Both hints are optional because most decklist
@@ -2012,7 +2123,7 @@ export type ImportMode = "merge" | "replace";
  * One line of a decklist after this side has decided everything a *deck* decision is.
  *
  * The first three fields are the three answers the backend cannot compute for itself: which
- * printing (resolved by {@link ipc.deckImportResolve}, and perhaps overridden in the preview),
+ * printing (resolved by {@link ipc.importResolve}, and perhaps overridden in the preview),
  * how many, and which pile.
  */
 export interface ImportItem {
@@ -2414,7 +2525,7 @@ export interface CardTags {
  * The same answer keyed by a **printing** id (`cards.id`), for the callers that hold one.
  *
  * Almost every categorising call site does: a drag payload, `useDeck.addCard` and
- * `deck_import_resolve`'s rows all name a printing. A separate DTO rather than reusing
+ * `import_resolve`'s rows all name a printing. A separate DTO rather than reusing
  * {@link CardTags} because a printing id in a field called `oracleId` would be a lie, and this
  * mirror is the one place that lie would never be caught.
  */
@@ -2424,18 +2535,25 @@ export interface PrintingTags {
 }
 
 /**
- * The Oracle tag taxonomy's own freshness — `oracle_tag_meta`, plus the shape of a database
- * that has never fetched it.
+ * One tag taxonomy's own freshness — its `*_tag_meta` row, plus the shape of a database that
+ * has never fetched the file.
  *
  * **Every field is nullable and `null` means "never ingested"**, which is a real state and not
- * an error: the taxonomy is a second dataset with its own weekly refresh, and the app works
- * without it — every add simply files by card type until the first ingest lands.
+ * an error: each taxonomy is a separate bulk dataset with its own weekly refresh, and the app
+ * works without either — an untagged deck add simply files by card type, and a Tags page with
+ * no art taxonomy says it has nothing yet.
  *
  * `checkedAt` and `ingestedAt` are separate because a 304 moves only the former. Collapsing
  * them would make an up-to-date taxonomy read as due on every launch and cost one API call per
  * start.
+ *
+ * **One interface for both datasets because Rust has one struct for both** — `tags::TagStatus`,
+ * which `tags/oracle.rs` and `tags/art.rs` each re-export under their own name. Two hand-copied
+ * mirrors of one struct is the drift this whole file is written to avoid, and it would be a
+ * drift nothing could catch: the two shapes would stay compatible for as long as they were
+ * identical and part in silence the day one gained a field.
  */
-export interface OracleTagStatus {
+export interface TagStatus {
   /** Scryfall's own stamp for the file these rows came from. */
   updatedAt: string | null;
   /** Unix **seconds**. `null` = the taxonomy has never been ingested. */
@@ -2445,24 +2563,174 @@ export interface OracleTagStatus {
   tagCount: number | null;
   taggingCount: number | null;
   stale: boolean;
-  /** Process-wide, not per database — one refresh per application. */
+  /** A refresh **of this dataset** is in flight right now. The two taxonomies are separate
+   *  files on separate schedules, so either may be refreshing while the other is. */
   refreshing: boolean;
 }
 
-/** The phases `oracle_tags.rs` emits. Five, against `SyncPhase`'s eight. */
-export type OracleTagPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+/** `tags::oracle::OracleTagStatus` — what a card *does*. {@link TagStatus} under the name the
+ *  command answering it carries. */
+export type OracleTagStatus = TagStatus;
+
+/** `tags::art::ArtTagStatus` — what an illustration *depicts*. The same shape again, and the
+ *  larger of the two files: ~12.5 MB gzipped against the oracle taxonomy's ~5.85 MB. */
+export type ArtTagStatus = TagStatus;
+
+/** `tags::PHASES` — the five a taxonomy refresh emits, against `SyncPhase`'s eight. */
+export type TagPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+
+/** {@link TagPhase} under the name callers spelled before the art taxonomy existed. Both
+ *  datasets emit the same five, because they are one `PHASES` in the crate. */
+export type OracleTagPhase = TagPhase;
 
 /**
- * Payload of the `oracle-tags:progress` event.
+ * Payload of a taxonomy's progress event — `tags::TagProgress`.
  *
- * A third progress event rather than a ninth `SyncPhase`, following `marketplace:progress`'
+ * A progress event of its own rather than a ninth `SyncPhase`, following `marketplace:progress`'
  * precedent for the same reason: the card sync's phase list is a closed union mirrored by hand
  * on this page, and a dataset with its own schedule has no business widening it.
+ *
+ * **Each taxonomy has its own channel** — `oracle-tags:progress` and `art-tags:progress`. One
+ * shared line would have the two fighting over it, since either may refresh while the other is.
  */
-export interface OracleTagProgressEvent {
-  phase: OracleTagPhase;
+export interface TagProgressEvent {
+  phase: TagPhase;
   done: number;
   total: number;
+}
+
+/** Payload of `oracle-tags:progress`. */
+export type OracleTagProgressEvent = TagProgressEvent;
+
+/** Payload of `art-tags:progress`. */
+export type ArtTagProgressEvent = TagProgressEvent;
+
+/**
+ * Which taxonomy a tag came from — `tags::query`'s `namespace`, as a hit carries it.
+ *
+ * **Never `"both"`.** That is an *input*: `tagSearch` and `tagChildren` accept it and mean
+ * "ask each of them", and a hit always came from exactly one. The two are separate files with
+ * separate id spaces that share plenty of slugs — `dog` is in both and they mean different
+ * things by it — so a stored mute names one namespace and a breadcrumb that lost this field
+ * would climb the wrong tree.
+ */
+export type TagNamespace = "art" | "oracle";
+
+/**
+ * How strong an art match has to be — `filters::CardFilters::art_weight_floor`.
+ *
+ * `"strong"` drops the closure rows Scryfall called `weak`, which their docs define as "the
+ * subject is a minor detail or background element". **It is a floor and not a narrowing to
+ * strong matches**: the predicate is `weight <> 'weak'`, so `median` — 462 008 of 475 163 art
+ * taggings, measured 2026-08-20 — is admitted. Any control built on this must say it excludes
+ * background detail; "strong matches only" would be a promise the query does not keep.
+ *
+ * Anything else, this union's `"any"` included, is no floor at all: an unrecognised value fails
+ * **open**, showing more rather than hiding cards nobody would report missing.
+ *
+ * **The art side only, and the include side only.** `oracle_tag_cards` carries no `weight`
+ * column at all — oracle taggings are 99.7 % `median` — and "not a dog" means not a dog at all,
+ * so a floor on an *exclude* would let weak dogs back into a result the reader asked to have
+ * none in.
+ */
+export type ArtWeightFloor = "any" | "strong";
+
+/**
+ * One taxonomy's tag chips: the tags a row must carry, and the tags it must not.
+ *
+ * **`include` INTERSECTS.** A themed deck asks for dogs AND snow, so each included slug is its
+ * own `EXISTS` rather than one `slug IN (…)` — which is the union, and would answer a superset
+ * that looks plausible. `exclude` is the same subquery under `NOT EXISTS`, and the two lists AND
+ * with each other and with every other filter.
+ *
+ * Both lists are `#[serde(default)]` on the Rust side, so naming one omits the other, and an
+ * absent `artTags`/`oracleTags` adds no SQL at all. Blanks are dropped and the rest sorted and
+ * deduplicated (`filters::picked_tags`), so an empty list means "no filter" and never "match
+ * nothing".
+ *
+ * **Both taxonomies are matched through their pre-flattened closure**, so a query for a parent
+ * tag answers the cards tagged only with its children — `dog` is directly tagged on 137
+ * illustrations and reaches 439, and `removal` has *zero* direct taggings while answering 6 686
+ * cards (both measured 2026-08-20).
+ */
+export interface TagTerms {
+  include?: string[];
+  exclude?: string[];
+}
+
+/**
+ * A tag named from somewhere else — enough to draw a breadcrumb and to ask about it again.
+ * `tags::query::TagRef`.
+ */
+export interface TagRef {
+  slug: string;
+  label: string;
+  namespace: TagNamespace;
+}
+
+/**
+ * One tag, as the Tags page draws it — `tags::query::TagHit`.
+ *
+ * Answered by both {@link ipc.tagSearch} and {@link ipc.tagChildren}, and a muted tag is absent
+ * from both, from `childCount` and from anyone's `parents`. Muting hides a *tag*; it never hides
+ * a card, and nothing in the card filters consults the mute table.
+ */
+export interface TagHit {
+  slug: string;
+  /**
+   * Scryfall's stable uuid, and **the only thing a mute may be keyed on** — their docs say "do
+   * not treat tag slugs or labels as permanent identifiers". A mute keyed on a slug un-mutes
+   * itself the week the tag is renamed, which is exactly the week it mattered.
+   *
+   * **`""` is a real value**: `oracle_tags.id` was added by an `ALTER TABLE` that could not add
+   * a `NOT NULL` column without a default, so every row that predates a refresh by a build new
+   * enough to write ids still carries the empty string. Such a tag is *unmutable* — {@link
+   * ipc.tagMute} refuses it in words — and the next refresh repairs it. That refusal is
+   * deliberate: one stored mute with a blank id would otherwise equal every one of those rows
+   * and take the whole taxonomy off the page with nothing logged.
+   */
+  id: string;
+  label: string;
+  /** Never `"both"` — see {@link TagNamespace}. */
+  namespace: TagNamespace;
+  description: string | null;
+  /**
+   * How many subjects the tag reaches **through the closure** — illustrations for the art
+   * taxonomy, oracle ids for the oracle one, and in neither case a count of *printings*.
+   *
+   * The direct taggings are the wrong number and they look right: a category tag has none of
+   * its own, so counting them would report `dog: 137` where the closure reaches 439, and
+   * `removal: 0` where it answers 6 686.
+   */
+  cardCount: number;
+  /** Direct children that are not muted, so a disclosure triangle drawn from this never opens
+   *  onto nothing. */
+  childCount: number;
+  /**
+   * Every parent, not the first one — **43 % of art tags have more than one** (4 970 of 11 531,
+   * measured 2026-08-20), so a tag reached through one branch of the rail routinely sits under
+   * another as well and a single-parent breadcrumb would be wrong for two tags in five.
+   */
+  parents: TagRef[];
+}
+
+/**
+ * One muted tag, as Settings lists it — `tags::muted::MutedTag`.
+ *
+ * Every field is stored rather than joined, which is the point of the table: a taxonomy that has
+ * been rebuilt since — or never fetched on this machine at all — must still be able to show the
+ * reader what they hid and offer to give it back.
+ */
+export interface MutedTag {
+  /** The two taxonomies are separate files with separate id spaces, so one uuid appearing in
+   *  both is two mutes. */
+  namespace: TagNamespace;
+  /** Scryfall's stable uuid — the key, with the namespace. */
+  tagId: string;
+  /** The slug as it read when the mute was made. Display only, and possibly stale by design. */
+  slug: string;
+  /** Unix **seconds**. */
+  mutedAt: number;
 }
 
 /**
@@ -2485,6 +2753,46 @@ export interface ErrorEntry {
   detail: string | null;
   /** How many times this exact failure has happened. `1` unless it repeated. */
   count: number;
+}
+
+/**
+ * What emptying the collection took with it — `src-tauri/src/reset.rs`.
+ *
+ * `allocations` is the number nobody predicts and is why this is a shape rather than a count:
+ * `deck_allocations.collection_entry_id` cascades from `collection_entries`, so every deck's
+ * reservation against an owned copy goes with the collection. The decks themselves stay.
+ */
+export interface CollectionCleared {
+  entries: number;
+  allocations: number;
+}
+
+/**
+ * What emptying the decks took with it.
+ *
+ * `folders` is its own number because the schema keeps folders their own thing —
+ * `decks.folder_id` is `ON DELETE SET NULL`, so clearing them is a second statement the
+ * backend takes deliberately. `covers` is files beside the database, not rows.
+ */
+export interface DecksCleared {
+  decks: number;
+  folders: number;
+  covers: number;
+}
+
+/**
+ * What the cache sweep freed.
+ *
+ * `failed` is not an error: a file another thread holds open cannot be deleted on Windows, and
+ * the honest answer is the count that went plus the count that would not. The panel says the
+ * second number only when it is non-zero.
+ */
+export interface CacheCleared {
+  files: number;
+  bytes: number;
+  /** `image_cache` rows dropped — the bookkeeping that vouched for those pictures. */
+  rows: number;
+  failed: number;
 }
 
 export const ipc = {
@@ -2556,6 +2864,13 @@ export const ipc = {
   /** The aggregate header, over the same filters as the list it captions. */
   collectionSummary: (query: CollectionQuery) =>
     invoke<CollectionSummary>("collection_summary", { query }),
+  /**
+   * One transaction for a whole imported file, rather than one `collectionAdd` per line — a
+   * 500-row CSV would otherwise be 500 transactions, and a failure halfway through would leave
+   * a collection nobody can reason about. A refusal rolls the whole file back.
+   */
+  collectionImportCommit: (items: CollectionImportItem[], mode: TransferImportMode) =>
+    invoke<ImportCommitOutcome>("collection_import_commit", { items, mode }),
   wishlistAdd: (wish: WishInput) => invoke<EntryChange>("wishlist_add", { wish }),
   /** An absolute quantity — and here `0` *removes* the row, because a wish holds nothing
    *  worth keeping once it is emptied. The opposite of the collection's, on purpose. */
@@ -2563,6 +2878,13 @@ export const ipc = {
     invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
+  /**
+   * One transaction for a whole imported file — {@link ipc.collectionImportCommit}'s rule. The
+   * `set` arm reaches its row through `add_wish` first and corrects the quantity after, so a
+   * `set` of 0 **deletes** the wish rather than leaving an empty one.
+   */
+  wishlistImportCommit: (items: WishlistImportItem[], mode: TransferImportMode) =>
+    invoke<ImportCommitOutcome>("wishlist_import_commit", { items, mode }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
   /**
@@ -2735,8 +3057,8 @@ export const ipc = {
    *  scopes each row's `cardCount` and nothing else, exactly as it does for categories. */
   deckTagList: (deckId: number, variant: DeckVariant) =>
     invoke<DeckTag[]>("deck_tag_list", { deckId, variant }),
-  /** A new label for this deck. Refuses a name the deck already has; the colour is a palette
-   *  token and the backend checks only that it is non-empty — see {@link TagColor}. */
+  /** A new label for this deck. Refuses a name the deck already has; the colour is `#rrggbb`
+   *  and the backend checks only that it is non-empty — see {@link TagColor}. */
   deckTagCreate: (deckId: number, name: string, color: TagColor) =>
     invoke<DeckTag>("deck_tag_create", { deckId, name, color }),
   /** Rename **and** recolour: one command, both arguments required. There is no patch shape
@@ -2833,6 +3155,24 @@ export const ipc = {
    *  the whole point of drawing one. */
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
+  /**
+   * Every card the plan asks for, as `deck_theory.rs`'s own `group_key` strings —
+   * `` `${cardId}|${finish ?? ""}` ``, one per theory row, in no particular order and with
+   * duplicates left in for the caller's set to fold.
+   *
+   * The deck editor's theory tick, and **the one question about the pair that
+   * {@link ipc.deckTheoryDiff} cannot answer**: a card the reader has fully acquired is absent
+   * from the diff and is still in the plan. See `features/decks/theoryMatch.ts`, which builds
+   * the same string for a live row and looks it up.
+   *
+   * **Not a `deckGet` of the other variant**, deliberately: that read prices every row and rolls
+   * up allocations, and `DeckEditor.test.tsx` pins that nothing may call it for the list the
+   * reader is not looking at. This is two columns of one indexed scan and no marketplace.
+   *
+   * Inactive categories are excluded, which is `deck_theory_diff`'s rule and the same reasoning:
+   * a card parked in the theory Maybeboard is not something the reader has decided to play.
+   */
+  deckTheorySlots: (deckId: number) => invoke<string[]>("deck_theory_slots", { deckId }),
   /**
    * Copy the live list into the theory one. Answers how many **rows** were written.
    *
@@ -3059,8 +3399,8 @@ export const ipc = {
    * The rows come back in the order the lines went out and carry
    * {@link ImportResolveRow.index} besides.
    */
-  deckImportResolve: (lines: ImportResolveLine[]) =>
-    invoke<ImportResolveRow[]>("deck_import_resolve", { lines }),
+  importResolve: (lines: ImportResolveLine[]) =>
+    invoke<ImportResolveRow[]>("import_resolve", { lines }),
   /**
    * A whole decklist into one deck: one transaction, one allocation, one or two history rows.
    *
@@ -3093,7 +3433,7 @@ export const ipc = {
    * the preview — rather than failing the other hundred. What comes back is a string and nothing
    * more; parsing it is this side's, exactly as it is for a paste.
    */
-  deckImportReadFile: (path: string) => invoke<string>("deck_import_read_file", { path }),
+  importReadFile: (path: string) => invoke<string>("import_read_file", { path }),
   /** The format rules as data, in picker order. Seeded by the migration, so this changes at
    *  most once per app version — cached for the session by `useFormatSpecs`. */
   formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),
@@ -3113,6 +3453,30 @@ export const ipc = {
   errorLogList: (limit: number) => invoke<ErrorEntry[]>("error_log_list", { limit }),
   /** Empty the log. Answers how many rows went. */
   errorLogClear: () => invoke<number>("error_log_clear"),
+  /**
+   * The four Settings can throw away — `src-tauri/src/reset.rs`.
+   *
+   * **The first three are irreversible and write no history**, which is not an oversight: the
+   * deck audit log is per-deck and cascades away with the decks it describes, so there is
+   * nowhere for a wipe to be recorded. The typed confirmation in `ConfirmDialog` is the whole
+   * of the safety, and it is this side's — the backend takes no `confirm` argument, because a
+   * fence the caller passes is a fence the caller can forget.
+   *
+   * Every one of them is a **table**, not a row: none takes an id, and none can be scoped.
+   */
+  collectionClear: () => invoke<CollectionCleared>("collection_clear"),
+  wishlistClear: () => invoke<number>("wishlist_clear"),
+  decksClear: () => invoke<DecksCleared>("decks_clear"),
+  /**
+   * The fourth, and the one that is not destructive: `data/images/` and `data/tmp/`, both of
+   * which the app refetches on demand. It never touches `data/covers/` — a deck cover is a
+   * picture the reader chose — and never a table but `image_cache`.
+   *
+   * **Rejects while a sync is running**, in a sentence meant to be shown: the corpus download
+   * puts 77 MB in `data/tmp/` and reads it back, so a sweep landing between the two fails a
+   * job the reader is watching a progress bar for.
+   */
+  cacheClear: () => invoke<CacheCleared>("cache_clear"),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /**
    * Every release the last check saw, newest first — the version history.
@@ -3250,6 +3614,90 @@ export const ipc = {
    */
   onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Promise<UnlistenFn> =>
     listen<OracleTagProgressEvent>("oracle-tags:progress", (evt) => cb(evt.payload)),
+  /**
+   * The **art** taxonomy's freshness — {@link ipc.oracleTagsStatus} one dataset over, and safe
+   * before the first refresh for the same reason: a database with no meta row answers every
+   * field `null` with `stale: true` rather than rejecting.
+   *
+   * A never-ingested art taxonomy is not a failure. It is what every install is on its first
+   * launch and what a machine that cannot reach Scryfall stays in, and the honest answer to it
+   * is a Tags page that says it has nothing yet.
+   */
+  artTagsStatus: () => invoke<ArtTagStatus>("art_tags_status"),
+  /**
+   * Fetch the art taxonomy if it is due. `force` skips the weekly throttle, **not** the ETag
+   * check — a forced refresh of an unchanged file still costs one request and no ingest.
+   *
+   * ~12.5 MiB compressed (measured 2026-08-20), a little over twice the oracle file, flattening
+   * 475 163 taggings into 951 499 closure rows. It reports through the same `Activity` mechanism
+   * every other long job uses, and **a failed fetch leaves the previous taxonomy in place**:
+   * nothing here may break a launch or a card sync.
+   */
+  artTagsRefresh: (force: boolean) => invoke<ArtTagStatus>("art_tags_refresh", { force }),
+  /**
+   * The art taxonomy being fetched, phase by phase — a channel of its own beside
+   * `oracle-tags:progress`, because either taxonomy may be refreshing while the other is.
+   *
+   * **Subscribe once**, like every other listener here. Tauri drops events emitted before the
+   * webview registered a listener and the startup refresh can begin before this window has one,
+   * so {@link ipc.artTagsStatus} is the reliable half of the pair.
+   */
+  onArtTagProgress: (cb: (e: ArtTagProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<ArtTagProgressEvent>("art-tags:progress", (evt) => cb(evt.payload)),
+  /**
+   * Type-ahead over the tag taxonomies — the Tags page's search box.
+   *
+   * `namespace` is `"art"`, `"oracle"` or `"both"`, and **`"both"` puts art first on an equal
+   * rank**: the page's job is an art theme, so a reader who types `dog` means the illustrations
+   * and the oracle tag of the same name is the secondary reading.
+   *
+   * **Substring, not prefix, and that is a deliberate departure from Scryfall** — verified live
+   * 2026-08-20, `otag:remov` 404s and `otag:*spot*` answers nothing, so there is nothing to
+   * borrow and a reader told "no such tag" until they spell `dogs-of-war` exactly is not using a
+   * search box. The exact hit is ranked first, then the prefix hits, then the rest.
+   *
+   * **An empty or all-punctuation `text` matches every tag rather than none**, so an untouched
+   * box answers the tags with the widest reach. `limit` caps the *merged* answer.
+   */
+  tagSearch: (text: string, namespace: TagNamespace | "both", limit: number) =>
+    invoke<TagHit[]>("tag_search", { text, namespace, limit }),
+  /**
+   * One level of the tag tree: the children of `slug`, or the **roots** when it is `null`.
+   *
+   * Unlimited, deliberately — this draws one level of a tree (3 219 art roots, measured
+   * 2026-08-20) and an arbitrary cut would silently lose branches.
+   *
+   * A tag with several parents is listed under every one of them, which is the honest reading of
+   * a graph rather than a tree; its {@link TagHit.parents} name the rest so the rail can say so.
+   * **A muted tag takes its subtree off the rail with it** — its children are not roots and no
+   * other path reaches them unless they have a second parent. That is recoverable by unmuting,
+   * and the children stay findable through {@link ipc.tagSearch}.
+   */
+  tagChildren: (namespace: TagNamespace | "both", slug: string | null) =>
+    invoke<TagHit[]>("tag_children", { namespace, slug }),
+  /**
+   * Stop offering a tag anywhere — Scryfall asks downstream apps for this in as many words,
+   * because Tagger is crowdsourced and they cannot guarantee the data is free from abuse.
+   *
+   * **Keyed on {@link TagHit.id}, never on the slug**, and a blank id is refused in words rather
+   * than stored: one row with an empty `tagId` would equal every un-refreshed `oracle_tags` row
+   * and take the whole taxonomy off the page silently. `slug` rides along so Settings can name
+   * the tag later without joining a taxonomy that may since have been rebuilt or emptied.
+   *
+   * Idempotent by `(namespace, tagId)`: muting an already-muted tag refreshes the stored slug and
+   * the timestamp, which is what makes a rename harmless.
+   */
+  tagMute: (namespace: TagNamespace, tagId: string, slug: string) =>
+    invoke<void>("tag_mute", { namespace, tagId, slug }),
+  /** Offer a tag again. A tag that was never muted is **not** an error — the row is gone either
+   *  way, and a Settings list that raced a second window is not worth shouting about. Unlike
+   *  {@link ipc.tagMute} this accepts a blank `tagId`, because a row with one is unreachable by
+   *  any tag it was meant to name and junk to delete is all it can ever be. */
+  tagUnmute: (namespace: TagNamespace, tagId: string) =>
+    invoke<void>("tag_unmute", { namespace, tagId }),
+  /** Everything the reader has hidden, for the Settings list that gives it back — by taxonomy,
+   *  then by the stored slug, because this list exists to be searched by eye. */
+  tagsMuted: () => invoke<MutedTag[]>("tags_muted"),
   /**
    * The Scryfall CDN URL for one printing at one size, or `null`.
    *

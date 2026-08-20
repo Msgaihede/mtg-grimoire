@@ -30,9 +30,9 @@ const deckLastFormat = vi.hoisted(() => vi.fn());
 // "the card database is not filled in yet". Mounted only while the dialog is open, but the
 // whole `ipc` object is replaced here, so a command left out is a `TypeError` rather than a
 // missing answer.
-const deckImportResolve = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
 // resolve; what it is called with is asserted in its own test below.
@@ -55,9 +55,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderDelete,
     formatSpecs,
     deckLastFormat,
-    deckImportResolve,
+    importResolve,
     deckImportCommit,
-    deckImportReadFile,
+    importReadFile,
     syncStatus,
   },
 }));
@@ -157,7 +157,7 @@ const PICKER: FormatSpec[] = [
   spec("casual"),
 ];
 
-/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+/** The one printing `import_resolve` answers with here — everything the plan does not
  *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
 const SOL_RING: ImportMatch = {
   cardId: "sol-ring",
@@ -250,11 +250,11 @@ beforeEach(() => {
   deckLastFormat.mockReset().mockResolvedValue(null);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  deckImportResolve
+  importResolve
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });
@@ -637,6 +637,14 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
+    // The select belongs to the new-deck **destination** since Task 12 and is drawn on the
+    // preview step, beside the tally its format changes — so the list has to be read before
+    // there is a select to look at. What the claim is about is unchanged: the answer this
+    // screen resolved reaches both surfaces that make a deck.
+    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
     const format = await screen.findByLabelText("Format");
     await waitFor(() => expect(format).toHaveValue("modern"));
   });
@@ -714,11 +722,12 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "Import deck" }));
 
-    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
-    await userEvent.click(screen.getByLabelText("Decklist"));
+    await userEvent.click(await screen.findByLabelText("Decklist"));
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+    // The name is the destination's question and is asked on its own step.
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     // Commander rather than Casual, and untouched by the reader: nothing has been created on
     // this install, so the gallery's remembered format is what a first deck starts on — and it
@@ -927,7 +936,7 @@ describe("DecksPage", () => {
    *
    * The menu focuses that tile as it closes — and that is *not* enough, which is the whole reason
    * these three cases exist. Every layer on this screen moves the caret into itself on mount
-   * (`DeleteConfirm`'s effect, `RenameField`'s, `DeckDialog`'s panel), so the menu's hand-back is
+   * (`DeleteConfirm`'s effect, `RenameField`'s, `Dialog`'s panel), so the menu's hand-back is
    * overwritten a moment later. `dismiss()` is then the only thing that can put it back, and it
    * puts it back on `openerRef` — so a menu that passed no opener leaves the caret on the panel
    * it is about to unmount, and this codebase's own rule says what happens next: an element that
@@ -979,7 +988,7 @@ describe("DecksPage", () => {
     expect(document.activeElement).toBe(tile);
   });
 
-  /** Closed is nothing mounted — `DeckDialog`'s guarantee, and what makes hosting this on a
+  /** Closed is nothing mounted — `Dialog`'s guarantee, and what makes hosting this on a
    *  wall of forty tiles free. */
   it("reads no deck at all until the settings dialog is opened", async () => {
     wrap(<DecksPage />);
@@ -1676,7 +1685,7 @@ describe("the folder row's menu", () => {
    *
    * The menu focuses that row as it closes and that is *not* enough — the same fact the tile's
    * three cases are here for. Every layer on this screen moves the caret into itself on mount
-   * (`FolderNameField`'s effect, `DeleteFolderConfirm`'s, `DeckDialog`'s panel), so the menu's
+   * (`FolderNameField`'s effect, `DeleteFolderConfirm`'s, `Dialog`'s panel), so the menu's
    * hand-back is overwritten a moment later and `dismiss()` is the only thing that can put it
    * right. It puts it on `openerRef` — so a menu row that passed no opener leaves the caret on a
    * panel about to unmount, and this codebase's own rule says what follows: focus drops to

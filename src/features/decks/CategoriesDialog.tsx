@@ -57,6 +57,7 @@ import {
   dropTargetForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { ToggleChip } from "@/components/FilterChips";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type DeckCard, type DeckCategory, type DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -66,7 +67,7 @@ import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
 // The gesture itself is `categoryDrag.ts`, shared with the deck's own piles: this dialog and
 // `StackView` draw a category completely differently and mean exactly the same write.
 import { categoryDragData, movedTo, readCategoryDrag } from "./categoryDrag";
-import { DeckDialog } from "./DeckDialog";
+import { Dialog } from "@/components/Dialog";
 import type { CardGroup } from "./grouping";
 import {
   CONFIRM_CANCEL,
@@ -97,9 +98,9 @@ export interface CategoriesDialogProps {
 }
 
 /**
- * The chrome is {@link DeckDialog}'s and the body below is this file's.
+ * The chrome is {@link Dialog}'s and the body below is this file's.
  *
- * **The body is a separate component and that is not tidiness**: a closed {@link DeckDialog}
+ * **The body is a separate component and that is not tidiness**: a closed {@link Dialog}
  * mounts no children at all, so the queries belong one floor down where they only exist while
  * the dialog is up. A closed dialog therefore costs nothing — no `deck_category_list`, no
  * `deck_get` — which is what makes it safe for the editor to mount this unconditionally beside
@@ -117,7 +118,7 @@ export function CategoriesDialog({
   onClose,
 }: CategoriesDialogProps): JSX.Element {
   return (
-    <DeckDialog
+    <Dialog
       open={open}
       title="Categories"
       closeLabel="Close categories"
@@ -126,7 +127,7 @@ export function CategoriesDialog({
       onClose={onClose}
     >
       <CategoriesBody deckId={deckId} variant={variant} />
-    </DeckDialog>
+    </Dialog>
   );
 }
 
@@ -354,6 +355,7 @@ function CategoryRow({
   /** Where this category's cards could go instead of being deleted with it. */
   others: readonly DeckCategory[];
 }) {
+  const tip = useTooltip();
   const rowRef = useRef<HTMLLIElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
@@ -447,7 +449,7 @@ function CategoryRow({
             }
           }}
           aria-label={`Move ${category.name}, ${index + 1} of ${total}`}
-          title="Drag to reorder, or press the up and down arrow keys"
+          {...tip("Drag to reorder, or press the up and down arrow keys")}
           className={cn(
             "shrink-0 cursor-grab rounded-sm text-dim",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
@@ -550,7 +552,7 @@ const CONFIRM_MOVING = cn(
  * **Exported, and the deck editor is the second host** (2026-08-14). A category heading's
  * right-click offers `Delete…`, and that row must ask the same question in the same words as
  * this dialog does — a second confirmation would be a second chance to get "the cards go with
- * it" wrong. The editor renders it inside a `DeckDialog` of its own; nothing here assumes the
+ * it" wrong. The editor renders it inside a `Dialog` of its own; nothing here assumes the
  * row it was written in, because it draws a self-contained `role="group"` and takes every
  * mutation it needs through `meta`.
  *
