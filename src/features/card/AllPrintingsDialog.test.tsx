@@ -262,9 +262,11 @@ describe("AllPrintingsDialog", () => {
     open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
     // `toBeInTheDocument` rather than `toBeVisible`, which is `CategoriesDialog.test.tsx`'s
-    // convention and for a reason worth carrying: `Dialog`'s panel carries its `initial` —
-    // `opacity: 0` — on the frame it mounts, so a visibility assertion on the first render is a
-    // race against a fade that `MotionGlobalConfig.skipAnimations` shortens but does not skip.
+    // convention. The race it was avoiding is gone as of 2026-08-20 — `src/test-setup.ts` now
+    // runs motion's batch inline, so `AllPrintingsDialog`'s panel no longer paints its `initial`
+    // (`opacity: 0`) for a frame — and this stays because it is the honest assertion anyway:
+    // `findByRole` has already proved the dialog is in the tree and accessible, and what this
+    // line is about is *which card* it names.
     expect(await screen.findByRole("dialog", { name: /Sol Ring/ })).toBeInTheDocument();
     expect(await screen.findByText("2 printings")).toBeVisible();
   });
