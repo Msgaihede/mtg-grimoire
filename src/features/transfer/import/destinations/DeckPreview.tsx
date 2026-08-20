@@ -67,6 +67,10 @@ export interface DeckImportInto {
    * than a preference: `deck.ts` makes every deck decision and this file makes none, so all this
    * prop does is reach `buildImportPlan`'s trailing argument. Absent — which is what the
    * toolbar's Import passes — the list is filed by what each card *does*, exactly as before.
+   *
+   * Only the editor has a pile to aim at. `NewDeckPreview` would take one just as well
+   * (`deck_import_commit` finds-or-creates a category by name), but the gallery has no heading
+   * to right-click and passes nothing.
    */
   forcedCategoryName?: string;
   /**
@@ -135,7 +139,8 @@ export function DeckPreview({
    *
    * This is the whole of the tally fix: `commanderIds` is a dependency of `items`, so pressing a
    * candidate recomputes both, and the two numbers on this step describe what Import will write
-   * rather than what the auto rule filed before anybody chose.
+   * rather than what the auto rule filed before anybody chose. See {@link tallyOf} for what the
+   * old shape put on screen.
    */
   const categories = useMemo(() => tallyOf(items), [items]);
   const blameSync = useBlameSync(plan);
