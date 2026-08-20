@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import type { CollectionRow, WishRow } from "@/lib/ipc";
 import { transferCard } from "../fixtures";
-import type { TransferCard } from "../TransferCard";
+import { fromCollectionRow, fromWishRow, type TransferCard } from "../TransferCard";
 import { ExportDialog } from "./ExportDialog";
 import { printing } from "../../../../.storybook/fake/fixtures";
 
@@ -34,7 +35,9 @@ function preview(canvasElement: HTMLElement): HTMLElement {
  * {@link preview} would have found it and passed.
  */
 async function expand(canvasElement: HTMLElement): Promise<void> {
-  await userEvent.click(await within(canvasElement).findByRole("button", { name: /Show decklist/ }));
+  await userEvent.click(
+    await within(canvasElement).findByRole("button", { name: /Show decklist/ }),
+  );
 }
 
 /**
@@ -116,6 +119,123 @@ const DECK_CARDS: TransferCard[] = [
     categoryKind: "main",
     categoryActive: false,
   }),
+];
+
+/**
+ * A `CollectionRow` built the way `.storybook/fake/db.ts`'s `toCollectionRow` builds one —
+ * `CollectionTable.stories.tsx`'s own `entry()`, copied rather than imported: that helper is not
+ * exported, and every card-derived field it fills in is nullable in the real DTO regardless.
+ * Every optional field is given a real value here, deliberately — {@link EveryFieldOn} is the
+ * story that turns every checkbox this can feed on, and a `null` column reads identically whether
+ * the field is off or merely empty.
+ */
+function collectionEntry(
+  card: ReturnType<typeof printing>,
+  over: Partial<CollectionRow> = {},
+): CollectionRow {
+  return {
+    id: 1,
+    cardId: card.id,
+    name: card.name,
+    oracleId: card.oracleId,
+    setCode: card.setCode,
+    setName: card.setName,
+    collectorNumber: card.collectorNumber,
+    lang: card.lang,
+    rarity: card.rarity,
+    manaCost: card.manaCost,
+    typeLine: card.typeLine,
+    layout: card.layout,
+    finish: "nonfoil",
+    condition: "NM",
+    quantity: 1,
+    tradelistQuantity: 0,
+    unitPrice: 4.5,
+    purchasePrice: 3.25,
+    purchaseCurrency: "USD",
+    acquiredAt: "2026-06-01",
+    acquisitionSource: "LGS",
+    serialNumber: null,
+    altered: false,
+    signed: false,
+    proxy: false,
+    misprint: false,
+    grading: null,
+    tags: "[]",
+    notes: "sleeved",
+    needsReview: null,
+    updatedAt: 1_786_266_000,
+    ...over,
+  };
+}
+
+/** Two entries the collection surface can carry every field of — a foil, graded and altered
+ *  Lightning Bolt and a played, tagged Sol Ring — via `fromCollectionRow`, the same adapter
+ *  `CollectionPage` reads its export scope through. */
+const COLLECTION_CARDS: TransferCard[] = [
+  fromCollectionRow(
+    collectionEntry(BOLT, {
+      id: 1,
+      finish: "foil",
+      condition: "LP",
+      quantity: 2,
+      tradelistQuantity: 1,
+      grading: "PSA 9",
+      altered: true,
+      signed: true,
+      tags: '["playset"]',
+      notes: "corner ding",
+    }),
+  ),
+  fromCollectionRow(
+    collectionEntry(SOL_RING, {
+      id: 2,
+      finish: "nonfoil",
+      condition: "MP",
+      quantity: 1,
+      tradelistQuantity: 0,
+      purchasePrice: 1.1,
+      purchaseCurrency: "EUR",
+      acquiredAt: "2026-02-14",
+      acquisitionSource: "Trade",
+      serialNumber: "007",
+      proxy: false,
+      misprint: true,
+      tags: "[]",
+      notes: null,
+    }),
+  ),
+];
+
+/** A `WishRow` for the two printings above, via `fromWishRow` — no condition, no acquisition
+ *  story, exactly as {@link ../TransferCard}'s doc says a wishlist row cannot carry either. */
+function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {}): WishRow {
+  return {
+    id: 1,
+    oracleId: card.oracleId,
+    cardId: card.id,
+    name: card.name,
+    setCode: card.setCode,
+    collectorNumber: card.collectorNumber,
+    lang: card.lang,
+    rarity: card.rarity,
+    manaCost: card.manaCost,
+    typeLine: card.typeLine,
+    artCardId: card.id,
+    quantity: 1,
+    preferredFinish: null,
+    unitPrice: 4.5,
+    ownedQuantity: 0,
+    notes: null,
+    needsReview: null,
+    updatedAt: 1_786_266_000,
+    ...over,
+  };
+}
+
+const WISHLIST_CARDS: TransferCard[] = [
+  fromWishRow(wishRow(BOLT, { id: 1, quantity: 4, preferredFinish: "foil", notes: "for Burn" })),
+  fromWishRow(wishRow(SOL_RING, { id: 2, quantity: 1, preferredFinish: null, notes: null })),
 ];
 
 /**
@@ -317,9 +437,10 @@ export const Archidekt: Story = {
  * deck names rather than on whatever art is cheapest. There is no finish marker: a printing's
  * foil is chosen in the cart, so `*F*` here would be a word Mass Entry read as part of the name.
  *
- * **Write-only, and the second such format after CSV** — measured rather than assumed, in
- * `format.test.ts`. Our own parser's bracket is anchored to the end of the line, so a bracket
- * with a number after it is not a bracket to it and the whole tail lands in the card's name.
+ * **The one write-only format** (CSV stopped being one in Task 10 — see {@link Csv} and
+ * `docs/reference/import-export.md`) — measured rather than assumed, in `format.test.ts`. Our
+ * own parser's bracket is anchored to the end of the line, so a bracket with a number after it
+ * is not a bracket to it and the whole tail lands in the card's name.
  */
 export const Tcgplayer: Story = {
   args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
@@ -354,8 +475,11 @@ export const Tcgplayer: Story = {
  * column is the pile's own name, which is how a spreadsheet keeps the filing the five text
  * formats say with a heading.
  *
- * **It is write-only and stays so**: nothing in `parse.ts` reads a comma-separated decklist, and
- * teaching it one would be a second grammar rather than a rule inside the one there is.
+ * **It reads as well as writes, since Task 10** — `parse.ts` detects a header by content (two
+ * known columns, one of which is Name) and then checks the next row's own field count agrees
+ * before it trusts the verdict, which is what stops a plain line like `"Quantity, Name"` being
+ * mistaken for one. TCGplayer is the one format left that is write-only; the full rule and the
+ * CSV header vocabulary are in `docs/reference/import-export.md`.
  *
  * **An empty pile is an empty string in every format, this one included**: a header over no rows
  * is a file that claims to be a decklist and is not one. See {@link EmptyPile}.
@@ -567,6 +691,136 @@ export const EmptyPile: Story = {
     await expect(preview(canvasElement).textContent).toBe("");
     await userEvent.click(canvas.getByRole("radio", { name: "CSV" }));
     await expect(preview(canvasElement).textContent).toBe("");
+  },
+};
+
+/**
+ * The **collection** surface — `surface: "collection"`, rows built with {@link fromCollectionRow}
+ * rather than a bare `transferCard()`, the same adapter `CollectionPage` reads its export scope
+ * through.
+ *
+ * **Opens on CSV, not plain text** — `useAppStore`'s `exportPrefs` seeds the collection at CSV
+ * because it is the only format with a Condition channel, and a collection export with no
+ * condition is a card list rather than a record of what the reader owns. The field row is the
+ * intersection `availableFields` draws: `Condition` is offered here and nowhere a deck
+ * export reaches, `Category` is offered nowhere on this surface at all — a collection row is not
+ * filed anywhere, so there is no pile to name.
+ */
+export const Collection: Story = {
+  args: {
+    subject: "your collection",
+    surface: "collection",
+    cards: COLLECTION_CARDS,
+    suggestedFileName: "collection",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await expect(canvas.getByRole("radio", { name: "CSV" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    const fields = canvas.getByRole("group", { name: "Fields" });
+    await expect(within(fields).getByRole("checkbox", { name: "Condition" })).toBeChecked();
+    // No pile to name on this surface — `availableFields` never offers it here.
+    await expect(within(fields).queryByRole("checkbox", { name: "Category" })).toBeNull();
+
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Quantity,Name,Set,Collector number,Finish,Condition",
+    );
+    await expect(preview(canvasElement)).toHaveTextContent("2,Lightning Bolt,2x2,117,foil,LP");
+  },
+};
+
+/**
+ * The **wishlist** surface — `surface: "wishlist"`, rows built with {@link fromWishRow}. Opens
+ * on plain text, the format every surface but the collection remembers first.
+ *
+ * **No Condition, no Category, no Tradelist quantity** — a wish is cardboard the reader does not
+ * own yet, so none of the collection's own facts about a physical copy exist here, and
+ * `SURFACE_FIELDS.wishlist` never offers them.
+ */
+export const Wishlist: Story = {
+  args: {
+    subject: "your wishlist",
+    surface: "wishlist",
+    cards: WISHLIST_CARDS,
+    suggestedFileName: "wishlist",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: 'Export "your wishlist"' });
+    await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await expect(canvas.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent("4 Lightning Bolt");
+    await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring");
+
+    await userEvent.click(canvas.getByRole("radio", { name: "CSV" }));
+    const fields = canvas.getByRole("group", { name: "Fields" });
+    await expect(within(fields).queryByRole("checkbox", { name: "Condition" })).toBeNull();
+    await expect(within(fields).queryByRole("checkbox", { name: "Category" })).toBeNull();
+    await expect(within(fields).queryByRole("checkbox", { name: "Tradelist quantity" })).toBeNull();
+    await expect(within(fields).getByRole("checkbox", { name: "Notes" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Every field the collection can carry, on, in CSV** — the tallest thing this dialog can draw.
+ *
+ * Not a hypothetical: this dialog already shipped one overflow bug where the panel grew past
+ * the window and took Copy and Save as… off the bottom, reachable by neither pointer nor wheel —
+ * `src/CLAUDE.md`'s clamp-the-panel paragraph. `jsdom` has no layout engine, so nothing this play
+ * asserts can see that failure; what it *can* pin is that every column really does turn on and
+ * really does write a value, which is the live pass's starting point at a short viewport.
+ *
+ * 24 columns for the collection surface — `SURFACE_FIELDS.collection`'s own length, never
+ * written down twice: the play turns on every checkbox `Fields` draws rather than a count typed
+ * here, so a field added to the registry is exercised by this story without anybody remembering
+ * to update it.
+ */
+export const EveryFieldOn: Story = {
+  args: {
+    subject: "your collection",
+    surface: "collection",
+    cards: COLLECTION_CARDS,
+    suggestedFileName: "collection",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
+    await expect(canvas.getByRole("radio", { name: "CSV" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    const fields = canvas.getByRole("group", { name: "Fields" });
+    for (const box of within(fields).getAllByRole("checkbox")) {
+      if (!(box as HTMLInputElement).checked) await userEvent.click(box);
+    }
+    for (const box of within(fields).getAllByRole("checkbox")) {
+      await expect(box).toBeChecked();
+    }
+
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Quantity,Name,Set,Collector number,Finish,Condition,Language,Tradelist quantity," +
+        "Purchase price,Purchase currency,Acquired,Acquired from,Serial number,Grading," +
+        "Altered,Signed,Proxy,Misprint,Tags,Notes,Set name,Rarity,Type line,Price",
+    );
+    // Values from fields that carry nothing anywhere else in this file's fixtures, which is
+    // what tells "the column is on" apart from "the column was always going to be empty".
+    await expect(preview(canvasElement)).toHaveTextContent("PSA 9");
+    await expect(preview(canvasElement)).toHaveTextContent("corner ding");
+    await expect(preview(canvasElement)).toHaveTextContent("007");
   },
 };
 

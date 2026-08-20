@@ -5,9 +5,11 @@ import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import type { ImportDestination } from "./destination";
+import { collectionDestination } from "./destinations/CollectionPreview";
 import { deckDestination } from "./destinations/deckInto";
 import { NewDeckPreview } from "./destinations/NewDeckPreview";
 import { newDeckDestination } from "./destinations/newDeck";
+import { wishlistDestination } from "./destinations/WishlistPreview";
 import { REFERENCE_LIST } from "./fixtures";
 import { ImportDialog } from "./ImportDialog";
 
@@ -272,5 +274,97 @@ export const Refused: Story = {
     await expect(args.onImported).not.toHaveBeenCalled();
     await userEvent.click(canvas.getByRole("button", { name: "Back" }));
     await expect(await canvas.findByLabelText("Decklist")).toHaveValue("1 Sol Ring");
+  },
+};
+
+/**
+ * The collection and the wishlist each hand the shell exactly **one** destination — a plain
+ * value rather than {@link deckDestination}'s builder, because neither closes over anything the
+ * deck's does (an id, a variant it writes into). {@link Dialog}'s own `deckId`/`variant` args
+ * belong to that builder alone, so these two stories carry their own trigger rather than reusing
+ * it — the same shape `CollectionPage.tsx` and `WishlistPage.tsx` mount, minus the surrounding
+ * page.
+ *
+ * **The trigger says "Open import", not "Import"** — unlike the real pages' own button, which
+ * really is named `Import`. The preview step's own commit button carries that exact name
+ * (`CommitBar`'s `label` prop), and this story's trigger stays mounted beside the open dialog
+ * rather than being replaced by it, so the two would otherwise be indistinguishable by role and
+ * name at once — a collision the real page never has to answer because nothing there queries the
+ * trigger and the commit button by the same string.
+ */
+function SingleDestinationDialog({ destination }: { destination: ImportDestination }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="grid min-h-[30rem] place-items-start">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+        className={cn(
+          "inline-flex h-9 items-center rounded-md border border-border px-3 text-sm text-dim",
+          FOCUS,
+        )}
+      >
+        Open import
+      </button>
+      <ImportDialog
+        destinations={[destination]}
+        open={open}
+        onDismiss={() => setOpen(false)}
+        onClose={() => setOpen(false)}
+        onDone={() => setOpen(false)}
+      />
+    </div>
+  );
+}
+
+/**
+ * Into the reader's own collection — `CollectionPage`'s `Import` button, over
+ * `collectionDestination`. **Two facts a text list cannot carry, asked before the reader
+ * commits**: what condition and finish a line with neither becomes. `add`/`set`, never
+ * `replace` — a collection is thousands of rows a 40-line paste must not be able to empty, so
+ * the word the deck's own preview offers is not in this destination's vocabulary at all.
+ */
+export const IntoCollection: Story = {
+  render: () => <SingleDestinationDialog destination={collectionDestination} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring\n2 Lightning Bolt");
+    await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+
+    await expect(await canvas.findByText(/will be added to your collection/)).toBeInTheDocument();
+    await expect(canvas.getByLabelText(/Condition when the file doesn.t say/)).toBeInTheDocument();
+    await expect(canvas.getByLabelText(/Finish when the file doesn.t say/)).toBeInTheDocument();
+    // `add`/`set`, and `add` first — never `replace`, which belongs to the deck's own preview.
+    await expect(canvas.getByLabelText(/^Add these copies/)).toBeChecked();
+    await expect(canvas.queryByText(/^Replace/)).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
+  },
+};
+
+/**
+ * Into the reader's own wishlist — `WishlistPage`'s `Import` button, over
+ * `wishlistDestination`. **No condition question at all**: a wish is a card the reader does not
+ * own yet, so recording a grade for cardboard nobody has is a question this destination has
+ * never asked. The finish select survives — "the shiny one" is an answer about taste, which a
+ * wish can carry the same as a collection entry can.
+ */
+export const IntoWishlist: Story = {
+  render: () => <SingleDestinationDialog destination={wishlistDestination} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring\n2 Lightning Bolt");
+    await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+
+    await expect(await canvas.findByText(/will be added to your wishlist/)).toBeInTheDocument();
+    await expect(canvas.getByLabelText(/Finish when the file doesn.t say/)).toBeInTheDocument();
+    await expect(canvas.queryByLabelText(/Condition/)).toBeNull();
+    await expect(canvas.getByLabelText(/^Add these wishes/)).toBeChecked();
+    await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },
 };

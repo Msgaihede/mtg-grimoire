@@ -47,6 +47,17 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   would have to choose a reader before it had read anything, and would be wrong about exactly the
   lists somebody has edited by hand. So an unfamiliar mixture is read line by line rather than
   refused whole.
+- **CSV is the one exception, and it is a _file-level_ judgement made once, on the header row
+  alone** (Task 10 — CSV was write-only before this). Two known columns, one of which is Name,
+  is the content test; the row after it has to carry the header's own field count before the
+  verdict is trusted, which is what stops a plain line like `"Quantity, Name"` — two cells off
+  its one comma, both naming a known column — from being read as a header over a file that is
+  not a CSV at all. A header this app *nearly* recognises (two known columns, no Name) is a CSV
+  from somewhere else and gets one sentence rather than a per-line issue per row. Once the header
+  is trusted every later row is read **by column**, never by the line grammar below it — a
+  `Condition`/`Purchase price`/… cell is what makes the collection's own import a restore rather
+  than a dump. Full header vocabulary and the field-count check:
+  [import-export.md](../../../docs/reference/import-export.md).
 - **Four decorations and one heading rule, and the heading rule is the _only_ lookahead in the
   file.** The four are per-line and cost nothing: an **empty `()`** printing hint, an Archidekt
   `^Tag,#colour^`, the `[Category]` bracket, and the `*F*`/`*E*` finish markers it always had (a
@@ -253,17 +264,16 @@ controls open that dialog** — the editor header's `Export deck` and a category
   `Maybeboard` "because that is what it is called" files a switched-on Maybeboard out of the deck
   it counts toward **and** leaves a reader's own switched-off `Ramp` under `Deck` beside it — one
   edit, both errors, and nothing about it reads as wrong.
-- **Two formats are write-only**, and `decklists.test.ts` excludes each **by name** rather than by
-  omission (`expect(READABLE).toEqual([…])`), so a format dropped out of that table by accident is a
-  failure rather than a quietly smaller matrix. **CSV**, because nothing in `parse.ts` reads a
-  comma-separated decklist and teaching it one would be a second grammar rather than a rule inside
-  the one there is. **TCGplayer**, because its line is addressed to a shopping cart rather than to
-  us: `parse.ts`'s `BRACKET` is anchored to the **end of the line**, so a bracket with a collector
-  number after it is not a bracket to that parser at all and the whole tail lands in the card's
-  name — `2 Lightning Bolt [2X2] 117` comes back as a card *called* `Lightning Bolt [2X2] 117`, the
-  copies surviving and the name not. That is **measured in `format.test.ts` rather than asserted
-  here**, so the day `parse.ts` learns to read an unanchored bracket the exclusion fails rather
-  than quietly outliving its reason.
+- **One format is write-only**, and `decklists.test.ts` excludes it **by name** rather than by
+  omission (`expect(READABLE).toEqual([…])`), so a format dropped out of that table by accident is
+  a failure rather than a quietly smaller matrix. **TCGplayer**, because its line is addressed to
+  a shopping cart rather than to us: `parse.ts`'s `BRACKET` is anchored to the **end of the
+  line**, so a bracket with a collector number after it is not a bracket to that parser at all and
+  the whole tail lands in the card's name — `2 Lightning Bolt [2X2] 117` comes back as a card
+  *called* `Lightning Bolt [2X2] 117`, the copies surviving and the name not. That is **measured
+  in `format.test.ts` rather than asserted here**, so the day `parse.ts` learns to read an
+  unanchored bracket the exclusion fails rather than quietly outliving its reason. **CSV was the
+  second one until Task 10** — it reads now, and the `## Import` section above has the rule.
 - **`decklists.test.ts` is where a writer drifting from the parser shows up.** Three real decklists
   crossed with every format, driven text → planner → writer → parser, and **every readable
   format is a fixed point**: export → import → export is byte-identical. One cycle cannot see a

@@ -703,3 +703,61 @@ the wrapping half at the same 1280 width; a larger desk is now in the one-line h
   the real element in the page for a `shot` afterwards, and setting the clone's own
   `style.height`/`gap`/`padding` back to the old values photographs before and after from one
   build. The clone must be removed afterwards; it is not React's and nothing else will.
+
+## The general import/export feature, driven end to end — 2026-08-20, `npm run tauri dev` (debug), this worktree
+
+Task 15's live pass, against a fresh sync in this worktree (116,700 cards, its own
+`target/debug/data/mtg.db` — separate from the main checkout's, which held 0 collection rows and 0
+wishes throughout, untouched). Every row this pass created in the collection, the wishlist and the
+gallery was removed afterwards and the removal confirmed by a direct `node:sqlite` read (`0` each)
+before the app was shut down. The full write-up, with every field name and grain, is
+[import-export.md](import-export.md); this entry is the pass log.
+
+### The export dialog, clamped, every field on, CSV — the check left unmeasured at Task 9
+
+`src-tauri/tauri.conf.json` enforces `minWidth: 1024, minHeight: 700`, so 1024×700 is the real
+worst case a reader can produce rather than an arbitrary "short" number. At that size, on the
+collection surface, CSV, all **22** optional field checkboxes on, and **17** real collection rows
+(imported for this pass, enough that the `<pre>`'s own `scrollHeight` read 785px against a 593px
+body budget — genuinely too tall to fit):
+
+- Panel: `top 24, bottom 676` — clamped inside the 700px window.
+- **Copy**: `top 619, bottom 655` — on screen, reachable.
+- **Save as…**: `top 619, bottom 655` — on screen, reachable.
+- The `<pre>` absorbed its own overflow in its own `overflow-auto` box (a visible scrollbar in the
+  screenshot taken during the pass); the outer body's `scrollHeight` stayed equal to its
+  `clientHeight` (593 = 593), so the footer never had to move at all.
+
+**The panel does not stay clamped below the app's own floor, and that is the reason the floor
+matters rather than an open bug.** Pushing the CDP-emulated viewport to 1024×380 — well under the
+enforced 700px minimum, a size Windows will never let a reader's window reach — reproduced the
+un-clamped failure: the dialog's outer `<div role="dialog">` computes `overflow: visible`, so a
+flex column taller than the window pushes its own footer buttons out past the panel's box rather
+than being clipped by it. Recorded here because the mechanism is real and worth knowing about, not
+because a reader can reach it.
+
+### CSV round trip, condition included
+
+`dialog:allow-save`/`dialog:allow-open` are native windows this harness cannot drive — the same
+limit this file's other entries already note for a file picker — so this checked the **text**
+round trip the file system would carry byte for byte, rather than the picker gesture itself.
+Pasted `Quantity,Name,Set,Collector number,Finish,Condition` naming a nonfoil Lightning Bolt at
+**LP** and a foil Sol Ring at **NM** into the collection's Import dialog; the table read back
+`Nonfoil · LP (Lightly played)` and `Foil · NM (Near mint)`; exporting the same two rows to CSV
+read back `2,Lightning Bolt,2x2,117,,LP` and `1,Sol Ring,c21,263,foil,NM` — the condition survived
+on both rows, at both finishes, exactly.
+
+### A plain-text list into the wishlist
+
+`1 Lightning Bolt` / `1 Sol Ring` / `1 Counterspell`, no set or collector number on any line,
+committed. `wishlist_entries` read directly (`node:sqlite`) showed `card_id: null`,
+`set_code: null`, `collector_number: null` and a populated `oracle_id` on all three; the table's
+own Printing column agreed, reading "Any printing" for all three.
+
+### New-deck import navigation — no regression test anywhere, so this pass is the only proof
+
+From the gallery's "Import deck" button, a 4-card paste, a typed name, Import. The ribbon's own
+`h1` still read "Decks" — it names the section rather than "gallery vs. editor" and does not move
+for this — but the page itself carried `Export deck` (a control that exists only inside the deck
+editor), the typed deck name, and the 4 cards correctly filed under Ramp and Removal: the reader
+was left inside the deck that was just created, not looking at its new tile in the gallery.
