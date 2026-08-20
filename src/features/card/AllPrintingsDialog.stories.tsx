@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { listWalkStops } from "@/features/card/cardWalk";
 import { useDeck } from "@/features/decks/useDeck";
 import type { PrintingsResponse } from "@/lib/ipc";
@@ -546,7 +547,12 @@ export const SetPicker: Story = {
     // Alpha holds three of the eight printings; the other five sets hold one each. The count is on
     // the tooltip because the row's own name is the set's name and code.
     const alpha = listbox.getByRole("option", { name: /Limited Edition Alpha/ });
-    await expect(alpha).toHaveAttribute("title", "Limited Edition Alpha — 3 printings");
+    await userEvent.hover(alpha);
+    const tooltip = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(tooltip).toHaveTextContent("Limited Edition Alpha — 3 printings");
+    await userEvent.unhover(alpha);
     await expect(listbox.getAllByRole("option")).toHaveLength(6);
 
     await userEvent.click(alpha);

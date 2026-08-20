@@ -11,6 +11,7 @@ import {
   ResetAll,
   ToggleChip,
 } from "@/components/FilterChips";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
@@ -167,6 +168,7 @@ export function FilterBar({
    */
   const sortDir: SortDir | undefined =
     search.sortSelection === "" ? undefined : (search.sort[0]?.dir ?? "asc");
+  const tip = useTooltip();
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <label htmlFor="card-search-text" className="sr-only">
@@ -384,38 +386,48 @@ export function FilterBar({
             when the reader themselves puts the select back to `Default order`, and their caret
             is on that select when they do it — the button never vanishes from under the thing
             focusing it. */}
-        <button
-          type="button"
-          onClick={search.flipSortDir}
-          disabled={!sortDir}
-          aria-label={sortDirectionName(sortDir)}
-          title={sortDirectionName(sortDir)}
-          className={cn(
-            FILTER_CONTROL,
-            FILTER_FOCUS,
-            "flex size-9 items-center justify-center",
-            // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
-            // the other half of a control that is always doing something. `filterChipState`'s
-            // unpressed arm is what every other quiet control on this row wears, and its
-            // `unavailable` arm is the row's one greying treatment rather than a second one
-            // written next to it.
-            filterChipState(false, !sortDir),
-          )}
-        >
-          {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
-              non-replaced inline box, a transform does not apply to one at all, and the rotation
-              would silently do nothing. `SortableHeader` carries the same class for the same
-              reason. */}
-          <motion.span
-            aria-hidden="true"
-            initial={false}
-            animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
-            transition={TRANSITION.fast}
-            className="flex"
+        {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**
+            `aria-label` already carries the whole sentence, so the tooltip is `describes: false`
+            — pure redundancy for a pointer, which is the state this button spends most of a
+            default search in: `disabled={!sortDir}`. A `disabled` control fires no pointer
+            events at all, so `{...tip()}` bound to the button directly would be silently inert
+            in exactly the state a reader is likeliest to hover it, which is a real loss rather
+            than a no-op (Chromium still draws a native `title` on a disabled control today). The
+            wrapper adds no box beyond the button's own, so an enabled press and an enabled hover
+            both work exactly as before. */}
+        <span {...tip(sortDirectionName(sortDir), { describes: false })}>
+          <button
+            type="button"
+            onClick={search.flipSortDir}
+            disabled={!sortDir}
+            aria-label={sortDirectionName(sortDir)}
+            className={cn(
+              FILTER_CONTROL,
+              FILTER_FOCUS,
+              "flex size-9 items-center justify-center",
+              // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
+              // the other half of a control that is always doing something. `filterChipState`'s
+              // unpressed arm is what every other quiet control on this row wears, and its
+              // `unavailable` arm is the row's one greying treatment rather than a second one
+              // written next to it.
+              filterChipState(false, !sortDir),
+            )}
           >
-            <ArrowUp className="size-4" />
-          </motion.span>
-        </button>
+            {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
+                non-replaced inline box, a transform does not apply to one at all, and the rotation
+                would silently do nothing. `SortableHeader` carries the same class for the same
+                reason. */}
+            <motion.span
+              aria-hidden="true"
+              initial={false}
+              animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
+              transition={TRANSITION.fast}
+              className="flex"
+            >
+              <ArrowUp className="size-4" />
+            </motion.span>
+          </button>
+        </span>
       </div>
 
       {/* Always drawn, greyed when there is nothing to clear — the rule lives in the control,

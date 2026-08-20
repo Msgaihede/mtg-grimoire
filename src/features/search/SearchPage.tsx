@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
@@ -47,7 +48,7 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
  * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
  */
-function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
+function columnsFor(marketplace: Marketplace, tip: TooltipBinder): TableColumn<CardSummary>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return [
@@ -91,12 +92,20 @@ function columnsFor(marketplace: Marketplace): TableColumn<CardSummary>[] {
       width: "8rem",
       header: "Set",
       sortable: true,
-      cellClassName: "truncate font-mono text-dim",
+      cellClassName: "font-mono text-dim",
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
       // — the same rule as the grid caption and the pane.
+      //
+      // **No `whenClipped` here — the tooltip says the set's *name* and the span shows its
+      // *code*, so gating the panel on whether the code happens to be clipped would gate it on
+      // something unrelated to the words it carries.** At the search table's 8rem column,
+      // `MH3 · 234` never clips, so `whenClipped` never opened at all: the rule and the four
+      // sites it applied to wrongly are in `CardDetailPane.tsx`, beside the printings-row span
+      // this one matches. `block truncate` stays for the visual clip alone — an inline span
+      // ignores the grid cell's width and `truncate` needs a real layout box to act on.
       cell: (card) => (
-        <span title={card.setName ?? undefined}>
+        <span className="block truncate" {...tip(card.setName)}>
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
       ),
@@ -348,9 +357,12 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
 
 function Results({ search }: { search: CardSearch }) {
   const { query, rows, total, totalIsCapped, searchKey, marketplace } = search;
-  // Only the Price column depends on it, and a `TableColumn[]` rebuilt every render would
-  // re-key every header — so it is rebuilt when the marketplace changes and not otherwise.
-  const columns = useMemo(() => columnsFor(marketplace), [marketplace]);
+  const tip = useTooltip();
+  // Only the Price column and the tooltip binder depend on it, and a `TableColumn[]` rebuilt
+  // every render would re-key every header — so it is rebuilt when the marketplace changes and
+  // not otherwise. `tip`'s own identity never changes (`useTooltip` memoises it on the context
+  // alone), so it costs the memo nothing to depend on it too.
+  const columns = useMemo(() => columnsFor(marketplace, tip), [marketplace, tip]);
   // Read here rather than taken as a prop: the layout is the result area's own business,
   // and the page above it only needs to know which pager is live.
   const view = useAppStore((s) => s.searchView);
@@ -519,7 +531,7 @@ function Results({ search }: { search: CardSearch }) {
             topLeft={(card) =>
               card.printings > 1 ? (
                 <span
-                  title={`${card.printings} printings matched these filters`}
+                  {...tip(`${card.printings} printings matched these filters`)}
                   className={cn(
                     "block whitespace-nowrap tabular-nums text-text",
                     "text-[calc(10px*var(--mark-scale,1))] leading-none",

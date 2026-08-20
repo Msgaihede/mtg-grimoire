@@ -16,6 +16,11 @@ import type {
   SyncStatus,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { fromDeckCard } from "@/features/transfer/TransferCard";
 import { dragOnto, startDrag } from "@/test-drag";
 import {
@@ -360,7 +365,9 @@ function wrap(ui: ReactElement) {
   });
   return render(
     <QueryClientProvider client={client}>
-      <ContextMenuProvider>{ui}</ContextMenuProvider>
+      <TooltipProvider>
+        <ContextMenuProvider>{ui}</ContextMenuProvider>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -618,7 +625,16 @@ describe("DeckEditor", () => {
     expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
     const built = screen.getByRole("button", { name: /^Built/ });
     expect(built).toHaveAttribute("aria-pressed", "false");
-    expect(built).toHaveAttribute("title", "Reserves your copies for this deck");
+    // `ToggleChip`'s `hint` is redundant with its own composed `aria-label` ("Built, Reserves
+    // …"), so it binds `describes: false` — no `role="tooltip"`, found by the panel's one id.
+    fireEvent.pointerEnter(built);
+    const tooltip = await screen.findByText(
+      "Reserves your copies for this deck",
+      {},
+      { timeout: TOOLTIP_OPEN_MS + 1000 },
+    );
+    expect(tooltip.id).toBe(TOOLTIP_PANEL_ID);
+    fireEvent.pointerLeave(built);
   });
 
   /**
@@ -2107,7 +2123,13 @@ describe("DeckEditor", () => {
       // Not a control that records an intention and moves nothing: there is no width for what
       // it would open, and it says so rather than doing nothing.
       expect(rail).toHaveAttribute("aria-disabled", "true");
-      expect(rail).toHaveAttribute("title", expect.stringMatching(/not enough room/i));
+      // The reason moved off `title` to `useTooltip()` — a description of an already-named
+      // control, so it is `describes: true` by default and the panel carries `role="tooltip"`.
+      fireEvent.pointerEnter(rail);
+      const tooltip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+      expect(tooltip).toHaveTextContent(/not enough room/i);
+      expect(document.getElementById(TOOLTIP_PANEL_ID)).toBe(tooltip);
+      fireEvent.pointerLeave(rail);
       expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
       // **And pressing it really is refused**, which is the half of this that a shut-by-default
       // panel would otherwise be answering for: `aria-expanded="false"` is now true of a panel

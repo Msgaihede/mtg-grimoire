@@ -1,6 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
@@ -12,6 +13,17 @@ import {
   type DeckStatsSummary,
   type MissingWrite,
 } from "./DeckStats";
+
+/**
+ * Hover a tooltip anchor open and hand back its panel — `Figure`'s hint is a description of an
+ * already-named pair (the label and the value beside it), so it binds `describes: true` (the
+ * default) and the panel carries `role="tooltip"`, unlike the `describes: false` marks this
+ * bucket's own components bind.
+ */
+async function openTooltip(anchor: Element): Promise<HTMLElement> {
+  fireEvent.pointerEnter(anchor);
+  return await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+}
 
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
@@ -544,7 +556,11 @@ describe("deckStats", () => {
 
 describe("DeckStats", () => {
   const strip = (cards: DeckCard[], send = sender()) =>
-    render(<DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={send} />);
+    render(
+      <TooltipProvider>
+        <DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={send} />
+      </TooltipProvider>,
+    );
 
   /** A deck short of three copies of one card. */
   const short = (): DeckCard[] => [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })];
@@ -753,13 +769,11 @@ describe("DeckStats", () => {
 
   /** Spec §5: a price never appears without saying how old it is — and, now that a reader can
    *  pick, whose it is. */
-  it("says how old the deck's price is, and whose", () => {
+  it("says how old the deck's price is, and whose", async () => {
     strip([card({ name: "Bolt", unitPrice: 4.5, quantity: 2 })]);
 
-    expect(screen.getByText("Price (USD)").closest("div")).toHaveAttribute(
-      "title",
-      pricesAsOf(MARKETPLACES.tcgplayer),
-    );
+    const figure = screen.getByText("Price (USD)").closest("div") as HTMLElement;
+    expect(await openTooltip(figure)).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
     expect(screen.getByText("$9.00")).toBeInTheDocument();
   });
 
@@ -768,23 +782,23 @@ describe("DeckStats", () => {
    * together. A label still naming USD over a euro figure would be the one failure mode a
    * reader cannot detect from the number alone.
    */
-  it("draws the selected marketplace's currency in the figure, the label and the sentence", () => {
+  it("draws the selected marketplace's currency in the figure, the label and the sentence", async () => {
     render(
-      // The row as a Cardmarket read answers it: €3.00 a copy, where TCGplayer's read of the
-      // same card answers $4.50. A switch changes the rows, not which field a figure reads.
-      <DeckStats
-        cards={[card({ name: "Bolt", unitPrice: 3, quantity: 2 })]}
-        marketplace={MARKETPLACES.cardmarket}
-        send={sender()}
-      />,
+      <TooltipProvider>
+        {/* The row as a Cardmarket read answers it: €3.00 a copy, where TCGplayer's read of the
+            same card answers $4.50. A switch changes the rows, not which field a figure reads. */}
+        <DeckStats
+          cards={[card({ name: "Bolt", unitPrice: 3, quantity: 2 })]}
+          marketplace={MARKETPLACES.cardmarket}
+          send={sender()}
+        />
+      </TooltipProvider>,
     );
 
     expect(screen.getByText("€6.00")).toBeInTheDocument();
     expect(screen.queryByText("$9.00")).not.toBeInTheDocument();
-    expect(screen.getByText("Price (EUR)").closest("div")).toHaveAttribute(
-      "title",
-      pricesAsOf(MARKETPLACES.cardmarket),
-    );
+    const figure = screen.getByText("Price (EUR)").closest("div") as HTMLElement;
+    expect(await openTooltip(figure)).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
   });
 
   /**
@@ -813,7 +827,7 @@ describe("DeckStats", () => {
    * rather than folded in: "Cards 9" over a chip reading "you have 5" is two numbers for one
    * question.
    */
-  it("heads the strip with the cards a format's size rule counts", () => {
+  it("heads the strip with the cards a format's size rule counts", async () => {
     strip([
       card({ name: "Bolt", quantity: 4 }),
       card({ name: "Kenrith", categoryKind: "commander", quantity: 1 }),
@@ -822,9 +836,9 @@ describe("DeckStats", () => {
       card({ name: "Ghost", categoryKind: "maybe", quantity: 9 }),
     ]);
 
-    const figure = screen.getByText("Cards").closest("div");
-    expect(figure?.querySelector("dd")?.textContent).toBe("5+ 3 sideboard + 1 companion");
-    expect(figure).toHaveAttribute("title", expect.stringMatching(/size rule counts/i));
+    const figure = screen.getByText("Cards").closest("div") as HTMLElement;
+    expect(figure.querySelector("dd")?.textContent).toBe("5+ 3 sideboard + 1 companion");
+    expect(await openTooltip(figure)).toHaveTextContent(/size rule counts/i);
   });
 
   it("says nothing about other piles when the deck is only a main deck", () => {
@@ -894,6 +908,44 @@ describe("DeckStats", () => {
     await userEvent.click(button);
 
     expect(settled.mutate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The final-review fix, evidenced: `useTooltip.ts`'s `onFocus` used to hand the wrapping
+   * `<span>` to `TooltipProvider.focus()`, which tests `:focus-visible` on it — and a `<span>`
+   * with no `tabIndex` is never itself focused, so Tab landing on this button opened nothing at
+   * all. Unwrapped now, with the binder testing `e.target` (the button, which really was
+   * focused) rather than `e.currentTarget`, Tab opens the hint exactly like every other
+   * converted control's — and `aria-describedby` lands on the button holding the caret.
+   */
+  it("opens the shortfall hint on Tab once the button is spent", async () => {
+    const settled = sender({ isSuccess: true, data: 1 });
+    const view = render(
+      <TooltipProvider>
+        <DeckStats cards={short()} marketplace={MARKETPLACES.tcgplayer} send={sender()} />
+      </TooltipProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+    view.rerender(
+      <TooltipProvider>
+        <DeckStats cards={short()} marketplace={MARKETPLACES.tcgplayer} send={settled} />
+      </TooltipProvider>,
+    );
+
+    const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+
+    // The click above already focused this button (a real browser focuses whatever it presses),
+    // so it is already `document.activeElement` — a second `.focus()` on an element that is
+    // already focused fires no event at all, jsdom included, and would prove nothing. Blur it
+    // first, the way the caret-restore test below this one does for the same reason.
+    act(() => button.blur());
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => button.focus());
+
+    const panel = screen.getByRole("tooltip");
+    expect(panel).toHaveTextContent("This shortfall is already on your wishlist.");
+    expect(button).toHaveAttribute("aria-describedby", panel.id);
   });
 
   it("offers it again once the shortfall is a different one", async () => {

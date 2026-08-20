@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { GAME_CHANGER_HINT, GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { useAppStore, type SearchView } from "@/lib/store";
 import { SearchPage } from "./SearchPage";
 
@@ -546,23 +547,25 @@ export const GameChangerRow: Story = {
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Rhystic");
 
-    // The whole check inside one `waitFor`, because the results are replaced wholesale when the
-    // query lands and a row captured before that is stale.
-    await waitFor(
-      async () => {
+    // The row lookup inside its own `waitFor`, because the results are replaced wholesale when
+    // the query lands and a row captured before that is stale.
+    const mark = await waitFor(
+      () => {
         const rows = canvas.getAllByRole("row").filter((r) => r.textContent?.includes("Rhystic"));
-        await expect(rows).toHaveLength(1);
-        await expect(
-          within(rows[0]).getByRole("img", { name: GAME_CHANGER_LABEL }),
-        ).toBeInTheDocument();
-        // The pointer's half of the same fact: a `<title>` inside the glyph, which is what a
-        // hover surfaces. `getByTitle` matches an SVG `<title>` element, not the attribute —
-        // and the sentence it holds is longer than the name, because a tooltip has room to say
-        // what a game changer *is*.
-        await expect(within(rows[0]).getByTitle(GAME_CHANGER_HINT)).toBeInTheDocument();
+        expect(rows).toHaveLength(1);
+        return within(rows[0]).getByRole("img", { name: GAME_CHANGER_LABEL });
       },
       { timeout: 5000 },
     );
+    // The pointer's half of the same fact: bound `describes: false`, since the glyph's own
+    // `aria-label` already names it — so hovering opens a panel with no `role="tooltip"`,
+    // found by its one stable id, and the hover sentence has room to say what a game changer
+    // *is*, longer than the name.
+    await userEvent.hover(mark);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(GAME_CHANGER_HINT);
   },
 };
 

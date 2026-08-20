@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { TagsDialog } from "./TagsDialog";
 
 /** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
@@ -121,11 +122,17 @@ export const RecolouringATag: Story = {
     await userEvent.click(within(tag).getByRole("button", { name: "Slate" }));
     await userEvent.click(within(tag).getByRole("button", { name: "Done" }));
 
-    await waitFor(async () => {
-      await expect(
-        within(tag).getByRole("button", { name: "Change colour of Cut candidate" }),
-      ).toHaveAttribute("title", "#C8C4BF");
+    // The colour is a tooltip on the swatch now, not a `title` — hover it and read the panel.
+    // It describes the button (default `describes: true`) and mounts as a sibling of the whole
+    // story, not inside `tag`, so it is read off `canvas` rather than `within(tag)`.
+    const swatch = await waitFor(() =>
+      within(tag).getByRole("button", { name: "Change colour of Cut candidate" }),
+    );
+    await userEvent.hover(swatch);
+    const swatchTooltip = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
     });
+    await expect(swatchTooltip).toHaveTextContent("#C8C4BF");
   },
 };
 

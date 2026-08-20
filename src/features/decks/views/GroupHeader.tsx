@@ -7,6 +7,7 @@
  * is exactly the failure `grouping.ts` exists to prevent one level down.
  */
 import type { ReactNode } from "react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { CategoryKind } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -43,11 +44,15 @@ import type { CardGroup } from "../grouping";
  */
 const RULE_KINDS: readonly CategoryKind[] = ["commander", "side", "companion"];
 
-/** A small uppercase chip in the data face — the shape both markers take. */
+/** A small uppercase chip in the data face — the shape both markers take.
+ *
+ * `title` stays the prop's name — every call site still reads as a plain label-plus-explanation
+ * pair — and is bound as a tooltip inside this component rather than left as a DOM attribute. */
 function Marker({ label, title }: { label: string; title: string }) {
+  const tip = useTooltip();
   return (
     <span
-      title={title}
+      {...tip(title)}
       className="shrink-0 rounded-[3px] border border-border px-1 font-mono text-[0.5625rem] text-dim"
     >
       {label}
@@ -108,6 +113,7 @@ export function GroupHeader({
   actions?: ReactNode;
   className?: string;
 }) {
+  const tip = useTooltip();
   const rule = group.kind !== null && RULE_KINDS.includes(group.kind);
 
   return (
@@ -160,7 +166,7 @@ export function GroupHeader({
         {/* The as-of sentence rides here, as it does on every other price in the app: a price
             is never shown without saying when it was true — and, now that a reader can pick,
             whose price it is. */}
-        <span title={pricesAsOf(marketplace)}>
+        <span {...tip(pricesAsOf(marketplace))}>
           {formatPrice(group.totalPrice, marketplace.currency)}
         </span>
       </div>

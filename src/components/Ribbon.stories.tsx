@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import { RANK } from "@/lib/activity";
 import type { SyncStatus } from "@/lib/ipc";
 import { statusLine } from "@/lib/useSync";
@@ -342,17 +343,22 @@ export const UpdateNotInstallable: Story = {
  * overstate it. What is wrong is invisible without this — the cache never fills and every
  * revisit re-downloads — so it rides the tooltip that already names the folder it is about.
  *
- * A `title` is a thing no screenshot shows and no reader hovers by accident, so the assertion is
+ * A tooltip is a thing no screenshot shows and no reader hovers by accident, so the assertion is
  * the story. The singular/plural is asserted in `Ribbon.test.tsx`; what is here is the join —
- * two sentences about one folder, in that order, separated by a newline.
+ * two sentences about one folder, in that order, separated by a newline that
+ * `whitespace-pre-line` on the panel keeps as a break.
  */
 export const ImagesNotCached: Story = {
   args: { imageStoreFailures: 12 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByText(IDLE_LINE)).toHaveAttribute(
-      "title",
+    const line = canvas.getByText(IDLE_LINE);
+    await userEvent.hover(line);
+    const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    await expect(panel).toHaveTextContent(
       "D:\\MTG Grimoire\\data\n12 card images could not be saved to the cache — the data folder may be read-only or full.",
+      { normalizeWhitespace: false },
     );
+    await expect(line).toHaveAttribute("aria-describedby", panel.id);
   },
 };

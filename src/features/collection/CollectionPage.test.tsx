@@ -383,11 +383,14 @@ describe("CollectionPage", () => {
 
     // Spec §5: no price on screen without saying how old it is — and, with five marketplaces
     // in the picker, whose it is. The header has no room for the sentence beside the figures,
-    // so it rides on the figure it is about.
-    expect(screen.getByText("Value (USD)").closest("div")).toHaveAttribute(
-      "title",
-      pricesAsOf(MARKETPLACES.tcgplayer),
-    );
+    // so it rides on the figure it is about — `Figure`'s own `title` prop, bound through
+    // `useTooltip()` since the tooltip sweep rather than a native attribute.
+    const figure = screen.getByText("Value (USD)").closest("div") as HTMLElement;
+    await userEvent.hover(figure);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
+    expect(figure).toHaveAttribute("aria-describedby", panel.id);
+    await userEvent.unhover(figure);
   });
 
   /**
@@ -407,10 +410,11 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
 
     await waitFor(() => expect(screen.getByText("€8,100.00")).toBeInTheDocument());
-    expect(screen.getByText("Value (EUR)").closest("div")).toHaveAttribute(
-      "title",
-      pricesAsOf(MARKETPLACES.cardmarket),
-    );
+    const figure = screen.getByText("Value (EUR)").closest("div") as HTMLElement;
+    await userEvent.hover(figure);
+    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
+    await userEvent.unhover(figure);
   });
 
   /**

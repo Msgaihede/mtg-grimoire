@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, userEvent, within } from "storybook/test";
 import { printing } from "../../.storybook/fake/fixtures";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { soleFinish } from "@/lib/finish";
 import { CardArt } from "./CardArt";
 
@@ -129,8 +130,9 @@ export const EtchedOnly: Story = {
  * in nonfoil *and* foil, which is exactly why `soleFinish` answers `null` for it.
  *
  * **Hover the crown.** That is the second half of this change: the chip re-enables
- * `pointer-events` against the overlay's `none`, without which the `<title>` inside every glyph
- * here had been unreachable since the day it was written.
+ * `pointer-events` against the overlay's `none`, without which `useTooltip()`'s bindings on
+ * every glyph here would be unreachable, the same way the `<title>` elements they replaced
+ * were for the whole of this component's life before it.
  */
 export const GameChanger: Story = {
   args: {
@@ -142,8 +144,14 @@ export const GameChanger: Story = {
   play: async ({ canvasElement }) => {
     const chip = canvasElement.querySelector("[data-card-marks]");
     await expect(chip?.querySelector(".lucide-crown")).not.toBeNull();
-    await expect(chip).toHaveAttribute("title", "Game changer");
     await expect(chip).toHaveClass("pointer-events-auto");
+    // `describes: false`, so the panel carries no `role="tooltip"` — find it by its stable id
+    // instead. The chip's own `title` prop is gone; the crown's own tooltip (`GameChangerMark`)
+    // and the chip's combined one agree on this word when only one fact is on the card.
+    await userEvent.hover(chip!);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
+    await expect(panel).toHaveTextContent("Game changer");
     // No sheen: this printing is sold in both finishes, so there is nothing to photograph.
     await expect(canvasElement.querySelector("[data-foil-sheen]")).toBeNull();
   },
@@ -156,8 +164,10 @@ export const GameChanger: Story = {
  *
  * One chip, two glyphs, crown first. A tile's fourth corner is the only one left — bottom-left
  * is the owned badge, top-left the printing count, and below the frame is the caption — so a
- * second box beside this one would start a row of stickers over the art. The chip's own `title`
- * joins the two words with the separator the app uses between card facts everywhere else.
+ * second box beside this one would start a row of stickers over the art. The chip's own tooltip
+ * joins the two words with the separator the app uses between card facts everywhere else — and
+ * is what a hover on the chip's own padding says, since a hover that lands on one glyph gets
+ * that glyph's own single-fact tooltip instead (`FinishMark`, `GameChangerMark`).
  */
 export const GameChangerFoil: Story = {
   args: {
@@ -170,7 +180,10 @@ export const GameChangerFoil: Story = {
     const chips = canvasElement.querySelectorAll("[data-card-marks]");
     await expect(chips).toHaveLength(1);
     await expect(chips[0].querySelectorAll("svg")).toHaveLength(2);
-    await expect(chips[0]).toHaveAttribute("title", "Game changer · Foil");
+    await userEvent.hover(chips[0]);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
+    await expect(panel).toHaveTextContent("Game changer · Foil");
     await expect(canvasElement.querySelector("[data-foil-sheen]")).not.toBeNull();
     // Two marks, and the art is still the only thing in the accessibility tree: `getByRole`
     // skips a hidden subtree, so the one `img` it can see is the card.

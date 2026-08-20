@@ -1,6 +1,7 @@
 import { CircleArrowUp, RefreshCw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { ManaLine } from "@/components/ManaLine";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { Activity } from "@/lib/activity";
 import { PRESS, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,7 @@ export function Ribbon({
   updateInstallable = false,
   onOpenUpdate,
 }: RibbonProps) {
+  const tip = useTooltip();
   // Two sentences about one folder, in the tooltip that already names it. Not a banner:
   // every affected image still *displays* — the bytes were in hand when the write failed
   // — so nothing is broken on screen and interrupting the reader would overstate it. What
@@ -171,7 +173,7 @@ export function Ribbon({
           <p
             role="status"
             className={said ? "min-w-0 truncate text-sm text-dim" : "sr-only"}
-            title={tooltip}
+            {...tip(tooltip)}
           >
             {said}
             {/* Hidden from the announcement, not from the eye: the label changes about four

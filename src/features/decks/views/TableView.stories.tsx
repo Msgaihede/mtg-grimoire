@@ -7,7 +7,7 @@ import {
   deckTheoryMatches,
   deckViolations,
 } from "../../../../.storybook/fake/fixtures";
-import { THEORY_MATCH_LABEL } from "../CardMarks";
+import { THEORY_MATCH_ATTR, THEORY_MATCH_LABEL } from "../CardMarks";
 import { deckCardSlot } from "../dnd";
 import { TableView } from "./TableView";
 
@@ -94,8 +94,11 @@ export const TheoryMatches: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Four rows carry the badge, and each one says the words beside it — the pairing this view
-    // exists to keep. Virtualised, so these are the rows currently mounted.
+    // exists to keep. Virtualised, so these are the rows currently mounted. The badge itself is
+    // `aria-hidden` and bound `describes: false` (no `title` any more); `THEORY_MATCH_ATTR` is
+    // its own handle, and the `sr-only` twin beside it is what makes the words in `getAllByText`
+    // honest — this view is the one place `TheoryMatchBadge` gets one at all.
     expect(canvas.getAllByText(THEORY_MATCH_LABEL)).toHaveLength(4);
-    expect(canvas.getAllByTitle(THEORY_MATCH_LABEL)).toHaveLength(4);
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
   },
 };

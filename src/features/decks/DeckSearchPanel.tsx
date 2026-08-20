@@ -10,6 +10,7 @@ import {
 import { Plus, Search } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
@@ -304,6 +305,7 @@ export function DeckSearchPanel({
    * classes, the `aria-expanded` and the row's shape and nothing else. **A press is the only
    * thing that can unmount a search; a railing hides one** — see {@link DeckSearchPanelProps.roomy}.
    */
+  const tip = useTooltip();
   const [open, setOpen] = useState(false);
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -409,7 +411,7 @@ export function DeckSearchPanel({
       type="button"
       aria-expanded={shown}
       aria-disabled={!roomy || undefined}
-      title={roomy ? undefined : NO_ROOM}
+      {...tip(roomy ? null : NO_ROOM)}
       onClick={() => roomy && setOpen((v) => !v)}
       className={cn(
         "flex shrink-0 items-center gap-1.5 rounded-md text-xs text-dim",
@@ -712,6 +714,7 @@ function OpenPanel({
   // the reader picked is still theirs when the room returns. A resize is not a decision, and
   // this used to answer one as though it were: the panel remounted on the way back and put the
   // deck's format over a filter the reader had cleared.
+  const tip = useTooltip();
   const search = useCardSearch({ defaultFormat });
   const { query, rows, searchKey } = search;
 
@@ -896,7 +899,7 @@ function OpenPanel({
                 // "Add" are two controls a screen reader cannot tell apart, and the category is
                 // the one thing about this press that is not visible on the tile.
                 aria-label={`Add ${card.name} to ${landsIn}`}
-                title={`Add to ${landsIn}`}
+                {...tip(`Add to ${landsIn}`, { describes: false })}
                 // Never disabled while a write is in flight, and that is the behaviour rather
                 // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
                 // three times is three copies. Disabling would drop presses two and three, and

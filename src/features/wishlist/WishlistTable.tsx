@@ -10,6 +10,7 @@ import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
 import { FOCUS } from "@/lib/focus";
@@ -49,6 +50,7 @@ function columnsFor(
   onSetQuantity: (row: WishRow, quantity: number) => void,
   onRemove: (row: WishRow) => void,
   marketplace: Marketplace,
+  tip: TooltipBinder,
 ): TableColumn<WishRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
@@ -80,9 +82,11 @@ function columnsFor(
             // the *second* half is what to do about it. A truncation that eats the
             // instruction and offers no way to read it is half an error message, so the
             // whole sentence rides as the tooltip — and is in the accessible name either
-            // way, because a screen reader reads the text, not the clip.
+            // way, because a screen reader reads the text, not the clip. `interactive` as
+            // well as `whenClipped`, matching the collection's twin band: the instruction can
+            // now be selected and copied, rather than only read.
             <span
-              title={row.needsReview}
+              {...tip(row.needsReview, { whenClipped: true, interactive: true })}
               className="absolute inset-x-3 bottom-0.5 truncate text-[0.7rem] text-dim"
             >
               <span className="mr-1 font-medium text-destructive">Needs review:</span>
@@ -104,7 +108,7 @@ function columnsFor(
       cell: (row) => (
         <>
           <RarityGem rarity={row.rarity} />
-          <span className="truncate" title={printingOf(row)}>
+          <span className="truncate" {...tip(printingOf(row), { whenClipped: true })}>
             {printingOf(row)}
           </span>
         </>
@@ -209,7 +213,11 @@ function columnsFor(
           type="button"
           onClick={() => onRemove(row)}
           aria-label={`Remove ${wishLabel(row)} from your wishlist`}
-          title="Remove from your wishlist"
+          // Redundant, not "only name": the button already carries its own `aria-label`, so
+          // the tooltip repeats it for the pointer alone. `describes: false` is what keeps a
+          // screen reader from hearing "Remove … from your wishlist" twice — the collection
+          // table's twin button was converted the same way in PR 1.
+          {...tip("Remove from your wishlist", { describes: false })}
           className={cn(
             REVEAL_ON_HOVER,
             "grid size-6 place-items-center rounded-md border border-border text-dim",
@@ -314,11 +322,12 @@ export function WishlistTable({
   // has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  const tip = useTooltip();
 
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove, marketplace)}
+      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip)}
       label="Your wishlist"
       // A wishlist total is counted in full, so there is no unknown-count case here.
       total={total}
