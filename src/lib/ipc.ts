@@ -21,7 +21,12 @@
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
- * `CardTags`/`PrintingTags`/`OracleTagStatus`    — `src-tauri/src/oracle_tags.rs`
+ * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
+ * `TagStatus`/`TagProgressEvent`                 — `src-tauri/src/tags/mod.rs`, aliased per
+ *                                                  dataset by `tags/oracle.rs`/`tags/art.rs`
+ * `TagHit`/`TagRef`                              — `src-tauri/src/tags/query.rs`
+ * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
+ * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
  * **Two settings carry no struct at all.** Each is one `app_meta` row answered as a bare
  * string: `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
@@ -135,6 +140,26 @@ export interface SearchRequest {
    * control that decides this flag and {@link format} together (`formatParams`).
    */
   playableOnly?: boolean;
+  /**
+   * Scryfall **art** tags — what the picture shows, which is what a Tags-page deck is built
+   * around. Matched against the closure on `cards.illustration_id`, so this is a fact about an
+   * *illustration*: a card printed with five arts matches under the one that holds the motif and
+   * not under the other four. See {@link TagTerms}.
+   */
+  artTags?: TagTerms;
+  /**
+   * Scryfall **oracle** tags — what the card does (`removal`, `ramp`, `recursion`). {@link
+   * artTags}' shape over the other taxonomy, matched on `cards.oracle_id`; the two AND with each
+   * other, so "a dog that ramps" is one request.
+   */
+  oracleTags?: TagTerms;
+  /**
+   * `"strong"` drops the art matches Scryfall called `weak`; absent or `"any"` keeps them.
+   * **Nothing else on this request is affected** — not {@link artTags}' excludes, and not
+   * {@link oracleTags}, whose closure has no weight at all. See {@link ArtWeightFloor}, which
+   * is also where the wording a control may not use is written down.
+   */
+  artWeightFloor?: ArtWeightFloor;
   /**
    * `true` narrows to printings the collection has an entry for, `false` to those it does
    * not.
@@ -515,6 +540,27 @@ export interface CardFilters {
    *  the only place anything sends it. A collection lists what the user owns, and an art
    *  card in a binder is still in the binder. */
   playableOnly?: boolean;
+  /**
+   * Scryfall art tags, on the closure keyed by `cards.illustration_id` — see
+   * {@link SearchRequest.artTags}.
+   *
+   * **Declared here as well as on the search, because `filters::push_card_filters` emits it for
+   * all three lists** — the collection's and the wishlist's queries flatten this struct, so an
+   * owned-cards wall can be narrowed to a motif without a second filter path. `oracleId` above
+   * is the field that is deliberately *not* here, and the asymmetry is Rust's own.
+   *
+   * **A tag is a claim only a card row can answer**, so unlike `setCode` there is no fallback to
+   * the row's own columns: an orphaned collection entry fails every `include` and passes every
+   * `exclude`, exactly as `cards.illustration_id` being NULL does (4 977 of 116 712 live
+   * printings, measured 2026-08-20).
+   */
+  artTags?: TagTerms;
+  /** Scryfall oracle tags, on the closure keyed by `cards.oracle_id` — see
+   *  {@link SearchRequest.oracleTags}. */
+  oracleTags?: TagTerms;
+  /** `"strong"` drops the `weak` art matches; absent or `"any"` keeps them. Art includes only —
+   *  see {@link ArtWeightFloor}. */
+  artWeightFloor?: ArtWeightFloor;
 }
 
 /**
@@ -2435,18 +2481,25 @@ export interface PrintingTags {
 }
 
 /**
- * The Oracle tag taxonomy's own freshness — `oracle_tag_meta`, plus the shape of a database
- * that has never fetched it.
+ * One tag taxonomy's own freshness — its `*_tag_meta` row, plus the shape of a database that
+ * has never fetched the file.
  *
  * **Every field is nullable and `null` means "never ingested"**, which is a real state and not
- * an error: the taxonomy is a second dataset with its own weekly refresh, and the app works
- * without it — every add simply files by card type until the first ingest lands.
+ * an error: each taxonomy is a separate bulk dataset with its own weekly refresh, and the app
+ * works without either — an untagged deck add simply files by card type, and a Tags page with
+ * no art taxonomy says it has nothing yet.
  *
  * `checkedAt` and `ingestedAt` are separate because a 304 moves only the former. Collapsing
  * them would make an up-to-date taxonomy read as due on every launch and cost one API call per
  * start.
+ *
+ * **One interface for both datasets because Rust has one struct for both** — `tags::TagStatus`,
+ * which `tags/oracle.rs` and `tags/art.rs` each re-export under their own name. Two hand-copied
+ * mirrors of one struct is the drift this whole file is written to avoid, and it would be a
+ * drift nothing could catch: the two shapes would stay compatible for as long as they were
+ * identical and part in silence the day one gained a field.
  */
-export interface OracleTagStatus {
+export interface TagStatus {
   /** Scryfall's own stamp for the file these rows came from. */
   updatedAt: string | null;
   /** Unix **seconds**. `null` = the taxonomy has never been ingested. */
@@ -2456,24 +2509,174 @@ export interface OracleTagStatus {
   tagCount: number | null;
   taggingCount: number | null;
   stale: boolean;
-  /** Process-wide, not per database — one refresh per application. */
+  /** A refresh **of this dataset** is in flight right now. The two taxonomies are separate
+   *  files on separate schedules, so either may be refreshing while the other is. */
   refreshing: boolean;
 }
 
-/** The phases `oracle_tags.rs` emits. Five, against `SyncPhase`'s eight. */
-export type OracleTagPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+/** `tags::oracle::OracleTagStatus` — what a card *does*. {@link TagStatus} under the name the
+ *  command answering it carries. */
+export type OracleTagStatus = TagStatus;
+
+/** `tags::art::ArtTagStatus` — what an illustration *depicts*. The same shape again, and the
+ *  larger of the two files: ~12.5 MB gzipped against the oracle taxonomy's ~5.85 MB. */
+export type ArtTagStatus = TagStatus;
+
+/** `tags::PHASES` — the five a taxonomy refresh emits, against `SyncPhase`'s eight. */
+export type TagPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+
+/** {@link TagPhase} under the name callers spelled before the art taxonomy existed. Both
+ *  datasets emit the same five, because they are one `PHASES` in the crate. */
+export type OracleTagPhase = TagPhase;
 
 /**
- * Payload of the `oracle-tags:progress` event.
+ * Payload of a taxonomy's progress event — `tags::TagProgress`.
  *
- * A third progress event rather than a ninth `SyncPhase`, following `marketplace:progress`'
+ * A progress event of its own rather than a ninth `SyncPhase`, following `marketplace:progress`'
  * precedent for the same reason: the card sync's phase list is a closed union mirrored by hand
  * on this page, and a dataset with its own schedule has no business widening it.
+ *
+ * **Each taxonomy has its own channel** — `oracle-tags:progress` and `art-tags:progress`. One
+ * shared line would have the two fighting over it, since either may refresh while the other is.
  */
-export interface OracleTagProgressEvent {
-  phase: OracleTagPhase;
+export interface TagProgressEvent {
+  phase: TagPhase;
   done: number;
   total: number;
+}
+
+/** Payload of `oracle-tags:progress`. */
+export type OracleTagProgressEvent = TagProgressEvent;
+
+/** Payload of `art-tags:progress`. */
+export type ArtTagProgressEvent = TagProgressEvent;
+
+/**
+ * Which taxonomy a tag came from — `tags::query`'s `namespace`, as a hit carries it.
+ *
+ * **Never `"both"`.** That is an *input*: `tagSearch` and `tagChildren` accept it and mean
+ * "ask each of them", and a hit always came from exactly one. The two are separate files with
+ * separate id spaces that share plenty of slugs — `dog` is in both and they mean different
+ * things by it — so a stored mute names one namespace and a breadcrumb that lost this field
+ * would climb the wrong tree.
+ */
+export type TagNamespace = "art" | "oracle";
+
+/**
+ * How strong an art match has to be — `filters::CardFilters::art_weight_floor`.
+ *
+ * `"strong"` drops the closure rows Scryfall called `weak`, which their docs define as "the
+ * subject is a minor detail or background element". **It is a floor and not a narrowing to
+ * strong matches**: the predicate is `weight <> 'weak'`, so `median` — 462 008 of 475 163 art
+ * taggings, measured 2026-08-20 — is admitted. Any control built on this must say it excludes
+ * background detail; "strong matches only" would be a promise the query does not keep.
+ *
+ * Anything else, this union's `"any"` included, is no floor at all: an unrecognised value fails
+ * **open**, showing more rather than hiding cards nobody would report missing.
+ *
+ * **The art side only, and the include side only.** `oracle_tag_cards` carries no `weight`
+ * column at all — oracle taggings are 99.7 % `median` — and "not a dog" means not a dog at all,
+ * so a floor on an *exclude* would let weak dogs back into a result the reader asked to have
+ * none in.
+ */
+export type ArtWeightFloor = "any" | "strong";
+
+/**
+ * One taxonomy's tag chips: the tags a row must carry, and the tags it must not.
+ *
+ * **`include` INTERSECTS.** A themed deck asks for dogs AND snow, so each included slug is its
+ * own `EXISTS` rather than one `slug IN (…)` — which is the union, and would answer a superset
+ * that looks plausible. `exclude` is the same subquery under `NOT EXISTS`, and the two lists AND
+ * with each other and with every other filter.
+ *
+ * Both lists are `#[serde(default)]` on the Rust side, so naming one omits the other, and an
+ * absent `artTags`/`oracleTags` adds no SQL at all. Blanks are dropped and the rest sorted and
+ * deduplicated (`filters::picked_tags`), so an empty list means "no filter" and never "match
+ * nothing".
+ *
+ * **Both taxonomies are matched through their pre-flattened closure**, so a query for a parent
+ * tag answers the cards tagged only with its children — `dog` is directly tagged on 137
+ * illustrations and reaches 439, and `removal` has *zero* direct taggings while answering 6 686
+ * cards (both measured 2026-08-20).
+ */
+export interface TagTerms {
+  include?: string[];
+  exclude?: string[];
+}
+
+/**
+ * A tag named from somewhere else — enough to draw a breadcrumb and to ask about it again.
+ * `tags::query::TagRef`.
+ */
+export interface TagRef {
+  slug: string;
+  label: string;
+  namespace: TagNamespace;
+}
+
+/**
+ * One tag, as the Tags page draws it — `tags::query::TagHit`.
+ *
+ * Answered by both {@link ipc.tagSearch} and {@link ipc.tagChildren}, and a muted tag is absent
+ * from both, from `childCount` and from anyone's `parents`. Muting hides a *tag*; it never hides
+ * a card, and nothing in the card filters consults the mute table.
+ */
+export interface TagHit {
+  slug: string;
+  /**
+   * Scryfall's stable uuid, and **the only thing a mute may be keyed on** — their docs say "do
+   * not treat tag slugs or labels as permanent identifiers". A mute keyed on a slug un-mutes
+   * itself the week the tag is renamed, which is exactly the week it mattered.
+   *
+   * **`""` is a real value**: `oracle_tags.id` was added by an `ALTER TABLE` that could not add
+   * a `NOT NULL` column without a default, so every row that predates a refresh by a build new
+   * enough to write ids still carries the empty string. Such a tag is *unmutable* — {@link
+   * ipc.tagMute} refuses it in words — and the next refresh repairs it. That refusal is
+   * deliberate: one stored mute with a blank id would otherwise equal every one of those rows
+   * and take the whole taxonomy off the page with nothing logged.
+   */
+  id: string;
+  label: string;
+  /** Never `"both"` — see {@link TagNamespace}. */
+  namespace: TagNamespace;
+  description: string | null;
+  /**
+   * How many subjects the tag reaches **through the closure** — illustrations for the art
+   * taxonomy, oracle ids for the oracle one, and in neither case a count of *printings*.
+   *
+   * The direct taggings are the wrong number and they look right: a category tag has none of
+   * its own, so counting them would report `dog: 137` where the closure reaches 439, and
+   * `removal: 0` where it answers 6 686.
+   */
+  cardCount: number;
+  /** Direct children that are not muted, so a disclosure triangle drawn from this never opens
+   *  onto nothing. */
+  childCount: number;
+  /**
+   * Every parent, not the first one — **43 % of art tags have more than one** (4 970 of 11 531,
+   * measured 2026-08-20), so a tag reached through one branch of the rail routinely sits under
+   * another as well and a single-parent breadcrumb would be wrong for two tags in five.
+   */
+  parents: TagRef[];
+}
+
+/**
+ * One muted tag, as Settings lists it — `tags::muted::MutedTag`.
+ *
+ * Every field is stored rather than joined, which is the point of the table: a taxonomy that has
+ * been rebuilt since — or never fetched on this machine at all — must still be able to show the
+ * reader what they hid and offer to give it back.
+ */
+export interface MutedTag {
+  /** The two taxonomies are separate files with separate id spaces, so one uuid appearing in
+   *  both is two mutes. */
+  namespace: TagNamespace;
+  /** Scryfall's stable uuid — the key, with the namespace. */
+  tagId: string;
+  /** The slug as it read when the mute was made. Display only, and possibly stale by design. */
+  slug: string;
+  /** Unix **seconds**. */
+  mutedAt: number;
 }
 
 /**
@@ -3343,6 +3546,90 @@ export const ipc = {
    */
   onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Promise<UnlistenFn> =>
     listen<OracleTagProgressEvent>("oracle-tags:progress", (evt) => cb(evt.payload)),
+  /**
+   * The **art** taxonomy's freshness — {@link ipc.oracleTagsStatus} one dataset over, and safe
+   * before the first refresh for the same reason: a database with no meta row answers every
+   * field `null` with `stale: true` rather than rejecting.
+   *
+   * A never-ingested art taxonomy is not a failure. It is what every install is on its first
+   * launch and what a machine that cannot reach Scryfall stays in, and the honest answer to it
+   * is a Tags page that says it has nothing yet.
+   */
+  artTagsStatus: () => invoke<ArtTagStatus>("art_tags_status"),
+  /**
+   * Fetch the art taxonomy if it is due. `force` skips the weekly throttle, **not** the ETag
+   * check — a forced refresh of an unchanged file still costs one request and no ingest.
+   *
+   * ~12.5 MiB compressed (measured 2026-08-20), a little over twice the oracle file, flattening
+   * 475 163 taggings into 951 499 closure rows. It reports through the same `Activity` mechanism
+   * every other long job uses, and **a failed fetch leaves the previous taxonomy in place**:
+   * nothing here may break a launch or a card sync.
+   */
+  artTagsRefresh: (force: boolean) => invoke<ArtTagStatus>("art_tags_refresh", { force }),
+  /**
+   * The art taxonomy being fetched, phase by phase — a channel of its own beside
+   * `oracle-tags:progress`, because either taxonomy may be refreshing while the other is.
+   *
+   * **Subscribe once**, like every other listener here. Tauri drops events emitted before the
+   * webview registered a listener and the startup refresh can begin before this window has one,
+   * so {@link ipc.artTagsStatus} is the reliable half of the pair.
+   */
+  onArtTagProgress: (cb: (e: ArtTagProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<ArtTagProgressEvent>("art-tags:progress", (evt) => cb(evt.payload)),
+  /**
+   * Type-ahead over the tag taxonomies — the Tags page's search box.
+   *
+   * `namespace` is `"art"`, `"oracle"` or `"both"`, and **`"both"` puts art first on an equal
+   * rank**: the page's job is an art theme, so a reader who types `dog` means the illustrations
+   * and the oracle tag of the same name is the secondary reading.
+   *
+   * **Substring, not prefix, and that is a deliberate departure from Scryfall** — verified live
+   * 2026-08-20, `otag:remov` 404s and `otag:*spot*` answers nothing, so there is nothing to
+   * borrow and a reader told "no such tag" until they spell `dogs-of-war` exactly is not using a
+   * search box. The exact hit is ranked first, then the prefix hits, then the rest.
+   *
+   * **An empty or all-punctuation `text` matches every tag rather than none**, so an untouched
+   * box answers the tags with the widest reach. `limit` caps the *merged* answer.
+   */
+  tagSearch: (text: string, namespace: TagNamespace | "both", limit: number) =>
+    invoke<TagHit[]>("tag_search", { text, namespace, limit }),
+  /**
+   * One level of the tag tree: the children of `slug`, or the **roots** when it is `null`.
+   *
+   * Unlimited, deliberately — this draws one level of a tree (3 219 art roots, measured
+   * 2026-08-20) and an arbitrary cut would silently lose branches.
+   *
+   * A tag with several parents is listed under every one of them, which is the honest reading of
+   * a graph rather than a tree; its {@link TagHit.parents} name the rest so the rail can say so.
+   * **A muted tag takes its subtree off the rail with it** — its children are not roots and no
+   * other path reaches them unless they have a second parent. That is recoverable by unmuting,
+   * and the children stay findable through {@link ipc.tagSearch}.
+   */
+  tagChildren: (namespace: TagNamespace | "both", slug: string | null) =>
+    invoke<TagHit[]>("tag_children", { namespace, slug }),
+  /**
+   * Stop offering a tag anywhere — Scryfall asks downstream apps for this in as many words,
+   * because Tagger is crowdsourced and they cannot guarantee the data is free from abuse.
+   *
+   * **Keyed on {@link TagHit.id}, never on the slug**, and a blank id is refused in words rather
+   * than stored: one row with an empty `tagId` would equal every un-refreshed `oracle_tags` row
+   * and take the whole taxonomy off the page silently. `slug` rides along so Settings can name
+   * the tag later without joining a taxonomy that may since have been rebuilt or emptied.
+   *
+   * Idempotent by `(namespace, tagId)`: muting an already-muted tag refreshes the stored slug and
+   * the timestamp, which is what makes a rename harmless.
+   */
+  tagMute: (namespace: TagNamespace, tagId: string, slug: string) =>
+    invoke<void>("tag_mute", { namespace, tagId, slug }),
+  /** Offer a tag again. A tag that was never muted is **not** an error — the row is gone either
+   *  way, and a Settings list that raced a second window is not worth shouting about. Unlike
+   *  {@link ipc.tagMute} this accepts a blank `tagId`, because a row with one is unreachable by
+   *  any tag it was meant to name and junk to delete is all it can ever be. */
+  tagUnmute: (namespace: TagNamespace, tagId: string) =>
+    invoke<void>("tag_unmute", { namespace, tagId }),
+  /** Everything the reader has hidden, for the Settings list that gives it back — by taxonomy,
+   *  then by the stored slug, because this list exists to be searched by eye. */
+  tagsMuted: () => invoke<MutedTag[]>("tags_muted"),
   /**
    * The Scryfall CDN URL for one printing at one size, or `null`.
    *

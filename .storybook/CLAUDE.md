@@ -28,35 +28,55 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **fifteen** faults
+  Four seeds (`empty`/`starter`/`needsReview`/`large`), **seventeen** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
-  `imageUrisMissing`/`exportWriteError`); saying
+  `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Three of the fifteen are not failures at all** — `indexCold` is
-  the search index mid-build, `oracleTagsMissing` is the Oracle tag taxonomy having never
+  **Four of the seventeen are not failures at all** — `indexCold` is
+  the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
-  exists for, and `imageUrisMissing` is a corpus whose `cards.image_uris` is NULL throughout, so
+  exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
+  Tags page that says it has nothing yet; and `imageUrisMissing` is a corpus whose
+  `cards.image_uris` is NULL throughout, so
   `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing.
-  **`oracleTagsMissing` empties rows and `imageUrisMissing` branches in the handler**, and the
+  **The two taxonomy pairs are separate faults because the datasets are two files on two
+  schedules** — either can be missing, or failing, while the other is fine, and the Tags page has
+  to stand in all four of those worlds.
+  **The tag faults empty rows and `imageUrisMissing` branches in the handler**, and the
   difference is ownership rather than taste: `seeds.ts` shares `cards` **by reference** between
   worlds, so nulling a column there would null it for every story on the page.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
-- **`starter` seeds the Oracle tag taxonomy too**, derived from the corpus the same way — **32
+- **`starter` seeds both tag taxonomies too**, derived from the corpus the same way. Oracle: **32
   oracle cards, covering 38 of the 43 printings** (measured by `db.test.ts`, which fails rather
   than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so
-  a deck story shows real piles rather than everything falling back to card type. `empty` and
-  `large` deliberately go without, and `oracleTagsMissing` is how a story stands in the
-  never-ingested state on a *full* corpus. The two reads answer **one entry per requested id, in
-  request order, deduped, `slugs: []` for anything unknown** — a fake that answered only the
-  matches would look right in Storybook and break every caller that matches by id.
+  a deck story shows real piles rather than everything falling back to card type. Art: **eleven
+  tagged printings over thirteen tags and four roots**, keyed on `illustration_id` because an art
+  tag is a fact about a *picture* — one of the four Lightning Bolts carries `lightning` and the
+  other three carry nothing, which is the difference from the oracle table in one line. `empty`
+  and `large` deliberately go without both, and `oracleTagsMissing`/`artTagsMissing` are how a
+  story stands in the never-ingested state on a *full* corpus. The two oracle reads answer **one
+  entry per requested id, in request order, deduped, `slugs: []` for anything unknown** — a fake
+  that answered only the matches would look right in Storybook and break every caller that
+  matches by id.
+- **Every art tag in the fixture is true of the picture it is on**, which is why there is no
+  `dog` in it: nobody in these 43 illustrations is a dog, and a wall of cats filed under "Dog"
+  would teach a reader that the Tags page's whole subject is decorative. The crate's own fixture
+  (`tags/query.rs`'s tests) is where the `dog`/`hound`/`bulldog` branch lives. What the seed does
+  carry is the *shape* every story needs: a category with no direct taggings of its own
+  (`animal`, reached only through `cat` and `monkey`), a tag with **two** parents (`forest`, under
+  both `plant` and `landscape` — 43 % of real art tags have more than one), one `weak` tagging so
+  the weight floor visibly changes a wall, and one illustration tagged twice so the closure's
+  fold to the *strongest* weight has something to fold.
+- **Muting is never seeded.** `muted_tags` is a user table and the only one in that group, so a
+  Settings list showing a muted tag is about a press the story made — `deckUndo`'s rule.
 - **`indexCold`'s response answers every map with an *empty* one and every scalar with `0`, and
   only the first of those is self-describing.** An empty map makes every lookup miss, and a miss
   is the `undefined` the filter row fails open on. `FacetResponse.manaX` — the X chip's count —
