@@ -115,12 +115,14 @@ import { SPECS } from "@/features/decks/validation/fixtures";
 import { IMAGE_VARIANTS } from "@/lib/images";
 import type {
   CardDetail,
+  CacheCleared,
   CardFace,
   CardFilters,
   CardSummary,
   CardTags,
   CategoryKind,
   CategoryOrigin,
+  CollectionCleared,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
@@ -137,6 +139,7 @@ import type {
   DeckInput,
   DeckPatch,
   DeckRow,
+  DecksCleared,
   DeckTag,
   DeckVariant,
   DeckViewState,
@@ -636,9 +639,17 @@ export interface FakeUpdate {
  * a read-only stick, a directory that has since gone — and **the dialog stays open with the
  * text still in it**, which is the whole of what that refusal has to show: an export the app
  * could not save is one the reader can still copy.
+ *
+ * **`syncing`** is a card update in flight, and it exists for exactly one command:
+ * `cache_clear` refuses outright while one is running, because `data/tmp/` is where the corpus
+ * download puts 77 MB that the ingest then reads back. It is **not** `busy` — that fault is the
+ * write connection being held, and this refusal is checked before the connection is ever asked
+ * for, so the two produce different sentences from different places. Nothing else here reads
+ * it: a sync's *other* effects on a story are already `busy`'s.
  */
 export type Fault =
   | "busy"
+  | "syncing"
   | "syncError"
   | "imageFailures"
   | "gone"
@@ -652,6 +663,18 @@ export type Fault =
   | "oracleTagsFetchError"
   | "imageUrisMissing"
   | "exportWriteError";
+
+/**
+ * What the picture cache costs, as the Settings page's one button sees it.
+ *
+ * Bytes are the filesystem's, not a per-file average: a story that reports "freed 314 MB" has
+ * to be able to be given that number rather than derive it from a count.
+ */
+export interface FakeImageCache {
+  files: number;
+  bytes: number;
+  rows: number;
+}
 
 export interface FakeDb {
   cards: FakeCard[];
@@ -674,6 +697,21 @@ export interface FakeDb {
    * interaction no story could exercise.
    */
   errorLog: ErrorEntry[];
+  /**
+   * `image_cache` and the two disposable directories beside it, as one number each.
+   *
+   * **The only entry here that stands for files rather than rows**, and the shape is the
+   * concession: this fake has no filesystem, so `data/images/` and `data/tmp/` are a count and
+   * a total size instead of 5 540 paths. What that buys is the property every other table here
+   * has — `cache_clear` *writes* to it, so a story can press the button, watch the panel report
+   * what it freed, and press it again to see the nothing-to-do state. A canned response could
+   * do neither.
+   *
+   * `rows` is separate from `files` because the backend reports them separately, and the two
+   * genuinely differ: a picture fetched while the write connection was held is bytes on disk
+   * with no row vouching for them yet.
+   */
+  imageCache: FakeImageCache;
   /**
    * `app_meta.marketplace` — the one row this whole setting is.
    *
@@ -883,6 +921,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // failed" is a state of the world, not a shape of collection, so every seed can be in
     // either state. `installWorld` is where a fault is applied, so that is where it is filled.
     errorLog: [],
+    // A cache with something in it, unlike `errorLog` beside it: every install that has drawn a
+    // card wall has pictures on disk, so "nothing cached" is the *unusual* state and a story
+    // that wants it passes zeroes. 5 540 files / 314 MB is the dev machine's real cache,
+    // measured 2026-08-20 — a made-up round number would make the panel's formatting untested
+    // at the sizes it actually renders.
+    imageCache: { files: 5_540, bytes: 329_682_302, rows: 5_540 },
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
@@ -4081,6 +4125,9 @@ export function readHandlers(db: FakeDb) {
  * thing that holds it.
  */
 const BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
+
+/** `reset::SYNCING`, verbatim — the one refusal `cache_clear` has. */
+const CACHE_SYNCING = "a card update is running — clear the cache once it has finished";
 /** `collection::GONE` — what an *adjustment* says when the row it names is not there. */
 const ENTRY_GONE = "That collection entry is not there any more.";
 /** `wishlist::set_wish_quantity`'s twin of the above. */
@@ -6575,6 +6622,79 @@ export function writeHandlers(db: FakeDb) {
       const gone = db.errorLog.length;
       db.errorLog = [];
       return gone;
+    },
+
+    /**
+     * `reset::collection_clear` — the whole table, and the cascade with it.
+     *
+     * **`allocations` is derived rather than read**, because simplification 2 says there is no
+     * allocations table here: `allocate` works out a deck's claims at read time from its live
+     * rows. So the number reported is the claims that *were* standing — one per live deck row
+     * whose card the reader owned — which is what the Rust counts before its `DELETE` and what
+     * the panel's sentence is about.
+     */
+    collection_clear: (): CollectionCleared => {
+      refuseIfBusy(db);
+      const owned = new Set(db.collectionEntries.map((e) => e.cardId));
+      const allocations = db.deckCards.filter(
+        (dc) => dc.variant === LIVE && owned.has(dc.cardId),
+      ).length;
+      const entries = db.collectionEntries.length;
+      db.collectionEntries = [];
+      return { entries, allocations };
+    },
+
+    /** `reset::wishlist_clear`. Nothing references the wishlist, so nothing else moves. */
+    wishlist_clear: (): number => {
+      refuseIfBusy(db);
+      const gone = db.wishlistEntries.length;
+      db.wishlistEntries = [];
+      return gone;
+    },
+
+    /**
+     * `reset::decks_clear` — every deck, everything that cascades from one, and the folders.
+     *
+     * The folders are the half a reader does not predict and the half this handler exists to
+     * make visible: `decks.folder_id` is `ON DELETE SET NULL`, so the crate clears
+     * `deck_folders` in a *second* statement, and a fake that stopped at the cascade would draw
+     * a gallery with an empty folder tree still standing in it.
+     *
+     * `covers` counts the decks showing a custom picture, which is what has a file in the app.
+     * A `card_art` deck has none, so counting decks would report pictures that were never there.
+     */
+    decks_clear: (): DecksCleared => {
+      refuseIfBusy(db);
+      const decks = db.decks.length;
+      const folders = db.deckFolders.length;
+      const covers = db.decks.filter((d) => d.coverKind === COVER_CUSTOM).length;
+      db.decks = [];
+      db.deckFolders = [];
+      db.deckCards = [];
+      db.deckCategories = [];
+      db.deckTags = [];
+      db.deckAudit = [];
+      db.deckUndo = [];
+      return { decks, folders, covers };
+    },
+
+    /**
+     * `reset::cache_clear` — the one button on this page that destroys nothing.
+     *
+     * Refuses mid-sync in the backend's own words, which is the state worth a story: the corpus
+     * download puts 77 MB in `data/tmp/` and reads it back, so the crate fences the whole
+     * command rather than skipping that one directory. That check happens *before* the write
+     * connection is asked for, so it is `syncing` that produces it here and not `busy`.
+     *
+     * `failed` is always 0: it counts files Windows would not unlink, which needs a second
+     * process holding one open and has no representation here.
+     */
+    cache_clear: (): CacheCleared => {
+      if (db.fault === "syncing") throw refuse(CACHE_SYNCING);
+      refuseIfBusy(db);
+      const { files, bytes, rows } = db.imageCache;
+      db.imageCache = { files: 0, bytes: 0, rows: 0 };
+      return { files, bytes, rows, failed: 0 };
     },
 
     /**
