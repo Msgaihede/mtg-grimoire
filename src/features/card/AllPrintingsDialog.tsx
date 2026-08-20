@@ -397,7 +397,7 @@ export function AllPrintingsDialog() {
       //
       // `w-full` is 100% of the panel's grid area, which is exactly the room the shell has already
       // worked out: `p-4 sm:p-6` off the scrim, and — this is the part the number could not track
-      // — `DeckDialog`'s `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for.
+      // — `Dialog`'s `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for.
       // **So the chevrons keep their room by construction rather than by arithmetic here agreeing
       // with arithmetic there.** They are `absolute right-full mr-2` off this panel's edges, a
       // 36px disc plus an 8px gap into a 56px column, and a width spelled as `calc(100vw - 10rem)`
