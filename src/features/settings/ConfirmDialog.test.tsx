@@ -106,7 +106,7 @@ describe("ConfirmDialog", () => {
   });
 
   /**
-   * The caret starts in the field, which is `DeckDialog`'s "no field is focused" rule
+   * The caret starts in the field, which is `Dialog`'s "no field is focused" rule
    * deliberately overridden — this dialog is one question and the field is its answer. Asserted
    * with the DOM's own `activeElement` rather than by typing, because `user.type` focuses what
    * it is handed and would repair a broken entry point.
