@@ -2,12 +2,16 @@
  * A dialog that turns a pile of cards into decklist text: a format, a live preview, Copy, and
  * Save as….
  *
- * **Two controls open it, and the difference between them is the `cards` prop and nothing else.**
- * A deck category's right-click opens it over one pile; the editor header's `Export deck` opens
- * it over every row of the variant on screen. That was the point of taking the cards as a prop
- * rather than fetching them: a whole-deck export turned out to be a *caller* rather than a
- * rewrite, and this file did not change for it. `DeckEditor`'s `exportSubject` is where the two
- * scopes are resolved, and `layerMatches` is why one layer can carry both.
+ * **Four controls open it now** — the deck editor header's `Export deck`, a deck category
+ * heading's `Export cards…` (`DeckEditor.tsx`, one mount reached by both), and one each on
+ * `CollectionPage.tsx` and `WishlistPage.tsx`. What differs between them is no longer only
+ * `cards`: `surface` narrows the field row to what that surface can say and keys the remembered
+ * format/field pair, and the collection and wishlist also carry a `scope` — `export/scope.ts`'s
+ * paged sweep of the whole list, since what is on screen there is a scroll position rather than a
+ * decision. Taking the cards as a prop rather than fetching them is still what let a whole-deck
+ * export land as a *caller* rather than a rewrite in the deck editor, and this file still does not
+ * change for who is calling it. `DeckEditor`'s `exportSubject` is where the deck's two scopes are
+ * resolved, and `layerMatches` is why one layer there can carry both.
  *
  * **Built on `Dialog`**, the deck surface's shared modal shell (`src/CLAUDE.md`), rather
  * than carrying its own copy of the chrome — `ImportDialog`, `TheoryDiffDialog` and

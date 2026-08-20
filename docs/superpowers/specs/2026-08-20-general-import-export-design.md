@@ -332,8 +332,14 @@ Unknown columns are ignored silently — a spreadsheet somebody added a column t
 readable file. A file with no recognisable name column is refused with that sentence rather than
 parsed into 400 nameless issues.
 
-This is what makes a collection CSV a restore rather than a dump, and configurable columns force
-it: with the column set under the reader's control there is no fixed order left to assume.
+This is what makes a collection CSV a restore rather than a dump **for every row this app can
+currently create** — `planCollectionImport` and `collection_import_commit` do not carry `Altered`,
+`Signed`, `Proxy`, `Misprint`, `Serial number` or `Grading` through, six of `COLLECTION_GRAIN`'s
+ten columns, so a row that has ever had one of those six set would come back as a second row
+rather than be restored. No shipped surface can set one yet, which is the only reason the claim
+holds today; see `docs/reference/import-export.md`. Configurable columns force the general
+approach regardless: with the column set under the reader's control there is no fixed order left
+to assume.
 
 `parseDecklist` gains a CSV arm chosen by **the header row alone** — a first line that maps to two
 or more known headers, one of which is a name. This is not the format detector `parse.ts` exists

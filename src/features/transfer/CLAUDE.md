@@ -217,12 +217,49 @@ Pathway` is one card and there are seven such names in the reference list alone,
 
 ## Export
 
-`export/` is the mirror of `import/`, and the split is the repo's boundary: `format.ts` is pure
-(`(cards, format) => string` — no React, no hook, no IPC), `ExportDialog.tsx` is the surface (a
-format picker, a live preview, Copy and Save as…), and Rust supplies only the file write. **Two
-controls open that dialog** — the editor header's `Export deck` and a category heading's
-`Export cards…` — and the only thing that differs between them is which cards the caller passes.
+`export/` is the mirror of `import/`, and the split is the repo's boundary: `format.ts` is
+`(cards, format, fields) => string` — no React, no hook, no IPC — `ExportDialog.tsx` is the
+surface (a format picker, a field-checkbox row, a live preview, Copy and Save as…), and Rust
+supplies only the file write. **Four controls open that dialog now** — the deck editor header's
+`Export deck` and a category heading's `Export cards…` (`DeckEditor.tsx:3443`, one mount both
+reach), and one apiece on `CollectionPage.tsx:585` and `WishlistPage.tsx:438` — and what differs
+between them is no longer only which cards the caller passes: `surface` and, on the collection
+and the wishlist, `scope` differ too. Full reference, every figure kept beside the build it was
+measured on: [import-export.md](../../../docs/reference/import-export.md).
 
+- **`fields.ts` declares two independent things and the dialog's checkbox row draws only their
+  overlap.** A *format* says what channels it has (`FORMAT_FIELDS[format].optional` — Arena has
+  nowhere to put a `Condition` column at all, CSV offers every one) and a *surface* says what
+  facts it holds (`SURFACE_FIELDS[surface]` — a deck has no purchase history, a wishlist has no
+  piles). `availableFields(format, surface)` is the intersection; `quantity` and `name` are
+  `ALWAYS` and never drawn as checkboxes, because a line with no count and no name is not a card.
+  Switching format re-derives the checked set from that format's own defaults rather than
+  carrying the old selection forward — a set chosen for CSV means nothing to Arena.
+- **`foldForFields` merges rows the chosen fields cannot tell apart, and `DISCRIMINATOR` is why a
+  fold never crosses a section.** The collection keeps 2 NM and 1 LP Lightning Bolt as two rows
+  on purpose; a plain-text export has no condition channel, so writing them as two identical
+  lines hands a reader a decklist naming one card twice, which is what the fold is for. But the
+  chosen fields are not the only thing a writer tells two rows apart by: `sectionOf` groups
+  Arena, Moxfield and MTGO by section and Archidekt keys on `[categoryName, categoryActive]` for
+  `{noDeck}`, whether or not `category` is among the fields the reader switched on. Folding on
+  fields alone can merge a Sideboard row into a Main-deck row — the merged row inherits the
+  *first* card's section — and that is not a formatting slip, it moves cards between the zones of
+  the exported deck. `format.ts`'s `DISCRIMINATOR` map is what closes it, one arm per
+  section-writing format plus an explicit `null` for the three flat ones, **total rather than
+  partial**: a `Partial` map let a future section-writing format compile with no discriminator at
+  all, reproducing this same defect by omission rather than by a typo anyone would catch.
+- **`export/scope.ts` sweeps a filter into a whole list before the dialog opens on it.** The
+  collection and the wishlist are paged at 100 rows for their own views, so what is in memory at
+  any moment is a scroll position rather than a decision, and exporting that would silently
+  truncate a large collection to whatever the reader had scrolled past. `useExportScope` pages at
+  `SWEEP_PAGE = 500` and stops on a short page, never on the running total — a write landing
+  mid-sweep moves it — and offers "Everything" as the alternative, which re-sweeps with the row
+  filters cleared but `marketplace` kept, because which price a row is quoted at is not one of
+  the things "ignoring your filters" means.
+- **The chosen format and field set are remembered per surface**, `useAppStore`'s `exportPrefs`,
+  keyed by `surface` rather than held as local state — a reader who always exports the collection
+  as a condition-bearing CSV finds it that way again without a deck export dragging its own
+  Moxfield habit onto it.
 - **The cards are an argument the dialog never fetches**, and that is what made a whole-deck export
   a _caller_ rather than a rewrite: nothing in `export/` changed shape for it. `DeckEditor` derives
   them from the deck's own rows and **never from `shown`**: exporting "Removal" means the pile, not
