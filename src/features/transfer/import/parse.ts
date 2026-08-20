@@ -6,7 +6,12 @@
  * wrong: it would have to choose a reader before it had read anything, and it would be wrong
  * about exactly the lists that have been edited by hand. Every rule here is a **per-line**
  * rule for that reason, so an unfamiliar mixture is read line by line rather than refused
- * whole, and no line's reading depends on a verdict about the file.
+ * whole, and no line's reading depends on a verdict about the file — **with one exception.** A
+ * CSV header is the single file-level judgement this parser makes ({@link csvHeaderOf}), and it
+ * is made on the header row alone, checked against the row after it for shape
+ * ({@link csvShapeAgrees}) before anything is trusted. Every other file is still read line by
+ * line exactly as before, and a first row that turns out not to be a header — by content or by
+ * shape — changes nothing about how the rest of the file is read.
  *
  * It knows nothing about cards. A name is a string, and whether any card bears it is
  * `import_resolve`'s question — which is what keeps this file pure TypeScript with no
@@ -44,16 +49,41 @@ function normalizeHeader(raw: string): string {
  *
  * **Two known columns, one of which is the name.** One is not enough: a plain list whose first
  * card happens to be called `Name` would otherwise be read as a header over a nameless file.
- * This is the only file-level judgement in this parser, and every line after it is still read
- * by the per-line rules — a file whose first row is not a header is read exactly as before.
+ *
+ * `null` entries are kept rather than filtered — the caller needs each field's **position**, not
+ * just which fields were found, to read every later row by column.
+ *
+ * **This test alone is not sufficient**, and the caller does not treat a match here as the whole
+ * verdict — see {@link csvShapeAgrees}. `"Quantity, Name\n1 Sol Ring\n"` matches this test on its
+ * own: `parseCsv` splits the first line into two cells that both name a known column. It is not a
+ * CSV, and what tells the two apart is not this function's business — it answers only "does the
+ * first row's *content* look like a header", the same question it always asked.
  */
-function csvHeaderOf(row: readonly string[]): TransferFieldId[] | null {
+function csvHeaderOf(row: readonly string[]): (TransferFieldId | null)[] | null {
   if (row.length < 2) return null;
   const mapped = row.map((cell) => HEADER_TO_FIELD.get(normalizeHeader(cell)) ?? null);
   const known = mapped.filter((id) => id !== null);
   if (known.length < 2) return null;
   if (!known.includes("name")) return null;
-  return mapped as TransferFieldId[];
+  return mapped;
+}
+
+/**
+ * Does the grid's shape agree with treating its first row as a header?
+ *
+ * A header match by content is not enough, because a plain decklist line can satisfy it by
+ * accident: `parseCsv("Quantity, Name")` splits on the one comma into two cells that both name a
+ * known column, and `csvHeaderOf` cannot tell that line apart from a real header by content
+ * alone. What actually distinguishes the two is **shape** — a real CSV's first data row has the
+ * same field count as its header, because every row came off the same grid; a decklist line that
+ * merely happens to contain a comma did not.
+ *
+ * A header with no data row at all (`grid.length === 1`) still counts as agreeing: an empty
+ * spreadsheet is an empty import, which is the more sensible reading of a file that is one line
+ * naming known columns and nothing else — the alternative is a card called `Quantity,Name`.
+ */
+function csvShapeAgrees(grid: readonly string[][]): boolean {
+  return grid.length === 1 || grid[1].length === grid[0].length;
 }
 
 /** Two or more known column names, whatever they are — the test `csvHeaderOf` makes before it
@@ -484,15 +514,25 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
 export function parseDecklist(text: string): ParsedList {
   // The one file-level judgement this parser makes, and it is made on the header alone: a CSV
   // is detected before any per-line rule runs, and every line after that header is still read
-  // by column rather than by the per-line grammar below.
+  // by column rather than by the per-line grammar below. Content is not the whole test —
+  // `csvShapeAgrees` is what stops a plain line like "Quantity, Name" (two cells off its one
+  // comma, both naming a known column) from being mistaken for a header over a file that is not
+  // a CSV at all: its next row is one field against the header's two, so the shapes disagree and
+  // this falls through to the per-line reader below, exactly as if `csvHeaderOf` had found
+  // nothing.
   const grid = parseCsv(text);
   const header = grid.length > 0 ? csvHeaderOf(grid[0]) : null;
-  if (header !== null) return parseCsvGrid(grid, header);
+  if (header !== null && csvShapeAgrees(grid)) return parseCsvGrid(grid, header);
 
   // A header this app *nearly* recognises — two or more known columns but no name — is a CSV
   // somebody exported from somewhere else, and reading it line by line would produce one issue
   // per row saying nothing useful. One sentence is the honest answer.
-  if (grid.length > 0 && nearlyAHeader(grid[0])) {
+  //
+  // Gated on `header === null` rather than reached whenever the CSV arm above did not return: a
+  // header whose *content* named a column but whose *shape* disagreed already found a name, and
+  // saying "no column names the card" about it would be false. That case falls all the way
+  // through to the per-line reader instead, which is what the comment above this one describes.
+  if (header === null && grid.length > 0 && nearlyAHeader(grid[0])) {
     return {
       lines: [],
       issues: [

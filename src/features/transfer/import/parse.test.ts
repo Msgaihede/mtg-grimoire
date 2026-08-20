@@ -467,4 +467,34 @@ describe("a CSV", () => {
     const list = parseDecklist("Quantity,Name,Category\n1,Sol Ring,Ramp\n");
     expect(list.lines[0]).toMatchObject({ section: "deck", categoryName: "Ramp" });
   });
+
+  it("does not mistake a plain list's first line for a header when the data row's shape disagrees", () => {
+    // `parseCsv` splits "Quantity, Name" into two cells that both name a known column — quantity
+    // and name — which is enough to satisfy `csvHeaderOf` on its own. What tells the two apart is
+    // shape: a real CSV's first data row has the same field count as its header, and "1 Sol Ring"
+    // is one field against the header's two. Read as a plain list instead: a card called
+    // "Quantity, Name" (one word with a comma in it, same as any other decklist line this parser
+    // has never split on a comma) and then Sol Ring.
+    const list = parseDecklist("Quantity, Name\n1 Sol Ring\n");
+    expect(list.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [1, "Quantity, Name"],
+      [1, "Sol Ring"],
+    ]);
+    expect(list.issues).toEqual([]);
+
+    // The no-space variant reads identically — the space around the comma is not what matters.
+    // The per-line reader never splits on a comma at all, so the whole first line is one name.
+    const tight = parseDecklist("Quantity,Name\n1 Sol Ring\n");
+    expect(tight.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [1, "Quantity,Name"],
+      [1, "Sol Ring"],
+    ]);
+  });
+
+  it("reads a header with no data rows as an empty import, not as a card", () => {
+    const list = parseDecklist("Quantity,Name");
+    expect(list.lines).toEqual([]);
+    expect(list.issues).toEqual([]);
+    expect(list.totalCards).toBe(0);
+  });
 });
