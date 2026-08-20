@@ -67,6 +67,19 @@ pub struct SearchRequest {
     /// always answered, so no existing caller changes. The search view sends `true` unless
     /// its Unplayable chip is pressed. See [`crate::filters::CardFilters::playable_only`].
     pub playable_only: Option<bool>,
+    /// Scryfall **art** tags — what the picture shows. `include` intersects, `exclude`
+    /// subtracts, and both are matched through the pre-flattened closure, so a query for a
+    /// parent tag answers the cards tagged only with its children. Absent means no filter.
+    /// See [`crate::filters::TagTerms`].
+    pub art_tags: Option<filters::TagTerms>,
+    /// Scryfall **oracle** tags — what the card does. [`Self::art_tags`]' shape over the other
+    /// taxonomy; the two AND with each other, so "a dog that ramps" is one request.
+    pub oracle_tags: Option<filters::TagTerms>,
+    /// `"strong"` drops the art matches Scryfall called `weak`; absent or `"any"` keeps them.
+    /// **Nothing else on this request is affected** — not the excludes, and not the oracle
+    /// tags, whose closure has no weight at all. See
+    /// [`crate::filters::CardFilters::art_weight_floor`].
+    pub art_weight_floor: Option<String>,
     /// `Some(true)` narrows to printings the collection has an entry for, `Some(false)` to
     /// those it does not. Spec §7's owned/wishlist status filter, buildable at last now
     /// that the table exists.
@@ -121,6 +134,9 @@ impl SearchRequest {
             rarity: self.rarity.clone(),
             paper_only: self.paper_only,
             playable_only: self.playable_only,
+            art_tags: self.art_tags.clone(),
+            oracle_tags: self.oracle_tags.clone(),
+            art_weight_floor: self.art_weight_floor.clone(),
         }
     }
 }
@@ -4311,6 +4327,145 @@ mod tests {
         assert!(
             !plan.iter().any(|step| step.starts_with("SCAN c")),
             "and `cards` must never be scanned for it: {plan:#?}\n{sql}"
+        );
+    }
+
+    /// Four printings and both tag closures over them. `illus-none` is deliberately absent
+    /// from `art_tag_illustrations` and `bolt-nil` carries no `illustration_id` at all — the
+    /// two ways a row can fail an art tag, one of which is 4 977 of the live 116 712
+    /// printings (measured 2026-08-20 against the dev database).
+    #[rustfmt::skip]
+    fn fixture_with_tags() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let rows = [
+            ("bolt-strong", "o-bolt",  "Lightning Bolt",  Some("illus-strong")),
+            ("bolt-weak",   "o-bolt",  "Lightning Bolt",  Some("illus-weak")),
+            ("shock",       "o-shock", "Shock",           Some("illus-none")),
+            ("bolt-nil",    "o-bolt",  "Lightning Bolt",  None),
+        ];
+        for (id, oracle_id, name, illustration) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,is_paper,illustration_id,search_text,raw)
+                 VALUES (?1,?2,?3,'tst',?1,'en','normal',1,?4,?3,'{}')",
+                rusqlite::params![id, oracle_id, name, illustration],
+            ).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO art_tag_illustrations (illustration_id,slug,weight) VALUES
+                 ('illus-strong','dog','strong'), ('illus-weak','dog','weak');
+             INSERT INTO oracle_tag_cards (oracle_id,slug) VALUES ('o-shock','removal');
+             INSERT INTO cards_fts(cards_fts) VALUES('rebuild');",
+        ).unwrap();
+        conn
+    }
+
+    /// The **wire shape**, which no test in `filters` can see: a field spelled differently
+    /// here from `src/lib/ipc.ts` is a filter that silently does nothing, and this is the
+    /// whole reason the Tags page can reuse `search_cards` instead of growing a second search
+    /// stack.
+    ///
+    /// Both lists are `#[serde(default)]`, so `{"artTags":{"include":["dog"]}}` — a chip row
+    /// with nothing excluded, which is the common payload — deserializes rather than failing
+    /// the request. The predicates themselves are pinned in `filters::tests`.
+    #[test]
+    fn tag_terms_arrive_over_the_wire_and_narrow_the_page() {
+        let conn = fixture_with_tags();
+        let ids = |payload: &str| {
+            let req: SearchRequest = serde_json::from_str(payload).unwrap();
+            let page = run_search(&conn, &req).unwrap();
+            let mut ids: Vec<String> = page.items.into_iter().map(|c| c.id).collect();
+            ids.sort();
+            ids
+        };
+
+        assert_eq!(ids(r#"{"limit":50}"#).len(), 4, "no tag terms is no filter");
+        assert_eq!(
+            ids(r#"{"artTags":{"include":["dog"]},"limit":50}"#),
+            ["bolt-strong", "bolt-weak"],
+            "`shock` holds no dog and `bolt-nil` has no illustration to hold one"
+        );
+        assert_eq!(
+            ids(r#"{"artTags":{"include":["dog"]},"artWeightFloor":"strong","limit":50}"#),
+            ["bolt-strong"]
+        );
+        assert_eq!(
+            ids(r#"{"artTags":{"exclude":["dog"]},"artWeightFloor":"strong","limit":50}"#),
+            ["bolt-nil", "shock"],
+            "an exclude ignores the floor: a weak dog is still a dog"
+        );
+        assert_eq!(
+            ids(r#"{"oracleTags":{"exclude":["removal"]},"limit":50}"#),
+            ["bolt-nil", "bolt-strong", "bolt-weak"]
+        );
+        // A mixed request ANDs the two taxonomies, and the floor reaches only the art half —
+        // `oracle_tag_cards` has no `weight` column, so a floor copied onto that arm would be
+        // a `no such column` error rather than a wrong answer.
+        assert_eq!(
+            ids(
+                r#"{"artTags":{"include":["dog"]},"oracleTags":{"exclude":["removal"]},"artWeightFloor":"strong","limit":50}"#
+            ),
+            ["bolt-strong"]
+        );
+    }
+
+    /// Each correlated subquery is an **indexed two-column equality probe** — both the slug
+    /// and the subject id, on one index — and neither closure is ever scanned.
+    ///
+    /// This is the assertion no test about ids can make. A correlation on the wrong column,
+    /// or a subquery alias that shadowed the outer one and compared the table to itself,
+    /// answers a four-row fixture perfectly well and costs a walk of 400 k-plus closure rows
+    /// per card in the field.
+    ///
+    /// The planner picks the **`slug` index** over the declared primary key, and that is not
+    /// a second-best: both closures are `WITHOUT ROWID`, so an index on `slug` alone carries
+    /// the primary key's columns with it and covers `(slug, subject_id)` outright. Either
+    /// choice is one seek. `SCAN c` in the plan is the outer driver and is expected — a tag
+    /// filter narrows `cards` the way `owned: true` does, and the facet side's answer to that
+    /// is a bitset rather than this statement.
+    #[test]
+    fn a_tag_filter_probes_its_closure_on_both_key_columns() {
+        let conn = fixture_with_tags();
+        let req = SearchRequest {
+            art_tags: Some(filters::TagTerms {
+                include: vec!["dog".into()],
+                exclude: Vec::new(),
+            }),
+            oracle_tags: Some(filters::TagTerms {
+                include: vec!["removal".into()],
+                exclude: Vec::new(),
+            }),
+            limit: 50,
+            ..Default::default()
+        };
+        let mut p = filters::Predicates::default();
+        filters::push_card_filters(&mut p, &req.card_filters(), "c", None);
+        let sql = count_sql_for("cards c", &p.where_sql(), false);
+
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(
+                rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                |r| r.get::<_, String>(3),
+            )
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        for (alias, subject) in [("ati", "illustration_id"), ("otc", "oracle_id")] {
+            let probe = plan
+                .iter()
+                .find(|step| step.starts_with(&format!("SEARCH {alias} ")))
+                .unwrap_or_else(|| panic!("no indexed probe of {alias}: {plan:#?}\n{sql}"));
+            assert!(probe.contains("slug=?"), "{probe}");
+            assert!(probe.contains(&format!("{subject}=?")), "{probe}");
+        }
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.starts_with("SCAN ati") || step.starts_with("SCAN otc")),
+            "neither closure may be scanned per card: {plan:#?}\n{sql}"
         );
     }
 }
