@@ -4719,20 +4719,7 @@ function theoryCopies(db: FakeDb, deckId: number): number {
 }
 
 /**
- * `deck_theory::group_key` — what makes two deck rows the same *card* for a difference.
- *
- * Oracle id when there is one, the printing's id when there is not, told apart by a prefix so
- * a card id can never be mistaken for an oracle id: both are UUIDs out of the same generator,
- * and a bare string key would be one collision away from comparing a printing with an
- * unrelated card. Two orphans of the same card therefore look like two cards, which is as far
- * as the data honestly goes.
- */
-function groupKey(oracleId: string | null, cardId: string): string {
-  return oracleId === null ? `c:${cardId}` : `o:${oracleId}`;
-}
-
-/**
- * `deck_theory::OWNED_SPARE_SQL` — copies of one oracle card the collection holds that **no
+ * `deck_theory::OWNED_SPARE_SQL` — copies of one **printing** the collection holds that **no
  * built deck has claimed**.
  *
  * Built is the whole of the test, and it is the allocator's rule read from the other end: a
@@ -4741,14 +4728,12 @@ function groupKey(oracleId: string | null, cardId: string): string {
  * collection stepped down under a stored claim can make the subtraction negative, and "you own
  * −1 of these" is not a thing to tell anyone.
  *
- * The orphan arm is `?1 IS NULL AND card_id = ?2`: a row whose printing left `cards` is matched
- * by **exact printing** instead, because that is the only identity it has left.
+ * **Per printing because {@link theoryDiff} is** (2026-08-20), and the two halves of one row
+ * may not disagree about what a card is. It needs no orphan arm for the same reason: a
+ * collection entry's `cardId` is the printing whether or not `cards` still carries it.
  */
-function ownedSpare(db: FakeDb, oracleId: string | null, cardId: string): number {
-  const mine = (entryCardId: string) => {
-    if (oracleId === null) return entryCardId === cardId;
-    return cardById(db, entryCardId)?.oracleId === oracleId;
-  };
+function ownedSpare(db: FakeDb, cardId: string): number {
+  const mine = (entryCardId: string) => entryCardId === cardId;
   const held = db.collectionEntries
     .filter((e) => mine(e.cardId))
     .reduce((n, e) => n + e.quantity, 0);
@@ -4783,11 +4768,12 @@ interface GroupedDiff {
  * purpose — filtering one side and not the other is how a scratchpad would come to fill a
  * shopping list.
  *
- * Compared by **oracle card**, not by printing: needing a second Sol Ring is not answered by
- * the live list holding a different printing of one. The same card filed in two theory
- * categories is **one line**, for the sum, named by the category the editor lists first — and
- * ordered by where that representative row falls in the editor's own reading order, so the
- * shopping list runs down the deck the way the deck is drawn.
+ * Compared by **printing** (changed 2026-08-20, from the oracle card): a plan naming one Sol
+ * Ring is not answered by a different printing of it in the live list. **Which pile a card sits
+ * in is not compared at all** — the same printing filed in two theory categories is **one
+ * line**, for the sum, named by the category the editor lists first, and re-filing a card in one
+ * list and not the other is no difference. Ordered by where that representative row falls in the
+ * editor's own reading order, so the shopping list runs down the deck the way the deck is drawn.
  */
 function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[] {
   const rows = db.deckCards
@@ -4801,7 +4787,8 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
   const order: [string, GroupedDiff][] = [];
   for (const dc of rows) {
     const card = cardById(db, dc.cardId);
-    const key = groupKey(card?.oracleId ?? null, dc.cardId);
+    // The printing, and nothing else — not the category, and not the finish.
+    const key = dc.cardId;
     if (dc.variant !== "theory") {
       held.set(key, (held.get(key) ?? 0) + dc.quantity);
       continue;
@@ -4832,7 +4819,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     const short = (wanted.get(key) ?? 0) - (held.get(key) ?? 0);
     if (short <= 0) continue;
     grouped.row.quantity = short;
-    grouped.row.ownedSpare = ownedSpare(db, grouped.oracleId, grouped.row.cardId);
+    grouped.row.ownedSpare = ownedSpare(db, grouped.row.cardId);
     diff.push(grouped);
   }
   return diff;

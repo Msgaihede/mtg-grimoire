@@ -140,7 +140,8 @@ are all things no suite could have seen.
    select, at the app's own default window.** The row is `flex min-w-0 flex-1` holding the name
    input (`shrink: 1`) beside two `shrink-0` children — the variant tabs (102px; the same two
    buttons, which read `Theory | Live` since the move-on-enable change) and the
-   "N cards differ" button (107px) — which together already exceed the container, so the input
+   "N cards differ" button (107px, and the `Compare` button since 2026-08-20) — which together
+   already exceed the container, so the input
    absorbs the entire deficit. Measured: name width **18px at 1100, 1200 and 1280**, and the
    container overflowing by **202px / 102px / 22px** respectively; `overflow` is `visible`, so at
    1280 the button's last **9.9px** is painted over by, and hit-tests to, `select[aria-label=
