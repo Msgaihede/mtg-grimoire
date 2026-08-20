@@ -24,37 +24,14 @@
  * {@link omittedCount} is what says so out loud.
  */
 import type { CategoryKind, DeckCard } from "@/lib/ipc";
+import type { ExportFormat } from "../formats";
 
-export const EXPORT_FORMATS = [
-  "plain",
-  "mtgo",
-  "arena",
-  "moxfield",
-  "archidekt",
-  "tcgplayer",
-  "csv",
-] as const;
-export type ExportFormat = (typeof EXPORT_FORMATS)[number];
-
-export const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
-  plain: "Plain text",
-  mtgo: "MTGO",
-  arena: "Arena",
-  moxfield: "Moxfield",
-  archidekt: "Archidekt",
-  tcgplayer: "TCGplayer",
-  csv: "CSV",
-};
-
-export const EXPORT_FORMAT_EXTENSION: Record<ExportFormat, string> = {
-  plain: "txt",
-  mtgo: "txt",
-  arena: "txt",
-  moxfield: "txt",
-  archidekt: "txt",
-  tcgplayer: "txt",
-  csv: "csv",
-};
+export {
+  EXPORT_FORMATS,
+  EXPORT_FORMAT_LABEL,
+  EXPORT_FORMAT_EXTENSION,
+  type ExportFormat,
+} from "../formats";
 
 /**
  * What a card needs to be exported — a `Pick` of `DeckCard`, so a whole one satisfies it.
