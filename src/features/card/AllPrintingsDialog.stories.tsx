@@ -355,12 +355,13 @@ type Story = StoryObj<typeof meta>;
  * The wall as it opens: eight printings of one card, in six sets, with every control at rest.
  *
  * **For reading the controls against the thing they narrow.** The count line is above them
- * because it is what they are read against; the set chips are the sets *these* printings are in,
- * built from the rows rather than from `ipc.setsList`'s ~1050 sets, of which roughly 1040 hold no
- * printing of any given card; and the language picker exists because the non-English rows are
- * most of what crowds a heavily reprinted card's wall — the corner of the one Japanese tile says
- * `JA`, and none of the seven English ones says anything, because a wall where every tile says
- * `EN` says nothing.
+ * because it is what they are read against; the set picker is `SetCombobox`, the search page's
+ * own, handed the sets *these* printings are in rather than the ~1 050 `list_sets` answers with,
+ * of which roughly 1 040 hold no printing of any given card — which is also what turns its query
+ * off, so this modal makes no `list_sets` call at all; and the language picker exists because the
+ * non-English rows are most of what crowds a heavily reprinted card's wall — the corner of the one
+ * Japanese tile says `JA`, and none of the seven English ones says anything, because a wall where
+ * every tile says `EN` says nothing.
  *
  * **The three chips at zero are the state worth looking at.** No printing of this card is a
  * promo, a showcase or extended art, so those chips are drawn **greyed rather than dropped** —
@@ -383,12 +384,11 @@ export const Default: Story = {
     await expect(await modal.findByText("8 printings")).toBeInTheDocument();
     await expect(modal.getByRole("combobox", { name: "Sort printings by" })).toHaveValue("artist");
 
-    // A chip's accessible name carries its **count** as well as its label (the bare number beside
-    // it says nothing on its own), so an exact-label query would fail here and read as a missing
-    // control. Alpha holds three of the eight; the other five sets hold one each.
-    await expect(
-      modal.getByRole("button", { name: "Limited Edition Alpha — 3 printings" }),
-    ).toBeInTheDocument();
+    // The set picker at rest: a disclosure button whose *content* is its value, which is why its
+    // accessible name is the `sr-only` "Set" beside it and not the word on it. Shut, it says
+    // nothing about the card — which is the point of the shape, and why what is behind it is
+    // {@link SetPicker}'s subject rather than this story's.
+    await expect(modal.getByRole("button", { name: "Set" })).toHaveTextContent("Any set");
 
     // Out of reach, and saying so in all three channels the chip owns.
     const promo = modal.getByRole("button", { name: "Promo — 0 printings" });
@@ -422,9 +422,11 @@ export const Default: Story = {
  * here, so matching it would pass everything.
  *
  * `alpha` reaches the three Limited Edition Alpha rows through the **set name**, which is the
- * field a reader is most likely to type and the one no other control on the row can reach: the
- * set chips are pressed, not typed, and a chip is only worth pressing once you know the set is
- * there.
+ * field a reader is most likely to type — and the two boxes that both take a set name are not a
+ * duplication: this one narrows the *wall* and matches four fields at once, where the picker's
+ * ({@link SetPicker}) narrows the picker's own rows and commits nothing until a row is ticked.
+ * Typing `alpha` here also catches a collector number or an artist that happens to read that way,
+ * which is the whole reason the box says which four fields it matches.
  */
 export const Filtered: Story = {
   play: async ({ canvasElement }) => {
@@ -441,6 +443,59 @@ export const Filtered: Story = {
     // list at all, and its absence cannot be a virtualiser's window.
     await expect(modal.queryByAltText("Ancient Aegis (UNF 8)")).toBeNull();
     await expect(await modal.findByAltText("Ancient Aegis (LEA 1)")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The set picker open — **`SetCombobox`, the search page's own, over one card's sets.**
+ *
+ * This row used to draw the sets two ways: toggle chips up to eight of them, a scrolling checkbox
+ * list past that. The shape was therefore a fact about the *card*, and two cards a chevron apart
+ * could change the control's height between them. One picker at every size settles that, and it
+ * is the one a reader has already learnt on the search page and the collection — type a name or a
+ * code, read the set's own keyrune glyph, tick several without the list moving under the press.
+ *
+ * **Six rows and no seventh, which is what the `options` prop buys.** The picker's own query
+ * answers ~1 050 sets; those are the sets to narrow *the corpus* to, and roughly 1 040 of them
+ * hold no printing of any given card. Handed a list, it turns that query off entirely — so this
+ * modal makes no `list_sets` call at all — and the rows are `printingFilters.setOptions`' answer,
+ * counted off the very printings on the wall behind. Greying the other thousand instead would
+ * have been the facet rule applied where it does not fit: greyed means *empty in this search*,
+ * and a set this card was never printed in is not empty, it is not part of the question.
+ *
+ * The count is on the row's **tooltip** rather than drawn on it — `facetTitle`'s sentence, the
+ * same one the search page writes — because the row's visible content is the set's name and its
+ * code, and a third column would be this surface inventing a row shape the other two do not have.
+ *
+ * What it cost: the sets no longer arrive most-printings-first. That order *was* information, and
+ * `Sort printings by` is where the question now gets a straight answer.
+ */
+export const SetPicker: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: /Ancient Aegis/ });
+    const modal = within(dialog);
+    await modal.findByText("8 printings");
+
+    await userEvent.click(modal.getByRole("button", { name: "Set" }));
+
+    // **Scoped to the picker's own listbox**, because the `Sort printings by` `<select>` beside it
+    // holds four native `<option>`s and a native option's implicit role is `option` too — an
+    // unscoped count answers 10 here and would read as a picker offering the corpus.
+    const listbox = within(await modal.findByRole("listbox"));
+    // Alpha holds three of the eight printings; the other five sets hold one each. The count is on
+    // the tooltip because the row's own name is the set's name and code.
+    const alpha = listbox.getByRole("option", { name: /Limited Edition Alpha/ });
+    await expect(alpha).toHaveAttribute("title", "Limited Edition Alpha — 3 printings");
+    await expect(listbox.getAllByRole("option")).toHaveLength(6);
+
+    await userEvent.click(alpha);
+
+    // Ticked, and the wall narrows to that set — the same three rows {@link Filtered} reaches by
+    // typing, arrived at without knowing the set was there to type.
+    await expect(alpha).toHaveAttribute("aria-selected", "true");
+    await expect(await modal.findByText("showing 3 of 8 printings")).toBeInTheDocument();
+    await expect(modal.getByRole("button", { name: "Set" })).toHaveTextContent("1 set");
   },
 };
 

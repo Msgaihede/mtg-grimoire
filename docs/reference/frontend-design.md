@@ -1746,6 +1746,17 @@ Both are 36px discs on the panel's vertical centre (`cy` 400 against the panel's
 1280×800), and `elementFromPoint` at each centre hits the chevron rather than the scrim — the check
 this repo's drag pass learnt to make before concluding anything about a control.
 
+**Those two rows are unchanged by the width the panel asks for now, which is the argument for it.**
+It asked for `w-[72rem]` when they were taken and `max-w-full` clamped it to the column at both
+sizes, so 1120 and 864 were already the *column's* numbers rather than the request's. On 2026-08-20
+it became `w-full` — the request **is** the column — and both figures come out the same. What moves
+is the case the table has no row for: at 2560 maximised the reserved column is 2400 and the panel
+used to draw 1152 in the middle of it, six 170px tiles with the rest of the window left to the
+scrim. It draws 13 across now. Nothing about the chevrons had to change, and that is the point of
+spelling the width this way rather than as a `calc(100vw - 10rem)`: the room they sit in is
+`FLANK_COLUMNS` plus the scrim's own padding, and a length here would have had to restate both and
+would have parted company with them the first time either moved.
+
 ### What the walk does, confirmed live
 
 - **Wall**: 0 → 1 → 2 by ArrowRight, then ArrowDown landing on 5 — the column count having dropped

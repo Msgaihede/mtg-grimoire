@@ -15,12 +15,24 @@
  * the third surface in the app that asks a reader to narrow a list of cards. A chip here that
  * invented its own height would sit 2px off the line it shares with the text box; one that
  * invented its own focus mark would be the only control in the window a keyboard reader loses.
+ *
+ * **And the sets are `SetCombobox`, the search's own picker, for one rung further up the same
+ * argument.** This row used to draw them two ways — toggle chips up to eight sets, a scrolling
+ * checkbox list past that — which made the control's *shape* a fact about the card: a printing in
+ * eight sets got a wide wrapping chip row, one in nine got a 160px box, and the row changed height
+ * between two cards a chevron apart. One picker at every size settles that, and it is the picker a
+ * reader has already learnt on the search page and the collection: type a name or a code, read the
+ * set's own keyrune glyph, tick several without the list moving under the press. What is passed to
+ * it is this card's sets and only those — see the `options` prop, which also turns its `list_sets`
+ * query off, so the wall's own rows stay the only source of what is offered here.
  */
-import { useId, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { FILTER_CONTROL, ToggleChip } from "@/components/FilterChips";
+import { SetCombobox } from "@/features/search/SetCombobox";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
+import type { SetSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import {
   EMPTY_PRINTING_FILTER,
@@ -31,20 +43,6 @@ import {
   type TreatmentOption,
 } from "./printingFilters";
 import { isPrintingGroupBy, PRINTING_GROUP_BY_OPTIONS, type PrintingGroupBy } from "./printings";
-
-/**
- * Past how many sets the picker stops being chips and becomes a scrolling list.
- *
- * Eight, because that is where a wrapped row of set names stops being something the eye takes in
- * at once and starts being a paragraph — and because past it the row of chips would be taller
- * than the list that replaces it. The overwhelming case is under it: only a handful of cards in
- * the corpus carry more than a hundred paper printings, and most cards are in a small number of
- * sets however often they were reprinted within each.
- *
- * A `<select multiple>` is not the alternative at either size. It is a control a mouse cannot use
- * without ctrl-clicking, which is a thing readers are not taught and do not guess.
- */
-const SET_CHIP_LIMIT = 8;
 
 /**
  * The word above one group of controls.
@@ -86,12 +84,17 @@ interface CheckOption {
 }
 
 /**
- * A scrolling list of checkboxes — the shape both the set picker and the language picker take.
+ * A scrolling list of checkboxes — the shape the language picker takes.
  *
- * One component drawn twice rather than two that resemble each other, which is this repo's
- * standing rule about a resemblance: two copies are two decisions that happen to agree today. The
- * count is right-aligned in the data face rather than run into the label with a separator, so a
- * reader scans one column of names and one column of numbers instead of parsing every row.
+ * **One caller, and it stays a component rather than being inlined into it.** It was written for
+ * two, and the sets moved to `SetCombobox`; what is left is not a generic list looking for a
+ * second user but the boundary between *what a language row is* and *where the row's data comes
+ * from*, which is what keeps the accname note below attached to the markup it is about. A language
+ * is a two-letter code and could not have gone the sets' way: a combobox whose rows read `JA`,
+ * `PT`, `RU` is a control with nothing to type into it.
+ *
+ * The count is right-aligned in the data face rather than run into the label with a separator, so
+ * a reader scans one column of names and one column of numbers instead of parsing every row.
  *
  * **The bare number is named in the row's own accessible name rather than left to stand alone.**
  * Nothing beside it says what is being counted — the caption says what the *names* are — so the
@@ -101,11 +104,18 @@ interface CheckOption {
  * accname algorithm does to inline boxes with nothing between them (measured on `ResetAll`,
  * 2026-08-09).
  *
- * The options arrive in the order `printingFilters` built them — **sets by how many printings they
- * hold, languages English-first and then by count** — and that order is deliberately not run
- * through `sortOptions`. It is one of the two exemptions this app grants: the order *is* the
- * information. Which set a card was printed in most is the first thing a reader narrowing a wall
- * of 862 Forests wants, and alphabetising it would bury that set among the promos.
+ * The options arrive in the order `printingFilters` built them — **English first, then by count**
+ * — and that order is deliberately not run through `sortOptions`. It is one of the two exemptions
+ * this app grants: the order *is* the information. English is what the rest of the app is in and
+ * what a reader narrowing a wall of 862 Forests to "the normal ones" is reaching for, and on a
+ * heavily reprinted card it is not the largest group — so neither the alphabet nor the count would
+ * put it where it belongs.
+ *
+ * The sets no longer take this exemption and lost something real to it: `SetCombobox` sorts by
+ * name, so the set a card was printed in *most* is no longer the first row. It is the trade the
+ * picker was chosen for — one shape at every size, a needle to type, and the count still on the
+ * row's tooltip — and the wall's own `Sort printings by` control answers the "which set has the
+ * most" question directly.
  */
 function CheckList({
   options,
@@ -216,18 +226,43 @@ export function PrintingsFilterBar({
   const sortId = useId();
   const active = isFilterActive(filter);
   /**
-   * Chips or a list, decided by how many sets there are.
+   * This card's sets in the shape the search's picker takes, and the counts it draws them with.
    *
-   * A zero-count set cannot occur on either branch, because the options are built from the very
-   * rows being filtered — so unlike the treatments below, nothing here is ever drawn out of reach
-   * and neither shape needs a greyed state.
+   * Two values off one list rather than one, because `SetCombobox` reads them for two different
+   * questions and reading either off the other would be a claim. `options` is *which sets exist
+   * to offer*, and a `SetSummary` is what that picker's rows are built from — `setType` and
+   * `releasedAt` are `null` because a `Printing` does not carry them and the picker draws neither,
+   * so inventing a value would be worse than admitting there is none. `counts` is *how many rows
+   * each one holds in this search*, which is what `facetTitle` writes into the row's tooltip
+   * (`Limited Edition Alpha — 12 printings`) and what the greying rule reads. They happen to carry
+   * the same number here and are not the same fact: on the search page the first comes from a
+   * session-cached `list_sets()` and the second from the facet index.
+   *
+   * Neither can be zero, because both are counted off the very rows being filtered — so unlike
+   * the treatments below, nothing here is ever drawn out of reach and no greyed state can arise.
    */
-  const setsAsChips = setOptions.length <= SET_CHIP_LIMIT;
+  const sets = useMemo<SetSummary[]>(
+    () =>
+      setOptions.map((option) => ({
+        code: option.code,
+        name: option.name,
+        setType: null,
+        releasedAt: null,
+        cardCount: option.count,
+      })),
+    [setOptions],
+  );
+  const setCounts = useMemo(
+    () => Object.fromEntries(setOptions.map((option) => [option.code, option.count])),
+    [setOptions],
+  );
 
   return (
-    // One wrapping row, aligned to its **top**: the two pickers are boxes up to 160px tall and
+    // One wrapping row, aligned to its **top**: the language picker is a box up to 160px tall and
     // everything else is a 36px control, so centring would leave the text box floating in the
-    // middle of a tall row rather than at the head of it. `flex-wrap` is not optional — a row of
+    // middle of a tall row rather than at the head of it. It takes one box to need this rather
+    // than the two that used to be here, and the set picker becoming a 36px trigger is what makes
+    // the row's resting height that box's alone. `flex-wrap` is not optional — a row of
     // fixed-width controls is sized by the narrowest surface that draws it, and a flex item
     // cannot shrink below its own min-content, so an unwrapped row hangs out of its container and
     // the nearest `overflow-y-auto` ancestor turns the overhang into a horizontal scrollbar.
@@ -255,36 +290,21 @@ export function PrintingsFilterBar({
         )}
       />
 
+      {/* The picker is 36px and the language box beside it is up to 160px, which is what the row's
+          `items-start` is for — and what makes the caption above it worth keeping even though the
+          combobox already names itself. Without it the button would sit 20px above the first row
+          of every field beside it. */}
       <Field name="Sets">
-        {setsAsChips ? (
-          <div className="flex flex-wrap gap-1">
-            {setOptions.map((option) => (
-              <ToggleChip
-                key={option.code}
-                label={option.name}
-                pressed={filter.sets.includes(option.code)}
-                // Leads with the visible label (WCAG 2.5.3) and spends the rest on the count,
-                // which the chip has no room to draw and which is half of why it is pressed.
-                title={`${option.name} — ${plural(option.count, "printing")}`}
-                // The one bound this chip needs: a set name is **data**, not a word this app
-                // chose, and `Ravnica: City of Guilds` inside a 36px box wraps to three lines and
-                // takes the row's whole line with it. Written out rather than interpolated —
-                // Tailwind scans source text for whole class names.
-                className="max-w-48 truncate"
-                onClick={() =>
-                  onFilterChange({ ...filter, sets: toggleIn(filter.sets, option.code) })
-                }
-              />
-            ))}
-          </div>
-        ) : (
-          <CheckList
-            options={setOptions.map((o) => ({ key: o.code, text: o.name, count: o.count }))}
-            selected={filter.sets}
-            className="w-52"
-            onToggle={(code) => onFilterChange({ ...filter, sets: toggleIn(filter.sets, code) })}
-          />
-        )}
+        <SetCombobox
+          selected={filter.sets}
+          options={sets}
+          counts={setCounts}
+          // Second in the row rather than at the end of it, which is where both search-shaped
+          // callers put it — so the listbox is pinned to the trigger's *left* edge and opens
+          // rightwards, into the row it belongs to instead of back across the text box beside it.
+          align="start"
+          onToggle={(code) => onFilterChange({ ...filter, sets: toggleIn(filter.sets, code) })}
+        />
       </Field>
 
       {/* Always the list, at every size, unlike the sets above. A language is a two-letter code,
