@@ -7,6 +7,7 @@ import {
   LibraryBig,
   Search,
   Settings,
+  Tags,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
@@ -42,6 +43,10 @@ import { cn } from "@/lib/utils";
 
 const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
   { id: "search", label: "Search", Icon: Search },
+  // Directly after Search, because it is the *other* way into the same corpus: Search asks
+  // "which card is this", Tags asks "what is this card of". Everything below the pair is a
+  // list the reader owns rather than a way into the database.
+  { id: "tags", label: "Tags", Icon: Tags },
   { id: "collection", label: "Collection", Icon: LibraryBig },
   { id: "wishlist", label: "Wishlist", Icon: Heart },
   { id: "decks", label: "Decks", Icon: Layers },

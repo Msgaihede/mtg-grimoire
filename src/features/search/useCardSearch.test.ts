@@ -977,3 +977,124 @@ describe("the facet request useCardSearch builds", () => {
     expect(facetCards.mock.calls.length).toBe(settled);
   });
 });
+
+/**
+ * The two options the Tags page brought, tested here rather than only through that page: both
+ * are on the hook every card list in this app shares, and a change to either is felt by three
+ * callers that pass neither.
+ */
+describe("the tag terms a caller can AND into every request", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  /** A caller that has never heard of tags sends exactly the payload it always did. */
+  it("sends nothing about tags when nobody passes any", async () => {
+    renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(lastSearchRequest().artTags).toBeUndefined();
+    expect(lastSearchRequest().oracleTags).toBeUndefined();
+    expect(lastSearchRequest().artWeightFloor).toBeUndefined();
+  });
+
+  it("rides the chips on the request and on the facet count beside it", async () => {
+    const tagTerms = {
+      artTags: { include: ["landscape"], exclude: [] },
+      artWeightFloor: "strong" as const,
+    };
+    renderHook(() => useCardSearch({ tagTerms }), { wrapper });
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(lastSearchRequest()).toMatchObject(tagTerms);
+    // The counts that grey a chip and the wall that chip filters have to describe one corpus,
+    // or a colour with none of this motif in it would still be offered.
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+    expect(lastFacetRequest()).toMatchObject(tagTerms);
+  });
+
+  /**
+   * **The key is derived from the payload rather than passed beside it**, which is what makes
+   * "same payload, same key" hold by construction. Without this segment a second motif would be
+   * answered out of the first's cached pages — instantly, from local SQLite, with nothing on
+   * screen to notice.
+   */
+  it("mints a new key for a different motif rather than reusing the last one's pages", async () => {
+    const { rerender } = renderHook(
+      ({ slug }: { slug: string }) =>
+        useCardSearch({ tagTerms: { artTags: { include: [slug], exclude: [] } } }),
+      { wrapper, initialProps: { slug: "landscape" } },
+    );
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(1));
+
+    rerender({ slug: "lightning" });
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
+    expect(lastSearchRequest().artTags).toEqual({ include: ["lightning"], exclude: [] });
+  });
+
+  /** A picked tag **is** the reader asking, even though no control on the filter row can set
+   *  one — so an empty answer to it is a search that missed rather than an empty database. */
+  it("counts a picked tag as the reader having asked something", async () => {
+    const { result } = renderHook(
+      () => useCardSearch({ tagTerms: { oracleTags: { include: ["removal"], exclude: [] } } }),
+      { wrapper },
+    );
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.unfiltered).toBe(false);
+  });
+
+  /** An empty list adds no SQL at all (`filters::picked_tags`), so a payload carrying one asked
+   *  nothing and its empty answer is still a statement about the database. */
+  it("does not count an empty tag list as a question", async () => {
+    const { result } = renderHook(
+      () => useCardSearch({ tagTerms: { artTags: { include: [], exclude: [] } } }),
+      { wrapper },
+    );
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.unfiltered).toBe(true);
+  });
+});
+
+describe("the printings mode a caller can open on", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("collapses by default, which is what every caller but the Tags page wants", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.allPrintings).toBe(false);
+    expect(lastSearchRequest().collapse).toBe(true);
+  });
+
+  /**
+   * The Tags page's seed. An art tag is a fact about *this illustration*, so a collapsed row
+   * would be drawn by whichever printing is newest — a picture that need have nothing to do with
+   * the motif the reader searched for.
+   */
+  it("opens uncollapsed when the caller asks, and sends collapse absent rather than false", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultAllPrintings: true }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.allPrintings).toBe(true);
+    expect(lastSearchRequest().collapse).toBeUndefined();
+  });
+
+  /** A seed and not a lock: the toggle on the filter row is still the reader's. */
+  it("lets the reader collapse a page that opened uncollapsed", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultAllPrintings: true }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleAllPrintings());
+
+    await waitFor(() => expect(lastSearchRequest().collapse).toBe(true));
+  });
+});

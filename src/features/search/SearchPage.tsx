@@ -47,8 +47,17 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * the sentence in its header names the marketplace and the figures in its cells are read out
  * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
  * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
+ *
+ * **Exported, and the Tags page's table is the second caller.** That wall draws the same
+ * `CardSummary` rows narrowed by a motif rather than by a name, so it is the same six columns
+ * about the same printings — and a second copy would be six cells' worth of formatting, six
+ * sort keys and one accessible price header free to drift from these. {@link summaryOf} below
+ * is shared for the same reason and was shared first.
  */
-function columnsFor(marketplace: Marketplace, tip: TooltipBinder): TableColumn<CardSummary>[] {
+export function columnsFor(
+  marketplace: Marketplace,
+  tip: TooltipBinder,
+): TableColumn<CardSummary>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return [
@@ -193,8 +202,12 @@ function columnsFor(marketplace: Marketplace, tip: TooltipBinder): TableColumn<C
  * The tiles only. The table beside them is the view for *comparing* — five columns of facts
  * and a price — and a row there is read rather than picked up; the drag sources spec §1 names
  * are the wall's tiles, the two lists that are inventories, and the pane's printings.
+ *
+ * Exported for the Tags page's wall, which carries the same printing to the same places: a
+ * tile there is a card the reader found by motif rather than by name, and what it *is* when it
+ * lands on a deck column does not depend on how they found it.
  */
-const tileDrag = (card: CardSummary): DragPayload => ({
+export const tileDrag = (card: CardSummary): DragPayload => ({
   kind: "card",
   cardId: card.id,
   name: card.name,
@@ -207,9 +220,11 @@ const tileDrag = (card: CardSummary): DragPayload => ({
  * The finish a result row's printing *is*, for the sheen over its art.
  *
  * Only the printings that leave no choice — foil-only and etched-only. Module scope for
- * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes.
+ * `tileDrag`'s reason: the wall re-registers a tile when a callback's identity changes — and
+ * an import satisfies that promise exactly as a local `const` would, which is what lets the
+ * Tags page's wall share this one rather than hold a fourth copy.
  */
-const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
+export const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
 
 /**
  * Whether a tile's card is one the Commander bracket counts — the crown, in the same top-right
@@ -220,8 +235,12 @@ const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
  * "which finish leaves no choice" question to answer. Module scope for `tileDrag`'s reason all
  * the same — the wall re-registers a tile's drag when a callback's identity changes, and this one
  * travels the same path.
+ *
+ * Exported for the Tags page's wall. The deck editor's docked panel keeps a copy of its own,
+ * and says at its site why: that wall passes no `finish`, so its chip holds the crown alone
+ * and the pair of callbacks there is genuinely a different pair.
  */
-const tileGameChanger = (card: CardSummary) => card.gameChanger;
+export const tileGameChanger = (card: CardSummary) => card.gameChanger;
 
 /**
  * The card a right-click on a result is about — the same object for a tile and for a table row,
@@ -234,8 +253,12 @@ const tileGameChanger = (card: CardSummary) => card.gameChanger;
  *
  * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
  * does — the same fact, from the same row, that {@link tileDrag} hands a drop.
+ *
+ * Exported for the Tags page, whose wall and table are the same list of printings reached by a
+ * different question. **The `finish` omission is the whole content of this function**, so a
+ * second copy of it is a second place for a surface to start choosing a finish nobody named.
  */
-function cardTarget(card: CardSummary): CardMenuTarget {
+export function cardTarget(card: CardSummary): CardMenuTarget {
   return {
     cardId: card.id,
     name: card.name,
@@ -385,7 +408,12 @@ function Results({ search }: { search: CardSearch }) {
    * identical walk under a new identity, and a search page re-renders on every keystroke.
    */
   const walk = useMemo(
-    () => listWalkStops(rows, (card) => ({ cardId: card.id, oracleId: card.oracleId, name: card.name })),
+    () =>
+      listWalkStops(rows, (card) => ({
+        cardId: card.id,
+        oracleId: card.oracleId,
+        name: card.name,
+      })),
     [rows],
   );
   usePublishCardWalk("these results", walk);

@@ -10,7 +10,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { tagSearch },
 }));
 
-import { DEBOUNCE_MS } from "../search/useCardSearch";
+import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { TAG_SEARCH_LIMIT, useTagSearch } from "./useTagSearch";
 
 let qc: QueryClient;

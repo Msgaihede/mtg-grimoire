@@ -53,6 +53,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       refreshing: false,
     }),
     oracleTagsForPrintings: vi.fn().mockResolvedValue([]),
+    // The Tags view's three reads. Routing to it fires all of them on the way up, so an
+    // unmocked one is a rejected query rather than a compile error — and `art_tags_status`
+    // answers the honest never-ingested row for the reason `oracleTagsStatus` above does.
+    artTagsStatus: vi.fn().mockResolvedValue({
+      updatedAt: null,
+      ingestedAt: null,
+      checkedAt: null,
+      tagCount: null,
+      taggingCount: null,
+      stale: true,
+      refreshing: false,
+    }),
+    tagChildren: vi.fn().mockResolvedValue([]),
+    tagSearch: vi.fn().mockResolvedValue([]),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -488,6 +502,24 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
 
   const tile = await screen.findByRole("button", { name: /^Burn/ });
   await waitFor(() => expect(tile).toHaveFocus());
+});
+
+/**
+ * The sixth view, and the second way into the corpus. The sidebar entry has to reach the real
+ * page: `TagsPage`'s own tests render it directly, so nothing there can see whether `ViewId`,
+ * `NAV` and `ActiveView` actually agree about the word `tags`.
+ */
+it("opens the tag browser on the tags entry", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Tags" }));
+
+  expect(
+    await screen.findByRole("heading", { name: "Browse cards by tag", level: 2 }),
+  ).toBeInTheDocument();
+  // And the honest empty state, since this file's database has never ingested either taxonomy.
+  expect(await screen.findByText(/art tags have not been downloaded/i)).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
 
 /** The second live view. The sidebar entry has to reach the real thing, not the blurb that

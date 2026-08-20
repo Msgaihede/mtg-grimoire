@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
-import { ipc, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
+import { ipc, type SearchRequest, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
+
+/**
+ * No tag chips — what a caller that has never heard of the Tags page passes.
+ *
+ * One shared frozen object rather than a fresh `{}` per render: it is spread into the
+ * request payload and into the facet request, and a caller that hands back a new empty
+ * object each time is a caller nothing downstream may depend on the identity of. Frozen for
+ * `EMPTY_SELECTION`'s reason — a cast gets past the type and this does not.
+ */
+const EMPTY_TAG_TERMS: Pick<SearchRequest, "artTags" | "oracleTags" | "artWeightFloor"> =
+  Object.freeze({});
 
 /** Rows per request. The backend clamps at 200; 50 is one screenful plus slack. */
 export const PAGE_SIZE = 50;
@@ -299,31 +310,91 @@ export function needsNextPage(lastRenderedIndex: number, loadedCount: number): b
  * database sorted by name, which is what a card app should open on, and it is also the
  * one request whose empty answer proves the database itself is empty (see `unfiltered`).
  *
- * The one option is a **default** for the format filter, and default is the whole of what it
- * is: the reader can always move it, including to a format the deck they are building is not
- * legal in, and `Any format` never leaves the list. `SearchPage` passes nothing and gets
- * exactly the hook it always had.
+ * Two of the three options are **defaults** — the format filter's and the printings mode's —
+ * and default is the whole of what they are: the reader can always move either, including to a
+ * format the deck they are building is not legal in, and `Any format` never leaves the list.
+ * The third, {@link CardSearchOptions.tagTerms}, is not a default but a **narrowing the caller
+ * owns**: the Tags page's chips are a filter this row has no control for, so they ride in from
+ * outside and no control here can clear them. `SearchPage` passes nothing and gets exactly the
+ * hook it always had.
  */
-export function useCardSearch(
-  options: {
-    /**
-     * The format the filter opens on, or `null`/absent for "Any format" — the caller's own
-     * answer, which the deck editor derives from the open deck.
-     *
-     * The **caller's**, because only the caller knows whether the key it is holding is one the
-     * database can answer: a key with no `legalities` behind it comes back as no rows at all,
-     * which is indistinguishable on screen from a search that genuinely matched nothing, and
-     * telling those keys apart takes the `format_specs` row the caller already has in hand. A
-     * hook cannot make that judgement about a key it was handed, so it does not try; it seeds
-     * what it is given, and the caller is the fence. `DeckEditor`'s `searchFormatDefault` is
-     * where that fence is written down.
-     */
-    defaultFormat?: FormatFilterOption | null;
-  } = {},
-) {
+export interface CardSearchOptions {
+  /**
+   * The format the filter opens on, or `null`/absent for "Any format" — the caller's own
+   * answer, which the deck editor derives from the open deck.
+   *
+   * The **caller's**, because only the caller knows whether the key it is holding is one the
+   * database can answer: a key with no `legalities` behind it comes back as no rows at all,
+   * which is indistinguishable on screen from a search that genuinely matched nothing, and
+   * telling those keys apart takes the `format_specs` row the caller already has in hand. A
+   * hook cannot make that judgement about a key it was handed, so it does not try; it seeds
+   * what it is given, and the caller is the fence. `DeckEditor`'s `searchFormatDefault` is
+   * where that fence is written down.
+   */
+  defaultFormat?: FormatFilterOption | null;
+  /**
+   * Which printings mode the view **opens** on — `false` (one row per card) unless a caller
+   * says otherwise, which is what this hook has always answered.
+   *
+   * `true` is the Tags page's, and the reason is the whole point of that page: an art tag is a
+   * fact about **this illustration**, so collapsing folds five printings into one row drawn by
+   * the newest — whose art may have nothing to do with the motif the reader searched for. Art
+   * results are printings.
+   *
+   * A **seed** and not a lock, because `FilterBar` still draws the All printings toggle and a
+   * control the reader can see must be one they can move: a reader narrowed to an oracle tag is
+   * asking "which cards do this", where one row per card is the right answer. The seed is what
+   * makes the page's *opening* answer honest.
+   */
+  defaultAllPrintings?: boolean;
+  /**
+   * Tag chips to AND into every request — the Tags page's whole filter, and the one narrowing
+   * on this hook that no control in `FilterBar` can reach.
+   *
+   * The fields are `SearchRequest`'s own, so a caller hands over what `termsFor` built and
+   * nothing here re-derives it. **The query key is derived from this object rather than passed
+   * beside it** (`JSON.stringify` below), which is what makes "same payload, same key" true by
+   * construction: a key and a payload passed as two parameters are two things that can disagree,
+   * and the disagreement is invisible — one search answered out of another's cached pages.
+   * `tagFilters.ts`'s `termsFor` writes its fields in a fixed order and sorts every list, so the
+   * string is stable across two selections that mean the same thing.
+   */
+  tagTerms?: Pick<SearchRequest, "artTags" | "oracleTags" | "artWeightFloor">;
+}
+
+export function useCardSearch(options: CardSearchOptions = {}) {
   // Read once, and as a string rather than as the object: every caller builds that object
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
+  /**
+   * The tag chips, and the one string that identifies them.
+   *
+   * `tagKey` is the query-key segment. Derived from the payload rather than taken as a second
+   * parameter beside it, which is what makes "same payload, same key" hold by construction —
+   * two parameters are two things that can disagree, and a key that missed a chip would answer
+   * one search out of another's cached pages with nothing on screen to notice.
+   *
+   * Nothing depends on the object's *identity*: the request payload is rebuilt inside `queryFn`
+   * and the facet request is hashed by React Query with its keys sorted, so a caller building
+   * this inline costs nothing.
+   */
+  const tagTerms = options.tagTerms ?? EMPTY_TAG_TERMS;
+  const tagKey = JSON.stringify(options.tagTerms ?? null);
+  /**
+   * Whether a **tag** was picked — which is the reader asking something, even though no control
+   * on the filter row can set one.
+   *
+   * Read by `unfiltered` below, and it has to be the *slugs* rather than the presence of the
+   * object: an empty `artTags` adds no SQL at all (`filters::picked_tags`), so a payload
+   * carrying one asked nothing and its empty answer is still a statement about the database.
+   * The weight floor is deliberately not counted for the same reason — it narrows nothing
+   * without an include, and `termsFor` will not send one on its own.
+   */
+  const hasTagTerms =
+    (tagTerms.artTags?.include?.length ?? 0) > 0 ||
+    (tagTerms.artTags?.exclude?.length ?? 0) > 0 ||
+    (tagTerms.oracleTags?.include?.length ?? 0) > 0 ||
+    (tagTerms.oracleTags?.exclude?.length ?? 0) > 0;
   // Which marketplace's prices this list is quoting. It is an input to the query rather than
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
@@ -384,7 +455,11 @@ export function useCardSearch(
   // more: "View all printings" used to arrive here as a card to open up, and is a modal drawn
   // over wherever the reader already is now. So the toggle is a press on this row or nothing —
   // an independent view mode rather than the tail of somebody else's navigation.
-  const [allPrintings, setAllPrintings] = useState(false);
+  //
+  // Seeded from the caller rather than pinned `false` since the Tags page landed — see
+  // {@link CardSearchOptions.defaultAllPrintings} for why that page opens uncollapsed. A seed
+  // and not a lock: the toggle on the filter row is still the reader's.
+  const [allPrintings, setAllPrintings] = useState(options.defaultAllPrintings ?? false);
   // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
   // to off-and-hidden. It is the format select's `Any card` row now — one control, because the
   // chip and the select were narrowing and widening the same axis and `Modern plus the art
@@ -445,6 +520,11 @@ export function useCardSearch(
     // out of a different table from TCGplayer's — so two marketplaces are two answers to the
     // same filters, and neither may be served from the other's cached pages.
     marketplace.id,
+    // The caller's tag chips, as the one string they serialise to. `"null"` on every view but
+    // the Tags page, which is what keeps a search made from this hook's other two callers keyed
+    // exactly as it has always been — a segment that is constant across every reachable state
+    // of a view costs that view no second key.
+    tagKey,
   ];
 
   const query = useInfiniteQuery({
@@ -480,6 +560,11 @@ export function useCardSearch(
         // backend's own default, and sending it would make the payload lie about intent —
         // the same rule `paperOnly` follows below.
         collapse: allPrintings ? undefined : true,
+        // The caller's tag chips, spread rather than named field by field: `termsFor` already
+        // leaves out a taxonomy nobody picked from and a floor with nothing to narrow, so what
+        // arrives here is exactly what should ride, and restating the three names would be a
+        // second place for one of them to be forgotten.
+        ...tagTerms,
         // `paperOnly` is deliberately absent — omitted means true, which is the default
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong. `playableOnly` is the neighbour with the opposite default and
@@ -521,6 +606,18 @@ export function useCardSearch(
     // `false` would mint a second key for the search an untouched row has always had.
     manaX: manaX || undefined,
     owned,
+    // The tag chips travel with the facets for the reason every other filter here does: the
+    // counts that grey a chip and the wall that chip filters have to describe one corpus, or a
+    // colour the picked motif has none of is still offered. Spread from the same object the
+    // page's payload is built from, so the two cannot disagree about which tags are picked.
+    //
+    // **The index does not narrow by them yet** — `index/facets.rs`'s `run_facets` builds its
+    // one optional bitset from FTS alone, so today these fields ride, key the answer, and are
+    // ignored. That leaves the counts **wider** than the wall, which is the direction this row
+    // is built to fail in: `facets.ts` greys only what would change nothing, so a count that is
+    // too high offers an option that turns out empty, where one that was too low would hide
+    // cards nobody would think to report missing.
+    ...tagTerms,
   };
   const facets = useCardFacets(facetReq);
 
@@ -570,8 +667,7 @@ export function useCardSearch(
   // empty rather than that the search missed — which is exactly the distinction this flag is
   // read for. Counting it would caption a cold database's empty wall "try another word", and
   // there is no other word.
-  const formatIsReaderSet =
-    format !== "" && format !== ANY_CARD && format !== defaultFormatValue;
+  const formatIsReaderSet = format !== "" && format !== ANY_CARD && format !== defaultFormatValue;
 
   return {
     text,
@@ -781,7 +877,8 @@ export function useCardSearch(
       !setsParam &&
       !manaParam &&
       !manaX &&
-      owned === undefined,
+      owned === undefined &&
+      !hasTagTerms,
   };
 }
 

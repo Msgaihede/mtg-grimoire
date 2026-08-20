@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { ipc, type TagHit, type TagNamespace } from "@/lib/ipc";
-import { DEBOUNCE_MS } from "../search/useCardSearch";
 
 /**
  * How many tags one type-ahead answers with. The cap is on the **merged** answer across both

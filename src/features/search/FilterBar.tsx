@@ -81,6 +81,7 @@ function sortDirectionName(dir: SortDir | undefined): string {
 export function FilterBar({
   search,
   layoutToggle = true,
+  layoutFor = "search",
 }: {
   search: CardSearch;
   /**
@@ -92,6 +93,20 @@ export function FilterBar({
    * statement about which cards to show and means the same thing in both places.
    */
   layoutToggle?: boolean;
+  /**
+   * **Whose** stored layout preference that pair moves.
+   *
+   * The same hazard `layoutToggle={false}` answers for the deck panel, read from the other end:
+   * a second page drawing this row would otherwise move the search view's preference, changing
+   * nothing a reader can see here and silently re-laying-out a page they are not on. Each page
+   * with a wall keeps its own field for the reason `store.ts` splits the other three.
+   *
+   * A **section name** rather than a `view`/`onChange` pair, so the binding is one prop that
+   * cannot be passed half — and so the store read stays inside {@link ViewToggle}, where a
+   * component that re-renders on a preference nothing above it reads costs the filter row
+   * nothing.
+   */
+  layoutFor?: "search" | "tags";
 }) {
   /**
    * How many printings each option would leave, or `undefined` when that is not known.
@@ -454,15 +469,30 @@ export function FilterBar({
           also the art cards" — was a filter contradicting itself. One control, three rows, and
           the row is counted and cleared by Reset all like the filter it always was. */}
 
-      {layoutToggle && <ViewToggle />}
+      {layoutToggle && <ViewToggle section={layoutFor} />}
     </div>
   );
 }
 
-/** The layout pair, bound to the search's own preference — the collection keeps a separate
- *  one, because a search is for looking at cards and a collection for counting them. */
-function ViewToggle() {
-  const view = useAppStore((s) => s.searchView);
+/**
+ * The layout pair, bound to one page's own preference — the collection and the wishlist keep
+ * separate ones, because a search is for looking at cards and a collection for counting them.
+ *
+ * **Both branches are read every render, and that is the hooks rule rather than waste.** A
+ * `useAppStore` call inside a conditional is a hook order that changes with a prop; zustand's
+ * selector subscribes to the field it returns, so the cost of the pair is one extra subscription
+ * to a string that moves when a reader presses this very control.
+ */
+function ViewToggle({ section }: { section: "search" | "tags" }) {
+  const searchView = useAppStore((s) => s.searchView);
+  const tagsView = useAppStore((s) => s.tagsView);
   const setSearchView = useAppStore((s) => s.setSearchView);
-  return <LayoutToggle view={view} onChange={setSearchView} />;
+  const setTagsView = useAppStore((s) => s.setTagsView);
+  const tags = section === "tags";
+  return (
+    <LayoutToggle
+      view={tags ? tagsView : searchView}
+      onChange={tags ? setTagsView : setSearchView}
+    />
+  );
 }

@@ -2,8 +2,8 @@ import { create } from "zustand";
 import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
-/** The five top-level destinations in the sidebar. */
-export type ViewId = "search" | "collection" | "wishlist" | "decks" | "settings";
+/** The six top-level destinations in the sidebar. */
+export type ViewId = "search" | "tags" | "collection" | "wishlist" | "decks" | "settings";
 
 /**
  * The deck row the open card was opened *from* — which is the whole of what the card pane
@@ -83,6 +83,19 @@ interface AppState {
    *  their collection in a table was not saying anything about their shopping list. */
   wishlistView: SearchView;
   setWishlistView: (view: SearchView) => void;
+  /**
+   * How the Tags page's wall is laid out. A fourth field rather than a fourth reader of
+   * `searchView`, for the reason the other three split: a reader who put the search in a table
+   * to compare prices was not saying anything about a wall they browse *by motif*, and the two
+   * pages are read one after the other rather than instead of each other.
+   *
+   * The Tags page draws `FilterBar`, whose layout pair is bound to a stored preference — so
+   * without a field of its own that pair would move the **search's** while changing nothing the
+   * reader can see on the search page, which is the "control that lies" the deck panel's
+   * `layoutToggle={false}` exists to avoid.
+   */
+  tagsView: SearchView;
+  setTagsView: (view: SearchView) => void;
   /**
    * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
    * own — one of `ZOOM_STEPS` per section, all starting at `DEFAULT_ZOOM`.
@@ -392,6 +405,12 @@ export const useAppStore = create<AppState>((set) => ({
   // for the trip where the question is what it all costs.
   wishlistView: "grid",
   setWishlistView: (wishlistView) => set({ wishlistView }),
+  // Art by default, and this is the one of the four where the grid is not merely the better
+  // opening but the whole point: the page's question is "what does this illustration show",
+  // and a table of set codes and prices answers none of it. The table is still a press away
+  // for the trip where the question is what a themed deck would cost.
+  tagsView: "grid",
+  setTagsView: (tagsView) => set({ tagsView }),
   // A copy, not the constant itself. `Readonly<>` is a compile-time fence and nothing more, so an
   // in-place `state.cardZoom.deck = …` would write *through* the initial state into the exported
   // `DEFAULT_SECTION_ZOOMS` — and several suites reset this store from it, so the damage would
