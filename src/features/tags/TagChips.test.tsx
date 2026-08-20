@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ArtWeightFloor, TagNamespace } from "@/lib/ipc";
 import {
@@ -149,7 +149,37 @@ describe("TagChips", () => {
     const control = screen.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
     expect(control).toBeInTheDocument();
     expect(control).toHaveAccessibleName(/background element/i);
+    // Both halves, because the phrase can hide in two places: `queryByText` walks visible text
+    // only and would miss it reappearing in a `title` or an `aria-label`, which is exactly where
+    // `ToggleChip` puts the sentence it is handed.
     expect(screen.queryByText(/strong matches only/i)).not.toBeInTheDocument();
+    expect(control).not.toHaveAccessibleName(/strong matches only/i);
+  });
+
+  /**
+   * **On and out of reach is a state the row can really be handed**: pick an art tag, press the
+   * floor, remove the chip, and `selection.floor` is still `"strong"` with nothing left for it
+   * to narrow. Drawn as off it would tell the reader their setting had been cleared, which it
+   * has not — it springs back the moment they pick another art tag.
+   */
+  it("stays honest when the floor is on and there is nothing left to narrow", () => {
+    draw(selection([chip("removal", "oracle")], "strong"));
+
+    const control = screen.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
+    expect(control).toHaveAttribute("aria-pressed", "true");
+    expect(control).toHaveAttribute("aria-disabled", "true");
+    expect(control).toHaveAccessibleName(/on, and narrowing nothing/i);
+  });
+
+  /** The group names the reader's picks, so the switch that modifies them is not inside it. */
+  it("keeps the weight control out of the group named for the picked tags", () => {
+    draw(selection([chip("forest")]));
+
+    const group = screen.getByRole("group", { name: "Picked tags" });
+    expect(within(group).getByRole("button", { name: "Remove Forest, art tag" })).toBeInTheDocument();
+    expect(
+      within(group).queryByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) }),
+    ).not.toBeInTheDocument();
   });
 
   it("turns the weight floor on and off", async () => {

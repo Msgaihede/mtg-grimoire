@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -82,11 +82,15 @@ interface DrawOptions {
   hits?: readonly TagHit[] | null;
   pending?: boolean;
   picked?: ReadonlySet<string>;
+  /** What the page's write does. The default resolves; one test refuses. */
+  mute?: () => Promise<void>;
 }
 
-function draw({ namespace = "art", hits = null, pending, picked }: DrawOptions = {}) {
+function draw({ namespace = "art", hits = null, pending, picked, mute }: DrawOptions = {}) {
   const onPick = vi.fn();
-  const onMute = vi.fn();
+  // Typed with the parameter, so `onMute.mock.calls[0][0]` below stays a `TagHit` rather than
+  // an index into an empty tuple — `vi.fn(impl)` otherwise infers the signature of `impl`.
+  const onMute = vi.fn<(hit: TagHit) => Promise<void>>(mute ?? (() => Promise.resolve()));
   render(
     <TagTree
       namespace={namespace}
@@ -319,17 +323,65 @@ describe("TagTree", () => {
     expect(onMute).not.toHaveBeenCalled();
   });
 
-  /** Once a tag has been hidden the rail says where it went, so a category that took its
-   *  subtree with it does not read as a rail that broke. */
+  /**
+   * Once a tag has been hidden the rail says where it went, so a category that took its subtree
+   * with it does not read as a rail that broke.
+   *
+   * **The region is mounted from the start and empty**, which is the whole point rather than an
+   * implementation detail: a `role="status"` that first appears with its sentence already inside
+   * it announces nothing, and the one reader this line exists for is the one who cannot see the
+   * rows leave. Asserted both ways for that reason.
+   */
   it("says where a hidden tag went once one has been hidden", async () => {
     const user = userEvent.setup();
     draw();
 
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const status = await screen.findByRole("status");
+    expect(status).toBeEmptyDOMElement();
     await user.pointer({ keys: "[MouseRight]", target: await row("Lightning") });
     await user.click(await screen.findByRole("menuitem", { name: /^Hide this tag$/ }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent(/settings/i);
+    await waitFor(() => expect(status).toHaveTextContent(/settings/i));
+    // The same node throughout — a second `role="status"` swapped in for the first would
+    // announce exactly as poorly as one that was never there.
+    expect(screen.getByRole("status")).toBe(status);
+  });
+
+  /**
+   * **A refused hide must not become an unhandled rejection.** The page's `onMute` is
+   * `ipc.tagMute` plus two invalidations, so it rejects whenever the `invoke` does — and an
+   * awaited promise nobody catches is silent in the shipped window and pure noise in a suite
+   * that reaches it. The rail's own answer is to say nothing new: the row is still there, which
+   * is already the truth.
+   */
+  it("swallows a refused hide rather than claiming the tag went anywhere", async () => {
+    const user = userEvent.setup();
+    const { onMute } = draw({
+      mute: () => Promise.reject(new Error("tag_mute: a tag with no id cannot be muted")),
+    });
+
+    await user.pointer({ keys: "[MouseRight]", target: await row("Lightning") });
+    await user.click(await screen.findByRole("menuitem", { name: /^Hide this tag$/ }));
+
+    // Every queued microtask given its chance to surface. **This is where the assertion really
+    // lives, and it is vitest's rather than a line below**: an unhandled rejection fails the
+    // whole run (exit 1, an "Unhandled Rejection" banner naming this file), so without the
+    // `catch` in `hide` this test is red — verified by mutation, 2026-08-20.
+    //
+    // Two ways of catching it here were tried and neither works: `process.on` needs
+    // `@types/node`, which is banned for retyping `setTimeout` across the app program, and
+    // jsdom does **not** dispatch `unhandledrejection` on `window` under this runner — a
+    // `window` listener sits there never called and the test passes vacuously under the mutant.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onMute).toHaveBeenCalledTimes(1);
+    // …and the rail made no claim it cannot stand behind: the row is still there, which is the
+    // truth, and saying why belongs to the page that made the call.
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    expect(await row("Lightning")).toBeInTheDocument();
   });
 
   it("says an empty taxonomy is empty rather than drawing nothing", async () => {

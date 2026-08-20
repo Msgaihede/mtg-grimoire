@@ -152,8 +152,19 @@ export function TagTree({
       // Fire-and-forget from the row's point of view, and the note is only written once the
       // write has actually settled: a rail that said "hidden tags come back from Settings" after
       // a refused `tag_mute` would be pointing at a list the tag is not on.
+      //
+      // **The `catch` is load-bearing rather than tidiness.** `onMute` is the page's, and the
+      // page's is `ipc.tagMute` plus two invalidations — a function that rejects whenever the
+      // `invoke` does. An awaited promise nobody catches is an unhandled rejection: silent in
+      // the shipped window, and the noise that once printed 336 lines through a green suite.
+      // The rail's own answer to a refused hide is to say nothing new — the row is still there,
+      // which is already the truth — and reporting *why* belongs to the page that made the call.
       void (async () => {
-        await onMute(hit);
+        try {
+          await onMute(hit);
+        } catch {
+          return;
+        }
         setHidSomething(true);
       })();
     },
@@ -186,14 +197,20 @@ export function TagTree({
             <TagHitList hits={hits} pending={pending} />
           )}
         </div>
-        {/* A live region rather than a sentence that is always there: the rail only owes this
-            explanation to a reader who has just watched a heading and everything under it
-            disappear. Permanently mounted it would be chrome nobody reads. */}
-        {hidSomething && (
-          <p role="status" className="px-1 text-[0.6875rem] text-dim">
-            Hidden tags, and anything filed under them, come back from Settings.
-          </p>
-        )}
+        {/* **Mounted for the life of the rail and empty until it has something to say.** That is
+            the app's rule for a live region rather than a preference: one that first appears
+            with its sentence already inside it announces nothing. This line's entire audience is
+            the reader who cannot see that a heading and everything filed under it has just left
+            the rail — so mounting it with the news in it would fail exactly the person it exists
+            for. `Ribbon`, `AppShell` and `SyncProgress` are all this shape.
+
+            `sr-only` while empty, `Ribbon`'s reason: an element left in the flow with nothing in
+            it grows the gap above it by a phantom row. */}
+        <p role="status" className={hidSomething ? "px-1 text-[0.6875rem] text-dim" : "sr-only"}>
+          {hidSomething
+            ? "Hidden tags, and anything filed under them, come back from Settings."
+            : ""}
+        </p>
       </div>
     </TagRailContext.Provider>
   );

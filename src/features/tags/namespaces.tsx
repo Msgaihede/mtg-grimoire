@@ -61,6 +61,10 @@ export function tagReachLabel(hit: Pick<TagHit, "namespace" | "cardCount">): str
  * numbers, prices, counts — and the count sitting two boxes away on the same row is already
  * drawn in it. A taxonomy name set in mono would read as a second figure.
  *
+ * `tracking-wide` rather than an arbitrary value, because the app already has an uppercase
+ * micro-caption — `PrintingsFilterBar`'s `CAPTION` — and two uppercase labels a hair apart in
+ * letterspacing is the shape of thing that reads as a rendering fault rather than as a decision.
+ *
  * `aria-hidden`, because every surface that draws this composes its own accessible name and
  * spells the namespace into it; left announced, a screen reader would hear it twice.
  */
@@ -68,7 +72,7 @@ export function TagNamespaceMark({ namespace }: { namespace: TagNamespace }) {
   return (
     <span
       aria-hidden="true"
-      className="flex-none text-[0.625rem] uppercase tracking-[0.12em] text-dim"
+      className="flex-none text-[0.625rem] uppercase tracking-wide text-dim"
     >
       {TAG_NAMESPACE_LABEL[namespace]}
     </span>

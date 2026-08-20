@@ -39,8 +39,20 @@ export const HIDE_BACKGROUND_LABEL = "Hide background details";
 const HIDE_BACKGROUND_HINT =
   "drops taggings Scryfall marked as a minor detail or background element";
 
-/** Why it cannot be pressed. See {@link TagChipsProps.onFloorChange}. */
+/** Why it cannot be pressed, with it off. See {@link TagChipsProps.onFloorChange}. */
 const HIDE_BACKGROUND_IDLE = "nothing to hide until an art tag is picked";
+
+/**
+ * Why it cannot be pressed, with it **on** — the state the row can genuinely be handed.
+ *
+ * Pick an art tag, press this, then remove that chip: `selection.floor` is still `"strong"` while
+ * there is no longer an art include for it to narrow, so the chip is on *and* out of reach.
+ * `filterChipState` draws that pair as "on, and out of reach" rather than letting one silently
+ * win, and this is the sentence that says the same thing — a chip that read
+ * {@link HIDE_BACKGROUND_IDLE} while lit would be telling the reader their setting was off.
+ * The page owns whether the state can arise; the chip owns being honest about the one it is given.
+ */
+const HIDE_BACKGROUND_LATENT = "on, and narrowing nothing until an art tag is picked";
 
 export interface TagChipsProps {
   selection: TagSelection;
@@ -97,49 +109,56 @@ export function TagChips({ selection, onRemove, onToggleMode, onFloorChange }: T
   // under which the control can change a single row.
   const canFloor = chips.some((c) => c.namespace === "art" && c.mode === "include");
 
+  const floorOn = selection.floor === "strong";
+
   return (
-    <div
-      ref={row}
-      role="group"
-      aria-label="Picked tags"
-      className="flex flex-wrap items-center gap-1.5"
-    >
-      {chips.length === 0 ? (
-        // An empty row is an invitation rather than a blank: the page's whole gesture is picking
-        // a motif, and nothing else on screen says where from.
-        <p className="text-sm text-dim">
-          No tags picked yet. Pick one from the list to narrow the cards.
-        </p>
-      ) : (
-        chips.map((chip, i) => (
-          <PickedChip
-            key={chipKey(chip.namespace, chip.slug)}
-            chip={chip}
-            onToggleMode={() => onToggleMode(chip.slug, chip.namespace)}
-            onRemove={() => {
-              // The one after it, or the one before it when this was the last. Noted before the
-              // write, because `selection` is the parent's and is already the old list by the
-              // time the effect above runs.
-              const next = chips[i + 1] ?? chips[i - 1];
-              caretTo.current = next ? chipKey(next.namespace, next.slug) : null;
-              onRemove(chip.slug, chip.namespace);
-            }}
-          />
-        ))
-      )}
+    // The row, and inside it the group. **The weight control is not a picked tag**, so it sits
+    // outside the `role="group"` that names them — a group whose label promises the reader a
+    // list of their tags must not also contain a switch.
+    <div ref={row} className="flex flex-wrap items-center gap-1.5">
+      <div role="group" aria-label="Picked tags" className="flex flex-wrap items-center gap-1.5">
+        {chips.length === 0 ? (
+          // An empty row is an invitation rather than a blank: the page's whole gesture is
+          // picking a motif, and nothing else on screen says where from.
+          <p className="text-sm text-dim">
+            No tags picked yet. Pick one from the list to narrow the cards.
+          </p>
+        ) : (
+          chips.map((chip, i) => (
+            <PickedChip
+              key={chipKey(chip.namespace, chip.slug)}
+              chip={chip}
+              onToggleMode={() => onToggleMode(chip.slug, chip.namespace)}
+              onRemove={() => {
+                // The one after it, or the one before it when this was the last. Noted before
+                // the write, because `selection` is the parent's and is already the old list by
+                // the time the effect above runs.
+                const next = chips[i + 1] ?? chips[i - 1];
+                caretTo.current = next ? chipKey(next.namespace, next.slug) : null;
+                onRemove(chip.slug, chip.namespace);
+              }}
+            />
+          ))
+        )}
+      </div>
 
       {onFloorChange && (
         <ToggleChip
           label={HIDE_BACKGROUND_LABEL}
-          pressed={selection.floor === "strong"}
+          pressed={floorOn}
           disabled={!canFloor}
           // `title` is the tooltip and the accessible name together, so the visible label has to
-          // lead it (WCAG 2.5.3) — and the greyed state says why in the same sentence rather
-          // than leaving a dim chip with no explanation anywhere.
+          // lead it (WCAG 2.5.3) — and neither out-of-reach state leaves a dim chip with no
+          // explanation anywhere. Three sentences rather than two, because on-and-greyed is a
+          // state the row can really be handed: see {@link HIDE_BACKGROUND_LATENT}.
           title={`${HIDE_BACKGROUND_LABEL} — ${
-            canFloor ? HIDE_BACKGROUND_HINT : HIDE_BACKGROUND_IDLE
+            canFloor
+              ? HIDE_BACKGROUND_HINT
+              : floorOn
+                ? HIDE_BACKGROUND_LATENT
+                : HIDE_BACKGROUND_IDLE
           }`}
-          onClick={() => onFloorChange(selection.floor === "strong" ? "any" : "strong")}
+          onClick={() => onFloorChange(floorOn ? "any" : "strong")}
         />
       )}
     </div>
