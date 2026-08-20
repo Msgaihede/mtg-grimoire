@@ -1578,7 +1578,7 @@ comment above it — it currently explains why the `title` sits on the button ra
 and that reason is unchanged and still worth keeping; append that the two-line hint now needs the
 panel's `whitespace-pre-line` to keep its break.
 
-- [ ] **Step 3: The clipped cell and the icon-only button — `CollectionTable.tsx`**
+- [ ] **Step 3: The clipped cell and the already-labelled remove button — `CollectionTable.tsx`**
 
 Three sites in one file, one of each kind.
 
@@ -1666,8 +1666,13 @@ the measurement or the failure that produced it:
 - A hint is `useTooltip()`'s spread, never a `title` attribute and never an SVG `<title>`.
 - The panel is one, `fixed`, at the app root, at `LAYER.tooltip` — and the reason is that a
   virtualised row is transformed, so it caps `z-index` *and* is the containing block for `fixed`.
-- The three classifications from the spec's §4, with the measurement: 27 of 102 `title`s were on a
-  button and 12 of those had no `aria-label`, two of them icon-only.
+- The three classifications from the spec's §4, with the measurement — **corrected at `e4fcf59`**,
+  after Task 7 shipped and its review found the original script sliced each element at its first
+  `>` (which truncates before `aria-label` on any button whose `onClick` is an arrow function): 28
+  of 108 `title`s were on a button and 3 of those had no `aria-label`, and **none** of the three is
+  icon-only — each already has its own visible text, and the `title` is a conditional description
+  shown in one state. See the spec's §4/§7 for the two named sites this used to (wrongly) call
+  icon-only, and for the two real SVG `<title>` elements (not eight — see Task 9).
 - `whenClipped` never describes, because the DOM text is complete and only the paint is clipped.
 - Escape closes it without consuming the press, and why it is not on the dismissal ladder.
 - **`pointer-events` inherits, so a tooltip bound to anything inside a `pointer-events-none`
@@ -1814,12 +1819,15 @@ and `.stories.tsx`.
 
 `SortableHeader.tsx` was converted in PR 1; check it and leave it.
 
-Note the two hard ones: **all five SVG `<title>` elements are in your files** (`CardArt` ×2,
-`FinishMark` ×3, `GameChangerMark` ×2), and `CardArt.tsx`'s marks chip is the documented
-`pointer-events` case — the chip carries `pointer-events-auto` against its wrapper's `none`
-precisely so those glyphs can be hovered. Bind on the chip, not on the sheen. `CountTag` and
-`Figure` take `title` **props** that they pass to a DOM attribute: convert inside the component and
-keep the prop name.
+Note the two hard ones: **the two real SVG `<title>` elements are in your files** —
+`FinishMark.tsx:49` and `GameChangerMark.tsx:62`, one each, not the "five" (or "eight" app-wide)
+an earlier measurement claimed, which counted this codebase's own doc comments quoting `<title>`
+in backticks alongside the rendered elements. `CardArt.tsx` has **no** `<title>` of its own to
+convert — but it does render both glyphs, inside `FoilOverlay`'s marks chip, which is the
+documented `pointer-events` case: the chip carries `pointer-events-auto` against its wrapper's
+`none` precisely so those two glyphs can be hovered. Bind on the chip, not on the sheen.
+`CountTag` and `Figure` take `title` **props** that they pass to a DOM attribute: convert inside
+the component and keep the prop name.
 
 Then: apply the recipe above, run `npx vitest run src/components`, commit.
 
@@ -1874,9 +1882,11 @@ element is not reliably announced. Convert it to a visible abbreviation with an 
 expansion beside it plus `{...tip(conditionLabel(row.condition), { describes: false })}`, so the
 expansion reaches assistive technology as text. Say so in a comment at the site.
 
-`WishlistTable.tsx:212` is the second icon-only button in the app whose `title` is close to its
-whole name — check whether the `aria-label` beside it already covers the words before choosing a
-row of the table.
+`WishlistTable.tsx:212` is icon-only but **not** an only-name case — checked directly, it already
+carries `` aria-label={`Remove ${wishLabel(row)} from your wishlist`} `` beside
+`title="Remove from your wishlist"`, the same shape `CollectionTable.tsx`'s remove button had
+before PR 1 converted it. It is the **redundant** row: bind
+`{...tip("Remove from your wishlist", { describes: false })}` and leave the `aria-label` alone.
 
 Then: apply the recipe above, run `npx vitest run src/features/collection src/features/wishlist src/features/settings`, commit.
 
@@ -1924,7 +1934,9 @@ Checked against the spec, 2026-08-20:
 - §5 (behaviour, every dismissal, Escape, the bridge, focus-visible) → Task 3, with the two claims
   jsdom cannot make routed to Task 8's live pass.
 - §6 (look) → Task 3 Step 5.
-- §7 (inventory) → Tasks 9–13's file lists, which sum to 110 sites (102 attributes + 8 SVG).
+- §7 (inventory) → Tasks 9–13's file lists, which sum to 110 sites (108 attributes + 2 SVG,
+  corrected — see Task 7's own step and Task 9's note; the total happens to still be 110, since
+  the attribute count rose by exactly as much as the SVG count fell between the two measurements).
 - §8 (verification) → Tasks 1, 2, 3, 5 for the suites; Task 8 for the window.
 - §9 (delivery) → PR 1 = Tasks 1–8, PR 2 = Tasks 9–14.
 - §10 (what it does not do) → nothing in the plan adds an arrow, a portal, a `popover`, a
