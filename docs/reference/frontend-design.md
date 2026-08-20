@@ -2031,3 +2031,82 @@ process. **What a CDP click cannot check is the path a real pointer takes**: CDP
 straight to the renderer, so it exercises the React `onClick` — a real cursor lands on the native
 overlay instead, which swallows the click and sends `SC_MAXIMIZE` itself. Both paths exist on
 purpose, and only the fallback one is drivable from here.
+
+## The app draws its own tooltips, and the sweep off `title` is in progress
+
+Full design: `docs/superpowers/specs/2026-08-20-tooltip-component-design.md`. `useTooltip()`
+(`src/components/tooltip/useTooltip.ts`) is the one door: `{...tip(words, options)}` on the
+element that already carries the hint. **A hint is that spread, never a `title` attribute and
+never an SVG `<title>` element** — both still work today (see below), which is exactly the
+problem: neither goes red when new or changed code reaches for the old one instead.
+
+**One panel, `fixed`, mounted at the app root — because a virtualised row is both
+`position: absolute` and transformed, which caps every `z-index` inside it *and* makes that row
+the containing block for a `position: fixed` descendant.** A panel anchored inside a row inherits
+both traps at once; a panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
+(`z-46`, above `overlay`'s 45 because a hint can be shown over the deck editor's dialogs, below
+`gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
+something the reader cannot see), needs neither raised further nor clipped by an
+`overflow-hidden` scroller. `PrintingPreview` is what paying the alternative costs today: it
+places its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
+it has to stay inside its scroller's transform. `TooltipProvider` mounts in `src/App.tsx` and
+`.storybook/preview.tsx`, both above `ContextMenuProvider`, for that provider's own reason — its
+panel is a sibling of `children`, so a context nested inside it would wrap every view and none of
+the menu's own rows.
+
+**Each site is classified by what its words *are*, not run through a regex** — a regex cannot
+tell an icon-only button's only name from a description of an already-named one, and the sweep
+that will retire the rest of `title` has to read every site rather than pattern-match it:
+
+| The words are… | What the site does |
+| --- | --- |
+| the element's **only** name | add `aria-label`, bind with `describes: false` — otherwise a reader hears "Duplicate, Duplicate" |
+| a **description** of something already named | the default: `aria-describedby` while the panel is open |
+| **redundant** — `whenClipped`, or a mark whose words are already visible text | `describes: false`; the panel is `aria-hidden` |
+
+`CollectionTable.tsx`'s remove button is the shipped example of the first row: it carried
+`title="Remove from your collection"` with no `aria-label` of its own, so simply deleting the
+attribute would have left an icon-only button with no accessible name at all. It now carries
+`aria-label="Remove {name} ({finish}, {condition}) from your collection"` and binds
+`{...tip("Remove from your collection", { describes: false })}`.
+
+**`whenClipped` never describes, on principle rather than as a default that happens to be set.**
+The text a `whenClipped` tooltip repeats is already complete in the DOM, and therefore in the
+accessibility tree — only the *paint* is cut off by `truncate` — so wiring `aria-describedby` for
+it would make a screen reader announce the same words twice.
+
+**Escape closes the open tooltip without calling `preventDefault()`, and it deliberately does not
+join `useDismissOnEscape`'s capture-phase ladder** — the handshake `src/CLAUDE.md`'s "Escape
+closes one layer per press" rule describes for every other dismissible layer in the app. That
+stack is for a layer the reader navigated *into*; its top rung consumes the press. A tooltip that
+opened because a pointer drifted over a control is not such a layer, and if it consumed Escape it
+would swallow the press meant for whatever dialog is open underneath it.
+
+**`pointer-events` inherits, so a tooltip bound to anything inside a `pointer-events-none`
+subtree can never be shown — and nothing goes red for it.** Unchanged from the `title`/SVG-
+`<title>` era this replaces (`FoilOverlay`'s chip needed `pointer-events-auto` against its
+wrapper's `none` for exactly this reason, above); a hit target invisible to the DOM is invisible
+to a test too, which is why it is worth restating at the new API rather than assuming the old
+lesson carries over on its own.
+
+**`useTooltip()` returns a no-op when no `TooltipProvider` is above it, and a dropped provider is
+silent** — every hint in the app, or every hint in Storybook, simply stops appearing, with no
+error and no red test at the call site that lost it. `src/lib/tokens.test.ts` pins both mounts
+(`App.tsx`, `.storybook/preview.tsx`) **and their ordering above `ContextMenuProvider`**, which is
+the one thing a source sweep can catch here — the same no-op trade `NO_MENU` makes in
+`menu/useContextMenu.ts`, for the same reason: after the sweep, most surfaces in the app bind a
+tooltip and each is also a story rendered on its own, so throwing on a missing provider would fail
+every one of them rather than the one call site that forgot.
+
+**The sweep off `title` is in progress, not finished, and this file will not carry its running
+count.** Five call sites were converted as proof — a truncated table cell, an interactive band, an
+icon-only button, a shared header's description (`SortableHeader`, so the change reached every
+sortable table at once), and one drawn inside a `DeckDialog` to prove `z-46` actually clears a
+real `z-45` scrim rather than only a Storybook decorator — and the rest of the app's hints are
+still native `title` attributes and SVG `<title>` elements, left for a later PR. Measured at
+`2cbccbb` (`grep -rn "\btitle=\|<title>" src --include=*.tsx | grep -v "\.test\.tsx\|\.stories\.tsx"`):
+**108** `title=` occurrences across **53** files and **8** SVG `<title>` elements remain — *more*
+`title=` sites than the design doc's own count at `06572dc` (102 across 48), despite five having
+been converted away, because the two commits are days and several unrelated merges apart and
+this app's chrome keeps growing. That is this file's own rule about counts, caught in the act:
+a count is a fact about a tree, re-measure before repeating either number.
