@@ -30,9 +30,9 @@ const deckLastFormat = vi.hoisted(() => vi.fn());
 // "the card database is not filled in yet". Mounted only while the dialog is open, but the
 // whole `ipc` object is replaced here, so a command left out is a `TypeError` rather than a
 // missing answer.
-const deckImportResolve = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
 // resolve; what it is called with is asserted in its own test below.
@@ -55,9 +55,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderDelete,
     formatSpecs,
     deckLastFormat,
-    deckImportResolve,
+    importResolve,
     deckImportCommit,
-    deckImportReadFile,
+    importReadFile,
     syncStatus,
   },
 }));
@@ -157,7 +157,7 @@ const PICKER: FormatSpec[] = [
   spec("casual"),
 ];
 
-/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+/** The one printing `import_resolve` answers with here — everything the plan does not
  *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
 const SOL_RING: ImportMatch = {
   cardId: "sol-ring",
@@ -250,11 +250,11 @@ beforeEach(() => {
   deckLastFormat.mockReset().mockResolvedValue(null);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  deckImportResolve
+  importResolve
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
   useAppStore.setState({ openDeckId: null, returnToDeckId: null });

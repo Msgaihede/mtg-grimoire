@@ -342,7 +342,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
 - **Two fences every deck write opens with, neither enforced by the DDL**: the variant must be
   one the schema knows, and the category must belong to _this_ deck — `deck_cards.category_id`'s
   FK only asks that the category exist, not whose it is.
-- **`deck_import.rs`: every resolution arm is one indexed lookup, and a `COLLATE NOCASE` or an
+- **`import.rs`: every resolution arm is one indexed lookup, and a `COLLATE NOCASE` or an
   `OR` is what stops it being one.** `cards.name`/`set_code`/`collector_number` are plain `TEXT`,
   so their indexes are BINARY and a comparison naming another collation plans as `SCAN c` — a full
   table scan **per line**. Splitting the arms took a 105-line list from **46 123 ms to 11.5 ms**
@@ -350,17 +350,17 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   `"N // N"` rows outranked the real card on 3 of those 105 lines. Case-insensitivity lives in the
   fold arm, in Rust, over `cards_fts`. **Do not restore the collation here** — it reads like a
   regression and is not one.
-- **`deck_import.rs`: a printing hint narrows which _printing of the named card_ to take, never
+- **`import.rs`: a printing hint narrows which _printing of the named card_ to take, never
   which card** (`hint_names_the_card`). `BY_SET_AND_NUMBER` consults no name in its SQL, so the row
   it finds is folded against the line's name in Rust and a disagreement is treated as exactly a
   hint that named nothing — `hint_missed`, and fall through. Before that guard,
   `1 Captain Sisay (brc) 132` silently imported **Arcane Signet** with `hint_missed: false`. Same
   reasoning as `deck_swap_printing`'s different-oracle guard.
-- **`deck_import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
+- **`import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
   language key is the decision: a copy you own in any language is still a copy you own, while
   "newest" is exactly the key that put 5 of the reference list's 105 lines on a `ja`/`dw`/`ph`
   printing. `fold_match` repeats the same keys in Rust and may never disagree.
-- **`deck_import.rs`: `ImportItem.inactive` switches off _only a pile this import creates_.**
+- **`import.rs`: `ImportItem.inactive` switches off _only a pile this import creates_.**
   Archidekt's `{noDeck}` says a pile counts toward nothing, which is exactly `is_active = 0` here;
   without it a reference deck's 17 maybeboard cards land in a counted pile and a 100-card commander
   deck reports 117. **A name the reader already has keeps whatever they set** — an import may not
@@ -430,7 +430,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   read by the story runner.
 - **A dialog verb answers a _path_, and a path is not permission to touch what is at it — which is
   why every one of them has a Rust command behind it.** `deck_set_cover_image` takes the path
-  `open()` gave and Rust reads the image; `deck_import_read_file` (`deck_import.rs`) takes a path
+  `open()` gave and Rust reads the image; `import_read_file` (`import.rs`) takes a path
   from the same picker and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
   path `save()` gave and Rust writes the text. Doing any of that from the page would need an `fs:`
   permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now

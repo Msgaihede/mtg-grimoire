@@ -14,8 +14,8 @@ import type {
 const deckCreate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportResolve = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -23,8 +23,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCreate,
     deckDelete,
     deckImportCommit,
-    deckImportResolve,
-    deckImportReadFile,
+    importResolve,
+    importReadFile,
     oracleTagsForPrintings,
   },
 }));
@@ -87,8 +87,8 @@ beforeEach(() => {
   deckCreate.mockReset().mockResolvedValue(MADE);
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckImportCommit.mockReset().mockResolvedValue(OUTCOME);
-  deckImportResolve.mockReset().mockResolvedValue([]);
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importResolve.mockReset().mockResolvedValue([]);
+  importReadFile.mockReset().mockResolvedValue("");
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
@@ -193,7 +193,7 @@ describe("useDeckImport", () => {
 /**
  * The second read the resolve makes, and the two rules that make it safe to make at all.
  *
- * **One call for the list, never one per line** — the whole reason `deck_import_resolve` takes
+ * **One call for the list, never one per line** — the whole reason `import_resolve` takes
  * every line at once is that an import is one round trip, and a per-line taxonomy lookup would
  * put ~100 `invoke`s straight back. **And it cannot fail the press**: the taxonomy is a second
  * dataset with a supported state of never having been downloaded, so a refusal answers no tags
@@ -201,7 +201,7 @@ describe("useDeckImport", () => {
  */
 describe("the Oracle tags a resolve reads", () => {
   it("asks for the whole list in one call, with each printing named once", async () => {
-    deckImportResolve.mockResolvedValue([
+    importResolve.mockResolvedValue([
       row(0, "bolt"),
       row(1, "sol-ring"),
       // A line nothing answered, and the same printing on a second line: neither is worth
@@ -224,7 +224,7 @@ describe("the Oracle tags a resolve reads", () => {
   /** A list of typos, or a paste made during the opening sync. There is nothing to ask about,
    *  so nothing is asked. */
   it("asks nothing when no line resolved", async () => {
-    deckImportResolve.mockResolvedValue([row(0, null), row(1, null)]);
+    importResolve.mockResolvedValue([row(0, null), row(1, null)]);
     const { result } = renderHook(() => useDeckImport(), { wrapper });
 
     const resolved = await result.current.resolve.mutateAsync(LINES);
@@ -239,7 +239,7 @@ describe("the Oracle tags a resolve reads", () => {
    * type-line filing it falls back to is the behaviour the app shipped with.
    */
   it("resolves with no tags when the tag read is refused", async () => {
-    deckImportResolve.mockResolvedValue([row(0, "bolt")]);
+    importResolve.mockResolvedValue([row(0, "bolt")]);
     oracleTagsForPrintings.mockRejectedValue("The card database is busy finishing a sync.");
     const { result } = renderHook(() => useDeckImport(), { wrapper });
 
@@ -252,7 +252,7 @@ describe("the Oracle tags a resolve reads", () => {
   /** The resolve's own refusal is still the caller's news — the tag read is the half that
    *  fails quietly, and only that half. */
   it("still refuses when the printings themselves could not be looked up", async () => {
-    deckImportResolve.mockRejectedValue("The card database is busy finishing a sync.");
+    importResolve.mockRejectedValue("The card database is busy finishing a sync.");
     const { result } = renderHook(() => useDeckImport(), { wrapper });
 
     await expect(

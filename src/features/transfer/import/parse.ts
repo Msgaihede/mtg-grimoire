@@ -9,7 +9,7 @@
  * whole, and no line's reading depends on a verdict about the file.
  *
  * It knows nothing about cards. A name is a string, and whether any card bears it is
- * `deck_import_resolve`'s question — which is what keeps this file pure TypeScript with no
+ * `import_resolve`'s question — which is what keeps this file pure TypeScript with no
  * IPC in it, and what stops it rejecting a card printed after the last sync.
  *
  * **Nothing is ever silently dropped.** A line this cannot read becomes a {@link ParseIssue}

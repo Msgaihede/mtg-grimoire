@@ -74,7 +74,7 @@
  * 10. **Every refusal is its Rust sentence verbatim, with one exception.** A story renders
  *    these, so they are copied rather than paraphrased; the parenthetical *why* inside
  *    {@link canonicalGrading}'s refusal is this parser's wording, because serde's could not be.
- * 11. **The import's fold arm reads the whole fixture, where `deck_import::fold_match` reads
+ * 11. **The import's fold arm reads the whole fixture, where `import::fold_match` reads
  *    200 FTS candidates.** `cards_fts` exists to stop that arm scanning 116 k rows; over 43
  *    it is the scan that is cheap and the index that would be the fiction. Everything the cap
  *    decides — which candidates survive a truncation, and in what order — is therefore
@@ -2962,7 +2962,7 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
 /* ------------------------------------------------------------------ the import -------- */
 
 /**
- * `deck_import::IMPORT_MODES` — what an import may do to the variant it lands in.
+ * `import::IMPORT_MODES` — what an import may do to the variant it lands in.
  *
  * A list rather than a union type for the Rust's reason: the refusal below **quotes it**, so
  * the two spellings a caller can name and the two the sentence offers are one array. Read
@@ -2971,12 +2971,12 @@ function toUpdateStatus(db: FakeDb): UpdateStatus {
 const IMPORT_MODES = ["merge", "replace"] as const;
 const IMPORT_REPLACE = IMPORT_MODES[1];
 
-/** `deck_import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
+/** `import::NOTHING_TO_IMPORT`. It matters most in `replace`, where "do nothing" and
  *  "clear the deck and put nothing back" are the same call with the same arguments. */
 const NOTHING_TO_IMPORT = "There is nothing to import.";
 
 /**
- * What {@link readHandlers}'s `deck_import_read_file` says instead of inventing a decklist.
+ * What {@link readHandlers}'s `import_read_file` says instead of inventing a decklist.
  *
  * **Not a Rust sentence, and the only handler in this file that has none.** The real command
  * takes a path the OS file picker answered, and there is no picker in a browser — so a fake
@@ -2986,7 +2986,7 @@ const NOTHING_TO_IMPORT = "There is nothing to import.";
 const NO_FILE_PICKER = "No file picker in Storybook.";
 
 /**
- * `deck_import::fold_name`'s table, transcribed — every character it maps and no other.
+ * `import::fold_name`'s table, transcribed — every character it maps and no other.
  *
  * Keyed on the **lower-case** half of each pair only, because {@link foldName} lowercases
  * before it looks anything up where the Rust lowercases in its fallthrough arm. The two agree
@@ -3032,7 +3032,7 @@ const FOLD_LETTERS: Readonly<Record<string, string>> = {
 };
 
 /**
- * `deck_import::fold_name` — a card name reduced to what two people typing it would agree on:
+ * `import::fold_name` — a card name reduced to what two people typing it would agree on:
  * lowercase, no diacritics, one kind of apostrophe, single spaces.
  *
  * Anything not in {@link FOLD_LETTERS} passes through, so a name in a script the table has
@@ -3048,7 +3048,7 @@ export function foldName(raw: string): string {
 }
 
 /**
- * `deck_import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
+ * `import::fold_rank` — how well a card's name folds to what the reader typed: `0` for
  * the whole name, `1` for the front face only, `null` for neither.
  *
  * **A rank rather than a bool**, and that is what keeps an art series from winning: the SQL
@@ -3063,7 +3063,7 @@ function foldRank(cardName: string, wanted: string): number | null {
 }
 
 /**
- * `deck_import::MATCH_ORDER` — a printing you own, then the newest, then the id.
+ * `import::MATCH_ORDER` — a printing you own, then the newest, then the id.
  *
  * The `id` tie-break is not decoration: it is what makes an import **deterministic**, so the
  * same list pasted twice puts the same printings in the deck. `releasedAt` needs no coalesce
@@ -3077,7 +3077,7 @@ function importOrder(db: FakeDb): Compare<FakeCard> {
 }
 
 /**
- * `deck_import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
+ * `import::MATCH_COLUMNS` as a DTO — the card half of `DECK_CARD_SELECT`, **less its
  * money**, plus the two facts only an import asks for.
  *
  * `everUncommon` is read off its column for {@link toDeckCard}'s reason, where the SQL
@@ -3134,7 +3134,7 @@ function bestOf(db: FakeDb, candidates: FakeCard[]): ImportMatch | null {
 }
 
 /**
- * `deck_import::fold_match` — fold both sides and compare, the arm the three exact ones fall
+ * `import::fold_match` — fold both sides and compare, the arm the three exact ones fall
  * through to.
  *
  * The candidate set is the whole paper fixture rather than `cards_fts`' 200; simplification 11
@@ -3159,7 +3159,7 @@ function foldMatch(db: FakeDb, name: string): ImportMatch | null {
   return toImportMatch(db, kept[0].card, kept.length);
 }
 
-/** `deck_import::given` — a hint the caller actually gave: trimmed, and absent when blank.
+/** `import::given` — a hint the caller actually gave: trimmed, and absent when blank.
  *  `""` and `"   "` reach here from real exports (a trailing tab in a Moxfield paste is
  *  enough), and either bound into `set_code = ?1` turns every line into a missed hint. */
 function givenHint(hint: string | null): string | null {
@@ -3747,7 +3747,7 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::resolve_lines` — every name in a parsed decklist, resolved to a printing
+     * `import::resolve_lines` — every name in a parsed decklist, resolved to a printing
      * this app has. **Read-only**, and one call for the whole list.
      *
      * Six arms, tried in the order the reader's own intent runs out — **narrowest first, and
@@ -3778,11 +3778,11 @@ export function readHandlers(db: FakeDb) {
      * upper-cases `(MH2)` is the ordinary source of one. The collector number keeps its
      * case-insensitivity, which is the one place `COLLATE NOCASE` survives.
      */
-    deck_import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
+    import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
       // `is_paper = 1` is on every arm, so it is applied once here.
       const paper = db.cards.filter((c) => c.isPaper);
       // `c.name >= "{name} // " AND c.name < "{name} //!"`, which over a byte-wise comparison
-      // is exactly "carries that prefix" — see `deck_import::front_face_range` for the proof.
+      // is exactly "carries that prefix" — see `import::front_face_range` for the proof.
       const fronts = (name: string) => paper.filter((c) => c.name.startsWith(`${name} // `));
 
       return args.lines.map((line, index) => {
@@ -3838,7 +3838,7 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::read_import_file`, which **throws here and always will**.
+     * `import::read_import_file`, which **throws here and always will**.
      *
      * The real command takes a path `@tauri-apps/plugin-dialog`'s `open()` answered — a native
      * window CDP cannot drive and a browser does not have. So there is no gesture in a story
@@ -3847,7 +3847,7 @@ export function readHandlers(db: FakeDb) {
      * it would be the wrong one. A story that wants a list pastes one, which is the same string
      * travelling the same path from one line later.
      */
-    deck_import_read_file: (): string => {
+    import_read_file: (): string => {
       throw refuse(NO_FILE_PICKER);
     },
 
@@ -5937,7 +5937,7 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_import::commit_import` — a whole decklist into one deck, in one transaction.
+     * `import::commit_import` — a whole decklist into one deck, in one transaction.
      *
      * **The command exists for the allocator.** Looping {@link deck_add_card} would be correct
      * in every other respect and would rebuild the deck's claims once per line. In the app it
@@ -6848,7 +6848,7 @@ export function writeHandlers(db: FakeDb) {
      * so a sync running underneath it cannot refuse it. A story that seeded `busy` to watch an
      * export fail would be watching a refusal the app cannot produce.
      *
-     * **Nothing is stored, for {@link deck_import_read_file}'s reason turned around.** There is
+     * **Nothing is stored, for {@link import_read_file}'s reason turned around.** There is
      * no disk here and no table this belongs in — the fake stores `cards` and the user's rows,
      * and an export is neither — so what a story can observe is exactly what the app can: that
      * the write was accepted, or the sentence it was refused with. `ExportDialog` draws no
@@ -6886,7 +6886,7 @@ const SAVE_DIR = "D:\\Storybook\\";
  * them holds a connection.
  *
  * **`plugin:dialog|save` answers a path, and that is not the same decision as
- * `deck_import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
+ * `import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
  * difference is what would be invented: `open` + `read_import_file` would invent a *decklist*,
  * which is the entire subject of the screen it feeds, so a story built on one would be a story
  * about a thing that cannot happen. All this dialog produces is a **string naming a file**, and

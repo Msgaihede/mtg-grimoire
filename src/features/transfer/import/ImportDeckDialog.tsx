@@ -134,7 +134,7 @@ type Step = "source" | "preview";
  * lines nothing answered, which printing was used where theirs could not be found, and who the
  * commander is going to be. Nothing is written until Import.
  *
- * **It decides nothing itself.** `parseDecklist` reads the text, `deck_import_resolve` answers
+ * **It decides nothing itself.** `parseDecklist` reads the text, `import_resolve` answers
  * which printing each name means, `oracle_tags_for_printings` answers what those printings do,
  * and `buildImportPlan` makes every deck decision there is — the piles, the commander, the
  * tallies. This file draws that plan and sends it back through `toImportItems`. A second
@@ -415,7 +415,7 @@ function ImportBody({
     setPicking(true);
     try {
       // `dialog:allow-open` is the one dialog permission this app grants. The picker answers a
-      // **path**; `deck_import_read_file` opens the file in Rust, which is why no `fs:`
+      // **path**; `import_read_file` opens the file in Rust, which is why no `fs:`
       // permission is needed here either.
       const path = await pickFile({
         multiple: false,

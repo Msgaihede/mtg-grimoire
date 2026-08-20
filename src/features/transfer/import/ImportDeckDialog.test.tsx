@@ -15,9 +15,9 @@ import type {
 import { spec } from "@/features/decks/validation/fixtures";
 import { ARENA_LIST } from "./fixtures";
 
-const deckImportResolve = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const deckCreate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
@@ -27,9 +27,9 @@ const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
-    deckImportResolve,
+    importResolve,
     deckImportCommit,
-    deckImportReadFile,
+    importReadFile,
     deckCreate,
     deckDelete,
     deckGet,
@@ -254,7 +254,7 @@ async function piles(): Promise<[string, string][]> {
 }
 
 beforeEach(() => {
-  deckImportResolve.mockReset().mockImplementation((lines: ImportResolveLine[]) =>
+  importResolve.mockReset().mockImplementation((lines: ImportResolveLine[]) =>
     Promise.resolve(
       lines.map((line, index) => ({
         index,
@@ -264,7 +264,7 @@ beforeEach(() => {
     ),
   );
   deckImportCommit.mockReset().mockResolvedValue(OUTCOME);
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue("");
   deckCreate.mockReset().mockResolvedValue(MADE);
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckGet.mockReset().mockResolvedValue(DETAIL);
@@ -291,7 +291,7 @@ describe("the import deck dialog", () => {
     await userEvent.click(await screen.findByLabelText("Decklist"));
     await userEvent.paste("1 Sol Ring");
     await waitFor(() => expect(go).toBeEnabled());
-    expect(deckImportResolve).not.toHaveBeenCalled();
+    expect(importResolve).not.toHaveBeenCalled();
   });
 
   /** The whole point of the second step: the reader sees what the import would do before
@@ -320,7 +320,7 @@ describe("the import deck dialog", () => {
   });
 
   it("quotes a printing hint it could not honour", async () => {
-    deckImportResolve.mockResolvedValue([
+    importResolve.mockResolvedValue([
       {
         index: 0,
         matched: { ...SOL_RING, setCode: "ltc", collectorNumber: "285" },
@@ -752,7 +752,7 @@ describe("the import deck dialog", () => {
     syncStatus.mockResolvedValue({ ...IDLE, cardCount: 0, syncing: true });
     // An empty `cards` table answers every line with nothing, which is exactly what the
     // opening sync looks like from here — and what a hundred false accusations start from.
-    deckImportResolve.mockImplementation((lines: ImportResolveLine[]) =>
+    importResolve.mockImplementation((lines: ImportResolveLine[]) =>
       Promise.resolve(lines.map((_line, index) => ({ index, matched: null, hintMissed: false }))),
     );
     wrap(<Harness />);
@@ -780,13 +780,13 @@ describe("the import deck dialog", () => {
    */
   it("reads a file the reader picked", async () => {
     pickFile.mockResolvedValue("C:/lists/burn.txt");
-    deckImportReadFile.mockResolvedValue("4 Lightning Bolt\n2 Sol Ring");
+    importReadFile.mockResolvedValue("4 Lightning Bolt\n2 Sol Ring");
     wrap(<Harness />);
     await panel();
 
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
-    await waitFor(() => expect(deckImportReadFile).toHaveBeenCalledWith("C:/lists/burn.txt"));
+    await waitFor(() => expect(importReadFile).toHaveBeenCalledWith("C:/lists/burn.txt"));
     await waitFor(() =>
       expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt\n2 Sol Ring"),
     );
@@ -802,13 +802,13 @@ describe("the import deck dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     await waitFor(() => expect(pickFile).toHaveBeenCalled());
-    expect(deckImportReadFile).not.toHaveBeenCalled();
+    expect(importReadFile).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows the file reader's refusal beside the button", async () => {
     pickFile.mockResolvedValue("C:/lists/burn.txt");
-    deckImportReadFile.mockRejectedValue("That file is larger than 1 MB.");
+    importReadFile.mockRejectedValue("That file is larger than 1 MB.");
     wrap(<Harness />);
     await panel();
 

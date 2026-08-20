@@ -2006,7 +2006,7 @@ mod tests {
 
     /// **One query per chunk, and no table scan in it.** The decklist import asks about a
     /// hundred printings at once, and this crate has already paid once for a plan that read
-    /// `SCAN c` where it meant to read an index — `deck_import`'s 46 s. `cards.id` is the
+    /// `SCAN c` where it meant to read an index — `import`'s 46 s. `cards.id` is the
     /// primary key and `oracle_id` carries `idx_cards_oracle`, so both sides of this join are
     /// searched, never scanned.
     #[test]

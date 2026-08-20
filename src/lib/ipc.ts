@@ -1843,7 +1843,7 @@ export interface SwapResult {
 /**
  * One line of a parsed decklist, on its way to be turned into a printing.
  *
- * **The quantity is deliberately not here.** {@link ipc.deckImportResolve} answers *which
+ * **The quantity is deliberately not here.** {@link ipc.importResolve} answers *which
  * printing a name means* — the one question this side cannot answer, because it is a question
  * about 116 k rows of card data — and how many copies the line asked for is this side's
  * arithmetic all the way to {@link ImportItem}. Both hints are optional because most decklist
@@ -2012,7 +2012,7 @@ export type ImportMode = "merge" | "replace";
  * One line of a decklist after this side has decided everything a *deck* decision is.
  *
  * The first three fields are the three answers the backend cannot compute for itself: which
- * printing (resolved by {@link ipc.deckImportResolve}, and perhaps overridden in the preview),
+ * printing (resolved by {@link ipc.importResolve}, and perhaps overridden in the preview),
  * how many, and which pile.
  */
 export interface ImportItem {
@@ -2414,7 +2414,7 @@ export interface CardTags {
  * The same answer keyed by a **printing** id (`cards.id`), for the callers that hold one.
  *
  * Almost every categorising call site does: a drag payload, `useDeck.addCard` and
- * `deck_import_resolve`'s rows all name a printing. A separate DTO rather than reusing
+ * `import_resolve`'s rows all name a printing. A separate DTO rather than reusing
  * {@link CardTags} because a printing id in a field called `oracleId` would be a lie, and this
  * mirror is the one place that lie would never be caught.
  */
@@ -3059,8 +3059,8 @@ export const ipc = {
    * The rows come back in the order the lines went out and carry
    * {@link ImportResolveRow.index} besides.
    */
-  deckImportResolve: (lines: ImportResolveLine[]) =>
-    invoke<ImportResolveRow[]>("deck_import_resolve", { lines }),
+  importResolve: (lines: ImportResolveLine[]) =>
+    invoke<ImportResolveRow[]>("import_resolve", { lines }),
   /**
    * A whole decklist into one deck: one transaction, one allocation, one or two history rows.
    *
@@ -3093,7 +3093,7 @@ export const ipc = {
    * the preview — rather than failing the other hundred. What comes back is a string and nothing
    * more; parsing it is this side's, exactly as it is for a paste.
    */
-  deckImportReadFile: (path: string) => invoke<string>("deck_import_read_file", { path }),
+  importReadFile: (path: string) => invoke<string>("import_read_file", { path }),
   /** The format rules as data, in picker order. Seeded by the migration, so this changes at
    *  most once per app version — cached for the session by `useFormatSpecs`. */
   formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),

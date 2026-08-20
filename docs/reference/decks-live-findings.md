@@ -95,7 +95,7 @@ are all things no suite could have seen.
   which is correct because the tag's `clip-path` has already receded there. **jsdom paints
   nothing and a class assertion cannot see any of this**; the suite was green throughout.
 - **Driven 2026-08-13 after the `CardStack.dc.html` redesign, on a 10-row Commander deck**
-  seeded through `deck_import_resolve`/`deck_import_commit` over `window.__TAURI_INTERNALS__`:
+  seeded through `import_resolve`/`deck_import_commit` over `window.__TAURI_INTERNALS__`:
   the quantity tag, the Game Changer banner, `RULE BREAK`, the data line and the stepper column
   all draw, `[data-stack-open]` counted exactly **1** across a hover, and the printed card faces
   paint over the app-drawn frame. **The pixel geometry was not re-measured** — no margin, top or
@@ -411,7 +411,7 @@ it.
 ## The four decklist formats, end to end — 2026-08-16, `npm run tauri dev` (debug), 1280×800
 
 Driven against the **live corpus of 116 712 cards, Scryfall data of 2026-08-15**, through the real
-`deck_import_resolve` / `deck_import_commit` rather than a stub. The three fixtures are the reader's
+`import_resolve` / `deck_import_commit` rather than a stub. The three fixtures are the reader's
 own exports of one deck, held verbatim in `src/features/transfer/import/fixtures.ts`; two decks were
 created for this pass and deleted afterwards.
 

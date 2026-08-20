@@ -29,7 +29,7 @@ import { buildImportPlan, tallyOf, toImportItems, type ImportPlan } from "./impo
 /**
  * The resolver, stubbed — and the stub claims **only that a printing answered this line**.
  *
- * `deck_import_resolve` is Rust asking 116 k rows which printing a name and a `(SET) 123` hint
+ * `import_resolve` is Rust asking 116 k rows which printing a name and a `(SET) 123` hint
  * name, and no TypeScript test can answer that. So: where a line carried a printing hint this
  * echoes the hint straight back, and **where it carried none it says so** — `""` for a set code
  * the line never named, never a plausible-looking three letters. A fixture that taught a false

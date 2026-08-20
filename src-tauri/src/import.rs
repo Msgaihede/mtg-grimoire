@@ -692,7 +692,7 @@ pub fn resolve_lines(
 /// commander list, measured over the live corpus — which is small but not free, and it must
 /// never queue behind an ingest.
 #[tauri::command]
-pub async fn deck_import_resolve(
+pub async fn import_resolve(
     state: tauri::State<'_, Arc<AppState>>,
     lines: Vec<ResolveLine>,
 ) -> Result<Vec<ImportResolveRow>, String> {
@@ -1055,7 +1055,7 @@ fn read_import_file(path: &Path) -> Result<String, String> {
 /// On the blocking pool like its two siblings, because a file on a network share or a slow
 /// stick is a disk wait, and the async runtime is not where a disk wait belongs.
 #[tauri::command]
-pub async fn deck_import_read_file(path: String) -> Result<String, String> {
+pub async fn import_read_file(path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || read_import_file(Path::new(&path)))
         .await
         .map_err(|e| format!("the decklist file could not be read: {e}"))?

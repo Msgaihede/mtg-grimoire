@@ -87,9 +87,9 @@ const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet".
-const deckImportResolve = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const deckImportReadFile = vi.hoisted(() => vi.fn());
+const importReadFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The editor warms the `art` its own views draw — the variant the deck builder renders, and
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
@@ -142,9 +142,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckRedoApply,
     deckTheoryDiff,
     deckFolderList,
-    deckImportResolve,
+    importResolve,
     deckImportCommit,
-    deckImportReadFile,
+    importReadFile,
     syncStatus,
   },
 }));
@@ -305,7 +305,7 @@ function found(name: string): CardSummary {
   };
 }
 
-/** The one printing `deck_import_resolve` answers with here — everything the plan does not
+/** The one printing `import_resolve` answers with here — everything the plan does not
  *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
 const SOL_RING: ImportMatch = {
   cardId: "sol-ring",
@@ -576,11 +576,11 @@ beforeEach(() => {
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  deckImportResolve
+  importResolve
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
-  deckImportReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
 });

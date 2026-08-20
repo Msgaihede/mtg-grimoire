@@ -61,7 +61,7 @@ export interface ResolvedList {
 /**
  * What the resolved printings do, in **one** read for the whole list.
  *
- * **One call, never one per line.** `deck_import_resolve` answers 105 names in a single
+ * **One call, never one per line.** `import_resolve` answers 105 names in a single
  * command precisely so an import costs one round trip; a tag read per line would put ~100
  * `invoke`s back where that trip saved them. The ids are deduplicated first — the backend drops
  * duplicates anyway, and a list with six Forests has no business sending six of them.
@@ -119,7 +119,7 @@ export function useDeckImport() {
    */
   const resolve = useMutation({
     mutationFn: async (lines: ImportResolveLine[]): Promise<ResolvedList> => {
-      const rows = await ipc.deckImportResolve(lines);
+      const rows = await ipc.importResolve(lines);
       return { rows, tags: await tagsFor(rows) };
     },
   });
@@ -132,7 +132,7 @@ export function useDeckImport() {
 
   /** The picker answers a path and Rust opens the file — which is the whole of why
    *  `dialog:allow-open` is enough and no `fs:` permission exists anywhere in this app. */
-  const readFile = useMutation({ mutationFn: (path: string) => ipc.deckImportReadFile(path) });
+  const readFile = useMutation({ mutationFn: (path: string) => ipc.importReadFile(path) });
 
   /**
    * A decklist as a deck of its own: `deck_create`, then the same commit, then the deck.

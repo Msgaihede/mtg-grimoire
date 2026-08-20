@@ -514,7 +514,7 @@ export const EMPTY_HINT_LIST = `1 Aerith, Last Ancient () 76
  * One resolved printing, with everything the planner does not read filled in as nothing.
  *
  * **The whole of what a stubbed resolver may claim is "a printing answered this line".**
- * `deck_import_resolve` is Rust asking 116 k rows which printing a name and a `(SET) 123` pick
+ * `import_resolve` is Rust asking 116 k rows which printing a name and a `(SET) 123` pick
  * out, and no TypeScript test can answer that — so nothing here invents a fact the real resolver
  * would have chosen differently. Everything the caller does not state is `null`, `false` or `0`,
  * and a fixture that taught a false set code, collector number or type line would be worse than

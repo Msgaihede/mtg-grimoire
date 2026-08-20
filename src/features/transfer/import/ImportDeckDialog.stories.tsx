@@ -87,7 +87,7 @@ const meta = {
           "Preview, and is shown what the import would do: which pile every card lands in, " +
           "which lines nothing answered, which printing was used where theirs could not be " +
           "found, and who the commander is going to be.\n\n" +
-          "Driven end to end by `.storybook/fake/`: `deck_import_resolve` really looks every " +
+          "Driven end to end by `.storybook/fake/`: `import_resolve` really looks every " +
           "name up and `deck_import_commit` really writes. **The workbench's corpus is 43 " +
           "printings**, not the app's 116 k, so a list of real cards mostly quotes itself back " +
           "here — which is why `PastedReferenceList` shows what it does. The one gesture no " +

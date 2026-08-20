@@ -313,7 +313,7 @@ function tallyOrder(name: string): number {
 /**
  * A parsed decklist and its resolved rows, decided.
  *
- * **`row.index` is the address, never the array position.** `deck_import_resolve` carries the
+ * **`row.index` is the address, never the array position.** `import_resolve` carries the
  * caller's own index back precisely so the two can differ; reading `rows[i]` against
  * `parsed.lines[i]` would work today and mis-file the whole list the day anything filters
  * between them. A row whose index names no line is skipped rather than thrown over — a preview

@@ -14,7 +14,7 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
 `ImportDeckDialog.tsx` (two steps, one panel, nothing written until Import).
 
 - **`plan.ts` stays pure and takes the slugs as an argument.** The tag read is chained inside
-  `useDeckImport`'s `resolve` mutation, after `deck_import_resolve` and in the **same**
+  `useDeckImport`'s `resolve` mutation, after `import_resolve` and in the **same**
   `mutationFn` — **one** `oracleTagsForPrintings` over the deduped matched ids for the whole list,
   never one per line. Putting it there rather than in the planner is what closes the tally-flicker
   hole _by construction_: the dialog crosses to step two in that mutation's `onSuccess`, so the
@@ -89,7 +89,7 @@ Oracle tag slugs** → piles, a commander, tallies), `useDeckImport.ts` (the wri
   beside it without trying it at all — a number is not unique across sets, so it can only ever
   narrow one — so that list previews **33 hint misses** where it used to preview 33 unresolved
   cards. Both halves are re-derived rather than remembered: `parse.test.ts` counts the 33
-  `setCode: null` lines out of 88, and the branch that sets the flag is `deck_import.rs`'s. **Not
+  `setCode: null` lines out of 88, and the branch that sets the flag is `import.rs`'s. **Not
   yet driven in the shipped window.**
 - **`[Foil]` is decoration and never a pile — and never a _finish_ either.** `FINISH_WORDS`
   matches `foil`/`etched`/`non-foil` whole and case-insensitively, because reading one as a
@@ -114,7 +114,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
   line have to agree) and the commander is `commanderIneligibility`, the same rule the validation
   panel judges a built deck by. A looser "looks like a commander" test here would offer a card the
   panel then refuses.
-- **`row.index` is the address, never the array position.** `deck_import_resolve` carries the
+- **`row.index` is the address, never the array position.** `import_resolve` carries the
   caller's own index back precisely so the two can differ; reading `rows[i]` against
   `parsed.lines[i]` works today and mis-files the whole list the day anything filters between them.
 - **`CardIdentity` is the card-level half of `CardFacts`, and `CardFacts` was deliberately _not_
@@ -134,7 +134,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
   click → path is not.
 - **Driven in the shipped window 2026-08-12** (`npm run tauri dev`, a **debug** build): the
   gallery path end to end put **105 of 105** reference-list lines and all **117 copies** into a
-  new deck, `deck_import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
+  new deck, `import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
   `invoke` on that build, and the commander step offered **56** candidates — the list's 55
   legendary creatures plus a legendary Spacecraft with a P/T box. Every figure, the variant and
   audit checks, and the three resolver-side faults it found — all since fixed: a printing hint

@@ -518,7 +518,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   deliberately — the same variant and `touch_deck` fences, the same `DECK_CARD_GRAIN`
   `ON CONFLICT` fold (so a list naming a card twice is one row with the sum), the same
   `category_for_name` find-or-create (so a `Sideboard` section lands on the seeded `side` row
-  and makes nothing). `mode` is `merge` or `replace` (`deck_import::IMPORT_MODES`), and
+  and makes nothing). `mode` is `merge` or `replace` (`import::IMPORT_MODES`), and
   **`replace` clears the cards of the one variant it was given and leaves every category
   standing** — a category is the reader's filing, not the list's. An empty item list is refused
   in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
@@ -541,7 +541,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   deserialising, and absent means the ordinary counted pile an import has always made. Rust records
   the flag and concludes nothing from it: which lines carry it is `parse.ts`'s reading of the
   bracket's **first** entry, carried to the item by `plan.ts`.
-- **`deck_import_resolve` is the import's read half, and it answers the one question TypeScript
+- **`import_resolve` is the import's read half, and it answers the one question TypeScript
   cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
   reused down the list, tried narrowest first — a set **and** a collector number; the set with the
   name; the set with the name as a **front face**; the name, exactly; the name as a front face of
@@ -579,7 +579,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   (`Dakkon, Shadow Slayer` is the mechanism — `mh2` and `amh2` share a release date and the art
   series wins the `id` tie-break). Asked in sequence the exact name always answers first. A
   `MULTI-INDEX OR` **is** indexed, measured — and still wrong.
-- **`deck_import_read_file` takes a path, not bytes**, which is the same contract
+- **`import_read_file` takes a path, not bytes**, which is the same contract
   `deck_set_cover_image` uses and the whole reason `dialog:allow-open` is sufficient and **no
   `fs:` permission is granted anywhere**: a webview that can only _name_ a file needs none. The
   1 MB cap (`MAX_IMPORT_BYTES`, shared with the paste path so the two cannot disagree) is read off
@@ -653,10 +653,10 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   also the one flat format that keeps a switched-off pile: Arena and MTGO cut theirs because a
   maybeboard is an illegal import at the other end, while a Mass Entry list is a cart and the pile
   a reader switched off is usually what they still have to buy. Rust's only part in any of it is
-  `export_write_file` taking the path `save()` answered, for `deck_import_read_file`'s reason one
+  `export_write_file` taking the path `save()` answered, for `import_read_file`'s reason one
   shelf up: **no `fs:` permission is granted anywhere**.
 - **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
-  native window CDP cannot reach, so `deck_import_read_file` was exercised by invoking the command
+  native window CDP cannot reach, so `import_read_file` was exercised by invoking the command
   with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;
   the **click → path half is not**.
 - **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
@@ -674,7 +674,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,
   `Artifact` 7, `Instant` 7, `Enchantment` 5, `Sorcery` 4) and `Commander` 1.
 - **The two timings, both through `invoke` from the webview on that debug build**, medians with
-  the first two runs dropped: `deck_import_resolve` over the 105-line reference list **120.4 ms**
+  the first two runs dropped: `import_resolve` over the 105-line reference list **120.4 ms**
   (116.9–141.3, 9 warm of 11), and `deck_import_commit` over its 105 items **7.9 ms** (7.1–8.0, 5
   warm of 7, `replace` into a deck already holding them; outcome `added 117, removed 117,
 categoriesCreated 0`). **That resolve figure does not contradict `resolve_lines`' 11.5 ms

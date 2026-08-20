@@ -16,7 +16,7 @@
 /// Truncating rather than appending: the reader picked this name in a save dialog that had
 /// already asked them about overwriting.
 ///
-/// On the blocking pool, like [`crate::deck_import::deck_import_read_file`] — a path on a
+/// On the blocking pool, like [`crate::import::import_read_file`] — a path on a
 /// network share or a slow stick is a disk wait, and the async runtime is not where a disk
 /// wait belongs. This command takes no `AppState` at all: it touches no database, so it
 /// needs no connection and cannot be refused as [`crate::db::BUSY`].

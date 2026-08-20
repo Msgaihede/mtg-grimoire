@@ -1669,7 +1669,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // with a `{"field":"undo","of":<id>}` payload rather than a tenth word, because
         // `deck_audit.kind`'s CHECK cannot be altered — SQLite has no `ALTER … CHECK` — and a
         // tenth word would mean rebuilding every reader's whole deck history for a spelling.
-        // `deck_import::commit_import` met this first and reused `add`/`remove` for it.
+        // `import::commit_import` met this first and reused `add`/`remove` for it.
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS deck_undo (
                 audit_id INTEGER PRIMARY KEY

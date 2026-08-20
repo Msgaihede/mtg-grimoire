@@ -2660,7 +2660,7 @@ describe("the decklist import", () => {
 
   /** The three fields of a resolve line, so a case can name only the ones it is about. */
   function resolve(db: FakeDb, lines: Partial<ImportResolveLine>[]) {
-    return readHandlers(db).deck_import_resolve({
+    return readHandlers(db).import_resolve({
       lines: lines.map((l) => ({ name: "", setCode: null, collectorNumber: null, ...l })),
     });
   }
@@ -2854,7 +2854,7 @@ describe("the decklist import", () => {
   });
 
   it("has no file to read, and says so rather than inventing a decklist", () => {
-    expect(() => readHandlers(makeDb()).deck_import_read_file()).toThrow(/no file picker/i);
+    expect(() => readHandlers(makeDb()).import_read_file()).toThrow(/no file picker/i);
   });
 });
 
@@ -2944,7 +2944,7 @@ describe("the busy fault", () => {
     //
     // All three follow the same split as `error_log_clear` before them: the write half takes
     // `AppState.db` through `lock_for` and is therefore refusable, while its read half
-    // (`deck_import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
+    // (`import_resolve`, `get_marketplace`, and `marketplace_feed_status`) goes through
     // `db_read` and answers through every second of a sync.
     //
     // The card pane's grouping selector then added `set_printing_group_by`, on the same split
