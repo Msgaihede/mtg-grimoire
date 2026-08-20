@@ -1,11 +1,37 @@
+import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { useAppStore, type SearchView } from "@/lib/store";
 import { WishlistPage } from "./WishlistPage";
+
+/**
+ * The page, with the layout the store would be holding when a reader arrives at it.
+ *
+ * `wishlistView` lives in the store — where `"grid"` is the app's own default, because these are
+ * cards the reader does not have yet and the picture is how you recognise what you are about to
+ * buy — and `WishlistPage` reads it directly, so a story cannot pass it as a prop. `useState`'s
+ * lazy initializer is `CollectionPage.stories.tsx`'s answer to that and for its reason: an effect
+ * runs after the first paint, so a table story would render the wall for one frame first.
+ *
+ * **`"grid"`, not `"card"`.** The store's type is `SearchView = "table" | "grid"`, shared with
+ * the other two lists; "card mode" is what the filter bar's toggle *calls* it — `LayoutToggle`'s
+ * two buttons are named "Card view" and "Table view".
+ */
+function Page({ view }: { view: SearchView }) {
+  useState(() => {
+    useAppStore.getState().setWishlistView(view);
+  });
+  return <WishlistPage />;
+}
 
 const meta = {
   title: "Wishlist/Page",
-  component: WishlistPage,
+  component: Page,
   tags: ["autodocs"],
+  args: { view: "grid" },
+  // Keyed, so changing the layout in Controls remounts and the initializer above runs again
+  // rather than writing to a store the mounted page is already subscribed to.
+  render: (args) => <Page key={args.view} {...args} />,
   decorators: [
     // The page is `h-full`, so it needs a parent with a height or the virtualiser is handed a
     // 0px window. 1032px is exactly the content column at the 1280×800 window
@@ -20,11 +46,25 @@ const meta = {
   ],
   parameters: {
     docs: {
+      /**
+       * **Each story on this page gets its own frame**, which is the one thing that gives it its
+       * own `useAppStore`.
+       *
+       * Every story in this file writes `wishlistView` during render, and the store is a module
+       * singleton that `.storybook/` cannot make per-story. Inline, an autodocs page mounts every
+       * story at once and the last one to render would own the store for all of them — every
+       * story below showing the same layout, and reading as a component that ignores its
+       * arguments. `CollectionPage.stories.tsx` carries the long form of this note.
+       */
+      story: { inline: false, height: "680px" },
       description: {
         component:
-          "The thin mirror of the collection: a shopping list, not an inventory. One list and " +
-          "no layout toggle — a shopping list is read by name, and forty pieces of art answer " +
-          "none of what it is for.\n\n" +
+          "The thin mirror of the collection: a shopping list, not an inventory — drawn as a " +
+          "wall of art or as a table, and **it opens on the wall**, which is where it agrees " +
+          "with the search rather than with the collection. These are cards the reader does not " +
+          "have yet and may never have held, so the picture is how you recognise the thing you " +
+          "are about to buy; the table is a press away for the trip where the question is what " +
+          "it all costs.\n\n" +
           "Driven end to end by `.storybook/fake/`. The **five seeded wishes are five different " +
           "answers to “is this filled?”**, and every one of them is arithmetic the fake really " +
           "does rather than a number written into a fixture — `wishlist::OWNED_SQL` is mirrored " +
@@ -50,7 +90,7 @@ const meta = {
       },
     },
   },
-} satisfies Meta<typeof WishlistPage>;
+} satisfies Meta<typeof Page>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -82,18 +122,97 @@ export const Default: Story = {
     await expect(await canvas.findByText("$158.06")).toBeInTheDocument();
     await expect(canvas.getByText("Still to buy (USD)")).toBeInTheDocument();
     await expect(canvas.queryByText("€94.62")).not.toBeInTheDocument();
-    // What assistive tech is told the list is: every matching row plus the header
-    // (`VirtualTable.tsx:181`), not the rows a virtualised list keeps in the DOM. A wishlist
-    // total is counted in full, so there is no unknown-count case here — unlike the search's.
-    await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
-      "aria-rowcount",
-      "6",
-    );
+
+    // Five wishes, five tiles. One per **wish** and never per card, which is the reverse of the
+    // collection's wall: there two entries for one printing are one piece of art, and here a
+    // foil wish and a nonfoil wish are two wishes with two prices.
+    await expect(canvas.getByRole("group", { name: "Your wishlist" })).toBeInTheDocument();
+    await expect(canvas.getByText("2/4")).toBeInTheDocument();
+
+    // The one thing a picture must not settle: Sol Ring's wish names no printing, so it is drawn
+    // as one — the newest of its oracle card — and captioned as what it actually is.
+    await expect(canvas.getByText("Any printing")).toBeInTheDocument();
+
     // **The Needs review chip is not drawn**, and its absence is the rule rather than an
-    // oversight: `WishlistFilterBar.tsx:21` offers it only where there is something to filter, so
+    // oversight: `WishlistFilterBar.tsx` offers it only where there is something to filter, so
     // a list nothing flagged does not carry a control that would spend its whole life saying
     // nothing. {@link NeedsReview} is the same page with the chip.
     await expect(canvas.queryByRole("button", { name: "Needs review" })).toBeNull();
+  },
+};
+
+/**
+ * The same five wishes as a list — the layout for the trip where the question is what it all
+ * costs, and where six columns of facts beat six pieces of art.
+ *
+ * It is one press from {@link Default} and one press back; nothing else about the list changes,
+ * which is the whole claim these two stories make together. The header above them is the same
+ * header, and the wishes are the same wishes.
+ */
+export const Table: Story = {
+  args: { view: "table" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // What assistive tech is told the list is: every matching row plus the header
+    // (`VirtualTable.tsx:181`), not the rows a virtualised list keeps in the DOM. A wishlist
+    // total is counted in full, so there is no unknown-count case here — unlike the search's.
+    await expect(await canvas.findByRole("table", { name: "Your wishlist" })).toHaveAttribute(
+      "aria-rowcount",
+      "6",
+    );
+    await expect(canvas.getByText("2 of 4 owned")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The two writes a wish needs, from a tile.
+ *
+ * The table edits in place because a shopping list is where the number of copies is
+ * *maintained*. A 170px caption has room for one 24px control and nothing else, so on the wall
+ * both moved into a panel behind it — the same anchored popup the search wall's quick-add hangs
+ * off, opening from the tile's left edge so the first column's panel is not clipped by a
+ * scroller that cannot be scrolled left.
+ *
+ * The stepper here is the table's stepper, `min={1}` included: zero deletes a wish, and a
+ * control that deleted a row when held down would be a one-way door with no undo. Removal is the
+ * press below it, and it is offered on every wish — crossing a line off a shopping list is what
+ * a shopping list is for.
+ */
+export const EditingFromATile: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /Edit Counterspell .* on your wishlist/ }),
+    );
+
+    const panel = await canvas.findByRole("dialog", { name: "Edit Counterspell" });
+    await expect(
+      within(panel).getByRole("spinbutton", { name: "Copies wanted of Counterspell (MH2 267)" }),
+    ).toHaveValue(4);
+    await expect(
+      within(panel).getByRole("button", { name: /Remove Counterspell .* from your wishlist/ }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * A flagged wish on the wall — **listed, counted, and asking to be looked at**, which is the rule
+ * `needs_review` is written under and therefore something no layout may drop.
+ *
+ * The table has a band across the row for the reconciler's sentence. A card has corners, so the
+ * flag shares the top-left chip with the cost, and the whole sentence rides as its tooltip — the
+ * same arrangement the band already makes for its own truncation, since the second half of that
+ * sentence is what to do about it.
+ */
+export const FlaggedOnTheWall: Story = {
+  parameters: { fake: { seed: "needsReview" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const flag = await canvas.findByText("Needs review", { selector: "span" });
+    await expect(flag).toHaveAttribute(
+      "title",
+      expect.stringContaining("Scryfall removed this printing from its database"),
+    );
   },
 };
 
@@ -109,6 +228,7 @@ export const Default: Story = {
  * NM", so a Damaged copy would fill a finish-blind wish completely.
  */
 export const FoilWishUnfilled: Story = {
+  args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Found by its printing rather than by "0 of 1 owned", which is **three** of the five seeded
@@ -145,6 +265,7 @@ export const FoilWishUnfilled: Story = {
  * 1), and Counterspell is one of the four it does not (2 of 4).
  */
 export const FulfilledAndUnfulfilled: Story = {
+  args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByText("Sol Ring");
@@ -212,6 +333,7 @@ export const Empty: Story = {
  * row on screen carries a flag and the chip is the only way back off.
  */
 export const NeedsReview: Story = {
+  args: { view: "table" },
   parameters: { fake: { seed: "needsReview" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -245,6 +367,7 @@ export const NeedsReview: Story = {
  * `onError` restores the snapshot `onMutate` took, and the box goes back to 4.
  */
 export const Busy: Story = {
+  args: { view: "table" },
   parameters: { fake: { fault: "busy" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -281,6 +404,7 @@ export const Busy: Story = {
  * a wish that is gone.
  */
 export const Removed: Story = {
+  args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByText("Sol Ring");
