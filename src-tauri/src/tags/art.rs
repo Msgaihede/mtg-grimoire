@@ -155,9 +155,10 @@ mod tests {
     /// **A hand-written file rather than a `format!` helper**, because three of the seven
     /// things it has to exercise are things a formatter cannot say: an `annotation` key that
     /// is *absent* rather than null (~99 % of the real file), a `"description": null`, and a
-    /// line that is not JSON at all. Every line's `"type"` is `"illustration"` and every
-    /// tagging key is `illustration_id` — an art fixture written with `oracle_id` would sail
-    /// through an ingest that read the wrong column and prove nothing.
+    /// line that is not JSON at all. Every **tag** line's `"type"` is `"illustration"` and
+    /// every tagging key is `illustration_id` — an art fixture written with `oracle_id` would
+    /// sail through an ingest that read the wrong column and prove nothing. (The deliberate
+    /// `{"object":"card", …}` line has no `"type"` at all, which is the point of it.)
     fn art_fixture() -> std::path::PathBuf {
         let lines = fixture_lines("art-tags-sample.jsonl");
         gz_fixture(&lines.iter().map(String::as_str).collect::<Vec<_>>())
@@ -196,6 +197,18 @@ mod tests {
             .into_iter()
             .map(|(slug, _)| slug)
             .collect()
+    }
+
+    /// How many `art_*_staging` tables a refused run left behind. Always zero: the ingest
+    /// drops them on the way out, and one left standing is what the *next* refresh's
+    /// `create_staging` would silently inherit rows from.
+    fn staging_tables(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name LIKE 'art_%_staging'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     fn weight_of(db: &Mutex<Connection>, illustration_id: &str, slug: &str) -> String {
@@ -342,36 +355,74 @@ mod tests {
         assert_eq!(stored, None, "what the file said, which was nothing");
     }
 
-    /// **An art file that names `oracle_id` is the wrong file**, and must yield no taggings
-    /// rather than half a taxonomy.
+    /// **An art file that names `oracle_id` is the wrong file, and is refused outright.**
     ///
     /// The two datasets are the same document in two dialects, so a line from the oracle file
-    /// parses perfectly as a tag here — only its taggings name a key this one does not read.
-    /// Falling back to the other dataset's key would file an oracle id in
-    /// `art_tag_illustrations`, where it joins to nothing and looks like an art tag nobody
-    /// drew.
+    /// parses perfectly as a tag here — thousands of them would — and only its taggings name
+    /// a key this one does not read. Filing an oracle id in `art_tag_illustrations` would be
+    /// a row that joins to nothing; **swapping the result in is worse**, because it promotes
+    /// an empty closure over a working taxonomy and stamps the watermark in the same
+    /// transaction, after which the next weekly check replays that ETag, is told 304, and
+    /// never gets past it. [`TagError::Untagged`] is what stops that, and it names taggings
+    /// rather than tags so a reader of `error_log` can tell "the download went wrong" from
+    /// "the download went right and was the wrong file".
+    ///
+    /// Driven over a database that already **has** a taxonomy, because "swaps nothing" is not
+    /// a claim an empty database can support.
     #[test]
-    fn an_oracle_keyed_line_contributes_no_art_taggings() {
+    fn an_oracle_keyed_file_is_refused_rather_than_swapped_in_empty() {
         let db = mem_db();
-        let line = r#"{"object":"tag","id":"id-ramp","label":"Ramp","slug":"ramp","type":"oracle","parent_ids":[],"taggings":[{"oracle_id":"oid-1","weight":"median"}]}"#;
-        let stats = ingest(&db, &gz_fixture(&[line])).unwrap();
+        ingest(&db, &art_fixture()).unwrap();
 
-        assert_eq!(stats.tags, 1, "the tag itself still parses");
-        assert_eq!(stats.taggings, 0, "and none of its taggings do");
-        assert_eq!(stats.closure_rows, 0);
-        let rows: i64 = crate::db::lock_blocking(&db)
-            .query_row("SELECT count(*) FROM art_tag_illustrations", [], |r| {
-                r.get(0)
-            })
+        let line = r#"{"object":"tag","id":"id-ramp","label":"Ramp","slug":"ramp","type":"oracle","parent_ids":[],"taggings":[{"oracle_id":"oid-1","weight":"median"}]}"#;
+        let err = ingest(&db, &gz_fixture(&[line])).unwrap_err();
+
+        assert!(
+            matches!(err, TagError::Untagged { tags: 1 }),
+            "expected Untagged {{ tags: 1 }}, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not one tagging"),
+            "the message has to point at the taggings, not at the tags: {err}"
+        );
+        // Written after shipping exactly this: a backslash line continuation inside an
+        // #[error] literal renders as a run of spaces once rustfmt joins the source lines,
+        // and the mangled sentence goes straight into `error_log` where nobody re-reads it.
+        assert!(
+            !err.to_string().contains("  "),
+            "a line continuation in the #[error] renders as a run of spaces: {err}"
+        );
+
+        // The taxonomy that was already there is untouched — the rows, and the watermark that
+        // says which file they came from.
+        assert_eq!(slugs_of(&db, "illus-grandchild"), ["beast", "dog", "hound"]);
+        let conn = crate::db::lock_blocking(&db);
+        let (tags, taggings): (i64, i64) = conn
+            .query_row(
+                "SELECT tag_count, tagging_count FROM art_tag_meta WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
-        assert_eq!(rows, 0);
+        assert_eq!(
+            (tags, taggings),
+            (9, 13),
+            "a refused run must not stamp the watermark either"
+        );
+        assert_eq!(staging_tables(&conn), 0);
     }
 
     /// The oracle rule, on the second dataset: a file that yields no tags is a bad download,
     /// not an empty taxonomy. Swapping here would trade working rows for none.
+    ///
+    /// **Driven from a database that already holds a taxonomy**, which is the whole of what
+    /// "swaps nothing" means. Started from `mem_db()` alone, the row count it asserts would
+    /// pass whether the swap ran or not — an empty database stays empty either way.
     #[test]
     fn an_art_file_with_no_tags_is_refused_and_swaps_nothing() {
         let db = mem_db();
+        ingest(&db, &art_fixture()).unwrap();
+
         let err = ingest(
             &db,
             &gz_fixture(&["<html>Service Unavailable</html>", r#"{"object":"card"}"#]),
@@ -382,19 +433,17 @@ mod tests {
             matches!(err, TagError::Empty { skipped: 2 }),
             "expected Empty {{ skipped: 2 }}, got {err:?}"
         );
+        assert_eq!(
+            slugs_of(&db, "illus-grandchild"),
+            ["beast", "dog", "hound"],
+            "an empty file must not touch the live tables"
+        );
         let conn = crate::db::lock_blocking(&db);
         let n: i64 = conn
             .query_row("SELECT count(*) FROM art_tags", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n, 0);
+        assert_eq!(n, 9);
         // And the staging tables were dropped rather than left lying around.
-        let staged: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name LIKE 'art_%_staging'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(staged, 0);
+        assert_eq!(staging_tables(&conn), 0);
     }
 }

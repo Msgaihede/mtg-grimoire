@@ -464,11 +464,28 @@ pub enum TagError {
     Io(#[from] std::io::Error),
     #[error("database error while storing tags: {0}")]
     Db(#[from] rusqlite::Error),
-    /// The file decoded and not one line was a tag. A gzipped error page, the wrong dataset,
-    /// a truncated download — none of which may replace a working taxonomy with an empty one.
-    /// [`crate::ingest::IngestError::Empty`] refuses a bulk card file for the same reason.
+    /// The file decoded and not one line was a tag. A gzipped error page, a truncated
+    /// download, a file of nothing but cards — none of which may replace a working taxonomy
+    /// with an empty one. [`crate::ingest::IngestError::Empty`] refuses a bulk card file for
+    /// the same reason.
     #[error("no tags found in the tag file ({skipped} lines skipped); keeping the previous ones")]
     Empty { skipped: u64 },
+    /// The file was full of tags and **not one of them tagged anything**.
+    ///
+    /// [`Empty`]'s sibling, and a separate variant because it points somewhere else entirely.
+    /// `Empty` is a download that went wrong; this is a download that went *right* and was the
+    /// wrong file — the other taxonomy served under this dataset's name, or Scryfall renaming
+    /// the key [`Dataset::subject_column`] reads. Both files parse as thousands of perfectly
+    /// good tags, and the taggings are the only place the difference shows.
+    ///
+    /// **Refusing is not fussiness, it is the only thing that self-heals.** A swap here would
+    /// promote an empty closure over a working one *and* stamp the watermark in the same
+    /// transaction, so the next weekly check would replay that ETag, be told 304, and keep an
+    /// empty taxonomy forever with nothing in `error_log` to say why.
+    ///
+    /// [`Empty`]: TagError::Empty
+    #[error("the tag file held {tags} tags and not one tagging; keeping the previous ones")]
+    Untagged { tags: u64 },
 }
 
 impl TagError {
@@ -477,7 +494,7 @@ impl TagError {
         use crate::errors::Kind;
         match self {
             TagError::Io(_) | TagError::Db(_) => Kind::Io,
-            TagError::Empty { .. } => Kind::Parse,
+            TagError::Empty { .. } | TagError::Untagged { .. } => Kind::Parse,
         }
     }
 }
@@ -646,15 +663,31 @@ pub fn ingest_gz(
         written = stats.taggings;
     }
 
-    // Not one line was a tag: the download is bad, not the taxonomy. Swapping here would
-    // trade a working set of categories for none, so refuse — and drop the staging tables
-    // rather than leave them lying around.
-    if g.tags.is_empty() {
+    // **Two ways a file that decoded perfectly is still not a taxonomy**, and the swap below
+    // is unconditional, so this is the last place either can be stopped. Both leave the
+    // previous rows exactly where they were and drop the staging tables rather than leave
+    // them lying around.
+    //
+    // Not one line was a tag is the obvious one: a gzipped error page, a truncated download.
+    // **Tags but not one tagging is the one that only exists because there are two datasets
+    // of the same shape** — the art file served under the oracle name, or Scryfall renaming
+    // the key `Dataset::subject_column` reads — and it is the more dangerous of the two,
+    // because it does not self-heal. A swap would write an empty closure *and* the watermark
+    // in one transaction, and the next weekly check would replay that ETag, take its 304 and
+    // leave the taxonomy empty forever with nothing in `error_log` to explain it.
+    let refusal = match (g.tags.is_empty(), stats.taggings) {
+        (true, _) => Some(TagError::Empty {
+            skipped: stats.skipped_lines,
+        }),
+        (false, 0) => Some(TagError::Untagged {
+            tags: g.tags.len() as u64,
+        }),
+        _ => None,
+    };
+    if let Some(err) = refusal {
         let conn = crate::db::lock_blocking(db);
         (ds.drop_staging)(&conn)?;
-        return Err(TagError::Empty {
-            skipped: stats.skipped_lines,
-        });
+        return Err(err);
     }
     stats.tags = g.tags.len() as u64;
 
