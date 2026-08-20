@@ -2,11 +2,11 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import type { DeckWalkStop } from "@/features/decks/deckWalk";
+import { listWalkStops } from "@/features/card/cardWalk";
 import { useDeck } from "@/features/decks/useDeck";
 import type { PrintingsResponse } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
-import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useAppStore, type CardWalkStop, type PaneDeckContext } from "@/lib/store";
 import { readHandlers } from "../../../.storybook/fake/db";
 import { printing } from "../../../.storybook/fake/fixtures";
 import { seed } from "../../../.storybook/fake/seeds";
@@ -89,6 +89,16 @@ function slotOf(deckId: number, cardId: string): PaneDeckContext {
 }
 
 /**
+ * A stop that really is a deck row: `CardWalkStop` with the nullable half nailed down.
+ *
+ * The store's stop carries `deck: PaneDeckContext | null`, because three of the four surfaces
+ * that publish a walk have no deck rows at all. {@link deckWalkOf} only ever builds the other
+ * kind, and saying so here is what lets the deck stories read `WALK_FROM.deck.deckId` without a
+ * non-null assertion apiece.
+ */
+type DeckStop = CardWalkStop & { deck: PaneDeckContext };
+
+/**
  * One deck's live rows as a walk the modal can step along — **the shape `DeckEditor` publishes.**
  *
  * `store.deckWalk` is the open editor's cards in the order the desk is drawing them, which depends
@@ -105,15 +115,16 @@ function slotOf(deckId: number, cardId: string): PaneDeckContext {
  * A row whose printing has left the corpus is dropped rather than carried: an orphan has no oracle
  * id, and an oracle id is the whole of what this modal is opened by.
  */
-function deckWalkOf(deckId: number): DeckWalkStop[] {
+function deckWalkOf(deckId: number): DeckStop[] {
   const db = seed("starter");
-  const stops: DeckWalkStop[] = [];
+  const stops: DeckStop[] = [];
   for (const row of db.deckCards) {
     if (row.deckId !== deckId || row.variant !== "live") continue;
     const card = db.cards.find((c) => c.id === row.cardId);
     const category = db.deckCategories.find((c) => c.id === row.categoryId);
     if (!card || !category) continue;
     stops.push({
+      cardId: row.cardId,
       oracleId: card.oracleId,
       name: row.name,
       deck: {
@@ -128,6 +139,34 @@ function deckWalkOf(deckId: number): DeckWalkStop[] {
   }
   return stops;
 }
+
+/**
+ * A **page's** list as a walk: the collection's, the wishlist's or the search results' — three
+ * cards with no deck row anywhere on them.
+ *
+ * Built through `listWalkStops`, the very function those three pages publish with, so the story
+ * stages the real shape rather than a hand-written one that could quietly disagree with it. The
+ * rows stand in for tiles on a wall; what a page's *order* is belongs to that page's own tests.
+ *
+ * Three synthetic cards of the `large` seed, so every one of them has a wall of eight printings
+ * to land on and the first printing of each is a real id for the ring to sit on.
+ */
+const LIST_WALK: CardWalkStop[] = (() => {
+  // One row per oracle card, first printing wins — which is what a wall of *cards* is, and what
+  // the collection's own tiles already merge down to.
+  const seen = new Set<string>();
+  const rows = seed("large")
+    .cards.filter((card) => !seen.has(card.oracleId) && seen.add(card.oracleId))
+    .slice(0, 3);
+  return listWalkStops(rows, (card) => ({
+    cardId: card.id,
+    oracleId: card.oracleId,
+    name: card.name,
+  }));
+})();
+
+/** The middle stop, so both chevrons are live — {@link DECK_2_WALK}'s own reason. */
+const LIST_FROM = LIST_WALK[1];
 
 /**
  * Deck 2's walk, and the stop {@link SteppingTheDeck} opens on.
@@ -188,6 +227,8 @@ function Printings({
   deckId,
   heldCardId,
   walkDeckId,
+  listWalk,
+  fromCardId,
   truncatedTo,
 }: {
   /** The oracle card whose printings are being asked for. */
@@ -200,9 +241,14 @@ function Printings({
   deckId: number | null;
   /** The printing that deck row plays: the swap's `from`, and the tile the wall rings. */
   heldCardId: string | null;
-  /** Stage an open deck editor publishing this deck's walk, or `null` for no editor at all —
-   *  which is what every surface outside the deck builder opens the modal from. */
+  /** Stage an open deck editor publishing this deck's walk, or `null` for no editor at all. */
   walkDeckId: number | null;
+  /** Stage a **page's** list publishing its walk instead — {@link LIST_WALK} — which is what the
+   *  collection, the wishlist and the search results do. `false` is no such list. */
+  listWalk: boolean;
+  /** The printing the modal was opened *from* where no deck row names one: the wall's "you are
+   *  here" ring on a page's list. Ignored where {@link heldCardId} answers instead. */
+  fromCardId: string | null;
   /** Stage a truncated page by claiming this many printings exist. `null` leaves the fake to
    *  answer — see {@link truncatedPage} for why the count cannot come from it. */
   truncatedTo: number | null;
@@ -219,11 +265,23 @@ function Printings({
         truncatedPage(oracleId, truncatedTo),
       );
     }
-    // **Written on every story, `[]` included**, rather than only where a walk is wanted: the
-    // store is the one global `.storybook/` cannot make per-story, so a story that said nothing
-    // here would inherit whichever deck the last one staged and grow chevrons nobody asked for.
-    useAppStore.getState().setDeckWalk(walkDeckId === null ? [] : deckWalkOf(walkDeckId));
-    useAppStore.getState().openAllPrintings({ oracleId, name, deck: opened });
+    // **Written on every story, the empty walk included**, rather than only where a walk is
+    // wanted: the store is the one global `.storybook/` cannot make per-story, so a story that
+    // said nothing here would inherit whichever list the last one staged and grow chevrons nobody
+    // asked for.
+    useAppStore.getState().setCardWalk(
+      walkDeckId !== null
+        ? { label: "the deck", stops: deckWalkOf(walkDeckId) }
+        : listWalk
+          ? { label: "your collection", stops: LIST_WALK }
+          : { label: "", stops: [] },
+    );
+    // `heldCardId` where a deck row names the printing, else the row the page's list was opened
+    // on. Both are the same field of the request and the same ring on the wall — the difference
+    // is only which surface could answer it.
+    useAppStore
+      .getState()
+      .openAllPrintings({ cardId: heldCardId ?? fromCardId ?? "", oracleId, name, deck: opened });
     return opened;
   });
 
@@ -265,6 +323,8 @@ const meta = {
     deckId: null,
     heldCardId: null,
     walkDeckId: null,
+    listWalk: false,
+    fromCardId: null,
     truncatedTo: null,
   },
   // Keyed, so changing the card, the opener or the count in Controls mounts a fresh host and the
@@ -272,7 +332,7 @@ const meta = {
   // already subscribed to.
   render: (args) => (
     <Printings
-      key={`${args.oracleId}:${args.deckId}:${args.walkDeckId}:${args.truncatedTo}`}
+      key={`${args.oracleId}:${args.deckId}:${args.walkDeckId}:${args.listWalk}:${args.truncatedTo}`}
       {...args}
     />
   ),
@@ -736,6 +796,59 @@ export const SteppingTheDeck: Story = {
     await waitFor(async () => {
       await expect(useAppStore.getState().paneDeckContext).toEqual(DECK_2_WALK[2].deck);
     });
-    await expect(useAppStore.getState().selectedCardId).toBe(DECK_2_WALK[2].deck.cardId);
+    await expect(useAppStore.getState().selectedCardId).toBe(DECK_2_WALK[2].cardId);
+  },
+};
+
+/**
+ * The same walk from a **page's list** — the collection, the wishlist or the search results.
+ *
+ * Reported 2026-08-20 (#128): the chevrons and the arrow keys worked from a deck row and did
+ * nothing anywhere else, because the only walk that existed was the desk's. The three card lists
+ * now publish theirs through the same `usePublishCardWalk`, and the modal reads one field without
+ * caring which surface filled it.
+ *
+ * **Two things differ from {@link SteppingTheDeck}, and no third.** The chevrons say the list's
+ * own noun — `Next card in your collection` — because the walk carries it, and a control that
+ * said "in the deck" over a wishlist would be the one part of this feature that lies. And the
+ * second write of a step is `setSelectedCardId` rather than `openCardFromDeck`: there is no deck
+ * row to re-anchor the card pane to, and clearing `paneDeckContext` is what keeps a reader who
+ * arrived here from a deck out of a pane still offering to swap the row they left.
+ *
+ * **The ring is the third thing, and it is new rather than different.** The wall marks the
+ * printing the question was asked about on every surface now, not only inside a deck. Without it
+ * a step between two printings of one card — which is what an All-printings search or a
+ * collection holding two of them is made of — moves nothing a reader can see.
+ */
+export const SteppingAPageList: Story = {
+  args: {
+    oracleId: LIST_FROM.oracleId,
+    name: LIST_FROM.name,
+    fromCardId: LIST_FROM.cardId,
+    listWalk: true,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("dialog", { name: LIST_FROM.name });
+
+    const back = canvas.getByRole("button", {
+      name: `Previous card in your collection, ${LIST_WALK[0].name}`,
+    });
+    const forward = canvas.getByRole("button", {
+      name: `Next card in your collection, ${LIST_WALK[2].name}`,
+    });
+    await expect(back).toBeEnabled();
+    await expect(forward).toBeEnabled();
+
+    await userEvent.click(forward);
+
+    await expect(await canvas.findByRole("dialog", { name: LIST_WALK[2].name })).toBeVisible();
+    // **And the selection followed.** Read out of the store because nothing in this frame draws
+    // the collection — the ring on its wall and the card pane are what this field is. No deck
+    // context travels with it: this list has no rows a press could write to.
+    await waitFor(async () => {
+      await expect(useAppStore.getState().selectedCardId).toBe(LIST_WALK[2].cardId);
+    });
+    await expect(useAppStore.getState().paneDeckContext).toBeNull();
   },
 };

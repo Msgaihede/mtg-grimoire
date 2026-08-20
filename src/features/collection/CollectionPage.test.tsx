@@ -947,6 +947,9 @@ describe("the card menu", () => {
     await user.click(printings);
 
     expect(useAppStore.getState().printingsRequest).toEqual({
+      // The printing the menu was opened on: the modal's "you are here" ring, and how it finds
+      // the reader's place on the walk this page publishes.
+      cardId: "c1",
       oracleId: "o1",
       name: "Lightning Bolt",
       // A collection row is not a row of an open deck, so there is no slot for a press in the
@@ -1237,5 +1240,65 @@ describe("the arrow-key walk", () => {
 
     expect(useAppStore.getState().selectedCardId).toBe("c2");
     expect(screen.getByRole("button", { name: "Ancestral Recall" })).toHaveFocus();
+  });
+});
+
+/**
+ * The list the printings modal's own arrow keys walk, published to the store by this page.
+ *
+ * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, outside every
+ * view, and the order is this page's — a query narrowed by its filter bar. What the modal *does*
+ * with a walk belongs to `AllPrintingsDialog.test.tsx`; what this file owes is that a walk of the
+ * right shape is published at all, and taken back when the page goes.
+ */
+describe("the walk it publishes for the printings modal", () => {
+  const walk = () => useAppStore.getState().cardWalk;
+
+  // The walk is derived from the rows rather than from either layout, so which one is on screen
+  // is not this suite's business — but the store is one global and the suite above it leaves the
+  // wall on, so say which and read the same page both ways.
+  beforeEach(() => useAppStore.setState({ collectionView: "table" }));
+
+  /**
+   * **Deduplicated by printing, and it is the *tiles* this is built from.** Two entries of one
+   * printing — a foil and a played nonfoil — are two rows of the table, one tile of the wall, and
+   * one wall with one ring from the modal. A stop for each would be a press that moved nothing on
+   * screen. This is the case that discriminates the tiles from the rows: the table draws three
+   * rows here and the walk has two stops.
+   */
+  it("publishes one stop per printing, in the order the list is drawn", async () => {
+    collectionList.mockResolvedValue(
+      page([
+        BOLT,
+        { ...BOLT, id: 8, finish: "nonfoil" },
+        { ...BOLT, id: 9, cardId: "c2", name: "Ancestral Recall", oracleId: "o2" },
+      ]),
+    );
+    wrap(<CollectionPage />);
+
+    await waitFor(() =>
+      expect(walk().stops).toEqual([
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Ancestral Recall", deck: null },
+      ]),
+    );
+  });
+
+  /** The noun the modal's chevrons read into their own names — `Next card in your collection`. */
+  it("says which list it is", async () => {
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(walk().label).toBe("your collection"));
+  });
+
+  /** And it goes when the page does: a walk left behind would step a modal opened somewhere else
+   *  through a list nobody is looking at. */
+  it("clears the walk when the page goes", async () => {
+    const view = wrap(<CollectionPage />);
+    await waitFor(() => expect(walk().stops).toHaveLength(1));
+
+    view.unmount();
+
+    expect(walk().stops).toEqual([]);
   });
 });
