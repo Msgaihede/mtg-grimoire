@@ -566,6 +566,75 @@ fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
 
+/// Every card the plan asks for, as [`group_key`] strings and nothing else.
+///
+/// The deck editor's theory tick: a reader on the **Live** list wants to know which of the cards
+/// in front of them are the deck they designed and which are the proxies standing in until the
+/// real one arrives. That is a question about *rows*, and it is the one question about the pair
+/// that [`theory_diff`] cannot answer — in either direction. A card the reader has fully acquired
+/// is **absent** from the diff and is still in the plan; a card half-acquired is on the diff and
+/// also in the plan. "On the shopping list" and "in the plan" are independent facts.
+///
+/// ## Why this exists rather than a second `deck_get`
+///
+/// The editor read the other variant's whole deck for a while and that was removed on 2026-08-20,
+/// for two reasons worth keeping apart. One was a **duplicate rule** — it re-implemented the
+/// comparison this module owns, and disagreed with it. The other was **cost**: `deck_get` prices
+/// every row, joins categories and rolls up allocations, which is a great deal of work for a mark.
+/// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
+/// two columns, no join to `cards` and no marketplace. `DeckEditor.test.tsx` pins the first
+/// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
+///
+/// **It answers [`group_key`] itself rather than a pair**, which is the whole reason the tick and
+/// the shopping list cannot drift: "the same planned card" is one function in this file, and both
+/// surfaces are spelling it with the same code rather than with two agreeing conventions. The
+/// frontend's `theoryMatch.ts` builds the same string for a live row and looks it up.
+///
+/// **Inactive categories are excluded, exactly as [`diff_select`] excludes them**, and for that
+/// function's stated reason: a card parked in the theory Maybeboard is not something the user has
+/// decided to play, so the plan is not asking for it. A pile is otherwise invisible here — the
+/// same card filed as Ramp in the plan and Main deck in the deck is one planned card, which is
+/// what makes the mark survive a re-filing.
+///
+/// Deliberately a `Vec` rather than a set: the caller builds the lookup, duplicates fold there,
+/// and a JSON array is what crosses the IPC boundary anyway.
+pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT dc.card_id, dc.finish
+               FROM deck_cards dc
+               JOIN deck_categories cat ON cat.id = dc.category_id
+              WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND cat.is_active = 1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id, THEORY], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut slots = Vec::new();
+    for row in rows {
+        let (card_id, finish) = row.map_err(|e| e.to_string())?;
+        slots.push(group_key(&card_id, finish.as_deref()));
+    }
+    Ok(slots)
+}
+
+/// [`theory_slots`]'s command. **Read-only** connection, and no marketplace: nothing here is
+/// priced.
+#[tauri::command]
+pub async fn deck_theory_slots(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+) -> Result<Vec<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        theory_slots(&crate::sync::lock_db_read(&state), deck_id)
+    })
+    .await
+    .map_err(|e| format!("the theory list could not be read: {e}"))?
+}
+
 /// What the plan wants and the deck does not have. **Read-only** connection.
 #[tauri::command]
 pub async fn deck_theory_diff(
@@ -1406,6 +1475,103 @@ mod tests {
             "and a printing the feed has never listed is unpriced too"
         );
         assert_eq!(price("bolt-lea", Manapool), Some(390.0));
+    }
+
+    /// Sorted, because `theory_slots` answers in whatever order the scan returns and every
+    /// assertion below is about the *set*.
+    fn slots(conn: &Connection, deck_id: i64) -> Vec<String> {
+        let mut out = theory_slots(conn, deck_id).unwrap();
+        out.sort();
+        out
+    }
+
+    /// The tick's whole job: the plan's rows, and only the plan's.
+    #[test]
+    fn theory_slots_answers_the_plan_and_never_the_live_list() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add(&conn, d, "bolt-lea", main, THEORY, 4);
+        add(&conn, d, "serra-lea", main, LIVE, 1);
+
+        assert_eq!(slots(&conn, d), vec!["bolt-lea|"]);
+    }
+
+    /// The grain, from the side the mark reads it: a plan naming the foil is not answered by the
+    /// regular copy, and the regular copy's key is the one `group_key` spells with an empty half.
+    #[test]
+    fn theory_slots_tells_a_finish_from_the_regular_copy() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add_finish(&conn, d, "bolt-lea", main, THEORY, Some("foil"), 1);
+        add_finish(&conn, d, "serra-lea", main, THEORY, None, 1);
+
+        assert_eq!(slots(&conn, d), vec!["bolt-lea|foil", "serra-lea|"]);
+    }
+
+    /// **The key is `group_key`'s own**, which is what stops the tick and the shopping list
+    /// drifting apart — this asserts they are the same string rather than two conventions that
+    /// happen to agree today.
+    #[test]
+    fn theory_slots_answers_group_keys_rather_than_a_second_spelling() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add_finish(&conn, d, "bolt-lea", main, THEORY, Some("etched"), 1);
+
+        assert_eq!(slots(&conn, d), vec![group_key("bolt-lea", Some("etched"))]);
+    }
+
+    /// A pile is invisible to this, which is what lets the mark survive a re-filing — the same
+    /// card planned as Ramp and sleeved into Main deck is one planned card. One key, not two.
+    #[test]
+    fn theory_slots_does_not_care_which_pile_the_plan_files_a_card_in() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let ramp = category(&conn, d, "Ramp");
+        let main = category(&conn, d, "Main deck");
+        add(&conn, d, "bolt-lea", ramp, THEORY, 1);
+        add(&conn, d, "bolt-lea", main, THEORY, 1);
+
+        // Two rows, one planned card — the caller's set folds them.
+        assert_eq!(slots(&conn, d), vec!["bolt-lea|", "bolt-lea|"]);
+    }
+
+    /// `diff_select`'s rule, read by the same reasoning: a card parked in an inactive pile is
+    /// not something the user has decided to play, so the plan is not asking for it.
+    #[test]
+    fn theory_slots_skips_a_switched_off_pile() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        let maybe = category(&conn, d, "Maybeboard");
+        add(&conn, d, "bolt-lea", main, THEORY, 1);
+        add(&conn, d, "serra-lea", maybe, THEORY, 1);
+        conn.execute(
+            "UPDATE deck_categories SET is_active = 0 WHERE id = ?1",
+            params![maybe],
+        )
+        .unwrap();
+
+        assert_eq!(slots(&conn, d), vec!["bolt-lea|"]);
+    }
+
+    /// A deck with no plan answers nothing rather than erroring — which is the honest reading,
+    /// and what lets the frontend gate on the switch alone.
+    #[test]
+    fn theory_slots_answers_nothing_for_a_deck_with_no_plan() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        let main = category(&conn, d, "Main deck");
+        add(&conn, d, "bolt-lea", main, LIVE, 4);
+
+        assert!(theory_slots(&conn, d).unwrap().is_empty());
     }
 
     /// The hand-mirrored wire contract, pinned so a field added here and never mirrored in

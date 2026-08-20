@@ -1381,6 +1381,49 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
+## The theory tick, and the four things a photograph settled
+
+Added 2026-08-20 with `TheoryMatchMark` — the mark a deck card wears on the **Live** list when the
+deck's plan asks for it too. The rule and the data are in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); this is what looking at it
+changed, and every one of the four was a decision the suite could not have made.
+
+**How it was looked at.** Both locks were held by other worktrees all afternoon, so this was the
+lock-free path: a `file://` page linking the **built** `dist/assets/index-*.css`, with card art
+out of the image cache, the components' own class strings pasted onto the markup, and
+`msedge --headless=new --screenshot`. Before and after in one frame, and candidates side by side —
+which is the whole reason it can settle a question a test cannot. **The shipped-window pass was
+not run** and is still owed.
+
+- **The fill is `--color-pie-u`, not `bg-accent`.** Gold was the obvious first choice — a chip on
+  a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
+  gold marks in one 27px strip meaning two unrelated things. `--color-ok`, the green the format
+  check draws its clean-deck `CircleCheck` in, is legible and says the one sentence a tick must
+  not ("nothing is wrong here"). The neutral count paint was no distinction at all — a grey chip
+  at each end of the strip. Azure is none of those. It **is** one of the six tag colours, which is
+  the accepted cost: the quantity tag at the other end draws a *number*, so the two are still told
+  apart by content and position.
+- **The slant is mirrored** — `COUNT_TAG_SLANT_MIRRORED`. `CountTag`'s cut takes its bite out of
+  the edge *away* from the corner it is pinned to, which is what makes it read as a banner tucked
+  into that corner. Reused unmirrored on the right, the bite lands against the card's own edge and
+  leaves a notch. The mirrored pair read as bookends of the marks strip; the unmirrored one read
+  as a mistake. Same idea `GameChangerBanner` already states about its forked tail.
+- **The Grid tile gets a second drawing, not the same one.** One `CountTag` banner for both card
+  faces was the first cut: 22px on a 210px stacked card is 7.5 % of it and the same 22px on a
+  150px tile is **15 %**, so a wall of tiles read as a wall of blue flags with cards behind them.
+  `variant="chip"` echoes the tile's own 9px copy count instead — which is the honest reading of
+  "the same badge as the quantity" anyway, since the two views do not draw the same quantity badge.
+- **The row views get no box.** `GameChangerBadge`'s outlined box around a **tick** is a
+  **checkbox** — the one control every reader already knows — and a decklist of them reads as
+  something to click. `GC` survives the box because it contains letters. So `TheoryMatchBadge` is
+  the glyph alone, at `DeckFinishMark`'s 12px rather than `GC`'s 9px type.
+
+**One thing the frame shows and nobody has decided:** at the bottom-left of a stacked card the
+`RULE BREAK` mark lands **over the card's own printed set/collector/artist line**. `GridView` has
+drawn it in that corner all along, so this is existing shipped behaviour rather than something the
+move introduced — but the stacked card is 210px against a tile's 150 and covers proportionally
+more of it. Worth a look if the illustrator-credit rule above is ever read strictly.
+
 ## The two marks a deck card carries: picked, and just landed
 
 Added 2026-08-14. The rules and the routing live in

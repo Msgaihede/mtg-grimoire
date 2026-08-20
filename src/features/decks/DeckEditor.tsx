@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -67,6 +68,7 @@ import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
+import { theoryMatchSet } from "./theoryMatch";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -2199,6 +2201,36 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * Which rows on screen the plan also asks for — the four views' theory tick.
+   *
+   * **`deckTheorySlots`, and emphatically not a second `deck_get` of the other variant.** That
+   * read was deleted from this file on 2026-08-20 and the test above it pins the deletion:
+   * nothing may call `deckGet` for the list the reader is not looking at. Both halves of that
+   * decision are honoured here. The *duplicate rule* half — it re-implemented the comparison
+   * `deck_theory_diff` owns, and disagreed with it — does not apply, because this is not a
+   * comparison: it asks the plan for its rows, which is the one question about the pair that the
+   * diff cannot answer in either direction. A card the reader has **fully acquired is absent from
+   * the diff and still in the plan**; a card half-acquired is on the diff and also in the plan.
+   * The *cost* half is answered by the command itself: two columns of one indexed scan, no
+   * prices, no allocation roll-up, no marketplace.
+   *
+   * **`live` only, and `undefined` everywhere else.** On the Theory tab every row *is* the plan,
+   * so a mark on all of them is noise — and the query is not even mounted there, which is what
+   * makes that a promise rather than a filter. `undefined` rather than an empty set is the
+   * distinction {@link theoryMatchSet} exists to keep: no plan is not the same statement as a
+   * plan that wants none of this.
+   *
+   * Under `["decks"]` like every other read here, so a theory edit made in this session
+   * invalidates it with everything else.
+   */
+  const planned = useQuery({
+    queryKey: ["decks", "theorySlots", deckId],
+    queryFn: () => ipc.deckTheorySlots(deckId),
+    enabled: theoryEnabled && variant === "live",
+  });
+  const theoryMatches = useMemo(() => theoryMatchSet(planned.data), [planned.data]);
+
+  /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
    *
    * Filtering happens **before** the grouping, so every count and price in a heading is a count
@@ -2410,6 +2442,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
+    theoryMatches,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this

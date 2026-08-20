@@ -3739,6 +3739,27 @@ export function readHandlers(db: FakeDb) {
         .map(toDeckAudit);
     },
 
+    /**
+     * `deck_theory::theory_slots` — every card the plan asks for, as `group_key` strings.
+     *
+     * The deck editor's theory tick. **Not the diff and not derivable from it**: a card the
+     * reader has fully acquired is absent from the shopping list and is still in the plan.
+     *
+     * Same two exclusions {@link theoryDiff} states — inactive categories out, the pile
+     * otherwise invisible — and duplicates left in, because the caller builds a set.
+     */
+    deck_theory_slots: (args: { deckId: number }): string[] => {
+      refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
+      return db.deckCards
+        .filter(
+          (dc) =>
+            dc.deckId === args.deckId &&
+            dc.variant === "theory" &&
+            categoryById(db, dc.categoryId)?.isActive === true,
+        )
+        .map((dc) => `${dc.cardId}|${dc.finish ?? ""}`);
+    },
+
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
      *  {@link theoryDiff} for the direction, the grouping and the two exclusions. */
     deck_theory_diff: (args: { deckId: number; marketplace?: string }): TheoryDiffRow[] => {

@@ -26,7 +26,49 @@ export const NEUTRAL_COUNT_PAINT = {
  * held at 10px on a tag drawn half size the slant is most of the banner, and on one drawn double it
  * is a nick in the corner. `--mark-scale` is the card's own factor — see `lib/cardZoom.ts`.
  */
-const SLANT = "polygon(0 0, 100% 0, calc(100% - 10px*var(--mark-scale,1)) 100%, 0 100%)";
+export const COUNT_TAG_SLANT =
+  "polygon(0 0, 100% 0, calc(100% - 10px*var(--mark-scale,1)) 100%, 0 100%)";
+
+/**
+ * The same cut for a mark in a **right-hand** corner — the left edge slants instead.
+ *
+ * Not a preference: {@link COUNT_TAG_SLANT} takes its bite out of the edge *away* from the corner
+ * it is pinned to, which is what makes the shape read as a banner tucked into that corner. Reused
+ * unmirrored on the right, the bite lands against the card's own edge and leaves a notch there —
+ * photographed 2026-08-20 against the built stylesheet, and the mirrored pair read as bookends of
+ * the marks strip where the unmirrored one read as a mistake.
+ *
+ * It is the same idea `GameChangerBanner` states for its forked tail ("the notch is cut into the
+ * *right* edge, so the banner points away from the tag it emerges from"): the geometry is
+ * oriented to where the mark sits, and only the orientation changes.
+ */
+export const COUNT_TAG_SLANT_MIRRORED =
+  "polygon(calc(10px*var(--mark-scale,1)) 0, 100% 0, 100% 100%, 0 100%)";
+
+/**
+ * The box the slant is cut out of — the height, the two paddings and the face, without the
+ * number.
+ *
+ * Exported so that a mark carrying a **glyph** instead of a count is the same object rather than
+ * a copy of one: `TheoryMatchMark` in `features/decks/CardMarks.tsx` is drawn in the corner
+ * opposite {@link CountTag} on the same card, and two hand-kept-in-step geometries in one corner
+ * pair is the drift this repo has already paid for once. It is deliberately *not* a `glyph` prop
+ * on {@link CountTag}: that component's whole contract is "a number, alone, never `×N`", and a
+ * second content mode inside it would be a branch through the one thing it promises.
+ *
+ * `pr` is larger than `pl` because the slant eats the right edge — the two paddings are what
+ * centre the content inside the visible trapezium rather than inside the box.
+ */
+export const COUNT_TAG_BOX = cn(
+  // 22px, 12px and both paddings are the tag's geometry **at 100% zoom**. It is drawn on a
+  // card face in the deck's stack view, which the reader can zoom from 0.5× to 2×, so every
+  // one of them is multiplied by the card's own `--mark-scale` (`lib/cardZoom.ts`) — a tag
+  // that held still was a sticker on a doubled card and a banner on a halved one. The `, 1`
+  // fallback is what any future surface outside a zoomable card gets, unchanged.
+  "flex h-[calc(22px*var(--mark-scale,1))] shrink-0 items-center",
+  "pr-[calc(0.75rem*var(--mark-scale,1))] pl-[calc(0.375rem*var(--mark-scale,1))]",
+  "font-mono text-[calc(0.75rem*var(--mark-scale,1))] leading-none tabular-nums",
+);
 
 /**
  * A number laid on a card, as a filled banner cut off at a slant — the deck stack's drawing of
@@ -76,18 +118,8 @@ export function CountTag({
     <span
       aria-hidden="true"
       title={title}
-      style={{ backgroundColor: paint.css, color: paint.fg, clipPath: SLANT }}
-      className={cn(
-        // 22px, 12px and both paddings are the tag's geometry **at 100% zoom**. It is drawn on a
-        // card face in the deck's stack view, which the reader can zoom from 0.5× to 2×, so every
-        // one of them is multiplied by the card's own `--mark-scale` (`lib/cardZoom.ts`) — a tag
-        // that held still was a sticker on a doubled card and a banner on a halved one. The `, 1`
-        // fallback is what any future surface outside a zoomable card gets, unchanged.
-        "flex h-[calc(22px*var(--mark-scale,1))] shrink-0 items-center",
-        "pr-[calc(0.75rem*var(--mark-scale,1))] pl-[calc(0.375rem*var(--mark-scale,1))]",
-        "font-mono text-[calc(0.75rem*var(--mark-scale,1))] leading-none tabular-nums",
-        className,
-      )}
+      style={{ backgroundColor: paint.css, color: paint.fg, clipPath: COUNT_TAG_SLANT }}
+      className={cn(COUNT_TAG_BOX, className)}
     >
       {count}
     </span>

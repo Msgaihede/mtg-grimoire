@@ -2838,6 +2838,24 @@ export const ipc = {
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
+   * Every card the plan asks for, as `deck_theory.rs`'s own `group_key` strings —
+   * `` `${cardId}|${finish ?? ""}` ``, one per theory row, in no particular order and with
+   * duplicates left in for the caller's set to fold.
+   *
+   * The deck editor's theory tick, and **the one question about the pair that
+   * {@link ipc.deckTheoryDiff} cannot answer**: a card the reader has fully acquired is absent
+   * from the diff and is still in the plan. See `features/decks/theoryMatch.ts`, which builds
+   * the same string for a live row and looks it up.
+   *
+   * **Not a `deckGet` of the other variant**, deliberately: that read prices every row and rolls
+   * up allocations, and `DeckEditor.test.tsx` pins that nothing may call it for the list the
+   * reader is not looking at. This is two columns of one indexed scan and no marketplace.
+   *
+   * Inactive categories are excluded, which is `deck_theory_diff`'s rule and the same reasoning:
+   * a card parked in the theory Maybeboard is not something the reader has decided to play.
+   */
+  deckTheorySlots: (deckId: number) => invoke<string[]>("deck_theory_slots", { deckId }),
+  /**
    * Copy the live list into the theory one. Answers how many **rows** were written.
    *
    * **This is no longer what enabling the switch does, and it used to be.**

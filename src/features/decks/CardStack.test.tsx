@@ -1259,6 +1259,62 @@ describe("CardStack marks", () => {
     );
 
   /**
+   * The plan's tick, and the corner it took off the rule break.
+   *
+   * `theoryMatch.ts` decides *which* rows carry it; this is about the drawing. The two
+   * assertions that matter are the pair: the tick is in the top-right and the `RULE BREAK` mark
+   * is not, on a card that has both — which is the whole reason the rule break moved, since a
+   * tick is the one glyph a reader could take for "this card is fine".
+   */
+  it("draws the theory tick opposite the rule break on a card carrying both", () => {
+    const planned = card({ name: "Mana Crypt", gameChanger: true });
+    render(
+      <CardStack
+        cards={[planned, card({ name: "Sol Ring" })]}
+        label="Ramp"
+        currency="usd"
+        violations={new Map([["c-Mana Crypt", [banned]]])}
+        // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
+        // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
+        // this notices the grain changing under it instead of agreeing with it by construction.
+        theoryMatches={new Set([`${planned.cardId}|`])}
+      />,
+    );
+
+    // One card of the two, which is the point: a mark every row carries says nothing.
+    const ticks = screen.getAllByTitle("In the theory list");
+    expect(ticks).toHaveLength(1);
+
+    // The tick rides the marks strip's own row (`ml-auto`), which is what puts it in the
+    // top-right without any offsets of its own — see `CardStack.tsx`.
+    expect(ticks[0].className).toContain("ml-auto");
+    expect(ticks[0].className).not.toContain("absolute");
+
+    // …and the rule break is at the other end of the card.
+    expect(screen.getByText("RULE BREAK").className).toContain("left-");
+
+    // The words, for the reader who cannot see either mark. Both marks are `aria-hidden`, so
+    // the button's own name is the whole of what is announced.
+    expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list"),
+    );
+    expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
+    );
+  });
+
+  /** A deck with no plan draws no ticks at all — `undefined` is "there is no question here",
+   *  which is the distinction `theoryMatchSet` exists to keep. */
+  it("draws no tick when the deck keeps no plan", () => {
+    withIssue();
+
+    expect(screen.queryByTitle("In the theory list")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
+    );
+  });
+
+  /**
    * The spec's own requirement: a rule break and a game changer must not be confusable,
    * because one is a problem and the other is a fact about a powerful card. Four things
    * separate them and this pins all four — the words, the colour, the place, and the card's
@@ -1287,13 +1343,25 @@ describe("CardStack marks", () => {
     expect(banners[0].className).toContain("bg-pie-gold-deep");
     expect(banners[0].className).not.toContain("destructive");
 
-    // The place: the break is the card's top-right corner, the banner is in the title strip
-    // on the left, tucked under the quantity tag.
+    // The place: the break is the card's **bottom-left** corner, the banner is in the title
+    // strip at the top, tucked under the quantity tag.
+    //
+    // **It moved out of the top-right on 2026-08-20 and the move is load-bearing**, which is why
+    // this assertion is spelled out rather than loosened: the top-right corner is
+    // `TheoryMatchMark`'s now, and that mark is a *tick*. A tick and a red box adjacent in one
+    // corner is precisely the confusion these four separations exist to prevent, so "not in that
+    // corner" is part of the requirement rather than an implementation detail this test happens
+    // to know.
     expect(mark.className).toContain("absolute");
-    // 5px from the right on a card at 100% zoom — the inset scales with the card, so the mark
+    expect(mark.className).not.toContain("right-");
+    // 5px from the left on a card at 100% zoom — the inset scales with the card, so the mark
     // stays in the same place on the picture at every stop rather than drifting toward the middle
     // of a doubled one.
-    expect(mark.className).toContain("right-[calc(5px*var(--mark-scale,1))]");
+    expect(mark.className).toContain("left-[calc(5px*var(--mark-scale,1))]");
+    // The bottom offset is the one sum on this card mixing a scaled term with a fixed one: the
+    // 4px is `STACK_DATA_RISE`, the distance the foot rides up over the face, and it does not
+    // scale — so a wholly scaled offset would put the mark behind the bar at 0.5×.
+    expect(mark.className).toContain("bottom-[calc(0.25rem*var(--mark-scale,1)+4px)]");
     expect(banners[0].className).not.toContain("absolute");
 
     // The edge: only the card that breaks a rule gets one.
