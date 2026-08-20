@@ -106,13 +106,22 @@ const meta = {
           "answers newest-first and none of that order survives here, deliberately: what the " +
           "backend says and what a picker draws are different questions. `Open` and " +
           "`PickedFirst` are the two halves of it this corpus can show.\n\n" +
+          "**It draws a caller's list where one is given.** Every story here leaves `options` " +
+          "absent and gets the session-cached `list_sets()` — the right answer when the question " +
+          "is *which sets shall I narrow the whole corpus to*. `AllPrintingsDialog` asks a " +
+          "different one and hands over the sets **one card** was printed in, which turns the " +
+          "query off entirely and lifts `MAX_SETS`, a ceiling that mirrors a backend truncation " +
+          "a client-side filter never reaches. That state is storied where it is used, as " +
+          "`Card/AllPrintingsDialog`'s `SetPicker`, because what makes it worth looking at is " +
+          "the six rows rather than the thousand — a fact about the card, not about this " +
+          "control.\n\n" +
           "**Four of its states cannot be reached from the story corpus, and none is faked " +
           "here.** The fake backend derives `list_sets` from the 43 fixture printings, which is " +
           "**31 sets with a paper printing** (measured by the `Open` story's own assertion): " +
           "too few for the `Showing N of M` footer *and the `Show 50 more` button beside it* — " +
           "they appear and disappear together — which need more than the 100 options " +
-          "`MAX_OPTIONS` renders (`SetCombobox.tsx:28`), and far too few for the ceiling " +
-          "sentence, which needs 64 picked (`SetCombobox.tsx:50`). The `large` seed does not " +
+          "`MAX_OPTIONS` renders, and far too few for the ceiling sentence, which needs " +
+          "`MAX_SETS` (64) picked. The `large` seed does not " +
           "help: its 5 200 synthetic printings take their `setCode` from the same 33 real rows, " +
           "so it is a bigger corpus in the same sets. `Loading sets…` and " +
           "`Could not read the set list` are the query's pending and error states: the fake " +

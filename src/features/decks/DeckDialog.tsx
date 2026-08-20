@@ -86,8 +86,9 @@ export interface DeckDialogProps {
    * ## Why the shell reserves the room rather than the host hanging a button off the panel
    *
    * The panel is `max-w-full` inside a scrim whose padding is the whole inset (`p-4 sm:p-6`), so
-   * at the app's **1024px floor** a wide panel already *is* the window — `AllPrintingsDialog` asks
-   * for `w-[72rem]`, which is 1152. A button positioned off that panel's edge is therefore off the
+   * a wide panel already *is* the window — `AllPrintingsDialog` asks for `w-full`, and at the
+   * app's **1024px floor** even the fixed widths above it (`w-[55rem]` is 880) have nothing left
+   * over. A button positioned off that panel's edge is therefore off the
    * window: unreachable by pointer, and scrollable to by nothing, since a horizontal scrollbar is
    * the one thing the 1024px floor forbids. So the scrim becomes a three-column grid —
    * {@link FLANK_COLUMNS} either side, the panel in `minmax(0,1fr)` between them — and the panel

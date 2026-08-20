@@ -286,13 +286,15 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   own zoom.** The gesture was already attached per _card section_ — `CardGrid`'s scroller and the
   deck editor's own `StackView` and `GridView` roots — so the sidebar, the ribbon, the tables and
   the card pane never move. What changed is what those listeners write. `useAppStore`'s `cardZoom`
-  is a `Record<ZoomSection, number>` over **four** sections (`ZOOM_SECTIONS`, `src/lib/cardZoom.ts`):
-  `search` and `collection`, the two walls; `deckSearch`, the deck editor's docked search column,
-  which is a third `CardGrid`; and `deck`, the editor's desk — **one key for both deck views**,
-  because Stacks and Grid are two drawings of the same pile and switching between them must not
-  resize the cards the reader just settled on. `useCardZoomGesture(ref, section)` names the section
-  it is stepping. **The wishlist has no zoom because it has no card section** — it is `VirtualTable`
-  only.
+  is a `Record<ZoomSection, number>` keyed by `ZOOM_SECTIONS` (`src/lib/cardZoom.ts`, which is the
+  list — no count is written here, because a count is a fact about a tree and the constant already
+  answers it): `search`, `collection` and `wishlist`, the three list walls; `deckSearch`, the deck
+  editor's docked search column, which is a fourth `CardGrid`; `deck`, the editor's desk — **one key
+  for both deck views**, because Stacks and Grid are two drawings of the same pile and switching
+  between them must not resize the cards the reader just settled on; and `printings`, the modal's
+  wall, which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)`
+  names the section it is stepping. **The wishlist joined the list on 2026-08-20**, when it gained a
+  card view of its own; until then it was `VirtualTable` only and had no card section to zoom.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
   owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
@@ -318,7 +320,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
     is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
     stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
-    card), the banner's drop shadow, and the two walls' gutters.
+    card), the banner's drop shadow, and the gutters `CardGrid` splits either side of a row.
   - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build at
     1280×800, against a real 116 712-card corpus, ctrl+wheel dispatched synthetically). Search
     wall, 0.5× / 1× / 2×: tile **85 / 170 / 340**, caption type **6 / 12 / 24px**, rarity gem
@@ -1200,10 +1202,43 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     there reaches it rather than the pile painted underneath.
   - **The one horizontal case the entries above reserve still behaves, and is still contained.**
     `overflow-x-auto` replaces `overflow-auto` on all three views: it implies `overflow-y: auto`,
-    which can never find anything to scroll in a box with no height of its own. At 1280×800 and
+    which **was claimed here to have nothing it could ever scroll** — see the 2026-08-20 entry
+    below, which is the day that turned out to be false in both of its clauses. At 1280×800 and
     2× zoom the rail simply wraps and nothing overflows either axis; at **1024×600** and 2×, a
     448px column in a 346px view overflowed by **88px** — inside the view, with the page, `main`
     and the document all at **0**.
+- **The second scrollbar survived that pass in the one state it never measured — a card open —
+  and `StackView` now reserves the room instead of scrolling it** (found and fixed 2026-08-20,
+  driven at `npm run tauri dev`, a **debug** build, at 1400×1300 and 1280×800). Every reading
+  above was taken with the deck at rest, and the implied rule — "a box with no height of its own
+  is never taller than its own content" — is wrong twice:
+  - **The box does get a height of its own.** `StackView`'s root is `h-full` off a desk row that
+    is `flex-1` in the editor's column, so whenever the window is taller than the deck the row is
+    sized by flex rather than by content and hands the view a **definite** height. Measured on a
+    15-card pile beside three 1-card piles at 1400×1300: content **894px** in a root of
+    **1081** — 187px of slack, and a definite box is one that can be overflowed.
+  - **And the content does outgrow it.** A pile's list keeps a fixed height with
+    `overflow-visible` (`CardStack`), so an open card pushes the cards after it `stackLiftRoom` =
+    `stackCardHeight − stackAdvance` = **285px at 1×** clean out of that box, on purpose. Under
+    the tallest column there is nothing to absorb it. With one card open the root read
+    `clientHeight` **1081** against `scrollHeight` **1144** and painted a **15px** bar beside the
+    editor's page scroller — the two-scrollbar screen this whole section exists to remove, back
+    by a third route.
+  - **A long pile among short ones is the shape that finds it**, which is how it was reported: the
+    long pile is what sets the box's height, so it is the one with nothing underneath to land in.
+  - **The other half of the case grew instead of scrolling, which is no better.** A deck _taller_
+    than the window is content-sized rather than stretched (the row's automatic minimum size
+    floors it), so the same open card had the desk row jump **1914 → 2318px** — 404px of page
+    appearing and vanishing under the reader's pointer, at 1280×800 on a 51-card deck.
+  - **The fix is one card's worth of lift reserved at the view's foot, always** — `padding-bottom`
+    of `8 + stackLiftRoom(zoom)`, 293px at 1× and 322px at the next stop up, gated on the deck
+    holding a pile of more than one card so a freshly created deck reserves nothing. Reserved
+    rather than grown-on-hover for `stackHeight`'s own reason: a box that resizes under the
+    pointer walks the page away from what the reader is pointing at. After: **1179/1179** with a
+    card open at 1400×1300 and **2199/2199** at 1280×800, `0` bar in both, and the root's height
+    identical at rest and open.
+  - **jsdom cannot referee this either**, so the suite asserts the inline `padding-bottom` the
+    view asks for rather than the scrollbar it prevents.
 - **The X scrollbar that pass declared gone came back through the docked panel, and it was a
   filter row 25px too wide** (found and fixed 2026-08-14, driven on the reader's own deck at
   `npm run tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain
@@ -1781,6 +1816,17 @@ full-width and anything hung off its edge would sit off-window.
 Both are 36px discs on the panel's vertical centre (`cy` 400 against the panel's own 400 at
 1280×800), and `elementFromPoint` at each centre hits the chevron rather than the scrim — the check
 this repo's drag pass learnt to make before concluding anything about a control.
+
+**Those two rows are unchanged by the width the panel asks for now, which is the argument for it.**
+It asked for `w-[72rem]` when they were taken and `max-w-full` clamped it to the column at both
+sizes, so 1120 and 864 were already the *column's* numbers rather than the request's. On 2026-08-20
+it became `w-full` — the request **is** the column — and both figures come out the same. What moves
+is the case the table has no row for: at 2560 maximised the reserved column is 2400 and the panel
+used to draw 1152 in the middle of it, six 170px tiles with the rest of the window left to the
+scrim. It draws 13 across now. Nothing about the chevrons had to change, and that is the point of
+spelling the width this way rather than as a `calc(100vw - 10rem)`: the room they sit in is
+`FLANK_COLUMNS` plus the scrim's own padding, and a length here would have had to restate both and
+would have parted company with them the first time either moved.
 
 ### What the walk does, confirmed live
 

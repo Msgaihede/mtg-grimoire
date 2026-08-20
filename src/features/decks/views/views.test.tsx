@@ -20,7 +20,7 @@ import { useAppStore } from "@/lib/store";
 import { dragOnto, startDrag } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
-import { stackCardWidth } from "../CardStack";
+import { stackCardWidth, stackLiftRoom } from "../CardStack";
 import {
   CARD_BODY_ATTR,
   DECK_GROUP_ATTR,
@@ -1159,6 +1159,61 @@ describe("StackView flow", () => {
     expect(flowRowSpan(300.2)).toBe(321);
     expect(flowRowSpan(0)).toBe(20);
     expect(flowRowSpan(-40)).toBe(1);
+  });
+
+  /**
+   * **The foot of this view holds one card's worth of lift, and that is what keeps the second
+   * scrollbar off the deck builder.**
+   *
+   * The root is `overflow-x-auto`, which computes `overflow-y` to `auto` as well, and an open
+   * card pushes the cards after it {@link stackLiftRoom} px outside its pile's fixed-height list
+   * on purpose. Under the tallest column that had nothing to land in, so it became this box's own
+   * scrollable overflow: measured live on 2026-08-20 at 1400×1300, `clientHeight` 1081 against
+   * `scrollHeight` 1144 and a 15px bar beside the editor's page scroller. The reserve is what the
+   * tail lands in instead — 1179 against 1179, no bar.
+   *
+   * **Written as an inline-style assertion because jsdom cannot see the defect.** There is no
+   * layout engine here, so nothing overflows and no scrollbar is ever drawn; what can be checked
+   * is that the view still asks for the room, in the units it asks for it in. Reserved whether a
+   * card is open or not, which is why no case here opens one: a box that grew on hover would walk
+   * the page under the pointer, and that is the same reason `stackHeight` reads the count alone.
+   */
+  it("keeps one card's lift free at its foot, and scales it with the zoom", () => {
+    const { container, rerender } = render(<StackView groups={GROUPS} marketplace={TCG} />);
+    const root = () => container.firstElementChild as HTMLElement;
+
+    // `GROUPS` holds a pile of two, so a card in it has somewhere to push.
+    expect(root().style.paddingBottom).toBe(`${8 + stackLiftRoom()}px`);
+    expect(root().style.paddingBottom).toBe("293px");
+    // The gutter is an inline style now, so the class it used to be must not also be here —
+    // Tailwind's `padding` shorthand and this longhand would be one rule apart from disagreeing.
+    expect(root().className).not.toContain("pb-2");
+
+    setDeckZoom(2);
+    rerender(<StackView groups={GROUPS} marketplace={TCG} />);
+    expect(root().style.paddingBottom).toBe(`${8 + stackLiftRoom(2)}px`);
+    expect(stackLiftRoom(2)).toBeGreaterThan(stackLiftRoom());
+  });
+
+  /**
+   * **A pile of one has nowhere to push, so nothing is reserved for it.**
+   *
+   * Opening the only card in a pile takes the `STACK_LIFTED_MARGIN` the list's height already
+   * carries and moves nothing after it. Without this test the freshly created deck — four piles,
+   * every one of them empty — would draw 285px of blank felt under itself for a reflow that
+   * cannot happen, which is the one case the reserve would be visible in and wrong.
+   */
+  it("reserves nothing for a deck no card can leave a pile in", () => {
+    const singles = buildGroups(
+      [card({ name: "Sol Ring" }), card({ name: "Serah Farron", categoryKind: "commander" })],
+      [COMMANDER, RAMP],
+      "category",
+      "alphabetical",
+    );
+    expect(singles.map((group) => group.cards.length)).toEqual([1, 1]);
+
+    const { container } = render(<StackView groups={singles} marketplace={TCG} />);
+    expect((container.firstElementChild as HTMLElement).style.paddingBottom).toBe("8px");
   });
 
   /**

@@ -19,7 +19,7 @@ import type { Marketplace } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { CardStack, STACK_CARD_BORDER, stackCardWidth } from "../CardStack";
+import { CardStack, STACK_CARD_BORDER, stackCardWidth, stackLiftRoom } from "../CardStack";
 import {
   CARD_BODY_ATTR,
   deckGroupMenuProps,
@@ -112,6 +112,16 @@ const FLOW_ROW = 1;
  * foot of every column — 20px of slack under the last pile, on top of the root's `pb-2`.
  */
 const FLOW_GAP_Y = 20;
+
+/**
+ * The gutter under the whole view, in pixels — the `pb-2` this used to be written as.
+ *
+ * A number rather than a class because {@link stackLiftRoom} is added to it, and a Tailwind
+ * `pb-*` and an inline `padding-bottom` do not add up: the inline one simply replaces it. Kept at
+ * 8 rather than folded into {@link DROP_MARK_ROOM}'s 6 because the foot of a column is the one
+ * edge that was never the drop marks' problem — see the root's own note.
+ */
+const ROOT_GUTTER = 8;
 
 /**
  * How many rows of the flowing grid a pile of this pixel height claims — its height, plus the one
@@ -388,6 +398,18 @@ export function StackView({
   // chrome at every stop on the ladder. A px number in an inline style rather than the `14rem`
   // this replaced, because a computed Tailwind class emits no CSS rule at all.
   const columnWidth = stackColumnWidth(cardZoom);
+  // **The room a card needs to leave its pile, kept at the foot of the view whether one is open or
+  // not** — the whole of the root's `padding-bottom` note below, and the reason this view no
+  // longer grows a scrollbar of its own the moment a reader rests on a long pile.
+  //
+  // `> 1` rather than `> 0`, because a pile of one card has nowhere to push: opening its only card
+  // takes the `STACK_LIFTED_MARGIN` that `stackHeight` already carries and moves nothing after it.
+  // So a freshly created deck — four piles, all empty — reserves nothing and draws exactly where
+  // it always did, which is the case that would otherwise show 285px of blank felt under it.
+  //
+  // Every group, not just `flow`: the rail is inside this same box, and a pile in it overflows
+  // downward exactly as one in the flow does.
+  const liftRoom = groups.some((group) => group.cards.length > 1) ? stackLiftRoom(cardZoom) : 0;
   // **The split happens before anything is drawn, and it has to.** The flow runs in the reader's
   // own order and never re-orders anything, so a sideboard, a maybeboard or a pile the reader has
   // switched off, left in that stream, lands wherever the line it fell on happened to end. A rail
@@ -533,9 +555,26 @@ export function StackView({
     // one column at 2× really is wider than a narrow desk, clipping a card is worse than a
     // scrollbar the reader asked for by zooming, and the alternative is that overhang reaching
     // the *page* and putting an X scrollbar across the whole app, which the 1024px floor forbids.
-    // It costs nothing while it is not needed: `overflow-x-auto` computes `overflow-y` to `auto`
-    // too, and a box with no height of its own is never taller than its own content, so the Y
-    // scrollbar this pair implies can never have anything to scroll.
+    // **`overflow-x-auto` computes `overflow-y` to `auto` as well, and that Y scrollbar is real
+    // — which is what {@link liftRoom} at the foot of this box is for** (added 2026-08-20). "A box
+    // with no height of its own is never taller than its own content" stood here for six days and
+    // is false twice over. This box *does* get a height of its own — `h-full` off a desk row the
+    // editor's column has spare space to hand out, which is every window taller than the deck —
+    // and its content *does* outgrow it, because a pile's list is a fixed height with
+    // `overflow-visible` (`CardStack`) and an open card pushes the cards after it
+    // {@link stackLiftRoom} px past that box on purpose. Under the tallest column there is nothing
+    // to absorb it, so it became scrollable overflow *here* and the reader got the second
+    // scrollbar the change above had just taken away — measured in the shipped window on
+    // 2026-08-20 at 1400×1300: root `clientHeight` 1081, `scrollHeight` 1144, a 15px bar beside
+    // the page's own. A long pile among short ones is exactly the shape that finds it, because the
+    // long one is what sets this box's height and so is the one with nothing underneath.
+    //
+    // The room is **reserved, not scrolled to**, and reserved **always rather than while a card is
+    // open**. A box that grew on hover would walk the page under the reader's pointer, which is
+    // the one thing `stackHeight` being a function of the count alone exists to prevent one floor
+    // up; and it is what this box did in the other half of the case — a deck taller than the
+    // window is content-sized rather than stretched, so the same open card grew the desk row by
+    // 404px instead of scrolling it. Reserving is one answer for both.
     //
     // The `flex-wrap` *here* is what decides the narrow desk. With the flowing box below
     // refusing to go under one column wide, a desk too narrow to hold a column beside the rail
@@ -560,19 +599,19 @@ export function StackView({
     // **{@link DROP_MARK_ROOM} is the padding, and it is what keeps a drag's own affordance on
     // screen.** This box clips at its padding box, so with none the leftmost pile's `DROP_RING`
     // and the rail's were each sliced down the edge for the whole length of a drag, and a pile's
-    // focus outline with them. `pb-2` outlives it and still wins the bottom edge — Tailwind emits
-    // the `padding` shorthand before the `padding-bottom` longhand, whatever order the two are
-    // written in here — because the foot of a column is the one edge that was never clipped and
-    // 8px is what the layout was drawn with.
+    // focus outline with them. The bottom edge is {@link ROOT_GUTTER} instead — the `pb-2` this
+    // was written as until the reserve above needed adding to it, and an inline `padding-bottom`
+    // replaces a Tailwind one rather than adding to it — because the foot of a column is the one
+    // edge that was never clipped and 8px is what the layout was drawn with.
     <div
       ref={scrollRef}
       // The arrow keys, for every card in the view — see {@link onArrowKey}, which is also where
       // the four things it refuses to answer are written down.
       onKeyDown={onArrowKey}
+      style={{ paddingBottom: ROOT_GUTTER + liftRoom }}
       className={cn(
         "flex h-full min-w-0 flex-1 flex-wrap content-start items-start gap-4 overflow-x-auto",
         DROP_MARK_ROOM,
-        "pb-2",
         className,
       )}
     >
