@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -2139,31 +2140,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * Which rows on screen the plan also asks for — the four views' theory tick.
    *
-   * **This is the second `deck_get` that was removed one commit ago, brought back for a
-   * different question and on a narrower gate — so the reason it is not that mistake is the
-   * important part of this comment.** What was removed re-implemented a *comparison the backend
-   * owns*: it counted how far the two lists disagree, which is exactly what `deck_theory_diff`
-   * answers, and the two disagreed. This asks the plan for its **rows**, and no command answers
-   * that. The diff cannot be read for it in either direction: a card the reader has fully
-   * acquired is **absent** from the diff and is still in the plan, and a card half-acquired is
-   * present in it and also in the plan — so "on the shopping list" and "in the plan" are
-   * independent, and only one of them is the mark.
-   *
-   * The gate is tighter than the one that was removed, which ran on both tabs: this reads the
-   * theory list only while a reader **with a plan is looking at Live**. `useDeck` keys its cache
-   * per variant, so a reader who has visited the Theory tab has already paid for it and flipping
-   * back costs nothing.
+   * **`deckTheorySlots`, and emphatically not a second `deck_get` of the other variant.** That
+   * read was deleted from this file on 2026-08-20 and the test above it pins the deletion:
+   * nothing may call `deckGet` for the list the reader is not looking at. Both halves of that
+   * decision are honoured here. The *duplicate rule* half — it re-implemented the comparison
+   * `deck_theory_diff` owns, and disagreed with it — does not apply, because this is not a
+   * comparison: it asks the plan for its rows, which is the one question about the pair that the
+   * diff cannot answer in either direction. A card the reader has **fully acquired is absent from
+   * the diff and still in the plan**; a card half-acquired is on the diff and also in the plan.
+   * The *cost* half is answered by the command itself: two columns of one indexed scan, no
+   * prices, no allocation roll-up, no marketplace.
    *
    * **`live` only, and `undefined` everywhere else.** On the Theory tab every row *is* the plan,
-   * so a mark on all of them is noise. `undefined` rather than an empty set is the distinction
-   * {@link theoryMatchSet} exists to keep: no plan is not the same statement as a plan that wants
-   * none of this.
+   * so a mark on all of them is noise — and the query is not even mounted there, which is what
+   * makes that a promise rather than a filter. `undefined` rather than an empty set is the
+   * distinction {@link theoryMatchSet} exists to keep: no plan is not the same statement as a
+   * plan that wants none of this.
+   *
+   * Under `["decks"]` like every other read here, so a theory edit made in this session
+   * invalidates it with everything else.
    */
-  const plan = useDeck(theoryEnabled && variant === "live" ? deckId : null, "theory");
-  const theoryMatches = useMemo(
-    () => theoryMatchSet(theoryEnabled && variant === "live" ? plan.cards : undefined),
-    [theoryEnabled, variant, plan.cards],
-  );
+  const planned = useQuery({
+    queryKey: ["decks", "theorySlots", deckId],
+    queryFn: () => ipc.deckTheorySlots(deckId),
+    enabled: theoryEnabled && variant === "live",
+  });
+  const theoryMatches = useMemo(() => theoryMatchSet(planned.data), [planned.data]);
 
   /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.

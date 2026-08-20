@@ -24,12 +24,14 @@
  * `foil` against a live row the reader never said anything about. The address is what the reader
  * wrote; two rows that both say `null` are two regular copies and match each other.
  *
- * **The backend reached the same grain independently, and that is worth knowing rather than a
- * coincidence to lean on.** `deck_theory_diff` grouped by *oracle card* until 2026-08-20 and now
- * groups on the exact card, finish included — `TheoryDiffDialog`'s `rowKey` is
- * `` `${cardId}|${finish ?? ""}` ``, this is the same pair with a different separator. Two files
- * deciding that a plan naming the Alpha foil is not satisfied by the M10 regular is agreement
- * about what a *planned card* is; keep them in step if either ever moves.
+ * **The plan's half of the key is not built here at all.** `deck_theory_slots` answers
+ * `deck_theory.rs`'s own `group_key` strings, so the only thing this file spells is the *live*
+ * row being looked up — and it has to spell it identically or every lookup misses. That is the
+ * point of taking the keys from the backend rather than a list of rows: "the same planned card"
+ * is one function, in Rust, and the tick and the shopping list are both spelling it with that
+ * code instead of with two conventions that agree today. `GROUP_SEPARATOR` there is where it
+ * would change; `theoryMatch.test.ts` and `deck_theory.rs`'s own tests write the same literals
+ * on both sides of the boundary so that a change fails one of them.
  *
  * **What is emphatically not shared is the question.** The shopping list subtracts *quantities*
  * and answers "what would I have to buy"; this answers "is the card in front of me the one I
@@ -44,20 +46,26 @@ import type { DeckCard } from "@/lib/ipc";
  * One row's address across the two lists — see the module note for why these two fields and no
  * others.
  *
- * A space as the separator, and the pair is unambiguous without one doing any work: a Scryfall
- * card id is a UUID and a `DeckFinish` is one of three known words, so neither half can contain
- * a space and no two rows can spell the same key. It is written as an ordinary space rather
- * than something exotic on purpose — the first draft of this used a NUL, which is a perfectly
- * good separator and a terrible one to *debug*: it made ripgrep call this file binary, so a
- * grep for `theorySlot` here answered nothing, and a test hand-spelling the key could not type
- * the character it needed. A key nobody can write down by hand is a key nobody can check.
+ * **`|` is not a choice this file gets to make.** `deck_theory_slots` answers the plan as
+ * `deck_theory.rs`'s `group_key` strings, and this has to spell a live row the same way or every
+ * lookup misses. That module's own note carries the reasoning — a Scryfall card id is a UUID and
+ * a finish is one of two words, so neither half can contain the character and no two pairs can
+ * spell one key — and `GROUP_SEPARATOR` there is where it would change.
+ *
+ * (The first draft of this used a NUL, back when both halves were built here. It is a perfectly
+ * good separator and a terrible one to *debug*: ripgrep called this file binary, so a grep for
+ * `theorySlot` answered nothing, and a test hand-spelling a key could not type the character it
+ * needed. A key nobody can write down by hand is a key nobody can check.)
  */
 export function theorySlot(card: Pick<DeckCard, "cardId" | "finish">): string {
-  return `${card.cardId} ${card.finish ?? ""}`;
+  return `${card.cardId}|${card.finish ?? ""}`;
 }
 
 /**
  * The plan as a lookup, or `undefined` for a deck that has no plan to compare against.
+ *
+ * Takes the slots {@link ipc.deckTheorySlots} answers with — already `group_key` strings, so this
+ * builds no key of its own; {@link theorySlot} is for the *live* row being looked up.
  *
  * `undefined` rather than an empty set, and the two are genuinely different: an empty set is a
  * plan that asks for nothing, which every card fails to match, while `undefined` is *there is no
@@ -67,10 +75,10 @@ export function theorySlot(card: Pick<DeckCard, "cardId" | "finish">): string {
  * arrangement one prop over.
  */
 export function theoryMatchSet(
-  cards: readonly Pick<DeckCard, "cardId" | "finish">[] | undefined,
+  slots: readonly string[] | undefined,
 ): ReadonlySet<string> | undefined {
-  if (cards === undefined) return undefined;
-  return new Set(cards.map(theorySlot));
+  if (slots === undefined) return undefined;
+  return new Set(slots);
 }
 
 /** Whether this row is one the plan asks for. A deck with no plan answers `false` for every row,

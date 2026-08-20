@@ -565,17 +565,17 @@ reader to configure the deck they had just made; it now asks all of them.
   front of me the one I planned". A card **fully acquired is absent from the diff and still in the
   plan**; a card half-acquired is on the diff *and* in the plan. So the mark cannot be read off the
   diff in either direction, which is the whole reason it needs the plan's rows.
-  **It costs a second `deck_get`, and that is the one thing to weigh before touching it.**
-  `DeckEditor` mounts `plan = useDeck(deckId, "theory")` for this — which is the read that was
-  **deleted from this file's editor one commit earlier**, so the distinction matters: what was
-  removed re-implemented the *comparison* the backend owns (it counted disagreement on
-  `(categoryId, cardId)`, both directions, and a card filed in two piles scored twice); this asks
-  for rows nothing else answers. The gate is also tighter than the one removed, which ran on both
-  tabs: `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
-  nothing, and `useDeck`'s per-variant cache means a reader who has opened Theory has already
-  paid. **If a lighter read is ever wanted, the honest shape is a Rust command answering
-  `(card_id, finish)` for one variant** — `deck_get` prices every row and rolls up allocations
-  for a mark that needs neither.
+  **It is `deckTheorySlots`, and it is emphatically not a second `deck_get` of the other
+  variant.** That read was deleted from `DeckEditor` on 2026-08-20 and `DeckEditor.test.tsx` pins
+  the deletion — *nothing may call `deckGet` for the list the reader is not looking at* — and both
+  halves of that decision are honoured rather than argued with. The **duplicate rule** half does
+  not apply: what was removed re-implemented the comparison `deck_theory_diff` owns (it counted
+  disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
+  twice), while this asks for rows no command answers. The **cost** half is answered by the
+  command: two columns of one indexed scan, no join to `cards`, no prices, no allocation roll-up,
+  no marketplace — against a `deck_get` that does all four. It is mounted only when
+  `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
+  nothing at all.
   `undefined` rather than an empty set is the other distinction `theoryMatchSet` keeps: no plan is
   not the same statement as a plan that wants none of this.
   **What moved to make room: the `RULE BREAK` mark, out of the stacked card's top-right corner and

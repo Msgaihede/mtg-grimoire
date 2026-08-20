@@ -1230,9 +1230,10 @@ describe("CardStack marks", () => {
         label="Ramp"
         currency="usd"
         violations={new Map([["c-Mana Crypt", [banned]]])}
-        // The slot is the printing and the finish — `theorySlot`'s own key, spelled here rather
-        // than imported so this test would notice the grain changing under it.
-        theoryMatches={new Set([`${planned.cardId} `])}
+        // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
+        // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
+        // this notices the grain changing under it instead of agreeing with it by construction.
+        theoryMatches={new Set([`${planned.cardId}|`])}
       />,
     );
 

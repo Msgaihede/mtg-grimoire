@@ -30,7 +30,7 @@ import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
-import { theorySlot } from "@/features/decks/theoryMatch";
+import { theoryMatchSet } from "@/features/decks/theoryMatch";
 import type { ValidationIssue } from "@/features/decks/validation/types";
 import type {
   CategoryKind,
@@ -509,13 +509,15 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  * reading as true while pointing at whatever printing that slot had become.
  */
 export function deckTheoryMatches(): ReadonlySet<string> {
-  return new Set(
+  return theoryMatchSet(
     [printing("lea", "288"), printing("lea", "161"), printing("mh2", "138"), printing("gtc", "148")]
-      // `deckCard` builds every fixture row with `finish: null`, so the plan's slots are the
-      // regular copies — which is the case the app's own grain is strictest about. See
-      // `theorySlot`, whose second term this is.
-      .map((card) => theorySlot({ cardId: card.id, finish: null })),
-  );
+      // The wire format `deck_theory_slots` answers with, spelled the way the backend spells it
+      // rather than through `theorySlot` — a fixture generating the key with the same function
+      // the code looks it up with would pass whatever separator either happened to use.
+      // `deckCard` builds every fixture row with `finish: null`, so these are the regular
+      // copies, which is the case the grain is strictest about.
+      .map((card) => `${card.id}|`),
+  ) as ReadonlySet<string>;
 }
 
 /* ------------------------------------------------------------------- the updater ------- */
