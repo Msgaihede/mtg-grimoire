@@ -885,6 +885,17 @@ export const AllFinishes: Story = {
  * — the order below is `FORMAT_ORDER`'s, with unknown keys appended rather than dropped, because
  * the set grows with every new format.
  *
+ * It is also the printing that settles the **heading**. The chips became a section on 2026-08-20
+ * — hairline, 12px uppercase word, the build `Printings` below already had — and the word is
+ * **Formats** rather than "Legal formats" because this card would then be filed under a heading
+ * seven of its own eight chips contradict. 3 461 cards in the corpus carry at least one banned or
+ * restricted chip (3.0% of the 116 712 with legality data, measured 2026-08-20); this is the
+ * extreme of them.
+ *
+ * The caption under the chips is the counterpart of the `not_legal` filter above: it keeps 11.3
+ * of 23 formats on a typical card, and without a line saying so the fifteen it dropped here are
+ * an absence the reader has to already know how to read.
+ *
  * It has no USD price at all while its `eur` key is filled, so at the default marketplace the one
  * finish it exists in reads an **em dash**: `formatPrice` never renders `$0.00`, which is a price
  * nobody quoted.
@@ -894,7 +905,11 @@ export const Legalities: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const pane = await canvas.findByRole("complementary", { name: "Card details" });
-    const chips = within(pane).getByRole("list", { name: "Format legality" });
+    // The section names the chips; the list inside it keeps its own, more exact name.
+    const formats = within(pane).getByRole("region", { name: "Formats" });
+    await expect(within(formats).getByRole("heading", { name: "Formats" })).toBeVisible();
+    await expect(within(formats).getByText("Formats not listed are not legal.")).toBeVisible();
+    const chips = within(formats).getByRole("list", { name: "Format legality" });
     // Exact, and in order: the format then its status, with "legal" present in the accessibility
     // tree even where it is not painted.
     await expect(
@@ -922,7 +937,11 @@ export const Legalities: Story = {
  * `Legalities` returns `null` when every key filters out, which is the right answer for the
  * corpus's one art-series printing: measured 2026-08-10, all 23 of `amh2 5s`'s legality keys are
  * `not_legal`. A section header over nothing, or a line reading "Not legal anywhere", would both
- * be the pane inventing a fact about a card that is not a card.
+ * be the pane inventing a fact about a card that is not a card — and that is still the shape
+ * after the chips became a headed section on 2026-08-20, which is what this story now holds.
+ * **The heading, the hairline and the caption go with the chips**: a "Formats" rule over empty
+ * space is the invented fact in a new form, and "Formats not listed are not legal" under nothing
+ * at all is a sentence about all 23 of them. 9 176 cards in the corpus land here.
  *
  * It is the corpus's `imageStatus: "missing"` row as well, and its six price keys are null —
  * so this is also the one printing where a story can say what the pane looks like when the data
@@ -936,6 +955,9 @@ export const NoLegalities: Story = {
     const canvas = within(canvasElement);
     const pane = await canvas.findByRole("complementary", { name: "Card details" });
     await expect(within(pane).queryByRole("list", { name: "Format legality" })).toBeNull();
+    // The heading and the caption are part of the chips, not chrome that outlives them.
+    await expect(within(pane).queryByRole("region", { name: "Formats" })).toBeNull();
+    await expect(within(pane).queryByText("Formats not listed are not legal.")).toBeNull();
     await expect(within(pane).getByText("Nonfoil").closest("div")).toHaveTextContent("Nonfoil—");
     // Still a card, still credited, still turnable over.
     await expect(within(pane).getByText("AMH2 · 5s")).toBeInTheDocument();
