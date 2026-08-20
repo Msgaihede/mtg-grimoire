@@ -21,6 +21,7 @@ pub mod marketplace_feed;
 pub mod oracle_tags;
 pub mod paths;
 pub mod reconcile;
+pub mod reset;
 pub mod schema;
 pub mod scryfall;
 pub mod search;
@@ -374,6 +375,10 @@ pub fn run() {
             oracle_tags::oracle_tags_for_cards,
             oracle_tags::oracle_tags_for_printings,
             export::export_write_file,
+            reset::collection_clear,
+            reset::wishlist_clear,
+            reset::decks_clear,
+            reset::cache_clear,
             error_log_list,
             error_log_clear,
             update_status,
