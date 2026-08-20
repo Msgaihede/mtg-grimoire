@@ -581,10 +581,22 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   `grep active:scale-100` is the census. The settings panels' button box is
   `src/features/settings/controls.ts`.
 - **Under jsdom the animations are real and timing-dependent**, which is why
-  `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. Even so, **a
-  `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false for
-  everything inside an animated surface until the next frame** — assertions about content inside
-  a newly opened overlay need `waitFor`.
+  `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. **The flag alone was
+  not enough and the gap it left was a CI flake** (fixed 2026-08-20): `skipAnimations` applies
+  the final keyframe inside `frame.update(...)`, which is scheduled on `requestAnimationFrame`,
+  so a `motion` element's first painted frame carried its `initial` — `opacity: 0` for every
+  preset here — and `toBeVisible` was false for everything inside an animated surface until the
+  next frame. `findBy*` resolves on the render *before* that frame, so
+  `expect(await findBy…).toBeVisible()` was a race it lost on a loaded runner. The setup file now
+  runs motion's non-`keepAlive` batch inline, and `motion.test.ts` asserts the *behaviour* — a
+  `dialog` preset at `opacity: 1` on its first render — rather than that the patch is installed,
+  so a `motion` upgrade that reschedules the keyframe fails there rather than on CI.
+  **Two things made it unreadable and both are worth keeping**: `byRole` and `toBeVisible`
+  disagree about **opacity and nothing else** (the accessibility tree tests `hidden`,
+  `aria-hidden` and `display: none`), so the query finds an element the assertion then refuses;
+  and jest-dom prints `element.cloneNode(false)`, a **shallow** clone, so the failure shows an
+  empty `<button />` and reads exactly like content that never arrived. An empty element in a
+  `toBeVisible` message is the printer, never evidence about the content.
 - **The old `\btransition-(?!none)` sweep is blind to JS motion** — a file animated entirely
   through `motion` matches nothing and passes trivially.
 

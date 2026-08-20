@@ -357,9 +357,10 @@ export const FoldersUnavailable: Story = {
     // **`waitFor`, because the line grows into place.** It is wrapped in an `AnimatePresence`
     // so it does not shove the whole tree down by its own height the moment a read is refused,
     // which means its first painted frame is at `height: 0, opacity: 0` — and `toBeVisible`
-    // walks the ancestors. Under the suite's `MotionGlobalConfig.skipAnimations` the arrival
-    // lands one frame later rather than 180ms later, but `findBy*` resolves on the render
-    // before it. The claim is unchanged: a line that never arrived still times out here.
+    // walks the ancestors. That frame is no longer observable under the suite (`src/test-setup.ts`
+    // runs motion's batch inline as of 2026-08-20), so this no longer *needs* the retry; it is
+    // kept because the claim it makes is the stronger one either way — a line that never arrived
+    // still times out here.
     await waitFor(async () =>
       expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible(),
     );
