@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FormatSpec } from "@/lib/ipc";
-import { card, commander, islands, padTo, resetRowIds, spec, tinyCommander } from "./fixtures";
-import { copyLimitFor, manaValueOf, validateDeck } from "./engine";
+import type { CardFacts } from "./types";
+import {
+  LEGAL,
+  card,
+  commander,
+  islands,
+  padTo,
+  resetRowIds,
+  spec,
+  tinyCommander,
+} from "./fixtures";
+import { copyLimitFor, manaValueOf, validateDeck, validateForMarks } from "./engine";
 
 /**
  * The card builders and the `format_specs` mirror these tests run on live in `./fixtures`, so
@@ -224,6 +234,167 @@ describe("what counts is the category's switch, not its kind", () => {
         (issue) => issue.code === "deck-size",
       ),
     ).toEqual([]);
+  });
+});
+
+/**
+ * Issue #134: a card in a switched-off pile drew no `RULE BREAK` mark at all, so a Golgari card
+ * dropped into a mono-white Commander deck's Maybeboard looked exactly like a card that fits.
+ *
+ * The fix is a **second** function rather than a flag on the first, and every test here is about
+ * that separation: `validateForMarks` answers for each card *drawn*, `validateDeck` answers for
+ * the deck, and the whole of the difference is the card's own facts under this format. So each
+ * test below asserts both — what the mark says, and that the deck's own answer did not move.
+ */
+describe("marks on the piles the reader switched off", () => {
+  /** A mono-white commander, which `commander()` deliberately is not: Kenrith's identity is all
+   *  five colours, so nothing in a deck of his is ever outside it. */
+  const whiteCommander = (): CardFacts =>
+    card({
+      name: "Sram, Senior Edificer",
+      categoryKind: "commander",
+      typeLine: "Legendary Creature — Dwarf Advisor",
+      manaCost: "{2}{W}",
+      cmc: 3,
+      colors: "W",
+      colorIdentity: "W",
+    });
+
+  /** The 99, and white for the same reason: `islands()` is blue, so filling a mono-white deck
+   *  with it accuses ninety-nine cards of the very rule these tests are about. */
+  const plains = (quantity: number): CardFacts =>
+    card({
+      name: "Plains",
+      typeLine: "Basic Land — Plains",
+      manaCost: null,
+      cmc: 0,
+      oracleText: "({T}: Add {W}.)",
+      colors: null,
+      colorIdentity: "W",
+      quantity,
+    });
+
+  /** The reported reproduction, both halves of it: the parked card is marked, and the deck the
+   *  reader is building says nothing about it. */
+  it("marks a parked card that is outside the commander's colour identity", () => {
+    const parked = card({
+      name: "Deadly Rollick",
+      categoryKind: "maybe",
+      categoryActive: false,
+      manaCost: "{3}{B}",
+      cmc: 4,
+      colors: "B",
+      colorIdentity: "BG",
+    });
+    const deck = [whiteCommander(), plains(99), parked];
+
+    expect(validateForMarks(deck, spec("commander"))).toEqual([
+      {
+        severity: "error",
+        code: "color-identity",
+        message:
+          "Deadly Rollick's color identity (BG) is outside your commander's (W).",
+        cardIds: ["c-Deadly Rollick"],
+      },
+    ]);
+    expect(validateDeck(deck, spec("commander"))).toEqual([]);
+  });
+
+  /** The card's own legality, which is the other half of "could this ever come in". A pile of
+   *  the reader's own that they switched off reaches this by the same line the Maybeboard does —
+   *  the kind here is `main`, exactly as in the pair above. */
+  it("marks a parked card the format's pool does not admit", () => {
+    const parked = card({
+      name: "Sol Ring",
+      categoryKind: "main",
+      categoryActive: false,
+      legalities: '{"modern":"banned"}',
+    });
+    const deck = [islands(60), parked];
+
+    expect(validateForMarks(deck, spec("modern"))).toEqual([
+      {
+        severity: "error",
+        code: "banned",
+        message: "Sol Ring is banned in Modern.",
+        cardIds: ["c-Sol Ring"],
+      },
+    ]);
+    expect(validateDeck(deck, spec("modern"))).toEqual([]);
+  });
+
+  /**
+   * **The fence, and the test most worth keeping.** Copies and size are arithmetic over a pile,
+   * so a parked card takes no part in either — which means five copies of a card in a
+   * switched-off pile draw *nothing*, and, just as importantly, the active copy beside them is
+   * not accused of anything either. Counting the parked rows would move a mark onto a card the
+   * reader has actually sleeved up, which is the deck validation this change exists to leave
+   * alone.
+   */
+  it("never counts a parked card toward a copy limit or a deck size", () => {
+    const deck = [
+      commander(),
+      islands(98),
+      card({ name: "Sol Ring", categoryKind: "main", quantity: 1, legalities: LEGAL }),
+      card({
+        name: "Sol Ring",
+        categoryKind: "maybe",
+        categoryActive: false,
+        quantity: 5,
+        legalities: LEGAL,
+      }),
+    ];
+
+    expect(validateForMarks(deck, spec("commander"))).toEqual([]);
+    expect(validateDeck(deck, spec("commander"))).toEqual([]);
+  });
+
+  /**
+   * A parked pile whose kind is `commander` is a card the reader is *considering* as their
+   * commander, not a card being held to the one they have chosen — so it is left out of the
+   * identity pass. The Golgari card beside it, in an ordinary switched-off pile, still draws its
+   * mark, which is what says the pass ran at all.
+   */
+  it("does not hold a parked commander to the active commander's identity", () => {
+    const alternative = card({
+      name: "Meren of Clan Nel Toth",
+      categoryKind: "commander",
+      categoryActive: false,
+      typeLine: "Legendary Creature — Human Shaman",
+      manaCost: "{2}{B}{G}",
+      cmc: 4,
+      colors: "BG",
+      colorIdentity: "BG",
+    });
+    const alsoParked = card({
+      name: "Deadly Rollick",
+      categoryKind: "maybe",
+      categoryActive: false,
+      colorIdentity: "BG",
+    });
+    const marks = validateForMarks(
+      [whiteCommander(), plains(99), alternative, alsoParked],
+      spec("commander"),
+    );
+
+    expect(marks.flatMap((issue) => issue.cardIds ?? [])).toEqual(["c-Deadly Rollick"]);
+  });
+
+  /**
+   * A format with no commander rule has no identity to judge against, and one with no legality
+   * data has no pool — so a parked card in a `casual` deck is marked for nothing at all. This is
+   * the arm that would fire on every deck ever made if the identity read were unguarded.
+   */
+  it("says nothing about a parked card in a format that judges neither pool nor identity", () => {
+    const parked = card({
+      name: "Deadly Rollick",
+      categoryKind: "maybe",
+      categoryActive: false,
+      colorIdentity: "BG",
+      legalities: '{"modern":"banned"}',
+    });
+
+    expect(validateForMarks([islands(60), parked], spec("casual"))).toEqual([]);
   });
 });
 
