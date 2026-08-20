@@ -25,6 +25,14 @@ const onOracleTagProgress = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
+// `TitleBar` is the one thing in this shell that does not go through `@/lib/ipc` — it reads the
+// window, through `@/lib/window`. The workbench's fakes rather than hand-rolled stubs, so this
+// file and Storybook agree about what a window does. Left off, the real `@tauri-apps/api`
+// reaches for `window.__TAURI_INTERNALS__`, which jsdom does not have, and because both calls
+// are in a mount effect the rejection is unhandled rather than caught — every test here still
+// passes while the run prints hundreds of errors.
+vi.mock("@tauri-apps/api/window", () => import("../../.storybook/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("../../.storybook/fake/event"));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -181,6 +189,27 @@ it("renders nav and refresh button", async () => {
   expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   expect(screen.getByText("content")).toBeInTheDocument();
+});
+
+/**
+ * The three controls that stop being optional the moment `tauri.conf.json` says
+ * `decorations: false`.
+ *
+ * `TitleBar` has its own file for how each behaves; this asserts only that the shell still
+ * mounts it — which is the difference between a window the reader can put down and one they
+ * cannot. Nothing else in the app draws a close button, so dropping this component is not a
+ * cosmetic regression and would leave every other test in this file green.
+ */
+it("draws the window's own caption, because Windows no longer does", () => {
+  render(
+    <AppShell update={noUpdate}>
+      <div>content</div>
+    </AppShell>,
+  );
+
+  expect(screen.getByRole("button", { name: "Minimize" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
 });
 
 describe("the status line", () => {
@@ -643,7 +672,9 @@ describe("the sidebar's drop targets", () => {
     await held.over(entry("Decks"));
     await held.drop();
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", 2, null, "live", null, 1));
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", 2, null, "live", null, 1),
+    );
   });
 
   /**

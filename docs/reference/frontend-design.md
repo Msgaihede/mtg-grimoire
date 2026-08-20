@@ -1960,3 +1960,74 @@ clicked tile keeps the caret and ArrowRight then ArrowDown step 2 → 3 → 6 at
 pile's only card, and ArrowDown on the last card of a pile. Both are `null` from
 `nextStackPosition` and therefore a press left alone — worth writing down, because "nothing
 happened" looks identical to a dead handler and cost this pass two wrong diagnoses.
+
+## The window's own title bar, and the two questions only a live pass could answer
+
+**2026-08-20, `npm run tauri dev`, a debug build, at 1280×800.** `tauri.conf.json` sets
+`decorations: false` and `src/components/TitleBar.tsx` draws the caption instead.
+
+Two things research could not settle, and both are settled here by measurement rather than by
+reading an issue tracker. Tauri's tracker has "cannot resize an undecorated window on Windows"
+reported, closed, and reported again (#8519, #11975, #12207), and whether a plugin's injected
+script clears this app's `script-src 'self'` was a guess either way.
+
+**Edge-resize survives `decorations: false`.** The window keeps `WS_THICKFRAME` — its style
+reads `0x14CF0000`, and `WS_CAPTION` is still set too — and every border answers the hit-test
+that makes it draggable. Sent `WM_NCHITTEST` at each edge of the window rect:
+
+| Point | Answer |
+| --- | --- |
+| left / right edge | `HTLEFT` (10) / `HTRIGHT` (11) |
+| top / bottom edge | `HTTOP` (12) / `HTBOTTOM` (15) |
+| top-left / bottom-left nub | `HTTOPLEFT` (13) / `HTBOTTOMLEFT` (16) |
+| bottom-right nub | `HTBOTTOMRIGHT` (17) |
+| the drag region, and all three buttons | `HTCLIENT` (1) |
+
+The mechanism is a child window of its own: `EnumChildWindows` shows a
+**`TAURI_DRAG_RESIZE_BORDERS`** at 1280×800, which **collapses to 0×0 when the window is
+maximized** — correct, since a maximized window has no borders to drag. The window rect is
+**1296×809** for a **1280×800** client, so there is an 8px invisible grab margin on each side.
+
+**The buttons all read `HTCLIENT` from the parent, and that is not the whole answer** — the snap
+overlay is a *child* HWND, so asking the parent about that point is asking the wrong window. The
+overlay is a **`Static` child, 46×33, at the maximize button's exact screen rect**, and it answers
+**`HTMAXBUTTON` (9)** — which is what raises the Windows 11 Snap Layouts flyout. It tracked a
+maximize precisely: the button moved to DOM `2468,0` and the overlay to screen `2468,0`, same
+46×33, still answering 9.
+
+**The injected script is not governed by the page's CSP.** `tauri-plugin-snap-layout` injects
+through `js_init_script`, which the webview runs before the page exists, so `script-src 'self'`
+never applies — all five `__SNAP_LAYOUT_*` globals are present and `__SNAP_LAYOUT_IS_ATTACHED__()`
+answers `true`. **No CSP change was needed**, which was the deciding argument against
+`tauri-plugin-decoration`: that one renders its own HTML controls and wants a stylesheet source
+added. The console over a full session held 13 lines and one error, a `502` on an uncached card
+image (this worktree has no copied `data/`) — nothing about the caption.
+
+**Geometry, and what the 34px comes out of.**
+
+| | Before (2026-08-14) | After |
+| --- | --- | --- |
+| title bar | — | **1280×34** at `y: 0` |
+| `nav` | 208×800 at `y: 0` | **208×766** at `y: 34` |
+| `main` | 1072×742 at `y: 58` | **1072×708** at `y: 92` |
+
+**It comes off height, not width**, which is the one thing that made it affordable: the deck
+editor is measured against `main`'s *width* to the pixel (`DECK_FLOOR`, the docked panel, the
+602px desk row), and none of that arithmetic moves. The editor loses 34px of a scroll it already
+had — the same trade the ribbon's 48 → 56 made, four times over. `documentElement.scrollWidth`
+**1280** and `scrollHeight` **800** against a `clientHeight` of 800: nothing scrolls in either
+axis, so the column swap did not reintroduce the phantom scroll that section further up is about.
+
+A caption button is **46×33** — 46 is Windows' own caption-button width, and the 33 is 34 less the
+row's 1px `border-b`, since the button is `h-full` inside it. The close button's right edge is
+**exactly 1280**: flush, which is the whole reason these three have no radius and no margin.
+The wordmark computes to **Cinzel, 13px, `letter-spacing: 2.6px`** (0.2em) in
+`oklch(0.65 0.01 90)`, which is `--color-dim`.
+
+**All three buttons drive the window**, checked one at a time. Maximize took it 1280×800 →
+**2560×1392** and flipped the label to `Restore Down` and the glyph from `Square` (one child) to
+`Copy` (two); a second press restored both. Minimize left `IsIconic` **true**. Close ended the
+process. **What a CDP click cannot check is the path a real pointer takes**: CDP delivers input
+straight to the renderer, so it exercises the React `onClick` — a real cursor lands on the native
+overlay instead, which swallows the click and sends `SC_MAXIMIZE` itself. Both paths exist on
+purpose, and only the fallback one is drivable from here.

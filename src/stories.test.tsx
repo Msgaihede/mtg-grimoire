@@ -48,6 +48,10 @@ import * as DecksPageStories from "./features/decks/DecksPage.stories";
  */
 vi.mock("@tauri-apps/api/core", () => import("../.storybook/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
+// The third boundary, mirroring `.storybook/main.ts`'s third alias. `TitleBar` reaches it
+// through `src/lib/window.ts`, which is in this file's graph, so the specifier is rewritten
+// and the paragraph below about `node_modules` does not apply.
+vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
 
 /**
  * The three Tauri **plugin** wrappers, re-pointed at the same fake — because **the two mocks
