@@ -3210,11 +3210,13 @@ describe("the busy fault", () => {
     //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
-    // Schema v21 added `deck_tag_remove_from_deck`, which takes the label off one deck's list
-    // and leaves the tag standing — a write like any other, so 49 → 50. Re-measure rather than
-    // adding one, for the reason above.
+    // **And it happened again, on the very next merge.** Schema v21's global tags added
+    // `deck_tag_remove_from_deck` — the write that takes a label off one deck's list and leaves
+    // the tag standing — while the remembered card zoom added `set_card_zoom`. Each branch wrote
+    // 49 → 50 and was right about the tree it was in; the merged table holds both, so it is 51.
+    // Re-measure after the next merge rather than adding one to whichever figure you find here.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(50);
+    expect(names).toHaveLength(51);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
