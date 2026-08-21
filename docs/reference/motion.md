@@ -82,7 +82,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `PRESS` in `src/lib/motion.ts` since 2026-08-16** (`b0a49aa`) — until then it was hand-copied
   onto every pressable control in the app, with the paragraph above pasted beside almost all of
   them. `PRESS_SOFT` sits next to it: the same string at `0.99`, for `MarketplacePanel`'s
-  full-width rows. **Both are built from one private `PRESS_BASE`** and are template literals,
+  full-width rows. **Both are built from one `PRESS_STILL`** and are template literals,
   which sharpens the rule above rather than softening it — a join that breaks a class name in
   half emits no rule at all, source still reads correctly, and nothing goes red.
   Re-verified in the built CSS on 2026-08-16, after the extraction: the emitted rule still reads
@@ -92,6 +92,53 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   all emitted. `ManaChip` keeps a list of its own
   (`transition-[opacity,box-shadow,transform,scale]`, because its on state is a ring) and is
   deliberately not a caller.
+- **The dip does not go on a box the reader types into, and on an `<input type="search">` that
+  is a functional rule rather than a taste one.** `PRESS_STILL` was made public for it
+  (2026-08-21) and `FilterChips`' `FILTER_FIELD` is `FILTER_CONTROL` built on it; the five
+  filter-row search boxes wear it. **What the dip breaks is the native clear button** (issue
+  #179): Chromium draws that ✕ in the field's own user-agent shadow tree, `scale` pivots on the
+  field's centre, and a `click` is dispatched to the common ancestor of the press target and the
+  release target — so the button slides out from under the pointer during the press, the click
+  lands on the field, `SearchFieldCancelButtonElement`'s handler never runs, and the box dips
+  **without clearing**. The reporter's words were "the text box bounces, but its contents are
+  not cleared".
+
+  **It is a width bug, which is why it read as one box working and the rest not.** The box
+  travels `width × (1/0.97 − 1) / 2` ≈ `width × 0.0155`, against a cancel button measured at
+  **10px** wide sitting **17–26px** in from the field's right edge. Swept a pixel at a time in
+  headless Edge 2026-08-21 (`--force-device-scale-factor=1`, `Input.dispatchMouseEvent`, a
+  400 ms hold so the 120 ms transition had settled), clicking each inset from 2 to 40 and
+  reading the value back:
+
+  | box | press clears at | of the button's 10px |
+  | --- | --- | --- |
+  | 176px, no dip | 17–26 | 10 |
+  | 176px, dip | 19–26 | 8 |
+  | 256px, dip | 20–26 | 7 |
+  | 700px, dip | — | **0** |
+
+  The filter row's boxes are `min-w-56 flex-1`, so on a maximised window they are the last row.
+  The one search box in the app that always worked is `DeckEditor`'s 176px "Filter this deck",
+  which had never taken `FILTER_CONTROL`. **A 40 ms hold measures 2px of travel rather than 10
+  and reads as "barely a bug"** — the transition is still running; hold the press.
+
+  Those three widths were swept against a replica of the recipe. The 700px row was then re-run
+  against **`dist/assets/index-*.css` itself**, with `FilterBar`'s exact class strings on the
+  box, holding the mouse down and reading `getComputedStyle(el).scale` and the rect together:
+
+  | box | at rest | held down | right edge travels | clears |
+  | --- | --- | --- | --- | --- |
+  | `FILTER_CONTROL` | `none`, right 724 | **`0.97`**, right 713.5 | **10.5px** | never |
+  | `FILTER_FIELD` | `none`, right 724 | `none`, right 724 | 0px | 17–26, all 10 |
+
+  10.5px of travel against a 10px button is the whole bug in two numbers: the button ends the
+  press clear of where it started, so nothing the pointer is over at release is the thing it
+  pressed.
+
+  **Nothing in the suite can see any of this**: jsdom has no layout engine and no user-agent
+  shadow tree, so there is no button to press and no hit test to miss. `motion.test.ts` sweeps
+  `src/` for the class instead, slicing each `<input>` tag brace- and comment-aware, and pins
+  four ways that sweep could go vacuously green.
 - **Cost: +41.4 kB gzip** for the full `motion.*` surface against the app's 176 kB (esbuild
   `--bundle --minify`, `NODE_ENV=production`, gzip -9). `m` + `LazyMotion(domAnimation)` measures
   +29.3 kB and code-splits; it was **not** taken, because the app loads from local disk in a
