@@ -65,9 +65,10 @@ on — do not work from this page alone.
 These skills carry the worktree and shipping workflow and are the authority on it — this
 file does not repeat them:
 
-- **`worktree-setup`** — first thing in a fresh worktree. `npm install` inside it (without
-  which three suites fail on Vite's `fs.allow` and it reads as your regression), the
-  base-branch check, and what is not shared with the main checkout.
+- **`worktree-setup`** — the working rules for a second checkout: the base-branch check,
+  what is not shared with the main checkout, and the shared stash stack. `npm install` is
+  no longer a step here — `.claude/hooks/worktree-deps.sh` runs it at SessionStart, along
+  with reporting the branch.
 - **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
   and both collisions are silent. Two locks in `locks/` under the git **common** dir
   (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a

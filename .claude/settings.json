@@ -36,6 +36,13 @@
             "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/merge-main.sh\" session",
             "timeout": 120,
             "statusMessage": "Catching this worktree up to main..."
+          },
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/worktree-deps.sh\"",
+            "timeout": 180,
+            "statusMessage": "Checking this worktree for dependencies..."
           }
         ]
       }
