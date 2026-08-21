@@ -54,17 +54,17 @@ const meta = {
           "answers the box, and `search_cards` answers the wall under the chips — so a story " +
           "that disagrees with the app is the app or the fake changing, never a fixture going " +
           "stale.\n\n" +
-          "**The page opens on 42 cards where `Search/Page` opens on 33, and the difference is " +
+          "**The page opens on 46 cards where `Search/Page` opens on 37, and the difference is " +
           "the one thing this page does differently.** Collapse is **off** here " +
           "(`useCardSearch`'s `defaultAllPrintings`), because an art tag is a fact about *this " +
           "illustration* — a collapsed row would stand for five printings and be drawn by " +
           "whichever is newest, showing a reader a picture that need have nothing to do with " +
-          "the motif they searched for. Art results are printings. The corpus is 47 printings, " +
-          "two of them digital (`paperOnly` is omitted-means-true) and three legal in none of " +
+          "the motif they searched for. Art results are printings. The corpus is 52 printings, " +
+          "two of them digital (`paperOnly` is omitted-means-true) and four legal in none of " +
           "Scryfall's formats (`playableOnly` rides with every format row but `Any card`), which " +
-          "is 47 → 45 → **42**. Measured 2026-08-21 by calling " +
+          "is 52 → 50 → **46**. Measured 2026-08-22 by calling " +
           "`readHandlers(seed(\"starter\")).search_cards` with this page's own request.\n\n" +
-          "**The fake's motifs are the ones its 47 illustrations actually carry, and there is no " +
+          "**The fake's motifs are the ones its 52 printings actually carry, and there is no " +
           "`dog` among them.** What the seed does carry is every *shape* the page needs: a " +
           "category reached only through its children (`animal`, via `cat` and `monkey`), a tag " +
           "under two parents (`forest`, under `plant` and `landscape`), one `weak` tagging so " +
@@ -104,7 +104,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("42 cards", CAPTION)).toBeInTheDocument();
+    await expect(await canvas.findByText("46 cards", CAPTION)).toBeInTheDocument();
     await expect(
       await canvas.findByRole("button", { name: "Creature, art tag, 6 illustrations" }),
     ).toBeInTheDocument();
@@ -142,7 +142,7 @@ export const Default: Story = {
 export const AMotifAndItsFloor: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("42 cards", CAPTION);
+    await canvas.findByText("46 cards", CAPTION);
 
     await userEvent.click(
       await canvas.findByRole("button", { name: "Landscape, art tag, 3 illustrations" }),
@@ -193,7 +193,7 @@ export const AMotifAndItsFloor: Story = {
 export const SearchingForATag: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("42 cards", CAPTION);
+    await canvas.findByText("46 cards", CAPTION);
 
     // The label is `sr-only`, which is the whole of what this control is called.
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search tags" }), "forest");
@@ -256,7 +256,7 @@ export const ArtTagsMissing: Story = {
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /, art tag, / })).toBeNull();
     // …and the wall is untouched, because no chip is narrowing it.
-    await expect(await canvas.findByText("42 cards", CAPTION)).toBeInTheDocument();
+    await expect(await canvas.findByText("46 cards", CAPTION)).toBeInTheDocument();
   },
 };
 
@@ -278,7 +278,7 @@ export const ArtTagsFetchError: Story = {
   parameters: { fake: { fault: "artTagsFetchError" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("42 cards", CAPTION);
+    await canvas.findByText("46 cards", CAPTION);
     await canvas.findByRole("button", { name: "Creature, art tag, 6 illustrations" });
 
     // `force`, because the seed's watermark is inside the weekly window and a refresh that is
@@ -296,6 +296,6 @@ export const ArtTagsFetchError: Story = {
       { timeout: 5000 },
     );
     await expect(canvas.queryByText(/tags have not been downloaded yet\./)).toBeNull();
-    await expect(canvas.getByText("42 cards", CAPTION)).toBeInTheDocument();
+    await expect(canvas.getByText("46 cards", CAPTION)).toBeInTheDocument();
   },
 };

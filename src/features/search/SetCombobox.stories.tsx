@@ -116,8 +116,8 @@ const meta = {
           "the six rows rather than the thousand — a fact about the card, not about this " +
           "control.\n\n" +
           "**Four of its states cannot be reached from the story corpus, and none is faked " +
-          "here.** The fake backend derives `list_sets` from the 47 fixture printings, which is " +
-          "**33 sets with a paper printing** (measured by the `Open` story's own assertion): " +
+          "here.** The fake backend derives `list_sets` from the 52 fixture printings, which is " +
+          "**36 sets with a paper printing** (measured by the `Open` story's own assertion): " +
           "too few for the `Showing N of M` footer *and the `Show 50 more` button beside it* — " +
           "they appear and disappear together — which need more than the 100 options " +
           "`MAX_OPTIONS` renders, and far too few for the ceiling sentence, which needs " +
@@ -188,7 +188,7 @@ export const Selected: Story = {
 };
 
 /**
- * Open, and what the whole list is: **33 sets**, not the 35 the fixture corpus prints cards in.
+ * Open, and what the whole list is: **36 sets**, not the 38 the fixture corpus prints cards in.
  *
  * A set with no paper printing can never match a search, so offering it would be offering an
  * empty result (`SetCombobox.tsx:182`). The two missing here are the two the corpus knows only
@@ -198,9 +198,9 @@ export const Selected: Story = {
  * printing, and it is offered.
  *
  * **And they are alphabetical**, which is the whole of the order when nothing is picked, nothing
- * is typed and no facet counts have arrived: Amonkhet Invocations first, Zendikar Rising last,
+ * is typed and no facet counts have arrived: Amonkhet first, Zendikar Rising last,
  * where `list_sets` would have answered Assassin's Creed first and Limited Edition Alpha last.
- * Asserted against `compareLabels` rather than against 31 written-out names — the corpus is
+ * Asserted against `compareLabels` rather than against 36 written-out names — the corpus is
  * generated and a regeneration must move this story rather than break it — which does mean the
  * assertion shares the app's collator and cannot catch a *wrong* one. `options.test.ts` is where
  * the collator itself is pinned.
@@ -216,7 +216,7 @@ export const Open: Story = {
 
     const list = canvas.getByRole("listbox");
     const options = within(list).getAllByRole("option");
-    await expect(options).toHaveLength(33);
+    await expect(options).toHaveLength(36);
     await expect(within(list).queryByText("Vintage Masters")).toBeNull();
     await expect(within(list).queryByText("Final Fantasy")).toBeNull();
     await expect(within(list).getByText("Final Fantasy: Through the Ages")).toBeInTheDocument();
@@ -235,10 +235,10 @@ export const Open: Story = {
  * The list is a page of 100 out of ~1 050, and a picked set that sorted past the end of it would
  * be a filter the reader can see counted on the button and cannot see, reach or switch off. So
  * "picked" is the first grouping key and the alphabet is the last — Limited Edition Alpha and
- * Modern Horizons 2 sit at the top here, above Amonkhet Invocations, which is where the A-Z
+ * Modern Horizons 2 sit at the top here, above Amonkhet, which is where the A-Z
  * would otherwise start.
  *
- * The second half of the assertion is that the rule is a *partition* and not a shuffle: the 29
+ * The second half of the assertion is that the rule is a *partition* and not a shuffle: the 34
  * rows below the two picked ones are still in alphabetical order, so ticking a set moves exactly
  * one row and leaves the list the reader had learned to scan.
  */
@@ -255,7 +255,7 @@ export const PickedFirst: Story = {
     await expect(names.slice(0, 2)).toEqual(["Limited Edition Alpha", "Modern Horizons 2"]);
 
     const rest = names.slice(2);
-    await expect(rest[0]).toBe("Amonkhet Invocations");
+    await expect(rest[0]).toBe("Amonkhet");
     await expect(rest).toEqual([...rest].sort(compareLabels));
   },
 };
@@ -273,7 +273,7 @@ export const PickedFirst: Story = {
  * note said the backend's newest-first order would have produced the same three anyway; the
  * order under `rank` is now the *alphabet*, and the alphabet produces the same three too —
  * Unfinity, Unhinged, Unlimited Edition is both the rank order and plain A-Z. What would
- * separate them is a name-matching set that sorts *before* a code-matching one, and the 31
+ * separate them is a name-matching set that sorts *before* a code-matching one, and the 36
  * offered here do not contain such a pair. The ordering asserted below is therefore the
  * *result*, not a proof of its cause. `SetCombobox.test.tsx:315` is where the rule is pinned
  * against a set list the alphabet alone would fail — `lea` first, with Arena League 1999 behind

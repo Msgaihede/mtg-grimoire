@@ -87,8 +87,8 @@ const meta = {
           "column beside the deck, with the wall's two slots pointed at this job: the badge " +
           "keeps telling the collection story, and the action becomes **Add to deck**.\n\n" +
           "Driven end to end by `.storybook/fake/`: the wall is `search_cards` over the seeded " +
-          "corpus (**33 cards** on the `starter` seed's default browse, measured 2026-08-14 — " +
-          "43 printings less the two the fake's `paperOnly` default excludes and the three its " +
+          "corpus (**37 cards** on the `starter` seed's default browse, measured 2026-08-22 — " +
+          "52 printings less the two the fake's `paperOnly` default excludes and the four its " +
           "`playableOnly` default does, collapsed to one row per card), and the Add " +
           "button writes through `deck_add_card`.\n\n" +
           "**Where a card goes is a deck setting, and this panel only reads it** " +
@@ -164,7 +164,7 @@ export const Docked: Story = {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(toggle);
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     // The pile is in every Add button's name, and it is the only part of the press a
     // screenshot cannot show: two tiles' buttons both called "Add" are two controls a screen
@@ -232,7 +232,7 @@ export const DeckFormat: Story = {
     // greyed, so the way to the whole corpus is one press from wherever the reader has got to —
     // which is what makes the deck's format a starting point rather than a pen.
     await userEvent.selectOptions(format, "");
-    await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
   },
 };
 
@@ -265,7 +265,7 @@ export const Collapsed: Story = {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
 
     await userEvent.click(toggle);
-    await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     await userEvent.click(toggle);
 
@@ -273,7 +273,7 @@ export const Collapsed: Story = {
     // The same button, not a new one in the same place — across both presses.
     await expect(within(panel).getByRole("button", { name: "Search cards" })).toBe(toggle);
     // Everything below the rail is gone with it: the filters, the count and the wall.
-    await expect(within(panel).queryByText("33 cards")).toBeNull();
+    await expect(within(panel).queryByText("37 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox")).toBeNull();
     await expect(within(panel).queryByLabelText("Add to")).toBeNull();
   },
@@ -376,7 +376,7 @@ export const NoMatch: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
-    await expect(await within(panel).findByText("33 cards")).toBeInTheDocument();
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
     // label, "Search cards".
@@ -429,7 +429,7 @@ export const Busy: Story = {
       "Could not add that card — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
-    await expect(within(panel).getByText("33 cards")).toBeInTheDocument();
+    await expect(within(panel).getByText("37 cards")).toBeInTheDocument();
   },
 };
 

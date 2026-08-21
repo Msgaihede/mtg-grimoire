@@ -30,7 +30,7 @@ function chipRef(): RefObject<HTMLButtonElement | null> {
  * `validation/fixtures.ts`'s `padTo` does the same job for the engine's own tests; this one pads
  * with a **corpus printing** so that every card in every deck below is one the database really
  * holds. It is one row carrying the whole balance rather than 88 rows of one copy, and that is a
- * fixture convenience with a reason: the corpus is 43 printings, a 100-card singleton deck cannot
+ * fixture convenience with a reason: the corpus is 52 printings, a 100-card singleton deck cannot
  * be built out of it, and this panel renders sentences rather than rows — nothing on screen
  * counts how many rows the padding took.
  *
@@ -328,7 +328,7 @@ export const SideboardTooLarge: Story = {
  * printing the clause `singleton.ts` parses (`"A deck can have any number of cards named"` or
  * `"A deck can have up to"`), and the string `"A deck can have"` appears **0 times** in
  * `.storybook/fake/cards.ts` (grepped 2026-08-09). Relentless Rats, Seven Dwarves and Nazgûl are
- * simply not among the 43 printings; `engine.test.ts:214-240` covers both branches instead.
+ * simply not among the 52 printings; `engine.test.ts:214-240` covers both branches instead.
  */
 export const CopyLimit: Story = {
   args: {
@@ -790,7 +790,7 @@ export const OrphanCard: Story = {
  * (`cards.game_changer`, maintained by the Commander Format Panel and delivered by a sync) rather
  * than a list this app keeps. Those three are the whole of the corpus's Game Changers: Ancient
  * Tomb, Rhystic Study and Consecrated Sphinx. Measured 2026-08-09 by running `estimateBracket`
- * over all 43 printings at once — **no** card in the corpus reads as mass land denial, and the
+ * over all 52 printings at once — **no** card in the corpus reads as mass land denial, and the
  * only one that takes an extra turn is Emrakul, the Aeons Torn, which is `commander: banned`. So
  * those two lines of the disclosure are absent here rather than empty: `estimate` filters an
  * empty list out, and three headings above one number would be two lines of nothing.

@@ -55,7 +55,7 @@ deliberately**: no screenshots are stored.
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
 - **`starter` seeds both tag taxonomies too**, derived from the corpus the same way. Oracle: **32
-  oracle cards, covering 38 of the 43 printings** (measured by `db.test.ts`, which fails rather
+  oracle cards, covering 42 of the 52 printings** (measured by `db.test.ts`, which fails rather
   than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so
   a deck story shows real piles rather than everything falling back to card type. Art: **eleven
   tagged printings over thirteen tags and four roots**, keyed on `illustration_id` because an art
@@ -67,7 +67,7 @@ deliberately**: no screenshots are stored.
   that answered only the matches would look right in Storybook and break every caller that
   matches by id.
 - **Every art tag in the fixture is true of the picture it is on**, which is why there is no
-  `dog` in it: nobody in these 43 illustrations is a dog, and a wall of cats filed under "Dog"
+  `dog` in it: nobody in these 52 printings is a dog, and a wall of cats filed under "Dog"
   would teach a reader that the Tags page's whole subject is decorative. The crate's own fixture
   (`tags/query.rs`'s tests) is where the `dog`/`hound`/`bulldog` branch lives. What the seed does
   carry is the *shape* every story needs: a category with no direct taggings of its own
