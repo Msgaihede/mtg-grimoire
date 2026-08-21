@@ -3126,6 +3126,12 @@ describe("the busy fault", () => {
       // the mode is looked at, which is the order the Rust has — but it is here because the
       // rule this record stands for is that `invoke` matches by name, not by position.
       mode: "artist",
+      // `set_card_zoom`'s pair — the only write here that takes two arguments of its own. Never
+      // read on this path either, for `mode`'s reason: the lock comes before the value is looked
+      // at. Both are valid all the same, so a handler that took the lock *after* validating would
+      // fail this loop by answering `Ok` instead of BUSY rather than by answering the wrong error.
+      section: "deck",
+      zoom: 1.25,
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
@@ -3188,10 +3194,15 @@ describe("the busy fault", () => {
     // to 45 → 49 rather than either one winning. Neither side was wrong when it was written, and
     // taking one side's figure would have been a count that was true of a tree nobody has.
     //
+    // The remembered card zoom then added `set_card_zoom`, on the same split as the two settings
+    // before it: the write takes `sync::with_write` and is refusable, while the read (`card_zoom`,
+    // on `db_read`) answers through every second of a sync. It is the one write here that takes
+    // **two** arguments of its own, which is why `section` and `zoom` both appear above.
+    //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(49);
+    expect(names).toHaveLength(50);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -3288,6 +3299,47 @@ describe("the whole command table", () => {
     );
     // Refused, and the row it would have overwritten is still the one that was chosen.
     expect(db.printingGroupBy).toBe(chosen);
+  });
+
+  /**
+   * The fourth `app_meta` row and the only one whose value is an **object**, which is where its
+   * three questions differ from the two above. There is no single default to fall back on: seven
+   * walls have each been zoomed or not, so an absent key *is* the answer for one nobody has
+   * touched — and the fallback for junk is therefore **per entry** rather than for the whole row,
+   * which is the difference between a reader noticing one wall opened at 100% and noticing that
+   * all of them did.
+   */
+  it("answers only the walls it has a usable zoom for, and refuses an unstorable one", () => {
+    expect(readHandlers(makeDb()).card_zoom()).toEqual({});
+    expect(readHandlers(makeDb({ cardZoom: { deck: 1.2 } })).card_zoom()).toEqual({ deck: 1.2 });
+
+    // One bad entry costs one wall. `40` and the blank key are what a hand-edit or a build with a
+    // wider ladder leaves behind; neither is a reason to forget the entry beside them.
+    expect(
+      readHandlers(makeDb({ cardZoom: { deck: 1.2, tags: 40, "": 1.5 } })).card_zoom(),
+    ).toEqual({ deck: 1.2 });
+
+    const db = makeDb();
+    const w = writeHandlers(db);
+    // Seven walls, seven independent memories — the whole reason the value is an object.
+    w.set_card_zoom({ section: "deckSearch", zoom: 1.5 });
+    w.set_card_zoom({ section: "deck", zoom: 0.7 });
+    expect(readHandlers(db).card_zoom()).toEqual({ deckSearch: 1.5, deck: 0.7 });
+
+    // **The section name is not validated and must not be**: the walls are TypeScript's
+    // vocabulary and `zoom.rs` deliberately does not know them, which is what `isZoomSection`
+    // exists for on the other side. A fake that checked here would hide that split.
+    w.set_card_zoom({ section: "eighthWall", zoom: 1.1 });
+    expect(readHandlers(db).card_zoom().eighthWall).toBe(1.1);
+
+    // The number *is*, and the refusal is the half a fake is easiest to leave out — the read
+    // drops an entry it cannot use in silence, so an unchecked write would look like it worked.
+    for (const zoom of [0.49, 2.01, 0, -1, 40, NaN]) {
+      expect(() => w.set_card_zoom({ section: "deck", zoom })).toThrow(/is not a card zoom/);
+    }
+    expect(() => w.set_card_zoom({ section: "", zoom: 1 })).toThrow(/cannot be blank/);
+    // Refused, and the entry each would have overwritten is still the one that was chosen.
+    expect(db.cardZoom.deck).toBe(0.7);
   });
 
   /**

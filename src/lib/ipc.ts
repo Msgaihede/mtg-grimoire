@@ -28,14 +28,20 @@
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Two settings carry no struct at all.** Each is one `app_meta` row answered as a bare
- * string: `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`). Both are the same shape,
- * and it is the shape a stored preference has to have — the read falls back on its default for
- * a row that is missing *or* holds a value this build does not recognise, and only the *write*
- * refuses. So each is typed `string` here rather than as its union: the narrowing belongs to
- * the module that owns the union (`@/lib/marketplace`, `@/features/card/printings`), and a row
- * a newer build wrote must reach this side as the string it is.
+ * **Three settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — and one, `cardZoom`/
+ * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`. All three are the
+ * shape a stored preference has to have: the read falls back on its default for a row that is
+ * missing *or* holds a value this build does not recognise, and only the *write* refuses. So each
+ * is typed loosely here rather than as its union: the narrowing belongs to the module that owns
+ * the vocabulary (`@/lib/marketplace`, `@/features/card/printings`, `@/lib/cardZoom`), and a row
+ * a newer build wrote must reach this side as what it is.
+ *
+ * The zoom row is the one of the three whose *shape* is a map, and the difference is worth a
+ * sentence: it has no single default to fall back on, because there are seven walls and each one
+ * has been zoomed or not. So the backend answers only what it has, and a section it says nothing
+ * about keeps the default the store was built with.
  *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
  * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
@@ -3599,6 +3605,30 @@ export const ipc = {
    * silence and an unchecked write would read back as `artist` forever.
    */
   setPrintingGroupBy: (mode: string) => invoke<void>("set_printing_group_by", { mode }),
+  /**
+   * How large each wall of cards was last left drawn, as section name → multiplier.
+   *
+   * The third `app_meta` setting and the one that is not a bare string — see this file's header.
+   * **A section is absent rather than defaulted**: the ladder's stops are this side's
+   * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
+   * backend does not invent a number it does not own. A whole unreadable row answers `{}`.
+   *
+   * Raw `Record<string, number>` rather than `Record<ZoomSection, number>`, for
+   * {@link getMarketplace}'s reason a third time: the keys are whatever some build of this app
+   * wrote, so `isZoomSection` narrows them here and `snapZoom` puts each value back on the
+   * ladder.
+   */
+  cardZoom: () => invoke<Record<string, number>>("card_zoom"),
+  /**
+   * Remember one wall's zoom, leaving the other entries in the row alone.
+   *
+   * Two arguments where its neighbours take one, and Tauri matches by name. Rejects a blank
+   * section and a multiplier outside 0.5–2, so `app_meta` cannot collect entries every later read
+   * would discard — but the *ladder* is not checked at the far end, deliberately: the backend
+   * bounds the number and this side owns where the stops are.
+   */
+  setCardZoom: (section: string, zoom: number) =>
+    invoke<void>("set_card_zoom", { section, zoom }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.

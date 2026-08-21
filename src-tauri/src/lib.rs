@@ -30,6 +30,7 @@ pub mod tags;
 pub mod update;
 pub mod window;
 pub mod wishlist;
+pub mod zoom;
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -370,6 +371,8 @@ pub fn run() {
             deck_theory::deck_theory_missing_to_wishlist,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
+            zoom::card_zoom,
+            zoom::set_card_zoom,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             tags::oracle::oracle_tags_refresh,
