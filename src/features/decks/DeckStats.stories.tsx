@@ -292,7 +292,7 @@ export const ColourBreakdown: Story = {
  * excludes lands to avoid.
  *
  * Seven of the eight type buckets are here. **Battle is absent because the corpus has no battle**
- * — 43 printings, none of them a Siege — and an empty bucket is dropped rather than drawn. The
+ * — 52 printings, none of them a Siege — and an empty bucket is dropped rather than drawn. The
  * `Other` bar is the orphaned row: a card with no type line has no printed type to file under,
  * and `Other` sorts last because it is a remainder rather than a kind.
  */

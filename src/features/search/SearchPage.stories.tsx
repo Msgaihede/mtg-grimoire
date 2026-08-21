@@ -79,20 +79,23 @@ const meta = {
           "`db.ts`'s `search_cards` answers it. Nothing here is a hand-written row, so a story " +
           "that disagrees with the app is the app or the fake changing — not a fixture going " +
           "stale.\n\n" +
-          "**The corpus is 43 printings and the caption says 33, down three steps.** " +
+          "**The corpus is 52 printings and the caption says 37, down three steps.** " +
           "`SearchRequest.paperOnly` is omitted-means-true and the fixture holds two digital " +
           "printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — `.storybook/fake/seeds.ts:620` " +
-          "names the same two), which is **43 → 41**; the search view sends `playableOnly` and " +
-          "three paper printings are legal in none of Scryfall's formats, which is **41 → 38** " +
+          "names the same two), which is **52 → 50**; the search view sends `playableOnly` and " +
+          "four paper printings are legal in none of Scryfall's formats, which is **50 → 46** " +
           "({@link Unplayable} is that step in one row); and the page opens **collapsed**, one " +
-          "row per card, where five of the survivors are further printings of a card already in " +
-          "the list (four Lightning Bolts, two Sol Rings, two Ancestral Recalls) — **38 → 33**. " +
-          "So `33 cards` is what every play below waits for; picking `Any card` in the format " +
-          "select gets 36 and All printings asks for the whole 41 " +
+          "row per card, where nine of the survivors are further printings of a card already in " +
+          "the list (four Lightning Bolts, three Elesh Norns, three Swords to Plowshares, two " +
+          "Sol Rings, two Ancestral Recalls) — **46 → 37**. " +
+          "So `37 cards` is what every play below waits for; picking `Any card` in the format " +
+          "select gets 41 and All printings asks for the whole 50 " +
           "({@link CollapsedPrintings}). Measured " +
           '2026-08-10 by calling `readHandlers(seed("starter")).search_cards` with the page\'s ' +
-          "own request, and re-measured 2026-08-14 after the playable filter landed — the two " +
-          "middle steps did not exist for the first measurement.\n\n" +
+          "own request, re-measured 2026-08-14 after the playable filter landed — the two " +
+          "middle steps did not exist for the first measurement — and again on 2026-08-22, when " +
+          "five layout fixtures joined the corpus for the card pane's turn controls and the " +
+          "`planar` one became the fourth printing no format allows.\n\n" +
           "**Two states this page can show have no story here, for two different reasons.** A " +
           "sync in flight is unreachable through the fake at all — its `sync_status` answers " +
           "`syncing: false` and its `sync_run` resolves at once — and nothing on this page reads " +
@@ -122,7 +125,7 @@ export const Default: Story = {
   args: { view: "grid" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("33 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("37 cards")).toBeInTheDocument();
     // The first card in `search::ORDER_NAME` — the browse order, which is the card's name and
     // then its newest printing. Named rather than counted: jsdom's viewport is not the app's, so
     // *how many* tiles the virtualiser draws here is an artefact of `src/stories.test.tsx`'s
@@ -157,7 +160,7 @@ export const CollapsedPrintings: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("33 cards");
+    await canvas.findByText("37 cards");
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Sol Ring");
 
@@ -221,14 +224,14 @@ export const Unplayable: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("33 cards");
+    await canvas.findByText("37 cards");
 
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     await expect(format).toHaveValue("");
 
     await userEvent.selectOptions(format, "any-card");
 
-    await canvas.findByText("36 cards");
+    await canvas.findByText("41 cards");
     await expect(format).toHaveValue("any-card");
     // The widest row is where the select was moved to, so the word on the closed control is the
     // one thing saying this wall has art cards in it.
@@ -269,13 +272,13 @@ export const TableView: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("33 cards");
+    await canvas.findByText("37 cards");
     // **What assistive tech is told the list is, which no screenshot shows.** A virtualised
     // table holds a couple of dozen rows in the DOM; `aria-rowcount` is every matching row plus
     // the header (`VirtualTable.tsx:181`), so 33 matches read as 34. Without it a screen reader
     // is told the database holds twenty cards.
     const table = canvas.getByRole("table", { name: "Search results" });
-    await expect(table).toHaveAttribute("aria-rowcount", "34");
+    await expect(table).toHaveAttribute("aria-rowcount", "38");
   },
 };
 
@@ -334,7 +337,7 @@ export const Empty: Story = {
  * `Collection/Page` and `Wishlist/Page`, where it is a band under the row it belongs to.
  *
  * Kept as a story rather than left out, so that the claim is asserted rather than described: this
- * seed answers the same 33 cards `starter` does (measured 2026-08-14 over both seeds), and if a
+ * seed answers the same 37 cards `starter` does (measured 2026-08-22 over both seeds), and if a
  * future seed change makes an orphan visible here, this is where it fails.
  */
 export const NeedsReview: Story = {
@@ -342,7 +345,7 @@ export const NeedsReview: Story = {
   parameters: { fake: { seed: "needsReview" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("33 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("37 cards")).toBeInTheDocument();
   },
 };
 
@@ -362,7 +365,7 @@ export const Busy: Story = {
   parameters: { fake: { fault: "busy" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("33 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("37 cards")).toBeInTheDocument();
     // No alert either: the page's `role="alert"` band is for a *failed query*, and nothing here
     // failed.
     await expect(canvas.queryByRole("alert")).toBeNull();
@@ -370,14 +373,14 @@ export const Busy: Story = {
 };
 
 /**
- * 5 238 printings of 683 cards — and the count that stops before it has walked them.
+ * 5 246 printings of 687 cards — and the count that stops before it has walked them.
  *
- * The seed holds 5 243 rows; the two the search never counts are digital, and the three it
+ * The seed holds 5 252 rows; the two the search never counts are digital, and the four it
  * used to count and no longer does are the printings no format allows (`seeds.ts`'s
  * `LARGE_TEMPLATES`, which is why the synthetic 5 200 are all playable).
  *
  * **This is the story where the collapse pays for itself.** The page opens on one row per
- * card, so the caption is an exact `683 cards`; pressing All printings asks for the printings
+ * card, so the caption is an exact `687 cards`; pressing All printings asks for the printings
  * instead, and *then* the count runs past `search::TOTAL_CAP` (`db.ts`, 5 000) and stops.
  * Past it the answer carries `totalIsCapped`, and `countOf` (`SearchPage.tsx`) renders
  * `5,000+ cards`: a floor, which is true, rather than `5,000 cards`, which would not be.
@@ -391,7 +394,7 @@ export const Large: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Collapsed — the default — the whole set fits under the cap and is counted exactly.
-    await expect(await canvas.findByText("683 cards")).toBeInTheDocument();
+    await expect(await canvas.findByText("687 cards")).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
@@ -411,7 +414,7 @@ export const Large: Story = {
  * Invisible on screen, and the only reason this is a story of its own rather than a second
  * assertion on {@link Large}: the two views take different paths to the same number.
  *
- * All printings is pressed first, because the cap is only reachable over printings now — 683
+ * All printings is pressed first, because the cap is only reachable over printings now — 687
  * cards fit under it comfortably, and a collapsed table reports an honest `aria-rowcount`.
  */
 export const CappedTotal: Story = {
@@ -420,10 +423,10 @@ export const CappedTotal: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Collapsed the count is exact, so the row count is a real number rather than "unknown".
-    await canvas.findByText("683 cards");
+    await canvas.findByText("687 cards");
     await expect(canvas.getByRole("table", { name: "Search results" })).toHaveAttribute(
       "aria-rowcount",
-      "684",
+      "688",
     );
 
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
@@ -450,7 +453,7 @@ export const NarrowedToAnExactCount: Story = {
   parameters: { fake: { seed: "large" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("683 cards");
+    await canvas.findByText("687 cards");
     // Over printings, because that is where the cap lives — see {@link CappedTotal}.
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
     await canvas.findByText("5,000+ cards");
@@ -493,7 +496,7 @@ export const OwnedCountsEntries: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("33 cards");
+    await canvas.findByText("37 cards");
 
     // A prefix, because the chip's accessible name carries its facet count — "Owned — 9
     // printings" — and the label is what has to come first.
@@ -543,7 +546,7 @@ export const GameChangerRow: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("33 cards");
+    await canvas.findByText("37 cards");
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Rhystic");
 
@@ -586,7 +589,7 @@ export const GameChangerOnTheWall: Story = {
   args: { view: "grid" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("33 cards");
+    await canvas.findByText("37 cards");
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Rhystic");
 

@@ -64,9 +64,14 @@ const SELECTIONS = [
   // --- The layouts. Each one is a different shape of `faces`.
   ["Delver of Secrets // Insectile Aberration", "isd", "51", "en", "`transform`: two faces, the back with an empty mana cost that must not render as a cost pill, and a flip control addressed by face index."],
   ["Fire // Ice", "apc", "128", "en", "`split`: two faces, two costs, one card, and a `//` name the search has to match either half of."],
+  ["Dusk // Dawn", "akh", "210", "en", "`split` **with `Aftermath`** — the half a reader has to turn the card *left* for, where the row above is the same layout turned right. The pane tells the two apart by `faces[1].oracleText` starting with `\"Aftermath\"`, a rule that agreed with Scryfall's `keywords` array on **347 of 347** live split printings; without this row that branch has no fixture and only the right turn is reachable."],
+  ["Akki Lavarunner // Tok-Tok, Volcano Born", "chk", "153", "en", "`flip`: two faces printed on **one** side, so a face count answers 1 and there is no back to flip to — the card is read by turning it 180°. 45 live printings, and the only layout here whose two faces share one picture."],
+  ["Llanowar", "ohop", "22", "en", "`planar`: a Plane card, printed sideways exactly as a classic split is and taking the same right turn. 330 live printings, and the layout no story covered."],
   ["Bonecrusher Giant // Stomp", "eld", "115", "en", "`adventure`: two faces where only the front is a permanent — the mana value is the creature's, not the sum."],
   ["Agadeem's Awakening // Agadeem, the Undercrypt", "znr", "90", "en", "`modal_dfc` with an `{X}` in the cost: the back is a land, so the colour identity folds in a face the front never shows."],
   ["Bruna, the Fading Light", "emn", "15", "en", "`meld`: the layout whose other half is a third card, and the one a face-count assumption breaks on."],
+  ["Brisela, Voice of Nightmares", "emn", "15b", "en", "The **meld result** — and it has to be this printing rather than any Brisela: `5a7a212e-e0b6-4f12-a95c-173cae023f93` is the id Bruna's own `all_parts` names, so this is the row \"open the melded card\" lands on. 72 of the corpus's rows are `meld`, 24 of them results."],
+  ["Gisela, the Broken Blade", "emn", "28", "en", "The melded card's **other half** (`c75c035a-7da9-4b36-982d-fca8220b1797`), so both of Brisela's `meld_part` relations resolve to a row the fake holds rather than one of two."],
   ["Prismatic Ending // Prismatic Ending", "amh2", "5s", "en", "`imageStatus: \"missing\"` with no image URLs at all — the no-image branch. All 162 rows in that state are `art_series` (measured 2026-08-09), so this is what that branch really looks like."],
 
   // --- Commander eligibility, which is the deck validator's hardest read.
@@ -174,6 +179,8 @@ const SELECT = `
 
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const stmt = db.prepare(SELECT);
+/** One relative's illustrator, by id — see {@link meldParts}. `undefined` for an id no row has. */
+const artistStmt = db.prepare("SELECT artist FROM cards WHERE id = ?1");
 const total = db.prepare("SELECT count(*) AS n FROM cards").get().n;
 
 const rows = [];
@@ -224,6 +231,7 @@ function toFakeCard(r, label) {
     priceUsd: r.price_usd,
     finishes: r.finishes,
     faces: trimFaces(r.faces),
+    meldParts: meldParts(r, raw),
     artist: r.artist,
     illustrationId: r.illustration_id,
     releasedAt: r.released_at,
@@ -240,6 +248,39 @@ function toFakeCard(r, label) {
     artCropUrl: uris.art_crop ?? null,
     normalUrl: uris.normal ?? null,
   };
+}
+
+/**
+ * What `card::card_meld_parts` answers for this row, as JSON — the **answer**, not the source.
+ *
+ * There is no `all_parts` column to copy: Rust parses the list out of the gzipped `raw` blob, and
+ * the fixture carries no `raw` for `db.ts` to parse. So the derivation happens once, here, and
+ * the row holds the finished relations.
+ *
+ * `null` for every layout that is not `meld`, where the command answers `[]`. Within a meld row:
+ * only `meld_part` and `meld_result` survive (`all_parts` also carries the set's `combo_piece`
+ * checklist card), Scryfall's order is kept, and the row's **own card is dropped by `name`**.
+ * By name rather than by id, because a meld row's `all_parts` can name a *different printing* of
+ * the same card — `Brisela, Voice of Nightmares` `0cd83c0e-…` carries its own `meld_result` as id
+ * `bbcd6747-…` — so an id test leaves the open card in its own list of relatives.
+ *
+ * `artist` is looked up from `cards` by that id, because the pane swaps the *picture* to the
+ * melded card while keeping the open card's facts and Scryfall's image policy requires the credit
+ * to name the illustrator whose art is on screen. `null` for an id no row has, which no live meld
+ * row produces: all 72 of them reference ids that resolve.
+ */
+function meldParts(r, raw) {
+  if (r.layout !== "meld") return null;
+  const parts = (raw.all_parts ?? [])
+    .filter((p) => p.component === "meld_part" || p.component === "meld_result")
+    .filter((p) => p.name !== r.name)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      component: p.component,
+      artist: artistStmt.get(p.id)?.artist ?? null,
+    }));
+  return JSON.stringify(parts);
 }
 
 /** Every face, projected onto {@link FACE_KEYS}. `"[]"` for a single-faced printing. */
@@ -336,6 +377,23 @@ export interface FakeCard {
    * dropped from the real blob is each face's \`image_uris\`; see the generator for why.
    */
   faces: string;
+  /**
+   * What \`card::card_meld_parts\` answers for this row, as JSON — \`null\` for every layout that
+   * is not \`meld\`.
+   *
+   * **The answer, not the source, and the one field here that is not derived from a column.**
+   * \`cards\` has no \`all_parts\`: Rust parses the relation list out of the gzipped \`raw\` blob, and
+   * the fixture has no copy of \`raw\` to parse. So this carries the finished array —
+   * \`{id, name, component, artist}\` per relative, in Scryfall's own order, with the row's own
+   * card already dropped and \`artist\` already looked up — and \`db.ts\` hands it over rather than
+   * deriving anything.
+   *
+   * The row's own card is dropped **by name rather than by id**, because a meld row's
+   * \`all_parts\` can name a different *printing* of the same card, and an id test would leave the
+   * open card in its own list of relatives. A \`meld\` row whose blob carries no \`all_parts\` is
+   * \`"[]"\`, which is what the command answers for one.
+   */
+  meldParts: string | null;
   artist: string | null;
   illustrationId: string | null;
   releasedAt: string;
@@ -429,6 +487,7 @@ for (const { card } of rows) {
       `usd=${card.priceUsd ?? "-"} paper=${card.isPaper} ` +
       `pt=${card.power ?? "-"}/${card.toughness ?? "-"} fin=${card.finishes} ` +
       `gc=${card.gameChanger} eu=${card.everUncommon} dig=${card.digital} ` +
-      `img=${card.imageStatus} art=${card.artCropUrl === null ? "none" : "yes"}`,
+      `img=${card.imageStatus} art=${card.artCropUrl === null ? "none" : "yes"} ` +
+      `meld=${card.meldParts === null ? "-" : JSON.parse(card.meldParts).map((p) => `${p.component}:${p.name}`).join(",")}`,
   );
 }

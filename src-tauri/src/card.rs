@@ -520,6 +520,167 @@ fn card_image_uri_inner(
 }
 
 // ---------------------------------------------------------------------------------------
+// Meld — the one relationship `cards` has no column for
+// ---------------------------------------------------------------------------------------
+
+/// The two `all_parts` components a meld relationship is made of, and the whole of what
+/// [`meld_parts`] answers.
+///
+/// Scryfall's `component` vocabulary is wider than this — a meld card also carries
+/// `combo_piece` entries (the Eldritch Moon checklist card is one, on every `emn` meld row)
+/// and other cards carry `token`. Those are real relationships and simply not this one: the
+/// pane offers to swap the *picture* to a card that melds with the open one, and a checklist
+/// is not a card anybody melds with.
+const MELD_COMPONENTS: [&str; 2] = ["meld_part", "meld_result"];
+
+/// One card a meld printing is related to — the other half of the pair, or the thing the
+/// pair becomes.
+///
+/// **`artist` is on this struct, and it is not a convenience.** The pane swaps the *picture*
+/// to the melded card while keeping the open card's facts on screen, and Scryfall's image
+/// policy requires the credit to name the illustrator whose art is being shown. Without this
+/// field the pane would print the open card's artist under a different card's picture — the
+/// wrong name under the right image, which is the one failure that policy is about.
+/// `CardDetailPane.tsx` already carries that rule in prose for double-faced cards, where the
+/// same swap happens between two faces of one row; this field is what lets it hold across two
+/// *rows*, which is what a meld is.
+///
+/// It costs one indexed lookup per relation and there are at most two or three of them —
+/// [`meld_parts`] measures that bound rather than assuming it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeldRelation {
+    pub id: String,
+    pub name: String,
+    /// Scryfall's `component`, verbatim: `meld_part` or `meld_result`.
+    ///
+    /// Verbatim because which of the two a relation is, is a *fact*, and what the pane calls
+    /// it — "Melds with", "Melds into" — is a conclusion, which this module's own header puts
+    /// in TypeScript.
+    pub component: String,
+    /// The illustrator of the printing at `id`, from `cards` — `None` when that row has none,
+    /// and `None` when the corpus has no such row at all.
+    pub artist: Option<String>,
+}
+
+/// Every meld relationship of one printing, in Scryfall's own order.
+///
+/// **Gated on `layout = 'meld'` before the blob is touched, and that gate is the whole reason
+/// this is cheap.** `raw` is a gzip BLOB from schema v3 on, so answering this question at all
+/// means inflating and parsing ~2 KB in Rust — [`crate::card_row::raw_json`] over
+/// `CAST(raw AS BLOB)`, because `json_extract` over a gzip member is a hard `malformed JSON`
+/// error rather than a NULL (CLAUDE.md). Measured against the live corpus: **72 of 116 590
+/// rows** are `meld` — 48 parts and 24 results — so the gate turns a decompression on every
+/// card the reader opens into one on six ten-thousandths of them. This is
+/// [`crate::deck::may_have_a_power_toughness_box`]'s argument with a much sharper number
+/// behind it: there, the type gate rules out the majority; here, the layout gate rules out
+/// all but 0.06%.
+///
+/// **Every way this can fail is `Ok(vec![])`, never an `Err`.** An unknown id, a `raw` that
+/// will not inflate or will not parse, a missing `all_parts`, an `all_parts` that is not an
+/// array — a card the reader asked to see must not fail to open over a control that is not
+/// there for most cards anyway. That is [`card_detail`]'s rule about the marketplace applied
+/// to a second setting.
+///
+/// Three filters, and the third is the one worth reading twice:
+///
+/// - `component` must be one of [`MELD_COMPONENTS`].
+/// - An entry with no `id` or no `name` is dropped: the pane needs both to draw anything.
+/// - **Self is excluded by `name`, never by `id`.** `all_parts` includes the card itself, and
+///   the obvious exclusion — the entry whose `id` equals the row's — is wrong on real data:
+///   `Brisela, Voice of Nightmares` printing `0cd83c0e-…` names a `meld_result` with id
+///   `bbcd6747-…`, which is *a different printing of Brisela*. An id comparison keeps it, and
+///   the pane then offers the reader "melds into Brisela" while they are looking at Brisela.
+///   Names are what a meld is defined on — the melded card is one card however many times it
+///   has been printed — so the name is the comparison that matches the fact.
+///
+/// Order is Scryfall's array order, untouched. Which relation to show first is a display
+/// decision, and this module's header says where those live.
+pub fn meld_parts(conn: &Connection, id: &str) -> Result<Vec<MeldRelation>, String> {
+    // `name` rides along with the gate rather than costing a second query: it is what self is
+    // excluded by, and this row is already being read.
+    let row: Option<(String, Option<String>, Option<Vec<u8>>)> = conn
+        .query_row(
+            "SELECT layout, name, CAST(raw AS BLOB) FROM cards WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    // An unknown id is an answer: no relationships, because there is no card.
+    let Some((layout, name, stored)) = row else {
+        return Ok(Vec::new());
+    };
+    if layout != "meld" {
+        return Ok(Vec::new());
+    }
+    let Some(json) = stored.as_deref().and_then(crate::card_row::raw_json) else {
+        return Ok(Vec::new());
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return Ok(Vec::new());
+    };
+    let Some(parts) = value.get("all_parts").and_then(serde_json::Value::as_array) else {
+        return Ok(Vec::new());
+    };
+
+    let own_name = name.unwrap_or_default();
+    let mut out: Vec<MeldRelation> = Vec::new();
+    for part in parts {
+        let (Some(part_id), Some(part_name), Some(component)) = (
+            str_field(part, "id"),
+            str_field(part, "name"),
+            str_field(part, "component"),
+        ) else {
+            continue;
+        };
+        if !MELD_COMPONENTS.contains(&component.as_str()) || part_name == own_name {
+            continue;
+        }
+        out.push(MeldRelation {
+            id: part_id,
+            name: part_name,
+            component,
+            artist: None,
+        });
+    }
+
+    // At most two or three lookups — a meld part names its sibling and the result, a result
+    // names its two parts — so one prepared statement over the primary key, and no attempt to
+    // batch. A relation whose id is not in `cards` keeps its `None` and is still returned: the
+    // frontend draws a "no image yet" panel for it rather than hiding a real relationship,
+    // which is the same choice `reconcile` makes about an orphan (flagged, never deleted).
+    if !out.is_empty() {
+        let mut stmt = conn
+            .prepare("SELECT artist FROM cards WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        for relation in out.iter_mut() {
+            relation.artist = stmt
+                .query_row(params![relation.id], |r| r.get::<_, Option<String>>(0))
+                .optional()
+                .map_err(|e| e.to_string())?
+                .flatten();
+        }
+    }
+    Ok(out)
+}
+
+/// The meld relationships of one printing. Read-only connection, blocking pool — as
+/// [`card_detail`] is, and for the same reason.
+///
+/// Takes no `marketplace`: this answers who a card melds with, not what anything costs.
+#[tauri::command]
+pub async fn card_meld_parts(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<Vec<MeldRelation>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || meld_parts(&lock_db_read(&state), &id))
+        .await
+        .map_err(|e| format!("meld parts could not be read: {e}"))?
+}
+
+// ---------------------------------------------------------------------------------------
 // How the pane groups that list — one `app_meta` row
 // ---------------------------------------------------------------------------------------
 
@@ -1661,6 +1822,332 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("https://cards.scryfall.io/display/top.webp?1")
+        );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Meld
+    // -----------------------------------------------------------------------------------
+
+    /// Scryfall's ids for the Eldritch Moon meld trio, as measured against the live corpus.
+    const BRUNA: &str = "27907985-b5f6-4098-ab43-15a0c2bf94d5";
+    const GISELA: &str = "c75c035a-7da9-4b36-982d-fca8220b1797";
+    /// The Brisela printing Bruna's own `all_parts` names.
+    const BRISELA: &str = "5a7a212e-e0b6-4f12-a95c-173cae023f93";
+    /// A *second* Brisela printing, and the third id in the story: only the first group of
+    /// each of these two was measured, so the tail is zeroed rather than invented — nothing
+    /// here should read as a uuid somebody could look up.
+    const BRISELA_ALT: &str = "0cd83c0e-0000-0000-0000-000000000000";
+    /// What `BRISELA_ALT`'s `all_parts` calls its own `meld_result`: a different printing of
+    /// itself, which is the whole reason self is excluded by name.
+    const BRISELA_SELF_REF: &str = "bbcd6747-0000-0000-0000-000000000000";
+
+    /// One `all_parts` entry, in the shape the bulk file writes it.
+    fn related(component: &str, id: &str, name: &str) -> String {
+        format!(
+            r#"{{"object":"related_card","id":"{id}","component":"{component}","name":"{name}","type_line":"Legendary Creature — Angel Horror","uri":"https://api.scryfall.com/cards/{id}"}}"#
+        )
+    }
+
+    /// A bulk line carrying nothing this command reads but `name` and `all_parts`.
+    fn raw_with_parts(name: &str, parts: &[String]) -> String {
+        format!(
+            r#"{{"object":"card","name":"{name}","layout":"meld","all_parts":[{}]}}"#,
+            parts.join(",")
+        )
+    }
+
+    /// A `cards` row whose `raw` is written **gzipped**, exactly as the ingest writes it
+    /// ([`crate::card_row::gzip_raw`]), so these tests inflate through the same path the
+    /// shipped app does rather than over a text column no live database has had since v3.
+    fn insert_card_with_raw(
+        conn: &Connection,
+        id: &str,
+        name: &str,
+        layout: &str,
+        artist: Option<&str>,
+        raw: &[u8],
+    ) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                released_at, rarity, artist, search_text, raw)
+             VALUES (?1, ?2, ?3, 'emn', ?4, 'en', ?5, '2016-07-22', 'rare', ?6, ?3, ?7)",
+            rusqlite::params![id, format!("o-{name}"), name, id, layout, artist, raw],
+        )
+        .unwrap();
+    }
+
+    /// The trio, with **two** printings of Brisela — the fixture's whole point.
+    ///
+    /// Every row is `layout = 'meld'` and every one is credited to Clint Cearley, who
+    /// illustrated all three cards.
+    fn seeded_meld() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        let art = Some("Clint Cearley");
+
+        // Bruna's list, in Scryfall's order: the result first, then itself, then its
+        // sibling — and the set's checklist card, which is a `combo_piece` and not a meld.
+        let bruna = raw_with_parts(
+            "Bruna, the Fading Light",
+            &[
+                related("meld_result", BRISELA, "Brisela, Voice of Nightmares"),
+                related("meld_part", BRUNA, "Bruna, the Fading Light"),
+                related("meld_part", GISELA, "Gisela, the Broken Blade"),
+                related("combo_piece", "checklist-emn", "Eldritch Moon Checklist"),
+            ],
+        );
+        insert_card_with_raw(
+            &conn,
+            BRUNA,
+            "Bruna, the Fading Light",
+            "meld",
+            art,
+            &crate::card_row::gzip_raw(&bruna),
+        );
+
+        let gisela = raw_with_parts(
+            "Gisela, the Broken Blade",
+            &[
+                related("meld_part", GISELA, "Gisela, the Broken Blade"),
+                related("meld_part", BRUNA, "Bruna, the Fading Light"),
+                related("meld_result", BRISELA, "Brisela, Voice of Nightmares"),
+            ],
+        );
+        insert_card_with_raw(
+            &conn,
+            GISELA,
+            "Gisela, the Broken Blade",
+            "meld",
+            art,
+            &crate::card_row::gzip_raw(&gisela),
+        );
+
+        // The printing Bruna points at. Nothing reads its `all_parts`, so it carries none.
+        insert_card_with_raw(
+            &conn,
+            BRISELA,
+            "Brisela, Voice of Nightmares",
+            "meld",
+            art,
+            &crate::card_row::gzip_raw(
+                r#"{"object":"card","name":"Brisela, Voice of Nightmares"}"#,
+            ),
+        );
+
+        // The other printing of the same card — the one whose own list names a *third* id
+        // for itself.
+        let brisela_alt = raw_with_parts(
+            "Brisela, Voice of Nightmares",
+            &[
+                related(
+                    "meld_result",
+                    BRISELA_SELF_REF,
+                    "Brisela, Voice of Nightmares",
+                ),
+                related("meld_part", BRUNA, "Bruna, the Fading Light"),
+                related("meld_part", GISELA, "Gisela, the Broken Blade"),
+            ],
+        );
+        insert_card_with_raw(
+            &conn,
+            BRISELA_ALT,
+            "Brisela, Voice of Nightmares",
+            "meld",
+            art,
+            &crate::card_row::gzip_raw(&brisela_alt),
+        );
+        conn
+    }
+
+    /// `(component, id, name, artist)` per relation, which is the whole DTO and is easier to
+    /// read in a failure than four parallel asserts.
+    fn shape(rows: &[MeldRelation]) -> Vec<(&str, &str, &str, Option<&str>)> {
+        rows.iter()
+            .map(|r| {
+                (
+                    r.component.as_str(),
+                    r.id.as_str(),
+                    r.name.as_str(),
+                    r.artist.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    /// The worked example, verbatim: `Bruna, the Fading Light` (`emn` 15) answers exactly
+    /// two rows, in Scryfall's own array order — its `meld_result` first, then its sibling
+    /// `meld_part`.
+    ///
+    /// Both drops are asserted by the length as much as by the contents: **itself**, which
+    /// `all_parts` always includes, and the set's `combo_piece` checklist, which is a real
+    /// relationship and simply not a meld.
+    #[test]
+    fn a_meld_part_answers_its_result_and_its_sibling_in_scryfall_order() {
+        let conn = seeded_meld();
+        let rows = meld_parts(&conn, BRUNA).unwrap();
+        assert_eq!(
+            shape(&rows),
+            vec![
+                (
+                    "meld_result",
+                    BRISELA,
+                    "Brisela, Voice of Nightmares",
+                    Some("Clint Cearley")
+                ),
+                (
+                    "meld_part",
+                    GISELA,
+                    "Gisela, the Broken Blade",
+                    Some("Clint Cearley")
+                ),
+            ],
+            "the result, then the sibling, with self and the checklist dropped"
+        );
+    }
+
+    /// The regression an id-based exclusion passes and a name-based one catches.
+    ///
+    /// `BRISELA_ALT`'s `all_parts` names a `meld_result` called `Brisela, Voice of
+    /// Nightmares` whose id is `BRISELA_SELF_REF` — *a different printing of the card being
+    /// asked about*. Comparing ids keeps that entry, and the pane then offers "melds into
+    /// Brisela" to a reader who is looking at Brisela.
+    #[test]
+    fn a_meld_result_excludes_itself_by_name_not_by_id() {
+        let conn = seeded_meld();
+        let rows = meld_parts(&conn, BRISELA_ALT).unwrap();
+        assert_eq!(
+            shape(&rows),
+            vec![
+                (
+                    "meld_part",
+                    BRUNA,
+                    "Bruna, the Fading Light",
+                    Some("Clint Cearley")
+                ),
+                (
+                    "meld_part",
+                    GISELA,
+                    "Gisela, the Broken Blade",
+                    Some("Clint Cearley")
+                ),
+            ],
+            "both parts, and the third printing of itself is not one of them"
+        );
+        assert!(
+            !rows.iter().any(|r| r.id == BRISELA_SELF_REF),
+            "excluding by id would have kept {BRISELA_SELF_REF}"
+        );
+    }
+
+    /// The `layout` gate, pinned two ways — and the second row is the one that would actually
+    /// go red.
+    ///
+    /// `garbage` holds bytes that begin like a gzip member and will not inflate, so a build
+    /// that read the blob at all would have to survive it. But an unreadable blob answers
+    /// `[]` through the *filters* as well, so on its own it proves nothing about the gate:
+    /// `melder` is a non-meld row carrying a perfectly good `all_parts`, and only the gate
+    /// keeps it at `[]`. 72 of 116 590 live rows are `meld`; this is the other 116 518.
+    #[test]
+    fn a_non_meld_layout_never_reads_its_raw() {
+        let conn = seeded_meld();
+        insert_card_with_raw(
+            &conn,
+            "garbage",
+            "Not A Meld",
+            "normal",
+            None,
+            &[0x1f, 0x8b, 0x0b, 0xad, 0xbe, 0xef],
+        );
+        let melder = raw_with_parts(
+            "Also Not A Meld",
+            &[related(
+                "meld_result",
+                BRISELA,
+                "Brisela, Voice of Nightmares",
+            )],
+        );
+        insert_card_with_raw(
+            &conn,
+            "melder",
+            "Also Not A Meld",
+            "normal",
+            None,
+            &crate::card_row::gzip_raw(&melder),
+        );
+
+        assert!(
+            crate::card_row::raw_json(&[0x1f, 0x8b, 0x0b, 0xad, 0xbe, 0xef]).is_none(),
+            "the fixture's bytes really are unreadable, so reading them could not have worked"
+        );
+        assert!(
+            meld_parts(&conn, "garbage").unwrap().is_empty(),
+            "an unreadable blob behind a non-meld layout is never touched, let alone failed on"
+        );
+        assert!(
+            meld_parts(&conn, "melder").unwrap().is_empty(),
+            "and a non-meld row with real meld data in `raw` is still not a meld"
+        );
+    }
+
+    /// An id no row answers to is an answer — no relationships, because there is no card.
+    /// A card the reader opened must never fail to open over this.
+    #[test]
+    fn an_unknown_id_has_no_meld_relations() {
+        let conn = seeded_meld();
+        assert!(meld_parts(&conn, "no-such-printing").unwrap().is_empty());
+    }
+
+    /// `artist` is looked up on the printing the relation *names*, and its absence has two
+    /// causes that must both survive: the corpus has no such row, and the row has a NULL
+    /// `artist`. Neither hides the relationship — the pane draws a "no image yet" panel for
+    /// one rather than dropping a real meld off the card.
+    ///
+    /// The field exists because the pane swaps the picture and keeps the open card's facts,
+    /// and Scryfall's image policy wants the credit to name the illustrator on screen.
+    #[test]
+    fn a_relation_is_credited_to_the_artist_of_the_printing_it_names() {
+        let conn = seeded_meld();
+        // A printing that exists and is credited to nobody.
+        insert_card_with_raw(
+            &conn,
+            "uncredited",
+            "Uncredited Half",
+            "meld",
+            None,
+            &crate::card_row::gzip_raw(r#"{"object":"card","name":"Uncredited Half"}"#),
+        );
+        let asker = raw_with_parts(
+            "Asker of Artists",
+            &[
+                related("meld_part", GISELA, "Gisela, the Broken Blade"),
+                related("meld_part", "uncredited", "Uncredited Half"),
+                related("meld_result", "never-synced", "Never Synced"),
+            ],
+        );
+        insert_card_with_raw(
+            &conn,
+            "asker",
+            "Asker of Artists",
+            "meld",
+            Some("Clint Cearley"),
+            &crate::card_row::gzip_raw(&asker),
+        );
+
+        assert_eq!(
+            shape(&meld_parts(&conn, "asker").unwrap()),
+            vec![
+                (
+                    "meld_part",
+                    GISELA,
+                    "Gisela, the Broken Blade",
+                    Some("Clint Cearley")
+                ),
+                ("meld_part", "uncredited", "Uncredited Half", None),
+                ("meld_result", "never-synced", "Never Synced", None),
+            ],
+            "credited from the named row; None both when that row has no artist and when \
+             there is no such row — and the relationship survives either way"
         );
     }
 }

@@ -159,6 +159,7 @@ import type {
   ImportResolveRow,
   InstallKind,
   MarketplaceFeedStatus,
+  MeldRelation,
   MutedTag,
   OracleTagStatus,
   Printing,
@@ -2398,7 +2399,7 @@ function matchesCardFilters(
   // **An orphan and a printing with no `illustration_id` fail every include and pass every
   // exclude**, and that is SQL's own rule rather than a choice: the real predicate correlates on
   // `c.illustration_id`, `NULL = NULL` is not true, so an `EXISTS` finds nothing and the
-  // `NOT EXISTS` around the same subquery is satisfied. Three of the 43 printings here have no
+  // `NOT EXISTS` around the same subquery is satisfied. Three of the 52 printings here have no
   // illustration id (4 977 of 116 712 live ones do not), and there is **no `rows` fallback** the
   // way `setCode` has one — a tag is a claim only a card row can answer.
   if (f.artTags) {
@@ -4378,6 +4379,31 @@ export function readHandlers(db: FakeDb) {
     card_detail: (args: { id: string; marketplace?: string }): CardDetail | null => {
       const card = cardById(db, args.id);
       return card ? toCardDetail(db, card, marketplaceOf(args.marketplace)) : null;
+    },
+
+    /**
+     * `card::card_meld_parts` — the other cards a `meld` printing is part of.
+     *
+     * **`[]` is the answer for almost every card in the game, and this handler mirrors Rust's
+     * three ways of reaching it rather than improving on any of them**, which is the argument for
+     * this fake living *under* `src/lib/ipc.ts`: a handler that refused an unknown id, or that
+     * answered a `transform` card with something, would let a story pass over a call the window
+     * answers differently. Every layout that is not `meld`, an unknown id, and a `meld` row whose
+     * blob carried no `all_parts` all come back empty — a card the reader opened must not fail to
+     * open because the relationship behind an orientation control could not be read. 72 of the
+     * 116 590 live rows are `meld`, 48 parts and 24 results.
+     *
+     * The list itself is {@link FakeCard.meldParts}, read rather than derived: `cards` has no
+     * `all_parts` column, Rust parses it out of the gzipped `raw` blob, and the fixture carries
+     * no `raw`. So the generator does the filtering, the ordering, the by-name exclusion of the
+     * row's own card and the artist lookup once, and this hands the finished array over.
+     *
+     * **No `marketplace`, unlike the two reads above it.** A relationship is not a price.
+     */
+    card_meld_parts: (args: { id: string }): MeldRelation[] => {
+      const card = cardById(db, args.id);
+      if (card === null || card.meldParts === null) return [];
+      return JSON.parse(card.meldParts) as MeldRelation[];
     },
 
     /**
