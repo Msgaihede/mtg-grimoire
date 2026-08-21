@@ -43,8 +43,20 @@ Every one of these has its measurement and its story in
   fallback, no hover lift), so the deck and the wall docked beside it drew one card two ways on
   one screen. A surface that draws its own frame instead says why at its own site, and each
   reason is that it is not a 5:7 box with an aspect-driven height — the stack's card (a computed
-  pixel height its whole geometry rests on), the pane's main art (a flip fade), `PrintingPreview`
-  (672×936), the two cover pickers (`ART_ASPECT`).
+  pixel height its whole geometry rests on), the pane's main art (a flip fade, and since
+  2026-08-22 a **turn**: a quarter-turned card is a landscape box, so that frame is the one
+  `CARD_ASPECT` is not always true of), `PrintingPreview` (672×936), the two cover pickers
+  (`ART_ASPECT`).
+- **Four layouts are not printed the way up they are stored, and turning one to read it is not
+  "distorting a card image"** — it is the card at its own proportions, which is what a reader
+  does with the cardboard and what Scryfall's own card pages offer. `split` (347 live printings,
+  96 of them Aftermath and turned the *other* way), `planar` (330), `flip` (45). The rule lives
+  in `features/card/orientation.ts`; the control is the card detail pane's, and **only** that
+  pane's — a wall of tiles is for finding a card, not reading one. What must not follow from
+  this is a crop, a filter or a recolour, which the image policy still forbids outright. The
+  directions were read off the printed images and the frame's geometry was measured in the
+  shipped window — including the half-pixel a `translate(-50%, -50%)` centring put under **every**
+  card in that frame: [frontend-design.md](../docs/reference/frontend-design.md).
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
   printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph

@@ -115,6 +115,12 @@ const MAIN: PaneDeckContext = {
 const cardDetail = vi.fn();
 const cardPrintings = vi.fn();
 /**
+ * `card_meld_parts`, which the pane calls **only** for a card whose layout is `meld` — so every
+ * test in this file but the meld ones leaves it unasked, and that fence is worth an assertion of
+ * its own (see "asks nothing about meld").
+ */
+const cardMeldParts = vi.fn();
+/**
  * What the pane reads the selected marketplace with. Its own `vi.fn()` because two tests below
  * change what it answers — the pane's prices arrive priced, so the marketplace is a *request*
  * parameter here rather than a formatting choice, and a test about Mana Pool's numbers has to
@@ -158,6 +164,7 @@ vi.mock("@/lib/ipc", async (original) => ({
   ipc: {
     cardDetail: (id: string, marketplace: MarketplaceId) => cardDetail(id, marketplace),
     cardPrintings: (o: string, marketplace: MarketplaceId) => cardPrintings(o, marketplace),
+    cardMeldParts: (id: string) => cardMeldParts(id),
     getMarketplace: () => getMarketplace(),
     marketplaceFeedStatus: () => marketplaceFeedStatus(),
     printingGroupBy: () => printingGroupBy(),
@@ -292,6 +299,9 @@ const face = (over: Partial<CardFace>): CardFace => ({
 beforeEach(() => {
   cardDetail.mockReset();
   cardPrintings.mockReset();
+  // No relationships unless a test says so — which is what Rust answers for every layout that
+  // is not `meld`, and the state the pane's controls must draw nothing from.
+  cardMeldParts.mockReset().mockResolvedValue([]);
   // **Cleared per test, or every assertion about them is an assertion about the whole file.**
   // These two are module mocks rather than the `vi.fn()`s above, so nothing resets them between
   // cases: a `toHaveBeenCalledWith` would then be satisfied by a call some *earlier* test made,
@@ -357,6 +367,311 @@ describe("CardDetailPane", () => {
     // front's abilities sitting under the back's art.
     expect(screen.getByText("Creature — Human Insect")).toBeInTheDocument();
     expect(screen.queryByText("Creature — Human Wizard")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The controls for the layouts that are not printed the way up they are stored — issue #156.
+   *
+   * **What a suite can and cannot see here matters, and it is the reason for `data-card-turn`.**
+   * jsdom has no layout engine and no opinion about a `transform`, so nothing in this file can
+   * tell a turned card from an upright one by looking at it. What these cases pin is the half
+   * that *is* a decision: which control exists, what it says, and how far the component asked
+   * for the card to be turned. The pixels are checked in the running window.
+   */
+  describe("the special layouts", () => {
+    const split = card({
+      id: "s1",
+      name: "Fire // Ice",
+      layout: "split",
+      typeLine: "Instant // Instant",
+      faces: [
+        face({ name: "Fire", oracleText: "Fire deals 2 damage divided as you choose." }),
+        face({ name: "Ice", oracleText: "Tap target permanent.\nDraw a card." }),
+      ],
+    });
+
+    const turnButton = () => screen.getByRole("button", { name: /^turn/i });
+    const turnedTo = (view: { container: HTMLElement }) =>
+      view.container.querySelector("[data-card-turn]")?.getAttribute("data-card-turn");
+
+    it("turns a classic split card clockwise, and offers the way back", async () => {
+      cardDetail.mockResolvedValue(split);
+      cardPrintings.mockResolvedValue(page([printing({ id: "s1", layout: "split" })]));
+
+      const view = wrap("s1");
+
+      await screen.findByText("Fire // Ice");
+      // A split has both halves printed on one physical side, so `faceCount` answers 1 and the
+      // pane must not offer a flip to a card back.
+      expect(screen.queryByRole("button", { name: /flip/i })).not.toBeInTheDocument();
+      expect(turnedTo(view)).toBe("0");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Turn to read" }));
+
+      expect(turnedTo(view)).toBe("90");
+      // The label and `aria-pressed` move together: the words *are* the accessible name, and a
+      // toggle whose name stops containing its visible label is one voice control cannot press.
+      expect(turnButton()).toHaveAccessibleName("Turn back");
+      expect(turnButton()).toHaveAttribute("aria-pressed", "true");
+
+      await userEvent.click(turnButton());
+      expect(turnedTo(view)).toBe("0");
+    });
+
+    /**
+     * The direction is the whole point of telling these two apart: an Aftermath card's second
+     * half is printed the *other* way up from a classic split's, so one rule for both would
+     * leave half the corpus upside down. 96 of 347 live split printings are Aftermath, and the
+     * test for one is the first word of the second face's rules text (`orientation.ts`).
+     */
+    it("turns an Aftermath card counter-clockwise instead", async () => {
+      cardDetail.mockResolvedValue(
+        card({
+          id: "s2",
+          name: "Dusk // Dawn",
+          layout: "split",
+          faces: [
+            face({ name: "Dusk", oracleText: "Destroy all creatures with power 3 or greater." }),
+            face({ name: "Dawn", oracleText: "Aftermath (Cast this spell only from your…" }),
+          ],
+        }),
+      );
+      cardPrintings.mockResolvedValue(page([printing({ id: "s2", layout: "split" })]));
+
+      const view = wrap("s2");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Turn to read" }));
+
+      expect(turnedTo(view)).toBe("-90");
+    });
+
+    it("turns a plane clockwise", async () => {
+      cardDetail.mockResolvedValue(
+        card({
+          id: "pl",
+          name: "Llanowar",
+          layout: "planar",
+          typeLine: "Plane — Dominaria",
+          faces: [],
+        }),
+      );
+      cardPrintings.mockResolvedValue(page([printing({ id: "pl", layout: "planar" })]));
+
+      const view = wrap("pl");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Turn to read" }));
+
+      expect(turnedTo(view)).toBe("90");
+    });
+
+    /**
+     * A `flip` card is the layout this control exists for that has no other way to be read: its
+     * two halves are on one physical side, so there is no back to flip to, and the second half
+     * is upside down until the card is turned.
+     */
+    it("names the half a flip card's half turn brings up, in both directions", async () => {
+      cardDetail.mockResolvedValue(
+        card({
+          id: "f1",
+          name: "Akki Lavarunner // Tok-Tok, Volcano Born",
+          layout: "flip",
+          faces: [
+            face({ name: "Akki Lavarunner", oracleText: "Haste" }),
+            face({ name: "Tok-Tok, Volcano Born", oracleText: "…" }),
+          ],
+        }),
+      );
+      cardPrintings.mockResolvedValue(page([printing({ id: "f1", layout: "flip" })]));
+
+      const view = wrap("f1");
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Turn to Tok-Tok, Volcano Born" }),
+      );
+
+      expect(turnedTo(view)).toBe("180");
+      expect(turnButton()).toHaveAccessibleName("Turn to Akki Lavarunner");
+    });
+
+    /**
+     * The fence the whole feature rests on. A double-faced card has a genuine second *side* and
+     * the pane has always flipped to it; adding a turn there would offer two controls for one
+     * problem and turn a card that is already the right way up.
+     */
+    it("offers no turn on a double-faced card, which flips instead", async () => {
+      cardDetail.mockResolvedValue(detail);
+      cardPrintings.mockResolvedValue(page(printings));
+
+      const view = wrap("p1");
+
+      expect(await screen.findByRole("button", { name: /flip/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^turn/i })).not.toBeInTheDocument();
+      expect(turnedTo(view)).toBe("0");
+    });
+
+    it("asks nothing about meld unless the card is one", async () => {
+      cardDetail.mockResolvedValue(split);
+      cardPrintings.mockResolvedValue(page([printing({ id: "s1", layout: "split" })]));
+
+      wrap("s1");
+
+      await screen.findByRole("button", { name: "Turn to read" });
+      // The backend gates on the same fact and answers `[]` in 116 518 of 116 590 rows; the pane
+      // fencing here is what keeps that from being a round trip per card opened.
+      expect(cardMeldParts).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Meld — issue #156. Two verbs, and they are different acts: **Meld** shows the melded card in
+   * this pane's frame, **Open** makes it the open card.
+   */
+  describe("meld", () => {
+    const GISELA = card({
+      id: "m1",
+      name: "Gisela, the Broken Blade",
+      layout: "meld",
+      typeLine: "Legendary Creature — Angel Horror",
+      artist: "Clint Cearley",
+      faces: [],
+    });
+    const BRISELA = card({
+      id: "m2",
+      name: "Brisela, Voice of Nightmares",
+      layout: "meld",
+      typeLine: "Legendary Creature — Eldrazi Angel",
+      artist: "Clint Cearley",
+      faces: [],
+    });
+    const RESULT = {
+      id: "m2",
+      name: "Brisela, Voice of Nightmares",
+      component: "meld_result",
+      artist: "Ryan Yee",
+    };
+    const SIBLING = {
+      id: "m3",
+      name: "Bruna, the Fading Light",
+      component: "meld_part",
+      artist: "Clint Cearley",
+    };
+
+    const meldPrintings = (id: string) => page([printing({ id, layout: "meld" })]);
+
+    it("shows the melded card in place, and credits the illustrator whose art that is", async () => {
+      cardDetail.mockResolvedValue(GISELA);
+      cardPrintings.mockResolvedValue(meldPrintings("m1"));
+      cardMeldParts.mockResolvedValue([RESULT, SIBLING]);
+
+      wrap("m1");
+
+      const meld = await screen.findByRole("button", {
+        name: "Meld — Brisela, Voice of Nightmares",
+      });
+      // A half offers the *result* and never its sibling half: Bruna is a `meld_part` in the
+      // same answer and gets no control of its own.
+      expect(
+        screen.queryByRole("button", { name: /Bruna, the Fading Light/ }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByAltText("Gisela, the Broken Blade")).toHaveAttribute(
+        "src",
+        expect.stringContaining("/display/m1/0"),
+      );
+
+      await userEvent.click(meld);
+
+      expect(await screen.findByAltText("Brisela, Voice of Nightmares")).toHaveAttribute(
+        "src",
+        expect.stringContaining("/display/m2/0"),
+      );
+      expect(meld).toHaveAttribute("aria-pressed", "true");
+      // Scryfall's image policy: the credit names whoever drew what is on screen. Gisela's own
+      // illustrator is a different person, and printing his name here would be a violation
+      // rather than a slip.
+      expect(screen.getByText(/Illustrated by Ryan Yee/)).toBeInTheDocument();
+      expect(screen.queryByText(/Illustrated by Clint Cearley/)).not.toBeInTheDocument();
+      // The pane is still *about* Gisela — this is a look at the melded card, not a trip to it.
+      expect(screen.getByRole("heading", { name: "Gisela, the Broken Blade" })).toBeInTheDocument();
+
+      await userEvent.click(meld);
+      expect(await screen.findByAltText("Gisela, the Broken Blade")).toBeInTheDocument();
+      expect(screen.getByText(/Illustrated by Clint Cearley/)).toBeInTheDocument();
+    });
+
+    /**
+     * The foil control marks **this printing's** cardboard. While another card's picture is in
+     * the frame there is nothing here for it to be true of, so both the button and the mark it
+     * draws stand down — and it is the mark that matters, because a foil-only printing draws its
+     * sheen from a statement the button does not own.
+     */
+    it("stops offering the foil view while the melded card is on screen", async () => {
+      cardDetail.mockResolvedValue(GISELA);
+      cardPrintings.mockResolvedValue(meldPrintings("m1"));
+      cardMeldParts.mockResolvedValue([RESULT, SIBLING]);
+
+      const view = wrap("m1");
+
+      const meld = await screen.findByRole("button", {
+        name: "Meld — Brisela, Voice of Nightmares",
+      });
+      expect(screen.getByRole("button", { name: /view as foil/i })).toBeInTheDocument();
+
+      await userEvent.click(meld);
+
+      expect(screen.queryByRole("button", { name: /view as/i })).not.toBeInTheDocument();
+      expect(view.container.querySelector("[data-foil-sheen]")).toBeNull();
+
+      await userEvent.click(meld);
+      expect(screen.getByRole("button", { name: /view as foil/i })).toBeInTheDocument();
+    });
+
+    it("opens the melded card as the card, which is not a printing swap", async () => {
+      cardDetail.mockResolvedValue(GISELA);
+      cardPrintings.mockResolvedValue(meldPrintings("m1"));
+      cardMeldParts.mockResolvedValue([RESULT, SIBLING]);
+      // Opened from a deck row, because that is what makes the two verbs distinguishable: the
+      // context has to *go*. Brisela is not another printing of the card the deck holds.
+      useAppStore.getState().openCardFromDeck({ ...MAIN, cardId: "m1" });
+
+      wrap("m1");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Open melded card" }));
+
+      expect(useAppStore.getState().selectedCardId).toBe("m2");
+      expect(useAppStore.getState().paneDeckContext).toBeNull();
+    });
+
+    /**
+     * From the melded card the two halves are cards to *go to* rather than pictures to look at:
+     * the picture in the frame already is the meld. The label names the relationship because
+     * nothing else on the pane would say why those two cards are under this one.
+     */
+    it("offers both halves from the melded card, and only opens them", async () => {
+      cardDetail.mockResolvedValue(BRISELA);
+      cardPrintings.mockResolvedValue(meldPrintings("m2"));
+      cardMeldParts.mockResolvedValue([
+        SIBLING,
+        {
+          id: "m1",
+          name: "Gisela, the Broken Blade",
+          component: "meld_part",
+          artist: "Clint Cearley",
+        },
+      ]);
+
+      wrap("m2");
+
+      expect(
+        await screen.findByRole("button", { name: "Meld part — Bruna, the Fading Light" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Meld —/ })).not.toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Meld part — Gisela, the Broken Blade" }),
+      );
+
+      expect(useAppStore.getState().selectedCardId).toBe("m1");
+    });
   });
 
   /**

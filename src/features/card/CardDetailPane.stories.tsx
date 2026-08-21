@@ -453,6 +453,196 @@ export const SplitCard: Story = {
     await expect(
       await within(pane).findByText("David Martin & Franz Vohwinkel"),
     ).toBeInTheDocument();
+
+    // **And the control that makes it readable.** Both halves are on screen and neither can be
+    // read: a classic split prints its titles top-to-bottom down the left edge, so the card is
+    // turned clockwise — which is what a reader does with the cardboard, and what Scryfall's own
+    // card page offers. `data-card-turn` is the handle, because jsdom-free or not, a `transform`
+    // is not something the story runner can see either.
+    const turn = within(pane).getByRole("button", { name: "Turn to read", pressed: false });
+    await expect(pane.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "0");
+    await userEvent.click(turn);
+    await expect(pane.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "90");
+    await expect(
+      within(pane).getByRole("button", { name: "Turn back", pressed: true }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The split card that turns the **other** way.
+ *
+ * Aftermath prints the top half upright and the bottom half rotated, and rotated the opposite
+ * way from a classic split — `Dawn`'s title reads bottom-to-top up the *right* edge, so the card
+ * is turned counter-clockwise. One rule for both would leave 96 of the 347 live split printings
+ * upside down (measured 2026-08-21), which is why {@link SplitCard} and this story are two
+ * fixtures rather than one.
+ *
+ * **How the two are told apart is a rules-text prefix, and that deserves saying out loud.**
+ * Scryfall retired the `aftermath` *layout* — every one of those 347 rows is `layout: "split"` —
+ * and moved the word into a `keywords` array this app has no column for. `orientation.ts` reads
+ * `faces[1].oracleText` instead, and that test agreed with Scryfall's own array on **347 of 347**
+ * printings, with zero disagreements.
+ */
+export const AftermathCard: Story = {
+  args: { cardId: printingId("akh", "210") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const pane = await canvas.findByRole("complementary", { name: "Card details" });
+    await expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent("Dusk // Dawn");
+    await expect(within(pane).queryByRole("button", { name: /^Flip to/ })).toBeNull();
+
+    await userEvent.click(within(pane).getByRole("button", { name: "Turn to read" }));
+
+    await expect(pane.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "-90");
+  },
+};
+
+/**
+ * Two halves on one physical side, one of them printed upside down — the layout the turn control
+ * exists for that has no other way to be read.
+ *
+ * `faceCount` answers 1 for `flip`, so there is no back and no flip button; without a turn,
+ * Tok-Tok stays upside down forever. It is also the one turn that names a **destination** the
+ * way the flip control does, because a flip card's two halves have two different names and
+ * "turn it over" is not the thing a reader wants — Tok-Tok is.
+ *
+ * 45 live printings, the smallest of the four layouts this control serves.
+ */
+export const FlipCard: Story = {
+  args: { cardId: printingId("chk", "153") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const pane = await canvas.findByRole("complementary", { name: "Card details" });
+    await expect(within(pane).queryByRole("button", { name: /^Flip to/ })).toBeNull();
+
+    await userEvent.click(
+      within(pane).getByRole("button", { name: "Turn to Tok-Tok, Volcano Born" }),
+    );
+
+    await expect(pane.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "180");
+    // Named for the half the press brings up, in both directions — the flip control's rule,
+    // applied to a card that has no second side.
+    await expect(
+      within(pane).getByRole("button", { name: "Turn to Akki Lavarunner", pressed: true }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * A plane — printed sideways in exactly the way a classic split is, and the layout the issue did
+ * not ask for.
+ *
+ * It is here because the control was already built: `Llanowar`'s title reads bottom-to-top up the
+ * left edge (checked against the printed image, 2026-08-21), so it takes the same clockwise turn
+ * as {@link SplitCard} and costs one word in `orientation.ts`. 330 live printings that could not
+ * be read in this pane before.
+ */
+export const PlaneCard: Story = {
+  args: { cardId: printingId("ohop", "22") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const pane = await canvas.findByRole("complementary", { name: "Card details" });
+    await expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent("Llanowar");
+
+    await userEvent.click(within(pane).getByRole("button", { name: "Turn to read" }));
+
+    await expect(pane.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "90");
+  },
+};
+
+/**
+ * Half of a meld, and the two things a reader can do about the other half.
+ *
+ * **They are different acts, which is why they are two controls.** *Meld* puts Brisela's picture
+ * in this frame while the pane stays about Gisela — how you check what two halves make without
+ * losing your place — and *Open* makes Brisela the open card, with her own prices, printings and
+ * collection state. Collapsing them into one would have taken the comparison away.
+ *
+ * The relationship comes from `card_meld_parts`, which is a read of its own rather than a field
+ * on `CardDetail`: the answer lives in the gzipped `raw` blob, so it costs an inflate, and the
+ * backend gates that on `layout = 'meld'` — **72 of 116 590 rows**. The pane is fenced on the
+ * same fact, so an ordinary card costs neither the call nor the parse.
+ *
+ * Gisela's `all_parts` also names **Bruna** as a `meld_part`, and she gets no control here: from
+ * a half, the card worth offering is the whole. {@link MeldedCard} is the other side of it.
+ */
+export const MeldHalf: Story = {
+  args: { cardId: printingId("emn", "28") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const pane = await canvas.findByRole("complementary", { name: "Card details" });
+    await expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Gisela, the Broken Blade",
+    );
+    await expect(
+      await within(pane).findByRole("img", { name: "Gisela, the Broken Blade" }),
+    ).toBeInTheDocument();
+    // The sibling half is in the same answer and is deliberately not a control.
+    await expect(within(pane).queryByRole("button", { name: /Bruna/ })).toBeNull();
+
+    const meld = await within(pane).findByRole("button", {
+      name: "Meld — Brisela, Voice of Nightmares",
+    });
+    await userEvent.click(meld);
+
+    // The picture is Brisela's; the heading is still Gisela's, because this is a look rather
+    // than a trip.
+    await expect(
+      await within(pane).findByRole("img", { name: "Brisela, Voice of Nightmares" }),
+    ).toBeInTheDocument();
+    await expect(meld).toHaveAttribute("aria-pressed", "true");
+    await expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Gisela, the Broken Blade",
+    );
+
+    // And the trip, which really does re-point the pane.
+    await userEvent.click(within(pane).getByRole("button", { name: "Open melded card" }));
+    await waitFor(async () =>
+      expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent(
+        "Brisela, Voice of Nightmares",
+      ),
+    );
+  },
+};
+
+/**
+ * The melded card, and the two halves it is made of.
+ *
+ * **Only one verb here, and its absence is the point.** There is nothing for a *view* to do on
+ * Brisela: the picture in the frame already **is** the meld. What a reader wants of Gisela and
+ * Bruna from here is their cards — what they cost, which printings exist, whether the collection
+ * holds one — so both controls open. The label names the relationship, because nothing else on
+ * this pane would say why those two cards are under this one.
+ *
+ * The corpus holds this exact printing (`emn 15b`) rather than any Brisela on purpose: the ids in
+ * a meld row's `all_parts` name specific printings, and `emn 15b` is the one Bruna's and Gisela's
+ * own relations point at. A different Brisela would have drawn a control that opened nothing.
+ */
+export const MeldedCard: Story = {
+  args: { cardId: printingId("emn", "15b") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const pane = await canvas.findByRole("complementary", { name: "Card details" });
+    await expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Brisela, Voice of Nightmares",
+    );
+
+    await expect(
+      await within(pane).findByRole("button", { name: "Meld part — Bruna, the Fading Light" }),
+    ).toBeInTheDocument();
+    // No view control: the card on screen is already the melded one.
+    await expect(within(pane).queryByRole("button", { name: /^Meld — / })).toBeNull();
+
+    await userEvent.click(
+      within(pane).getByRole("button", { name: "Meld part — Gisela, the Broken Blade" }),
+    );
+
+    await waitFor(async () =>
+      expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent(
+        "Gisela, the Broken Blade",
+      ),
+    );
   },
 };
 

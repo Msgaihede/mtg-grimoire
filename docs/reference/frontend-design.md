@@ -2279,3 +2279,106 @@ a hang rather than a wrong query — `SearchPage.stories.tsx`'s `GameChangerRow`
 already do. `findByRole("tooltip")` stays correct, and is the faster failure, for a *describing*
 site (the default `describes: true`), because there the panel really does carry that role once
 open.
+
+## Turning a card that is printed sideways, driven in the shipped window (issue #156)
+
+Four of Scryfall's layouts are not stored the way up they are printed, and until 2026-08-22 the
+card detail pane drew all four exactly as stored — which for **722 live printings** meant a card
+the reader could look at and not read. `split` (347, of which 96 are Aftermath), `planar` (330) and
+`flip` (45); `meld` (72) is the fourth case and is a different problem, below.
+
+**The direction each one turns is a fact about the cardboard, and it was settled against the
+printed images rather than reasoned about** (2026-08-22, Scryfall's own `normal` JPEGs):
+
+| Layout | Where the title reads from | Turn |
+| --- | --- | --- |
+| `split`, classic (`Assault // Battery`, `Fire // Ice`) | top-to-bottom down the **left** edge | 90° clockwise |
+| `split`, Aftermath (`Dusk // Dawn`) | bottom-to-top up the **right** edge | 90° **counter**-clockwise |
+| `planar` (`Llanowar`, `Naar Isle`) | bottom-to-top up the left edge | 90° clockwise |
+| `flip` (`Akki Lavarunner // Tok-Tok`) | the second half is printed inverted | 180° |
+
+One rule for both kinds of split would leave 96 printings upside down, which is why
+`features/card/orientation.ts` is a function and not a constant.
+
+**Aftermath is told by a rules-text prefix, and that needs saying out loud because it looks like a
+shortcut.** Scryfall retired the `aftermath` *layout* — all 347 live split printings are
+`layout: "split"` — and moved the word into a `keywords` array this app has no column for. The test
+is `faces[1].oracleText.startsWith("Aftermath")`, and it agreed with that array on **347 of 347**
+printings, 0 disagreements (measured 2026-08-21 against the local corpus). A `keywords` column
+would be the stronger answer; it is not worth a migration for one boolean, and this is the note
+that says so.
+
+### The frame turns with the card, and the alternative was worse
+
+A quarter-turned card is a **landscape** rectangle, so the pane's layout has to know: the frame
+carries the proportions (`aspect-ratio`, `CARD_ASPECT` reversed) and the card inside it carries the
+rotation. Everything under the art moves up to meet a turned card rather than leaving a hand's
+width of nothing under it — measured in the shipped window at 900px, a **335×469** frame becoming
+**335×239**.
+
+`aspect-ratio` is *transitioned* rather than snapped, which is not obvious: it interpolates in
+Chromium. Sampled over a 600ms transition on a standalone page in Chromium 151, a 200px-wide box
+went 280.0px → 208.3px → 142.8px across 79 frames (2026-08-22). The alternative — `height: 0` with
+a transitioning `padding-bottom` percentage — animates in every engine but spells the proportions
+of a Magic card out twice more, which is the drift `src/CLAUDE.md` already records the deck Grid
+view paying for.
+
+**The card's size is what makes it fill the frame exactly.** Quarter-turned it is `CARD_ASPECT` of
+the frame's *width* and the reciprocal of its *height*; upright it is `100%` of both. At rest in
+either state the card's bounding rect **is** the frame's — confirmed live at 335×469 and 335×239,
+same origin — so the foil sheen laid over it needs no arithmetic of its own, and only the 260ms
+between the two states is a card slightly larger than its box. That is why the frame carries **no
+`overflow-hidden`**: clipping it chops the corners off a card that is mid-turn.
+
+### The half-pixel the pass found, which no test could
+
+Centring the card with `left-1/2 top-1/2 translate(-50%, -50%)` is the obvious way and it was
+wrong. The pane's art column is **335px** in the shipped window — an odd number, because the pane's
+own scrollbar takes 17 of its 352 — so the resting transform came back as
+`matrix(1, 0, 0, 1, -167.5, -234.5)`: a **half-pixel composited offset on every card the app draws
+in this frame**, turnable or not, resampling art that used to be laid out on the pixel grid.
+
+`absolute inset-0 m-auto` with an explicit width *and* height centres the same box by **layout**
+instead, which lands on the grid; and the resting `transform` is omitted rather than written as
+`rotate(0deg)`, so the common case has no compositing layer at all. Measured before and after over
+CDP on the same window: `matrix(1, 0, 0, 1, -167.5, -234.5)` → `none`, and turned,
+`matrix(0, 1, -1, 0, -119.641, -167.492)` → `matrix(0, 1, -1, 0, 0, 0)`. A transition *from* `none`
+still interpolates from the identity, so nothing was lost.
+
+**jsdom has no layout engine and no opinion about a `transform`**, so none of this is assertable in
+the suite. What the suite pins is the decision — `data-card-turn` on the card, carrying the angle —
+and the pixels are the live pass's business. That split is the same one `FoilOverlay`'s
+`data-foil-sheen` draws.
+
+### Meld: two verbs, because they are two acts
+
+A meld half offers **Meld — <the melded card>**, which puts that card's picture in this frame while
+the pane stays about the card the reader opened, and **Open melded card**, which makes it the open
+card. Collapsing them into one would take away the comparison the first is for. From the melded
+card the two halves are `Meld part — <name>` and they only *open*: the picture in the frame already
+is the meld, so there is nothing for a view to do. The round trip was driven live —
+Gisela → melded picture → Brisela → `Meld part — Gisela` → back.
+
+Two things fall out of a picture swap that a flip does not have, and both are corrections rather
+than polish:
+
+- **The illustrator credit follows the picture.** Scryfall's image policy wants the artist of what
+  is on screen, and the two halves of a meld need not share one — so `MeldRelation` carries an
+  `artist` and `artistOf` prefers it outright rather than falling back to the open card's, which
+  would print a name that is *wrong* rather than missing.
+- **The foil control stands down while a meld view is up**, both the button and the mark. The sheen
+  is a statement about *this printing's* cardboard and the picture is another card's. Hiding only
+  the button would not have been enough: `soleFinish` draws the sheen for a foil-only printing
+  without any toggle being on, so the mark had to go too or it would outlive the control that
+  explains it.
+
+### What the pass confirmed, and what it cost
+
+Driven over CDP against the real 116,700-row database (debug build, 2026-08-22): all four turns,
+both meld directions, `scrollWidth === innerWidth` at 900px (below the app's own 1024 floor), a
+clean console across a full turn cycle and a full meld cycle (13 lines, none of them a warning),
+and `transition-property: none` on both the frame and the card under
+`prefers-reduced-motion: reduce`.
+
+**The control is the card pane's and only the card pane's.** A wall of tiles is for finding a card,
+not reading one, and a turned tile in a grid of upright ones would be a hole in the rhythm.
