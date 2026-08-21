@@ -103,7 +103,7 @@ describe("useCardZoomGesture", () => {
     wheel(deck.el, 100, true);
 
     expect(useAppStore.getState().cardZoom.deckSearch).toBe(1.1);
-    expect(useAppStore.getState().cardZoom.deck).toBe(0.75);
+    expect(useAppStore.getState().cardZoom.deck).toBe(0.8);
     expect(useAppStore.getState().cardZoom.search).toBe(1);
     expect(useAppStore.getState().cardZoom.collection).toBe(1);
   });

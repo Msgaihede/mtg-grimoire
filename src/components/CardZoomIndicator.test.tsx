@@ -208,8 +208,8 @@ describe("CardZoomIndicator", () => {
 
     await notch("deckSearch");
 
-    // 0.5 → 0.67 is the ladder's first stop up from the bottom, rounded for display.
-    expect(screen.getByText("67%")).toBeInTheDocument();
+    // 0.5 → 0.6 is the ladder's first stop up from the bottom.
+    expect(screen.getByText("60%")).toBeInTheDocument();
     expect(screen.queryByText("150%")).toBeNull();
   });
 
@@ -234,7 +234,7 @@ describe("CardZoomIndicator", () => {
    * A wheel roll is a stream of notches a few tens of milliseconds apart, so the badge has to
    * live off the **last** one. Two notches nearly a quiet period apart, and the total elapsed
    * here is well past {@link ZOOM_QUIET_MS} — a clock that was not restarted would have taken
-   * the figure down mid-gesture. 100 → 110 → 125 is the ladder's two stops up.
+   * the figure down mid-gesture. 100 → 110 → 120 is the ladder's two stops up.
    */
   it("stays up while the notches keep coming", async () => {
     render(<CardZoomIndicator />);
@@ -244,7 +244,7 @@ describe("CardZoomIndicator", () => {
     await notch();
     await tick(ZOOM_QUIET_MS - 100);
 
-    expect(screen.getByText("125%")).toBeInTheDocument();
+    expect(screen.getByText("120%")).toBeInTheDocument();
   });
 
   it("goes away once the reader stops", async () => {

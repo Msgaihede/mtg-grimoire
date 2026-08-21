@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import { DEFAULT_SECTION_ZOOMS, stepZoom, type ZoomSection } from "./cardZoom";
+import {
+  DEFAULT_SECTION_ZOOMS,
+  isZoomSection,
+  snapZoom,
+  stepZoom,
+  type ZoomSection,
+} from "./cardZoom";
 import type { Condition } from "./conditions";
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
@@ -114,8 +120,12 @@ interface AppState {
    * the sections are the four walls of cards and not the five views: Stacks and Grid share `deck`,
    * because they are one pile drawn two ways.
    *
-   * Session-only and deliberately so — this store is UI state, and nothing here reaches SQLite or
-   * `localStorage`. See `cardZoom.ts` for why restoring it on launch would be the wrong kindness.
+   * **Restored at launch since issue #175**, which reverses the second half of what this comment
+   * used to say. The store is still UI state and still reaches nothing itself: the value lives in
+   * one `app_meta` row, and `useCardZoomPersistence` — mounted once, in `AppShell` — is the only
+   * thing that reads or writes it. `cardZoom` is built out of `DEFAULT_SECTION_ZOOMS` and seeded
+   * a round trip later through {@link hydrateCardZoom}, so every wall is drawable from the first
+   * frame whatever storage eventually says.
    */
   cardZoom: Record<ZoomSection, number>;
   /**
@@ -165,6 +175,29 @@ interface AppState {
    * true by construction instead of by every call site remembering to say so.
    */
   zoomCards: (section: ZoomSection, direction: 1 | -1) => void;
+  /**
+   * Seed the sections from what the database remembered, once, at launch.
+   *
+   * The **second** door onto `cardZoom`, and it holds the same guarantee the first one does:
+   * every value goes through `snapZoom`, so the store still only ever holds one of the sixteen exact
+   * stops and `zoom === 1` stays a question worth asking. What arrives is `Record<string, number>`
+   * rather than a typed map, because it is a JSON object written by some build of this app — a
+   * key that is not a section this build draws (`isZoomSection` says no) is dropped rather than
+   * trusted, and a section the row says nothing about keeps the default it was built with.
+   *
+   * **It does not pulse, and that is the point of it being separate from {@link zoomCards}.** The
+   * badge is a HUD about a gesture; a value arriving from storage is not one, and pulsing here
+   * would greet every launch with a percentage floating in the corner of a wall nobody touched.
+   *
+   * **A gesture already made wins**, which is what `zoomPulse !== 0` buys. The read is a round
+   * trip, so a reader who spins the wheel inside it would otherwise have their new size
+   * overwritten by last session's a moment later — a wall visibly snapping back under their hand,
+   * with nothing on screen explaining it. Whole-store rather than per-section because that is what
+   * the pulse can answer, and the case is a sub-second window in which the reader has, by
+   * definition, only reached one wall: dropping the whole seed there costs at most the other six
+   * their memory for one session, and no reader can tell that from having zoomed them back.
+   */
+  hydrateCardZoom: (stored: Readonly<Record<string, number>>) => void;
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
@@ -460,6 +493,18 @@ export const useAppStore = create<AppState>((set) => ({
       zoomPulse: s.zoomPulse + 1,
       zoomSection: section,
     })),
+  // No pulse and no `zoomSection`: this is a value arriving, not a gesture happening. See the
+  // interface above for the `zoomPulse !== 0` guard, which is the whole of "a reader who zoomed
+  // during the read keeps what they asked for".
+  hydrateCardZoom: (stored) =>
+    set((s) => {
+      if (s.zoomPulse !== 0) return {};
+      const cardZoom = { ...s.cardZoom };
+      for (const [section, zoom] of Object.entries(stored)) {
+        if (isZoomSection(section)) cardZoom[section] = snapZoom(zoom);
+      }
+      return { cardZoom };
+    }),
   selectedCardId: null,
   // **And forgets which deck row the last card came from.** Every surface in the app that
   // opens a card goes through here — search tiles, collection rows, wishlist rows, the docked
