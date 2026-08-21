@@ -31,20 +31,30 @@ export const COUNT_TAG_SLANT =
   "polygon(0 0, 100% 0, calc(100% - 10px*var(--mark-scale,1)) 100%, 0 100%)";
 
 /**
- * The same cut for a mark in a **right-hand** corner — the left edge slants instead.
+ * The same cut for a mark in a **right-hand** corner — the bite moves to the bottom-**left**.
  *
- * Not a preference: {@link COUNT_TAG_SLANT} takes its bite out of the edge *away* from the corner
- * it is pinned to, which is what makes the shape read as a banner tucked into that corner. Reused
- * unmirrored on the right, the bite lands against the card's own edge and leaves a notch there —
- * photographed 2026-08-20 against the built stylesheet, and the mirrored pair read as bookends of
- * the marks strip where the unmirrored one read as a mistake.
+ * Not a preference: {@link COUNT_TAG_SLANT} takes its bite out of the corner *diagonally opposite*
+ * the one it is pinned to, which is what makes the shape read as a banner tucked into that corner.
+ * Reused unmirrored on the right, the bite lands against the card's own edge and leaves a notch
+ * there — photographed 2026-08-20 against the built stylesheet, and the mirrored pair read as
+ * bookends of the marks strip where the unmirrored one read as a mistake.
+ *
+ * ## It is a **reflection**, and until issue #182 it was a rotation
+ *
+ * Both transforms move the bite off the right edge, which is why the wrong one survived a
+ * photograph: rotate the polygon 180° and the bite lands top-left, reflect it across the vertical
+ * axis and it lands bottom-left, and either way the card's own right edge is left straight. Only
+ * the reflection is a mirror. A rotation flips the **taper** as well as the side — so the tag at
+ * the left of the marks strip was widest along its top edge while the mark at the right of it was
+ * widest along its bottom, two banners leaning opposite ways. That is what was reported: "bigger
+ * towards the bottom, whereas the quantity badge is bigger towards the top".
  *
  * It is the same idea `GameChangerBanner` states for its forked tail ("the notch is cut into the
  * *right* edge, so the banner points away from the tag it emerges from"): the geometry is
  * oriented to where the mark sits, and only the orientation changes.
  */
 export const COUNT_TAG_SLANT_MIRRORED =
-  "polygon(calc(10px*var(--mark-scale,1)) 0, 100% 0, 100% 100%, 0 100%)";
+  "polygon(0 0, 100% 0, 100% 100%, calc(10px*var(--mark-scale,1)) 100%)";
 
 /**
  * Everything the two boxes below share — the height, the face and the type, without either
@@ -83,15 +93,34 @@ export const COUNT_TAG_BOX = cn(
 );
 
 /**
- * The same box for a mark cut with {@link COUNT_TAG_SLANT_MIRRORED} — the two paddings swapped,
- * and nothing else.
+ * The box for a mark cut with {@link COUNT_TAG_SLANT_MIRRORED} — the larger padding on the
+ * **left**, and both of them small, because what it holds is a *glyph* rather than a digit.
  *
- * **Issue #158 is what it is for.** The theory tick in a stacked card's right-hand corner wore
- * {@link COUNT_TAG_BOX} unchanged, and a reader reported the glyph as left-aligned inside its own
- * banner. It was: the paddings above centre content in a trapezium whose bite is out of the
- * **right** edge, and the mirrored slant takes its bite out of the **left** one. At 100% zoom
- * that puts the mark's visible mid-height centre 5.5px to the *right* of where the content sits —
- * a quarter of a 22px box, which is why a glyph nobody measures still looked wrong.
+ * **Issue #158 moved the larger one to the left.** The theory tick in a stacked card's right-hand
+ * corner wore {@link COUNT_TAG_BOX} unchanged, and a reader reported the glyph as left-aligned
+ * inside its own banner. It was: the paddings above centre content in a trapezium whose bite is
+ * out of the **right** edge, and the mirrored slant takes its bite out of the **left** one. At
+ * 100% zoom that puts the mark's visible mid-height centre 5.5px to the *right* of where the
+ * content sits — a quarter of a 22px box, which is why a glyph nobody measures still looked wrong.
+ *
+ * **Issue #182 shrank the pair from `12/6` to `6/1`.** The mark this box draws sits in a stacked
+ * card's top-right corner, laid over the printed **mana cost** — the one thing a reader reads out
+ * of that corner — and at 30px it covered most of a three-pip one. 19px covers rather less, and
+ * the 11px came out of padding alone: the height, the face and the slant are untouched, so the
+ * mark is still {@link COUNT_TAG_BOX}'s shape reflected.
+ *
+ * ## Both issues are instances of one line of arithmetic, so here it is
+ *
+ * At the box's mid-height the slant has eaten `10px / 2` off the left edge, so the visible
+ * trapezium spans `[5px, W]` and its centre is at `(W + 5) / 2`; the content's centre is at
+ * `pl + c / 2`. Substitute `W = pl + c + pr` and the content width `c` cancels: the two centres
+ * coincide exactly when **`pl − pr = 5px`**, whatever either padding is and whatever is inside.
+ * `12/6` satisfied it to within the half pixel that was measured (the numbers came off Tailwind's
+ * scale); `6/1` satisfies it exactly.
+ *
+ * The right-hand padding gets to be a hairline because a stroked tick brings its own: lucide's
+ * `Check` is drawn `4 → 20` in a 24 viewBox, so 2px of bearing per side at the 12px this is worn
+ * at. A digit has no such room to give back, which is why {@link COUNT_TAG_BOX} keeps its `6/12`.
  *
  * A second constant rather than a `mirrored` flag on the first, because the pairing is the point:
  * a slant and the paddings that centre content inside it are **one shape** described in two
@@ -99,7 +128,7 @@ export const COUNT_TAG_BOX = cn(
  */
 export const COUNT_TAG_BOX_MIRRORED = cn(
   COUNT_TAG_FACE,
-  "pl-[calc(0.75rem*var(--mark-scale,1))] pr-[calc(0.375rem*var(--mark-scale,1))]",
+  "pl-[calc(0.375rem*var(--mark-scale,1))] pr-[calc(0.0625rem*var(--mark-scale,1))]",
 );
 
 /**

@@ -761,3 +761,46 @@ From the gallery's "Import deck" button, a 4-card paste, a typed name, Import. T
 for this — but the page itself carried `Export deck` (a control that exists only inside the deck
 editor), the typed deck name, and the 4 cards correctly filed under Ramp and Removal: the reader
 was left inside the deck that was just created, not looking at its new tile in the gallery.
+
+## The arrow keys walk one card at a time (#178)
+
+Driven in the shipped window **2026-08-21** (`npm run tauri dev`, a **debug** build, 1920×1080,
+against a copy of the real corpus), on a 14-card Commander deck laid out as six piles —
+`Commander(1) · Instant(3) · Artifact(4) · Creature(4)` in the flow, then `Test(1)` and one railed
+pile. The caret was put on a card by a **real pointer click**, which is the entry point
+[frontend-design.md](frontend-design.md) records a pass having missed once.
+
+- **A pile boundary is not a stop, and the step that proves it is the one *inside* a pile.**
+  ArrowRight from the head of the Artifact pile landed on its **second** card, where the old
+  two-axis walk would have jumped to the next pile. Crossing out of a pile was checked separately:
+  the last card of Instant → the first of Artifact.
+- **Thirteen presses walk a fourteen-card deck exactly once.** From the command zone's only card,
+  thirteen ArrowRights visited every one of the 14 slots in DOM order — no card twice, none
+  skipped, all four pile boundaries crossed, the railed pile included. **Five more presses moved
+  nothing**: the clamp, not a wrap.
+- **A pile is entered at its near edge.** ArrowLeft off the head of the `Test` pile landed on the
+  **last** card of Creature rather than its first — the property that makes one press and then the
+  other the card you started on.
+- **Up and down are the page's, which is the half jsdom cannot see.** With the caret on a card,
+  five ArrowDowns moved the deck editor's scroller **0 → 200px** (40px a press, Chromium's line
+  scroll) and three ArrowUps took it **200 → 80**, with `document.activeElement` on the same card
+  throughout. No branch, no `preventDefault`, so the key keeps the meaning the browser gives it.
+- **The ring and the pane follow the caret.** Exactly **one** `[data-deck-card-selected]` in the
+  DOM at the end of the walk, on the focused card, with the card pane showing that card's name.
+- **`scrollIntoView({block:"nearest"})` had nothing to do and did nothing.** The card the walk
+  ended on sat at 386–679 inside a scrollport of 112–1060 and `scrollTop` was still **0** — worth
+  recording because "the desk did not move" and "the walk did not follow" look identical from a
+  screenshot.
+
+### The grip, which now answers two keys instead of four
+
+- **ArrowDown and ArrowUp on a category grip reorder nothing.** The four grip labels read
+  `Move Instant, 1 of 4 · Move Artifact, 2 of 4 · Move Creature, 3 of 4 · Move Test, 4 of 4`
+  before and after both presses, with no `role="alert"` banner and the caret still on the grip —
+  so the view's own walk did not quietly take the press either.
+- **The tooltip says what the control now does**: hovering a grip for 900ms read
+  `Drag to reorder, or press the left and right arrow keys`.
+
+Left as the suite's: that ArrowLeft/ArrowRight on a grip still reorder. Driving it live means two
+`deck_category_reorder` writes against the reader's own deck, and the branch was not touched —
+`views.test.tsx` and `DeckEditor.test.tsx` both cover it, including the ids the second one sends.

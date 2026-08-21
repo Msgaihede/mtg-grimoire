@@ -586,7 +586,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   in `src/lib/motion.ts`** (and `PRESS_SOFT`, the settings rows' 0.99), where it joined the
   timings on 2026-08-16 — until then it was hand-copied onto every pressable control in the
   app, with the paragraph explaining why pasted beside almost all of them (`b0a49aa`). Both are
-  built from one private `PRESS_BASE`, because they differ by a single utility and the property
+  built from one `PRESS_STILL`, because they differ by a single utility and the property
   list must be written once. **Both are template literals now, which is a second reason the
   check belongs in `dist/`**: a join that breaks a class name in half emits no rule at all and
   source still reads correctly. **What a control does when it is out of reach is not in the
@@ -594,6 +594,17 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   the rest never grey; that is three facts about three kinds of control rather than drift, and
   `grep active:scale-100` is the census. The settings panels' button box is
   `src/features/settings/controls.ts`.
+- **Nothing that a reader types into takes the dip** — `PRESS_STILL` is the recipe without it,
+  and `FilterChips`' `FILTER_FIELD` is `FILTER_CONTROL` built on it. On an
+  `<input type="search">` this is not cosmetic: Chromium draws the ✕ inside the field's own
+  shadow tree, a `scale` pivots on the field's centre, and `click` goes to the common ancestor
+  of the press and the release — so the button slides out from under the pointer and the box
+  dips **without clearing** (issue #179). It is a width bug, which is why it read as one box
+  working: swept a pixel at a time against a 10px button, a 176px field still cleared over 8 of
+  them, a 256px field over 7, a 700px field over none, and the filter row's boxes are `flex-1`.
+  **jsdom has no layout engine and no user-agent shadow tree, so nothing can go red for the
+  behaviour** — `motion.test.ts` sweeps `src/` for the class instead, and the numbers come from
+  a browser.
 - **Under jsdom the animations are real and timing-dependent**, which is why
   `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. **The flag alone was
   not enough and the gap it left was a CI flake** (fixed 2026-08-20): `skipAnimations` applies
