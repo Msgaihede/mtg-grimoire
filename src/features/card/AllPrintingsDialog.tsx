@@ -84,6 +84,7 @@ import { plural } from "@/lib/counts";
 import { soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
+import { languageHint } from "@/lib/languages";
 import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore, type CardWalkStop, type PrintingsRequest } from "@/lib/store";
@@ -183,18 +184,39 @@ const tileFinish = (row: PrintingRow) => soleFinish(row.finishes);
  *
  * 10px scaled by the card's own `--mark-scale`, matching the search wall's printing count in the
  * same corner: a fixed size climbs out of the printed nameplate by 2×.
+ *
+ * **Module scope, and the tooltip is bound one level down in {@link LanguageMark} rather than
+ * here.** `CardGrid`'s `topLeft` wants a stable identity, and `useTooltip()` is a hook — a
+ * `tip` closed over from `Body` would either re-register every tile on every scrolled row or
+ * have to be called somewhere a hook may not run. A component costs one element and gets both.
  */
 const tileLanguage = (row: PrintingRow) =>
-  row.lang === "en" ? null : (
+  row.lang === "en" ? null : <LanguageMark lang={row.lang} />;
+
+/**
+ * The corner's two letters, and the sentence they are short for.
+ *
+ * The mark is an abbreviation on a photograph with no caption beside it: `PH` on Elesh Norn is
+ * unreadable to anyone who has not already learned that Scryfall files Phyrexian as a language
+ * (issue #161). The words come from `languageHint` so the wall, the card pane's facts line and
+ * its printings rows all say the same thing, and the corner can carry them at all because
+ * `CardGrid` gives both marks `pointer-events-auto` — a tooltip inside a `pointer-events-none`
+ * box is one that can never be shown.
+ */
+function LanguageMark({ lang }: { lang: string }) {
+  const tip = useTooltip();
+  return (
     <span
+      {...tip(languageHint(lang))}
       className={cn(
         "block whitespace-nowrap font-mono uppercase text-text",
         "text-[calc(10px*var(--mark-scale,1))] leading-none",
       )}
     >
-      {row.lang}
+      {lang}
     </span>
   );
+}
 
 /**
  * What a keypress inside this dialog belongs to before it belongs to the walk.

@@ -34,6 +34,7 @@ import { SetCombobox } from "@/features/search/SetCombobox";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { SetSummary } from "@/lib/ipc";
+import { languageName } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 import {
   EMPTY_PRINTING_FILTER,
@@ -80,6 +81,15 @@ interface CheckOption {
   key: string;
   /** What is drawn on the row. */
   text: string;
+  /**
+   * What the row is called in words, where {@link text} is an abbreviation — a language code.
+   *
+   * The row's accessible name and its tooltip are built from this rather than from what is
+   * drawn, so `JA` is announced and hovered as `Japanese`; a set row, whose text is already the
+   * set's name, leaves it unset and the two are the same string. The visible column stays the
+   * code because the box is 128px wide and a column of full names would truncate to nothing.
+   */
+  name?: string;
   /** How many printings it would leave. */
   count: number;
 }
@@ -99,8 +109,10 @@ interface CheckOption {
  *
  * **The bare number is named in the row's own accessible name rather than left to stand alone.**
  * Nothing beside it says what is being counted — the caption says what the *names* are — so the
- * checkbox is labelled `Limited Edition Alpha — 12 printings` and the same sentence is the row's
- * tooltip. The `<label>` still wraps the input, so the whole row is a hit target; the `aria-label`
+ * checkbox is labelled `Japanese — 41 printings` and the same sentence is the row's tooltip.
+ * **The name in it is the language's, not the two letters the row draws** (`CheckOption.name`):
+ * the sentence is the one place either reader is given room for the words, and a hover that
+ * answered `JA — 41 printings` would have repeated the abbreviation rather than explained it. The `<label>` still wraps the input, so the whole row is a hit target; the `aria-label`
  * is what stops the two spans being concatenated into `Limited Edition Alpha12`, which is what the
  * accname algorithm does to inline boxes with nothing between them (measured on `ResetAll`,
  * 2026-08-09).
@@ -154,7 +166,7 @@ function CheckList({
     >
       {options.map((option) => {
         const on = selected.includes(option.key);
-        const name = `${option.text} — ${plural(option.count, "printing")}`;
+        const name = `${option.name ?? option.text} — ${plural(option.count, "printing")}`;
         return (
           <li key={option.key}>
             <label
@@ -317,6 +329,9 @@ export function PrintingsFilterBar({
           options={langOptions.map((o) => ({
             key: o.lang,
             text: o.lang.toUpperCase(),
+            // The words the code stands for, which is what the row is hovered and announced as —
+            // see `CheckOption.name`, and `languages.ts` for why `PH` needed them (issue #161).
+            name: languageName(o.lang),
             count: o.count,
           }))}
           selected={filter.langs}
