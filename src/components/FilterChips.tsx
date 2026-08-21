@@ -2,7 +2,7 @@ import { LayoutGrid, Rows3 } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
-import { PRESS } from "@/lib/motion";
+import { PRESS, PRESS_STILL } from "@/lib/motion";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -10,8 +10,8 @@ import { cn } from "@/lib/utils";
  * The controls a filter row is built from, so that the collection's row is the *same* row
  * as the search's rather than a lookalike.
  *
- * Extracted from `FilterBar` unchanged when the second view needed it. The three exported
- * class recipes are the whole of what keeps them one family: a chip that invents its own
+ * Extracted from `FilterBar` unchanged when the second view needed it. The exported class
+ * recipes are the whole of what keeps them one family: a chip that invents its own
  * height sits 2px off the line, and one that invents its own focus style is the only
  * control on the screen a keyboard reader loses.
  */
@@ -32,6 +32,17 @@ import { cn } from "@/lib/utils";
 export const FILTER_FOCUS = FOCUS;
 
 /**
+ * The row's geometry alone, with nothing that moves — 36px tall, so every control in the row
+ * shares a line whether or not it is a thing you press.
+ *
+ * Module-private and written out whole: it is the half {@link FILTER_CONTROL} and
+ * {@link FILTER_FIELD} have in common, and a chip 2px off the line is the failure the family
+ * exists to prevent. Tailwind reads source text, so the four names live here once and both
+ * recipes are built from this.
+ */
+const FILTER_SHAPE = "h-9 rounded-md border text-sm";
+
+/**
  * Every control in the row is 36px tall, so the chips and the text controls share a line —
  * **and the press is {@link PRESS}, the app's one recipe, rather than a copy of it.**
  *
@@ -46,8 +57,38 @@ export const FILTER_FOCUS = FOCUS;
  * rather than `:disabled`, because these chips never leave the tab order — which is why the
  * out-of-reach clause is the caller's and is deliberately not in `PRESS`.
  */
-export const FILTER_CONTROL =
-  "h-9 rounded-md border text-sm " + `${PRESS} ` + "aria-disabled:active:scale-100";
+export const FILTER_CONTROL = `${FILTER_SHAPE} ` + `${PRESS} ` + "aria-disabled:active:scale-100";
+
+/**
+ * The same control, for the box the reader **types into** — every class {@link FILTER_CONTROL}
+ * wears except the press dip.
+ *
+ * **The dip is not cosmetic on a text field; it breaks the clear button** (issue #179).
+ * Chromium draws the `✕` of an `<input type="search">` inside the field's own shadow tree, and
+ * a `scale` pivots on the field's **centre** — so for as long as the button is held down the
+ * whole box, and that button with it, slides left by `width × (1/0.97 − 1) / 2`. A `click` is
+ * dispatched to the common ancestor of the press target and the release target, so once the
+ * button has travelled out from under the pointer the click lands on the *field*, Blink's
+ * cancel-button handler never runs, and the box dips without clearing. What a reader reports is
+ * exactly that: "the text box bounces, but its contents are not cleared".
+ *
+ * **It is a width bug, which is why it read as one box working and the rest not.** Swept a
+ * pixel at a time in Chromium 2026-08-21 against a 10px-wide cancel button: at `w-44` (176px)
+ * the press still lands over 8 of those pixels, at `w-64` (256px) over 7, and at 700px over
+ * **none at all** — measured against the shipped `dist/` CSS, a 700px box's right edge travels
+ * **10.5px** while it is held down, which is further than the button is wide. The filter row's
+ * boxes are `min-w-56 flex-1` — they take whatever the row leaves, which on a maximised window
+ * is most of it — so the one search box in the app that always worked was `DeckEditor`'s 176px
+ * "Filter this deck", which had never taken `FILTER_CONTROL` in the first place.
+ *
+ * The rule is {@link press}'s, one gesture along: that preset carries no `whileFocus` because
+ * "scaling on focus moves a control out from under a caret the reader just put there", and
+ * scaling on *press* moves it out from under the pointer pressing it. `TitleBar`'s caption
+ * buttons leave the dip off for a third version of the same sentence.
+ *
+ * `motion.test.ts` sweeps `src/` for a text-entry `<input>` that took the dip back.
+ */
+export const FILTER_FIELD = `${FILTER_SHAPE} ` + PRESS_STILL;
 
 /**
  * A control this search cannot reach.
