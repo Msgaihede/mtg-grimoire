@@ -59,7 +59,7 @@ const listSets = vi.hoisted(() => vi.fn());
 // rather than a missing answer.
 const deckCategoryList = vi.hoisted(() => vi.fn());
 const deckTagList = vi.hoisted(() => vi.fn());
-const deckTagSuggestions = vi.hoisted(() => vi.fn());
+const deckTagAll = vi.hoisted(() => vi.fn());
 // The two writes a card's own right-click reaches — the deck's label put on a row, and the
 // label made by the menu's own "New tag…" field. `setTag` had no control anywhere in the app
 // until that menu; this is its first caller.
@@ -137,7 +137,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     listSets,
     deckCategoryList,
     deckTagList,
-    deckTagSuggestions,
+    deckTagAll,
     deckCardSetTag,
     deckTagCreate,
     collectionAdd,
@@ -565,11 +565,11 @@ beforeEach(() => {
   listSets.mockReset().mockResolvedValue([]);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckTagList.mockReset().mockResolvedValue([]);
-  deckTagSuggestions.mockReset().mockResolvedValue([]);
+  deckTagAll.mockReset().mockResolvedValue([]);
   deckCardSetTag.mockReset().mockResolvedValue(undefined);
   deckTagCreate
     .mockReset()
-    .mockResolvedValue({ id: 12, deckId: 4, name: "Cut candidate", color: "gold", cardCount: 0 });
+    .mockResolvedValue({ id: 12, name: "Cut candidate", color: "gold", cardCount: 0 });
   collectionAdd.mockReset().mockResolvedValue(undefined);
   deckCategoryCreate.mockReset().mockResolvedValue(category(9, "Removal", "main"));
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
@@ -1454,7 +1454,7 @@ describe("DeckEditor", () => {
         {},
         [bolt({ tagId: 7, tagName: "Wincon", tagColor: "gold" }), card({ name: "Bear" })],
         CATEGORIES,
-        [{ id: 7, deckId: 4, name: "Wincon", color: "gold", cardCount: 4 }],
+        [{ id: 7, name: "Wincon", color: "gold", cardCount: 4 }],
       ),
     );
 
@@ -3676,7 +3676,7 @@ describe("DeckEditor — a card's menu", () => {
    */
   const RECURSION = category(7, "Recursion", "main", { origin: "auto", sortOrder: 5 });
 
-  const BUDGET: DeckTag = { id: 8, deckId: 4, name: "Budget swap", color: "moss", cardCount: 1 };
+  const BUDGET: DeckTag = { id: 8, name: "Budget swap", color: "moss", cardCount: 1 };
 
   /** Right-click the card the editor drew, found by the slot every view stamps on it. */
   async function rightClickCard(name: string) {
@@ -3937,21 +3937,26 @@ describe("DeckEditor — a card's menu", () => {
    * picker, so every label made this way was gold. Two presses instead of one, and the label
    * arrives in the colour the reader chose — everything about the *chain* is unchanged, which is
    * what the three cases here are actually about.
+   *
+   * **That dialog became a picker with a create in it at schema v21**, and the chain is still
+   * untouched: the row is "More tags…", the field is "Find or name a tag", and the button says
+   * the name back. What is new is the *other* press — see the case below this one, where an
+   * existing tag goes on the card with no create at all.
    */
-  it("makes a label from the menu's New tag… dialog and puts it on the card", async () => {
+  it("makes a label from the menu's More tags… dialog and puts it on the card", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt()]));
     await open();
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
     // The menu is gone the moment the row is pressed; the dialog is what is left.
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    await screen.findByRole("dialog", { name: "New tag" });
+    await screen.findByRole("dialog", { name: "Add tag" });
 
-    await userEvent.type(screen.getByLabelText("New tag name"), "Cut candidate");
+    await userEvent.type(screen.getByLabelText("Find or name a tag"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Slate" }));
-    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
     // The colour the reader picked, where the field this replaced sent gold and never asked.
     await waitFor(() =>
@@ -3985,16 +3990,16 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
-    await userEvent.type(await screen.findByLabelText("New tag name"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
+    await userEvent.type(await screen.findByLabelText("Find or name a tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "New tag" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Add tag" })).not.toBeInTheDocument(),
     );
     expect(deckCardSetTag).not.toHaveBeenCalled();
 
-    landed({ id: 12, deckId: 4, name: "Cut candidate", color: "#d9b95c", cardCount: 0 });
+    landed({ id: 12, name: "Cut candidate", color: "#d9b95c", cardCount: 0 });
 
     await waitFor(() =>
       expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
@@ -4016,13 +4021,52 @@ describe("DeckEditor — a card's menu", () => {
     await rightClickCard("Lightning Bolt");
     await expand(/Tag card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "New tag…" }));
-    await userEvent.type(await screen.findByLabelText("New tag name"), "Cut candidate");
-    await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
+    await userEvent.type(await screen.findByLabelText("Find or name a tag"), "Cut candidate");
+    await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
     expect(
       await screen.findByText(/Could not change this deck — The database is busy/),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **The other press the dialog grew, and the one the issue is chiefly about**: a tag the reader
+   * already owns, that this deck's list is not wearing, goes on the card with **no create at
+   * all**.
+   *
+   * It is one write rather than two, so nothing here needs the chain the three cases above are
+   * about — which is exactly why it is worth pinning separately. The choices are the app-wide
+   * list minus what the context menu already offered, subtracted in the editor because that is
+   * the only place holding both halves.
+   */
+  it("puts a tag the reader owns but this list does not wear on the card", async () => {
+    deckTagAll.mockResolvedValue([
+      { id: 8, name: "Budget swap", color: "moss", cardCount: 3, deckCount: 2 },
+      // Already on a card in this list, so the menu offers it and the dialog must not.
+      { id: 9, name: "Wincon", color: "gold", cardCount: 1, deckCount: 1 },
+    ]);
+    deckGet.mockResolvedValue(
+      detail({}, [bolt()], CATEGORIES, [
+        { id: 9, name: "Wincon", color: "gold", cardCount: 1 },
+      ]),
+    );
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await expand(/Tag card/);
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add tag" });
+    // The tag this list already wears is a radio in the *menu*, never a row here. Scoped to the
+    // dialog because the editor's toolbar draws a tag filter chip by the same name.
+    expect(within(dialog).queryByRole("button", { name: /Wincon/ })).not.toBeInTheDocument();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: /Budget swap/ }));
+
+    expect(deckTagCreate).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8),
+    );
   });
 
   /**

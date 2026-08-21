@@ -268,7 +268,13 @@ export function RenameField({
  */
 export function sectionFailure(
   writes: readonly [Write, ...Write[]],
-  read: { isError: boolean; error: unknown },
+  // **Any number of reads, because the tags dialog grew a second one.** It draws two lists off
+  // two commands — what this deck's list wears, and every tag there is — and either can be
+  // refused on its own. One argument would have made the caller pick which failure the reader
+  // is told about, which is a choice with no right answer. The first one that failed wins, in
+  // the order the caller lists them: that is the order they are drawn in.
+  ...reads: readonly { isError: boolean; error: unknown }[]
 ): string | null {
-  return writeFailure(writes) ?? (read.isError ? ipcError(read.error) : null);
+  const refused = reads.find((r) => r.isError);
+  return writeFailure(writes) ?? (refused ? ipcError(refused.error) : null);
 }

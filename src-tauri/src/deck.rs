@@ -1757,26 +1757,11 @@ pub fn duplicate_deck(
         .map_err(|e| e.to_string())?;
     }
 
-    let tags: Vec<(i64, String, String)> = tx
-        .prepare("SELECT id, name, color FROM deck_tags WHERE deck_id = ?1 ORDER BY id")
-        .map_err(|e| e.to_string())?
-        .query_map(params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .map_err(|e| e.to_string())?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())?;
-    let mut tag_map: HashMap<i64, i64> = HashMap::new();
-    for (old, name, color) in tags {
-        let new: i64 = tx
-            .query_row(
-                "INSERT INTO deck_tags (deck_id, name, color, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
-                 RETURNING id",
-                params![copy, name, color],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        tag_map.insert(old, new);
-    }
+    // **The tags are not copied, and since schema v21 there is nothing to copy.** A duplicate
+    // used to get its own `deck_tags` rows and a map from the original's ids to them, because a
+    // tag belonged to a deck and the copy needed its own. A tag is one app-wide row now, so the
+    // copied cards keep the very `tag_id` they had: the duplicate wears the same labels as its
+    // original, which is what a reader duplicating a deck means by "the same deck".
 
     // `needs_review` travels with the row: the sentence says this printing left the card
     // database, which is just as true of the copy.
@@ -1824,7 +1809,8 @@ pub fn duplicate_deck(
                 card.collector_number,
                 card.lang,
                 card.name,
-                card.tag_id.and_then(|t| tag_map.get(&t).copied()),
+                // Verbatim: the label is the app's, so the copy wears the very same row.
+                card.tag_id,
                 card.quantity,
                 card.needs_review,
                 card.finish,
@@ -2962,8 +2948,19 @@ pub struct DeckDetail {
     /// Their `card_count` and both `total_price_*` are scoped to the same variant the cards
     /// are.
     pub categories: Vec<DeckCategoryRow>,
-    /// Every tag of the deck, alphabetically — the palette a row's label is picked from,
-    /// which exists whether or not any row is wearing it.
+    /// Every tag **this list is wearing**, most-used first — the fast row of the right-click
+    /// menu, and nothing more than that.
+    ///
+    /// It was "every tag of the deck, worn or not" until schema v21, when a tag stopped being a
+    /// deck's at all. There is no per-deck palette to send any more: what a deck has is cards,
+    /// some of which wear a label, and that is what this is. Scoped to the same `variant` the
+    /// cards are, because the live list and the theory list are treated as separate decks where
+    /// labels are concerned — a menu opened over a theory row offers what the theory list wears.
+    ///
+    /// **The other tags are one command away and deliberately not here**: `deck_tag_all` is the
+    /// whole list, which the Tags dialog and the "Add tag" dialog read and a context menu does
+    /// not want. `deck_get` is the editor's one read and adding an app-wide table to it would
+    /// make every deck open pay for a list that changes for reasons no deck knows about.
     pub tags: Vec<DeckTagRow>,
 }
 
@@ -6065,8 +6062,16 @@ mod tests {
     }
 
     /// A deck delete is a real user deletion — the decks are the user's to destroy — and
-    /// the CASCADEs take the cards, the claims, the categories and the tags with it. What it
-    /// never touches is the collection: a deck names copies, it does not own them.
+    /// the CASCADEs take the cards, the claims and the categories with it. What it never
+    /// touches is the collection: a deck names copies, it does not own them.
+    ///
+    /// **Nor the tags, since schema v21, and that is the change rather than a leak.** A tag
+    /// used to carry `deck_id … ON DELETE CASCADE` and went with the deck that made it, which
+    /// was right while it belonged to one. It belongs to the app now: deleting a deck that
+    /// happened to be where "Cut candidate" was first typed must not take the label off the
+    /// nine other decks wearing it, so a delete unclaims the label here (through `deck_cards`)
+    /// and leaves it standing. Clearing *every* deck is the case that would otherwise strand
+    /// them, and `reset::clear_decks` sweeps the table by hand for exactly that reason.
     #[test]
     fn deleting_a_deck_takes_its_cards_and_claims_and_deleting_it_twice_still_succeeds() {
         let conn = seeded();
@@ -6082,7 +6087,11 @@ mod tests {
         assert_eq!(count(&conn, "deck_cards"), 0);
         assert_eq!(count(&conn, "deck_allocations"), 0);
         assert_eq!(count(&conn, "deck_categories"), 0);
-        assert_eq!(count(&conn, "deck_tags"), 0);
+        assert_eq!(
+            count(&conn, "deck_tags"),
+            1,
+            "the label outlives the deck it was made in — see this test's doc"
+        );
         assert_eq!(
             count(&conn, "collection_entries"),
             1,
@@ -7955,8 +7964,9 @@ mod tests {
                 .iter()
                 .map(|t| (t.name.as_str(), t.card_count))
                 .collect::<Vec<_>>(),
-            vec![("Flex", 4), ("Unworn", 0)],
-            "and every tag, worn or not — `card_count` being copies rather than rows, which \
+            vec![("Flex", 4)],
+            "and every tag **this list wears**, `Unworn` being a tag of the app rather than \
+             of a deck since v21 — `card_count` being copies rather than rows, which \
              is why the tag on one four-of reads 4"
         );
 
@@ -7998,7 +8008,7 @@ mod tests {
                 .iter()
                 .map(|t| (t.name.as_str(), t.card_count))
                 .collect::<Vec<_>>(),
-            vec![("Flex", 7), ("Unworn", 0)],
+            vec![("Flex", 7)],
             "one read, one list of cards, one variant — on all three of its parts"
         );
     }

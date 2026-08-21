@@ -8,7 +8,7 @@ import type {
   DeckDetail,
   DeckRow,
   DeckTag,
-  TagSuggestion,
+  GlobalTag,
 } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 
@@ -31,7 +31,7 @@ const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
  * file: what they answer is `TagsDialog.test.tsx`'s subject.
  */
 const deckTagList = vi.hoisted(() => vi.fn());
-const deckTagSuggestions = vi.hoisted(() => vi.fn());
+const deckTagAll = vi.hoisted(() => vi.fn());
 const deckTagCreate = vi.hoisted(() => vi.fn());
 const deckTagUpdate = vi.hoisted(() => vi.fn());
 const deckTagDelete = vi.hoisted(() => vi.fn());
@@ -53,7 +53,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagCreate,
     deckTagUpdate,
     deckTagDelete,
-    deckTagSuggestions,
+    deckTagAll,
     deckGet,
     deckMoveCard,
     oracleTagsForPrintings,
@@ -102,9 +102,11 @@ const CATEGORIES: DeckCategory[] = [
 
 /** Whatever the shared hook's tag reads answer — see the mock's doc. */
 const TAGS: DeckTag[] = [
-  { id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 3 },
+  { id: 10, name: "Cut candidate", color: "ember", cardCount: 3 },
 ];
-const SUGGESTIONS: TagSuggestion[] = [{ name: "Budget swap", color: "moss" }];
+const SUGGESTIONS: GlobalTag[] = [
+  { id: 11, name: "Budget swap", color: "moss", cardCount: 4, deckCount: 2 },
+];
 
 /** The deck row `deck_get` answers with. Nothing on this dialog reads a field of it — the one
  *  thing it wants out of `deck_get` is `cards`, for the auto-categoriser. */
@@ -215,7 +217,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   deckCategoryList.mockResolvedValue(CATEGORIES);
   deckTagList.mockResolvedValue(TAGS);
-  deckTagSuggestions.mockResolvedValue(SUGGESTIONS);
+  deckTagAll.mockResolvedValue(SUGGESTIONS);
   deckGet.mockResolvedValue(DECK);
   deckCategoryCreate.mockResolvedValue(category({ id: 6, name: "Draw" }));
   deckCategoryRename.mockResolvedValue(category({ id: 2, name: "Acceleration" }));

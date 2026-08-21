@@ -59,6 +59,14 @@ tauri-plugin-snap-layout = "1"
 # and fail the build that needs them least.
 tauri-plugin-mcp-bridge = "0.12"
 rusqlite = { version = "0.40", features = ["bundled"] }
+# What makes two tag names the same name. `deck_tags` is one global list since schema v21 and
+# its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode lowercase,
+# then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining accent, and
+# in capitals is one label rather than three rows a reader cannot tell apart. SQLite cannot
+# answer this on its own: `COLLATE NOCASE` is ASCII-only and the bundled build carries no
+# normalisation at all, which is why the key is computed here and stored. Two small tables and
+# no dependencies of its own.
+unicode-normalization = "0.1"
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

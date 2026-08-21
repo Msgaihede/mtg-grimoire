@@ -1139,36 +1139,49 @@ export interface DeckCategory {
 export type TagColor = string;
 
 /**
- * One tag of one deck: a per-deck label a card can carry, at most one per card.
+ * One tag **in use in one list of one deck** — a label a card can carry, at most one per card.
  *
  * The "at most one" is the `deck_cards.tag_id` column itself and nothing else — there is no
  * join table and no constraint to relax if that ever changes.
+ *
+ * **It carried a `deckId` until schema v21 and no longer can**, because there is no such fact:
+ * a tag is one app-wide row ({@link GlobalTag}) and what a deck has is not a list of tags but a
+ * list of cards, some of which wear one. So this row is a tag *and* a fact about the deck and
+ * variant it was read by — which is why `deckTagList` cannot answer a tag nothing is wearing,
+ * and why `deckTagAll` exists.
  */
 export interface DeckTag {
   id: number;
-  deckId: number;
   name: string;
   color: TagColor;
   /** Copies carrying it, `sum(quantity)` like {@link DeckCategory.cardCount}, and scoped to
-   *  the same variant the read asked by — the two agree, deliberately. */
+   *  the same deck **and variant** the read asked by. Never zero: a zero would mean the row is
+   *  not in this list at all, and then it is not in the answer. */
   cardCount: number;
 }
 
 /**
- * One row of the "New tag" dialog's autocomplete: a name, a colour, and no deck.
+ * One tag as a thing in itself — every tag there is, worn or not.
  *
- * **Global on purpose.** A tag is per-deck data, but the palette a dialog offers to complete
- * from is a property of the app's whole history rather than of the deck that happens to be
- * open — a reader who has typed "Cut candidate" into four decks should be offered it in the
- * fifth. `deck_tag_suggestions` is the only command in the deck surface that takes no id at
- * all, and it answers most-used first.
+ * **The whole list is app-wide, and that is the feature rather than a convenience.** A tag was
+ * per-deck until schema v21: `Cut candidate` in four decks was four rows, four colours and four
+ * things to rename. It is one row now, so recolouring it recolours it everywhere, and a name a
+ * tag already holds cannot be taken by a second one — compared with
+ * {@link tagNameKey}'s normalisation, not by the word.
  *
- * Grouped on the **pair**, not on the name: nothing in the schema forces two decks to pick
- * the same colour for one word, so a name used in two colours is honestly two rows.
+ * This replaced `TagSuggestion`, which had a name and a colour and no id, because picking one
+ * *copied* it into the deck you were in. Picking one now **uses** that very tag.
  */
-export interface TagSuggestion {
+export interface GlobalTag {
+  id: number;
   name: string;
   color: TagColor;
+  /** Copies wearing it anywhere — every deck, both variants. `0` for a tag nothing wears,
+   *  which is a row this list can answer and {@link DeckTag} never can. */
+  cardCount: number;
+  /** Decks with at least one card wearing it — what a delete confirmation quotes, because the
+   *  reach of that press is the app's and not the open deck's. */
+  deckCount: number;
 }
 
 /**
@@ -3118,24 +3131,33 @@ export const ipc = {
    */
   deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
     invoke<void>("deck_category_delete", { id, moveToCategoryId }),
-  /** A deck's tags on their own, alphabetically — `deckGet` carries the same list. `variant`
-   *  scopes each row's `cardCount` and nothing else, exactly as it does for categories. */
+  /** The tags **this deck's list is wearing**, most-used first — `deckGet` carries the same
+   *  list. `variant` scopes membership as well as the counts, because the live list and the
+   *  theory list are treated as separate decks where labels are concerned. */
   deckTagList: (deckId: number, variant: DeckVariant) =>
     invoke<DeckTag[]>("deck_tag_list", { deckId, variant }),
-  /** A new label for this deck. Refuses a name the deck already has; the colour is `#rrggbb`
-   *  and the backend checks only that it is non-empty — see {@link TagColor}. */
+  /** A new label, **app-wide**. `deckId` is where the reader was standing — it goes in the
+   *  history row and is not stored on the tag. Refuses a name any tag already holds; the
+   *  colour is `#rrggbb` and the backend checks only that it is non-empty — see
+   *  {@link TagColor}. */
   deckTagCreate: (deckId: number, name: string, color: TagColor) =>
-    invoke<DeckTag>("deck_tag_create", { deckId, name, color }),
-  /** Rename **and** recolour: one command, both arguments required. There is no patch shape
-   *  here, so a caller changing one sends the other back unchanged. */
-  deckTagUpdate: (id: number, name: string, color: TagColor) =>
-    invoke<DeckTag>("deck_tag_update", { id, name, color }),
-  /** Delete a label. **Untags its cards rather than deleting them** — `deck_cards.tag_id` is
-   *  `ON DELETE SET NULL` — which is the half of the sentence a confirm dialog owes a reader. */
-  deckTagDelete: (id: number) => invoke<void>("deck_tag_delete", { id }),
-  /** The autocomplete palette for a "New tag" dialog: every name and colour used across
-   *  **every** deck, most-used first. Takes no deck id at all — see {@link TagSuggestion}. */
-  deckTagSuggestions: () => invoke<TagSuggestion[]>("deck_tag_suggestions"),
+    invoke<GlobalTag>("deck_tag_create", { deckId, name, color }),
+  /** Rename **and** recolour, **in every deck at once**: one command, both arguments required.
+   *  There is no patch shape here, so a caller changing one sends the other back unchanged. */
+  deckTagUpdate: (deckId: number, id: number, name: TagColor, color: TagColor) =>
+    invoke<GlobalTag>("deck_tag_update", { deckId, id, name, color }),
+  /** Delete a label **from the whole app**. It **untags its cards rather than deleting them**
+   *  — `deck_cards.tag_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
+   *  {@link GlobalTag.deckCount} exists for a confirm dialog to say first. */
+  deckTagDelete: (deckId: number, id: number) => invoke<void>("deck_tag_delete", { deckId, id }),
+  /** Take a label off **this deck's cards in one list**, leaving the tag itself alone —
+   *  the row-level act the app-wide list needed and the per-deck one never did. Answers how
+   *  many rows lost it; zero is a success. */
+  deckTagRemoveFromDeck: (deckId: number, tagId: number, variant: DeckVariant) =>
+    invoke<number>("deck_tag_remove_from_deck", { deckId, tagId, variant }),
+  /** Every tag there is, most-used first — the only list that can answer a tag no card is
+   *  wearing. Takes no deck id at all; see {@link GlobalTag}. */
+  deckTagAll: () => invoke<GlobalTag[]>("deck_tag_all"),
   /**
    * Put the one tag a deck card carries on it, or take it off with `tagId: null`.
    *

@@ -174,7 +174,7 @@ import type {
   TagNamespace,
   TagRef,
   TagStatus,
-  TagSuggestion,
+  GlobalTag,
   TheoryDiffRow,
   TransferImportMode,
   UpdateAsset,
@@ -487,11 +487,12 @@ export interface FakeDeckCategory {
   origin: CategoryOrigin;
 }
 
-/** One row of `deck_tags`: a per-deck label, at most one per card row. `color` names a token
- *  from the app's palette, never a CSS colour — the backend stores what it is handed. */
+/** One row of `deck_tags`: an **app-wide** label, at most one per card row. It carried a
+ *  `deckId` until schema v21 and does not any more — a tag belongs to no deck, and what a deck
+ *  has is cards that wear one. `color` is `#rrggbb`, or one of the six legacy tokens; the
+ *  backend stores what it is handed and `tagColors.ts` decides what it draws as. */
 export interface FakeDeckTag {
   id: number;
-  deckId: number;
   name: string;
   color: string;
 }
@@ -3106,16 +3107,74 @@ function toDeckCategory(
  * describe one list of cards. Scoping one and not the other is how a Theory read came back
  * once with Theory category counts beside Live tag counts.
  */
-function toDeckTag(db: FakeDb, t: FakeDeckTag, variant: DeckVariant): DeckTag {
+function toDeckTag(db: FakeDb, t: FakeDeckTag, deckId: number, variant: DeckVariant): DeckTag {
   return {
     id: t.id,
-    deckId: t.deckId,
     name: t.name,
     color: t.color,
     cardCount: db.deckCards
-      .filter((dc) => dc.tagId === t.id && dc.variant === variant)
+      .filter((dc) => dc.tagId === t.id && dc.deckId === deckId && dc.variant === variant)
       .reduce((n, dc) => n + dc.quantity, 0),
   };
+}
+
+/**
+ * `deck_meta::list_all_tags`' row — one tag and how far it reaches, over every deck and both
+ * variants.
+ *
+ * `deckCount` counts **distinct decks with a card wearing it**, not rows: `count(DISTINCT
+ * dc.deck_id)` in the SQL, and the number a delete confirmation quotes. Zero for a tag nobody
+ * has used yet, which is the row this list can answer and `deck_tag_list` never can.
+ */
+function toGlobalTag(db: FakeDb, t: FakeDeckTag): GlobalTag {
+  const wearing = db.deckCards.filter((dc) => dc.tagId === t.id);
+  return {
+    id: t.id,
+    name: t.name,
+    color: t.color,
+    cardCount: wearing.reduce((n, dc) => n + dc.quantity, 0),
+    deckCount: new Set(wearing.map((dc) => dc.deckId)).size,
+  };
+}
+
+/**
+ * `schema::tag_name_key` — what makes two tag names the same name, in the fake.
+ *
+ * A third copy of a rule that already exists twice (Rust's is the authority, `tagNames.ts` is
+ * the webview's courtesy), and it has to be here for the fake to refuse what the backend
+ * refuses: a story that types `removal` over an existing `Removal` must see the same sentence
+ * the app would show. Kept to one line so the three cannot drift far.
+ */
+function tagKey(name: string): string {
+  return name.trim().normalize("NFC").toLowerCase().normalize("NFC");
+}
+
+/** Whether some **other** tag already holds this name, by {@link tagKey}'s comparison. `except`
+ *  is the row allowed to hold it — `null` for a create, the row's own id for a rename, which is
+ *  what lets a reader recapitalise `removal` to `Removal`. */
+function tagNameIsTaken(db: FakeDb, name: string, except: number | null): boolean {
+  const key = tagKey(name);
+  return db.deckTags.some((t) => t.id !== except && tagKey(t.name) === key);
+}
+
+/**
+ * `deck_meta::list_tags` — the tags one deck's one list is wearing, most-used first.
+ *
+ * The join `deck_get` and `deck_tag_list` both answer through, written once because the two must
+ * agree exactly: they describe one list of cards, and the day they stop agreeing is the day a
+ * context menu offers a label the Tags dialog says the deck does not use. Ties break on the
+ * name, which is the SQL's own second term.
+ */
+function tagsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckTag[] {
+  const worn = new Set(
+    db.deckCards
+      .filter((dc) => dc.deckId === deckId && dc.variant === variant && dc.tagId !== null)
+      .map((dc) => dc.tagId),
+  );
+  return db.deckTags
+    .filter((t) => worn.has(t.id))
+    .map((t) => toDeckTag(db, t, deckId, variant))
+    .sort((a, b) => b.cardCount - a.cardCount || cmp(a.name, b.name));
 }
 
 /**
@@ -4482,10 +4541,7 @@ export function readHandlers(db: FakeDb) {
         .filter((c) => c.deckId === deck.id)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
         .map((c) => toDeckCategory(db, c, variant, mp));
-      const tags: DeckTag[] = db.deckTags
-        .filter((t) => t.deckId === deck.id)
-        .sort((a, b) => cmp(a.name, b.name) || a.id - b.id)
-        .map((t) => toDeckTag(db, t, variant));
+      const tags: DeckTag[] = tagsWorn(db, deck.id, variant);
       return { deck: toDeckRow(db, deck), cards, categories, tags };
     },
 
@@ -4511,41 +4567,37 @@ export function readHandlers(db: FakeDb) {
         .map((c) => toDeckCategory(db, c, variant, mp));
     },
 
-    /** `deck_meta::list_tags` — `ORDER BY t.name`, and the count scoped to the same variant a
-     *  category's is. The two agree deliberately: they describe one list of cards. */
+    /**
+     * `deck_meta::list_tags` — the tags **this deck's list is wearing**, most-used first.
+     *
+     * Membership is a join over `deck_cards` since schema v21, not a `WHERE t.deck_id`: there is
+     * no deck on a tag row to filter by, and what a deck has is cards. So `variant` scopes which
+     * tags are in the answer as well as their counts — the live list and the theory list are
+     * treated as separate decks where labels are concerned.
+     */
     deck_tag_list: (args: { deckId: number; variant: DeckVariant }): DeckTag[] => {
       const variant = validVariant(args.variant);
       refuseIfMetaUnreadable(db, TAGS_UNREADABLE);
-      return db.deckTags
-        .filter((t) => t.deckId === args.deckId)
-        .sort((a, b) => cmp(a.name, b.name) || a.id - b.id)
-        .map((t) => toDeckTag(db, t, variant));
+      return tagsWorn(db, args.deckId, variant);
     },
 
     /**
-     * `deck_meta::tag_suggestions` — every tag name and colour ever used, **across every deck**,
-     * most-used first.
+     * `deck_meta::list_all_tags` — every tag there is, most-used first.
      *
-     * The one command in the deck surface that takes no id at all: a tag is per-deck data, but
-     * the palette a "New tag" dialog completes from is a property of the app's whole history
-     * rather than of the deck that happens to be open.
+     * The one command in the deck surface that takes no id at all, and the only list that can
+     * answer a tag no card is wearing: a `LEFT JOIN`, so an unused label is a row with two
+     * zeroes rather than a row that is missing.
      *
-     * Grouped on the **pair** and not on the name, `GROUP BY name, color`: nothing in the schema
-     * forces two decks to pick the same colour for one word, so a name used in two colours is
-     * honestly two rows. Ties break on the name, which is the SQL's own second term.
+     * It replaced `deck_tag_suggestions`, which grouped on `(name, color)` and answered names
+     * without ids — a shape that existed only because two decks could hold two rows spelling one
+     * word, and picking a "suggestion" copied it into the deck you were in. There is one row per
+     * name now, so this answers ids and picking one **uses** that very tag.
      */
-    deck_tag_suggestions: (): TagSuggestion[] => {
+    deck_tag_all: (): GlobalTag[] => {
       refuseIfMetaUnreadable(db, TAG_PALETTE_UNREADABLE);
-      const groups = new Map<string, { name: string; color: string; uses: number }>();
-      for (const t of db.deckTags) {
-        const key = `${t.name} ${t.color}`;
-        const found = groups.get(key);
-        if (found) found.uses += 1;
-        else groups.set(key, { name: t.name, color: t.color, uses: 1 });
-      }
-      return [...groups.values()]
-        .sort((a, b) => b.uses - a.uses || cmp(a.name, b.name))
-        .map(({ name, color }) => ({ name, color }));
+      return db.deckTags
+        .map((t) => toGlobalTag(db, t))
+        .sort((a, b) => b.cardCount - a.cardCount || cmp(a.name, b.name));
     },
 
     /** `deck_meta::list_folders` — every folder there is, flat, `ORDER BY sort_order, id`. No
@@ -5086,11 +5138,12 @@ const CATEGORY_SELF_MOVE = "A category cannot be moved into itself.";
  */
 const predefinedRefusal = (name: string) =>
   `${name} is required by this deck's rules — it can be emptied but not removed.`;
-/** `deck_meta::TAG_GONE`, `TAG_NAME_TAKEN` and `TAG_WRONG_DECK` — {@link CATEGORY_GONE}'s
- *  three twins, one table over. */
+/** `deck_meta::TAG_GONE` and `TAG_NAME_TAKEN` — {@link CATEGORY_GONE}'s twins, one table over.
+ *  There were three until schema v21; `TAG_WRONG_DECK` refused a `tagId` resolving to another
+ *  deck's tag, and there is no such thing any more. */
 const TAG_GONE = "That tag is not there any more.";
-const TAG_NAME_TAKEN = "This deck already has a tag with that name.";
-const TAG_WRONG_DECK = "That tag belongs to a different deck.";
+const TAG_NAME_TAKEN =
+  "A tag with that name already exists. Pick it from the list instead of making a second one.";
 /** `deck_meta::CARD_NOT_IN_CATEGORY` — `deck::card_gone` generalised, for the stale editor
  *  pointing at a row that has since moved, folded or been stepped to zero. */
 const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.";
@@ -5103,7 +5156,7 @@ const FOLDER_CYCLE = "A folder cannot be moved inside itself.";
  *  because the module writes four, and a panel prints whichever one it got. */
 const CATEGORIES_UNREADABLE = "the deck's categories could not be read: database is locked";
 const TAGS_UNREADABLE = "the deck's tags could not be read: database is locked";
-const TAG_PALETTE_UNREADABLE = "the tag palette could not be read: database is locked";
+const TAG_PALETTE_UNREADABLE = "the tag list could not be read: database is locked";
 const FOLDERS_UNREADABLE = "the deck folders could not be read: database is locked";
 /** `deck_audit`'s, which the same fault produces: the history is a satellite read like the
  *  three above it, and a drawer over an editor is exactly the surface that can be open while
@@ -6618,7 +6671,9 @@ export function writeHandlers(db: FakeDb) {
       db.decks = db.decks.filter((d) => d.id !== args.id);
       db.deckCards = db.deckCards.filter((dc) => dc.deckId !== args.id);
       db.deckCategories = db.deckCategories.filter((c) => c.deckId !== args.id);
-      db.deckTags = db.deckTags.filter((t) => t.deckId !== args.id);
+      // **The tags stay**, since schema v21: a label belongs to no deck, so deleting the deck
+      // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
+      // which is every deck at once, sweeps the table.
       db.deckAudit = db.deckAudit.filter((a) => a.deckId !== args.id);
     },
 
@@ -6678,12 +6733,11 @@ export function writeHandlers(db: FakeDb) {
       // `?? 0` covers a source on Auto (in no map) and a source pointing at a pile that has
       // gone, which the delete handler's clean-up means cannot happen.
       copy.defaultCategoryId = categoryMap.get(source.defaultCategoryId ?? 0) ?? 0;
-      const tagMap = new Map<number, number>();
-      for (const t of db.deckTags.filter((row) => row.deckId === source.id)) {
-        const made: FakeDeckTag = { ...t, id: nextId(db.deckTags), deckId: copy.id };
-        db.deckTags.push(made);
-        tagMap.set(t.id, made.id);
-      }
+      // **No tags are copied, and since schema v21 there is nothing to copy.** A duplicate used
+      // to get its own `deck_tags` rows and a map from the original's ids to them, because a tag
+      // belonged to a deck. It is one app-wide row now, so the copied cards keep the very
+      // `tagId` they had — the duplicate wears the same labels as its original, which is what a
+      // reader duplicating a deck means by "the same deck".
       // `needsReview` travels with the row: the sentence says this printing left the card
       // database, which is just as true of the copy.
       for (const dc of db.deckCards.filter((row) => row.deckId === source.id)) {
@@ -6694,7 +6748,8 @@ export function writeHandlers(db: FakeDb) {
           // `?? dc.categoryId` cannot happen — a card's category is a category of its own
           // deck — and is the honest answer if it ever does, as the Rust's `NULL` fallback is.
           categoryId: categoryMap.get(dc.categoryId) ?? dc.categoryId,
-          tagId: dc.tagId === null ? null : (tagMap.get(dc.tagId) ?? null),
+          // Verbatim: the label is the app's, so the copy wears the very same row.
+          tagId: dc.tagId,
         });
       }
       return toDeckRow(db, copy);
@@ -7411,63 +7466,117 @@ export function writeHandlers(db: FakeDb) {
       deck.updatedAt = stamp(db);
     },
 
-    /** `deck_meta::create_tag` — a new label for this deck. Refuses a name the deck already has;
-     *  the colour is a palette token and only its non-emptiness is checked here. */
-    deck_tag_create: (args: { deckId: number; name: string; color: string }): DeckTag => {
+    /**
+     * `deck_meta::create_tag` — a new label, **app-wide**. `deckId` is where the reader was
+     * standing: it goes in the history row and is not stored on the tag.
+     *
+     * Refuses a name **any** tag already holds, compared on {@link tagKey} rather than on the
+     * word — `removal` collides with `Removal`, and a `Café` typed with a combining accent with
+     * one typed without. That is the issue's second half and it is a table property, so the fake
+     * enforces it the way the UNIQUE index does.
+     */
+    deck_tag_create: (args: { deckId: number; name: string; color: string }): GlobalTag => {
       refuseIfBusy(db);
       const name = validMetaName(args.name, "A tag");
       const color = validColor(args.color);
-      if (nameIsTaken(db.deckTags, args.deckId, name, null)) throw refuse(TAG_NAME_TAKEN);
+      if (tagNameIsTaken(db, name, null)) throw refuse(TAG_NAME_TAKEN);
       const deck = requireDeck(db, args.deckId);
-      const tag: FakeDeckTag = { id: nextId(db.deckTags), deckId: deck.id, name, color };
+      const tag: FakeDeckTag = { id: nextId(db.deckTags), name, color };
       db.deckTags.push(tag);
       recordTag(db, deck.id, { action: "create", tag: name, previous: null });
       deck.updatedAt = stamp(db);
-      return toDeckTag(db, tag, LIVE);
+      return toGlobalTag(db, tag);
     },
 
     /**
-     * `deck_meta::update_tag` — rename **and** recolour, one command, both arguments required.
-     * There is no patch shape here, so a caller changing one sends the other back unchanged.
+     * `deck_meta::update_tag` — rename **and** recolour, **in every deck at once**: one command,
+     * both arguments required. There is no patch shape here, so a caller changing one sends the
+     * other back unchanged.
      *
-     * `rename` covers a recolour too, which is the honest simplification: the colour is a token
-     * from a fixed palette and never appears in a history line, so a second verb would name a
-     * distinction no reader could see.
+     * **Two verbs, where `rename` used to cover both.** It covered both because a colour was one
+     * of six palette tokens and never reached a sentence; the colour is the reader's own now and
+     * is the same colour in every deck, so "Recoloured tag Ramp" is a line a reader may come
+     * back looking for.
      */
-    deck_tag_update: (args: { id: number; name: string; color: string }): DeckTag => {
+    deck_tag_update: (args: {
+      deckId: number;
+      id: number;
+      name: string;
+      color: string;
+    }): GlobalTag => {
       refuseIfBusy(db);
       const name = validMetaName(args.name, "A tag");
       const color = validColor(args.color);
       const tag = tagById(db, args.id);
       if (!tag) throw refuse(TAG_GONE);
-      if (nameIsTaken(db.deckTags, tag.deckId, name, tag.id)) throw refuse(TAG_NAME_TAKEN);
-      const deck = requireDeck(db, tag.deckId);
+      if (tagNameIsTaken(db, name, tag.id)) throw refuse(TAG_NAME_TAKEN);
+      const deck = requireDeck(db, args.deckId);
       const previous = tag.name;
       tag.name = name;
       tag.color = color;
-      recordTag(db, deck.id, { action: "rename", tag: name, previous });
+      recordTag(
+        db,
+        deck.id,
+        previous === name
+          ? { action: "recolour", tag: name, previous: null, color }
+          : { action: "rename", tag: name, previous, color },
+      );
       deck.updatedAt = stamp(db);
-      return toDeckTag(db, tag, LIVE);
+      return toGlobalTag(db, tag);
     },
 
     /**
-     * `deck_meta::delete_tag` — **untags its cards rather than deleting them**
-     * (`deck_cards.tag_id` is `ON DELETE SET NULL`), which is the half of the sentence a confirm
-     * dialog owes a reader.
+     * `deck_meta::remove_tag_from_deck` — take a label off **this deck's cards in one list**,
+     * leaving the tag itself alone. Answers how many rows lost it.
+     *
+     * The act the app-wide list needed and the per-deck one never did: "I am done with this
+     * label here" and "this label should stop existing" were one press while a tag belonged to a
+     * deck. Zero is a success, not a refusal, and writes nothing.
+     */
+    deck_tag_remove_from_deck: (args: {
+      deckId: number;
+      tagId: number;
+      variant: DeckVariant;
+    }): number => {
+      const variant = validVariant(args.variant);
+      refuseIfBusy(db);
+      const tag = tagById(db, args.tagId);
+      if (!tag) throw refuse(TAG_GONE);
+      const wearing = db.deckCards.filter(
+        (dc) => dc.tagId === tag.id && dc.deckId === args.deckId && dc.variant === variant,
+      );
+      if (wearing.length === 0) return 0;
+      const deck = requireDeck(db, args.deckId);
+      for (const dc of wearing) dc.tagId = null;
+      recordTag(db, deck.id, {
+        action: "remove",
+        tag: tag.name,
+        previous: null,
+        cards: wearing.length,
+      });
+      deck.updatedAt = stamp(db);
+      return wearing.length;
+    },
+
+    /**
+     * `deck_meta::delete_tag` — **from the whole app**, and it **untags its cards rather than
+     * deleting them** (`deck_cards.tag_id` is `ON DELETE SET NULL`) in every deck wearing it,
+     * which is the half of the sentence a confirm dialog owes a reader.
      *
      * An id that resolves to nothing is a success: the caller wanted that tag gone, and it is
-     * gone — and it touches no deck, having none left to touch.
+     * gone.
      */
-    deck_tag_delete: (args: { id: number }): void => {
+    deck_tag_delete: (args: { deckId: number; id: number }): void => {
       refuseIfBusy(db);
       const tag = tagById(db, args.id);
       if (!tag) return;
-      const deck = requireDeck(db, tag.deckId);
+      const deck = requireDeck(db, args.deckId);
+      const cards = db.deckCards.filter((dc) => dc.tagId === tag.id).length;
       db.deckTags = db.deckTags.filter((t) => t.id !== tag.id);
       for (const dc of db.deckCards) if (dc.tagId === tag.id) dc.tagId = null;
       // `previous` is null: this row is about the label, and the label it is about is `tag`.
       // Filling it here would make a delete read as a rename that went nowhere.
-      recordTag(db, deck.id, { action: "delete", tag: tag.name, previous: null });
+      recordTag(db, deck.id, { action: "delete", tag: tag.name, previous: null, cards });
       deck.updatedAt = stamp(db);
     },
 
@@ -7498,7 +7607,7 @@ export function writeHandlers(db: FakeDb) {
       if (args.tagId !== null) {
         const tag = tagById(db, args.tagId);
         if (!tag) throw refuse(TAG_GONE);
-        if (tag.deckId !== args.deckId) throw refuse(TAG_WRONG_DECK);
+        // No wrong-deck fence since schema v21: there is no other deck's tag to refuse.
         applied = tag.name;
       }
       const deck = requireDeck(db, args.deckId);
@@ -8398,7 +8507,10 @@ function deckOf(db: FakeDb, name: string, args: Record<string, unknown>): number
       return db.deckCategories.find((c) => c.id === id)?.deckId;
     case "deck_tag_update":
     case "deck_tag_delete":
-      return db.deckTags.find((t) => t.id === id)?.deckId;
+      // **The argument's own `deckId`, not the tag's** — a tag has none since schema v21, and
+      // both commands take one for exactly this: the deck the reader was standing in, which is
+      // where the history row goes and which deck's undo stack the step joins.
+      return typeof args?.deckId === "number" ? args.deckId : undefined;
     default:
       return undefined;
   }
@@ -8412,7 +8524,10 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
     deck: { ...deck },
     cards: db.deckCards.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
     categories: db.deckCategories.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
-    tags: db.deckTags.filter((t) => t.deckId === deckId).map((t) => ({ ...t })),
+    // **Every tag, not this deck's** — since schema v21 there is no such thing, and a tag write
+    // is app-wide. A snapshot narrowed to one deck would let an undo leave another deck's label
+    // renamed and call the deck restored.
+    tags: db.deckTags.map((t) => ({ ...t })),
   };
 }
 
@@ -8428,10 +8543,8 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
     ...db.deckCategories.filter((c) => c.deckId !== deckId),
     ...state.categories.map((c) => ({ ...c })),
   ];
-  db.deckTags = [
-    ...db.deckTags.filter((t) => t.deckId !== deckId),
-    ...state.tags.map((t) => ({ ...t })),
-  ];
+  // The whole table, for the reason `deckState` records the whole table.
+  db.deckTags = state.tags.map((t) => ({ ...t }));
 }
 
 /**

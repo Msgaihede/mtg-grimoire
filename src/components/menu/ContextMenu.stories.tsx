@@ -217,8 +217,8 @@ const CATEGORIES: DeckCategory[] = [
 ];
 
 const TAGS: DeckTag[] = [
-  { id: 1, deckId: 1, name: "Wincon", color: "gold", cardCount: 3 },
-  { id: 2, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 1 },
+  { id: 1, name: "Wincon", color: "gold", cardCount: 3 },
+  { id: 2, name: "Cut candidate", color: "ember", cardCount: 1 },
 ];
 
 /** A Bolt filed in the deck's main pile, wearing no label — so the tag radios open on **None**
@@ -256,7 +256,7 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     setTag: (card, tagId) => act(`tag:${card.cardId}:${tagId ?? "none"}`),
     setFinish: (card, to) => act(`finish:${card.cardId}:${to ?? "regular"}`),
     tags: TAGS,
-    newTag: (card) => act(`new-tag:${card.cardId}`),
+    addTag: (card) => act(`add-tag:${card.cardId}`),
     // The stepper's zero by another road — there is no `remove` mutation in this app, because
     // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
     // card is one add to put back.
@@ -658,7 +658,12 @@ export const MoveToPile: Story = {
  * It is a plain `submenu`: the rows are free — the editor already holds `deck.tags` from
  * `deck_get` — and since 2026-08-20 there is nothing in the panel that is not a row. It was
  * `lazy` for a **field**, "New tag…" having been a text box a `MenuItem[]` cannot carry; that row
- * opens `NewTagDialog` now, so the menu mounts nothing and the last row is a row.
+ * opens a dialog now, so the menu mounts nothing and the last row is a row.
+ *
+ * **It says "More tags…" since schema v21, because there are more.** A tag is one app-wide row,
+ * so the radios above the line are the tags *this deck's list is wearing* — the fast path, most
+ * used first — and every other label the reader owns is behind that row, along with making a new
+ * one.
  */
 export const TagRadios: Story = {
   args: { build: (act) => buildDeckCardMenu(DECK_CARD, deckCardDeps(act)) },
@@ -678,7 +683,7 @@ export const TagRadios: Story = {
     await expect(canvas.getByRole("menuitemradio", { name: "Cut candidate" })).toBeInTheDocument();
 
     // The row that replaced the field: a press closes the menu and the editor opens a dialog.
-    await expect(canvas.getByRole("menuitem", { name: "New tag…" })).toBeInTheDocument();
+    await expect(canvas.getByRole("menuitem", { name: "More tags…" })).toBeInTheDocument();
 
     await userEvent.click(wincon);
     await expect(args.act).toHaveBeenCalledWith(`tag:${DECK_CARD.cardId}:1`);

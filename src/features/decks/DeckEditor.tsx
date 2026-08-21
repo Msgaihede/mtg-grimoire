@@ -68,7 +68,7 @@ import { newDeckDestination } from "@/features/transfer/import/destinations/newD
 import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
-import { NewTagDialog } from "./NewTagDialog";
+import { AddTagDialog } from "./AddTagDialog";
 import { PriceStrip } from "./PriceStrip";
 import { QuickAdd } from "./QuickAdd";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
@@ -566,12 +566,12 @@ type Layer =
    * gave. The name rides along because the dialog's header says which card it is about, and a
    * card removed under the open dialog must not turn that sentence into a blank.
    */
-  | { kind: "newTag"; slot: NewTagSlot }
+  | { kind: "addTag"; slot: AddTagSlot }
   | null;
 
-/** The card a new label is being made for: the grain `deck_card_set_tag` is addressed at, plus
- *  the name {@link NewTagDialog} says out loud. */
-interface NewTagSlot {
+/** The card a label is being put on: the grain `deck_card_set_tag` is addressed at, plus the
+ *  name {@link AddTagDialog} says out loud. */
+interface AddTagSlot {
   cardId: string;
   categoryId: number;
   finish: DeckFinish;
@@ -882,7 +882,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * 2026-08-20. It used to be `DEFAULT_TAG_COLOR`, chosen here and never asked for, because the
    * control was a text field inside a context menu with no room for a picker — so every label a
    * reader made this way was gold and had to be visited in the Tags dialog to be told from the
-   * last one. `NewTagDialog` asks for both, and this chain is otherwise untouched.
+   * last one. `AddTagDialog` asks for both, and this chain is otherwise untouched.
    */
   const startTagCreate = meta.createTag.mutateAsync;
   const setTagOnSlot = deck.setTag.mutate;
@@ -919,7 +919,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const clearCategory = deck.clearCategory.mutate;
   const clearPending = deck.clearCategory.isPending;
   const createTagFor = useCallback(
-    (slot: NewTagSlot, name: string, color: string) => {
+    (slot: AddTagSlot, name: string, color: string) => {
       void startTagCreate({ name, color })
         .then((tag) =>
           setTagOnSlot({
@@ -935,6 +935,40 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     },
     [startTagCreate, setTagOnSlot],
   );
+
+  /** Putting an **existing** tag on the slot — `createTagFor` without the create. One write
+   *  rather than two, and the same `deck_card_set_tag` grain, which is the whole reason the
+   *  slot is frozen rather than looked back up. */
+  const setCardTagOnSlot = useCallback(
+    (slot: AddTagSlot, tagId: number) => {
+      setTagOnSlot({
+        cardId: slot.cardId,
+        categoryId: slot.categoryId,
+        finish: slot.finish,
+        tagId,
+      });
+    },
+    [setTagOnSlot],
+  );
+
+  /**
+   * What "More tags…" offers: every tag the reader owns, minus the ones the context menu has
+   * already listed.
+   *
+   * **The subtraction is here because this is the only place holding both halves.** `deck.tags`
+   * is what this deck and variant wears, carried in with `deck_get`; `meta.allTags` is the
+   * app-wide list, off a command that takes no deck at all. Neither knows about the other, and
+   * a dialog handed both would be a dialog re-deriving the menu's own rule.
+   *
+   * The app-wide list's order survives the filter — most-used first — because `filter` keeps
+   * it, which is the ordering the issue asks for and the reason nothing sorts here.
+   */
+  const wornHere = deck.tags;
+  const allTags = meta.allTags;
+  const addTagChoices = useMemo(() => {
+    const worn = new Set(wornHere.map((t) => t.id));
+    return allTags.filter((t) => !worn.has(t.id));
+  }, [allTags, wornHere]);
 
   // Every write the editor's **own banner** speaks for — the array is the list, deliberately not
   // a number in this sentence, because it has been recounted twice in one day. The *latest* of
@@ -1593,12 +1627,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * Reading the caret asks the question the other callers answer from a lookup, and answers it
    * for all four views at once.
    */
-  const openNewTag = useCallback(
+  const openAddTag = useCallback(
     (card: DeckCard) => {
       const opener = document.activeElement;
       openLayer(
         {
-          kind: "newTag",
+          kind: "addTag",
           slot: {
             cardId: card.cardId,
             categoryId: card.categoryId,
@@ -1954,7 +1988,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           setTag: setCardTag,
           setFinish: setFinishAt,
           tags: deck.tags,
-          newTag: openNewTag,
+          addTag: openAddTag,
           remove: removeCard,
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
@@ -1971,7 +2005,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       moveCardTo,
       setCardTag,
       setFinishAt,
-      openNewTag,
+      openAddTag,
       removeCard,
     ],
   );
@@ -3293,16 +3327,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The label a card's menu asked for. **The press closes it and the chain finishes without
-          it** — `createTagFor` is two writes on this component's observers, so the dialog is free
-          to go on the press exactly as the field it replaced did, and a create still in flight
-          when the reader dismisses still lands on the card. */}
-      <NewTagDialog
-        open={layer?.kind === "newTag"}
-        cardName={layer?.kind === "newTag" ? layer.slot.name : null}
+      {/* The label a card's menu asked for — pick one of the reader's other tags, or make one.
+          **The press closes it and the chain finishes without it** — `createTagFor` is two
+          writes on this component's observers, so the dialog is free to go on the press exactly
+          as the field it replaced did, and a create still in flight when the reader dismisses
+          still lands on the card.
+
+          `choices` is the app-wide list minus what this list already wears, and the subtraction
+          is here rather than in the dialog because the editor is the only thing holding both
+          halves: `deck.tags` came in with `deck_get` and `meta.allTags` off `deck_tag_all`. */}
+      <AddTagDialog
+        open={layer?.kind === "addTag"}
+        cardName={layer?.kind === "addTag" ? layer.slot.name : null}
+        choices={addTagChoices}
         pending={meta.createTag.isPending}
+        onPick={(tagId) => {
+          if (layer?.kind !== "addTag") return;
+          setCardTagOnSlot(layer.slot, tagId);
+          dismiss();
+        }}
         onCreate={(name, color) => {
-          if (layer?.kind !== "newTag") return;
+          if (layer?.kind !== "addTag") return;
           createTagFor(layer.slot, name, color);
           dismiss();
         }}

@@ -2,17 +2,18 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { DeckCategory, DeckTag, TagSuggestion } from "@/lib/ipc";
+import type { DeckCategory, DeckTag, GlobalTag } from "@/lib/ipc";
 
 const deckTagList = vi.hoisted(() => vi.fn());
 const deckTagCreate = vi.hoisted(() => vi.fn());
 const deckTagUpdate = vi.hoisted(() => vi.fn());
 const deckTagDelete = vi.hoisted(() => vi.fn());
-const deckTagSuggestions = vi.hoisted(() => vi.fn());
+const deckTagRemoveFromDeck = vi.hoisted(() => vi.fn());
+const deckTagAll = vi.hoisted(() => vi.fn());
 /**
  * The category list, which this dialog draws nothing from — `useDeckMeta` is one hook over a
- * deck's piles *and* its labels, so mounting it here fires that read too. Mocked so nothing
- * rejects unhandled; what it answers is `CategoriesDialog.test.tsx`'s subject.
+ * deck's piles *and* the app's labels, so mounting it here fires that read too. Mocked so
+ * nothing rejects unhandled; what it answers is `CategoriesDialog.test.tsx`'s subject.
  */
 const deckCategoryList = vi.hoisted(() => vi.fn());
 /** Present so it can be asserted **absent**: this dialog mounts no `useDeck`, because a tag
@@ -31,7 +32,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagCreate,
     deckTagUpdate,
     deckTagDelete,
-    deckTagSuggestions,
+    deckTagRemoveFromDeck,
+    deckTagAll,
     deckGet,
   },
 }));
@@ -40,23 +42,27 @@ import { TagsDialog } from "./TagsDialog";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
-const TAGS: DeckTag[] = [
-  { id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 3 },
-  { id: 11, deckId: 1, name: "Playtest", color: "azure", cardCount: 0 },
-];
+/**
+ * What this deck's **live** list is wearing.
+ *
+ * Every row here has a non-zero `cardCount` by construction, and that is the schema rather than
+ * the fixture being tidy: since v21 membership of this list *is* wearing the tag, so a zero
+ * would mean the row is not in the answer at all.
+ */
+const TAGS: DeckTag[] = [{ id: 10, name: "Cut candidate", color: "ember", cardCount: 3 }];
 
 /**
- * The **theory** list's tag counts, which this dialog reads as well — see {@link useDeckMeta}'s
- * second `deck_tag_list`.
+ * Every tag there is — the app-wide list, and the dialog's second section.
  *
- * Empty by default, so these fixtures are single-list decks and a confirmation's number equals
- * the row's. The tests that make them differ are the point.
+ * `Cut candidate` appears in both lists on purpose: it is the *same row*, seen once as "what
+ * this deck wears" and once as "what the app holds". `Budget swap` is in this list only, which
+ * is what puts it in the second section; `Playtest` is there too and is worn by nothing at all,
+ * which is the row `deck_tag_list` can never answer.
  */
-const NO_THEORY_TAGS: DeckTag[] = [];
-
-const SUGGESTIONS: TagSuggestion[] = [
-  { name: "Cut candidate", color: "ember" },
-  { name: "Budget swap", color: "moss" },
+const EVERY_TAG: GlobalTag[] = [
+  { id: 10, name: "Cut candidate", color: "ember", cardCount: 8, deckCount: 3 },
+  { id: 12, name: "Budget swap", color: "moss", cardCount: 5, deckCount: 2 },
+  { id: 11, name: "Playtest", color: "azure", cardCount: 0, deckCount: 0 },
 ];
 
 /** Whatever the shared hook's category read answers — see the mock's doc. */
@@ -91,16 +97,12 @@ function row(name: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   deckCategoryList.mockResolvedValue(CATEGORIES);
-  // Variant-aware, because the dialog asks twice: the list on screen and the other one. A mock
-  // that answered the same rows to both would make every tag's two counts agree by accident,
-  // which is the fixture shape that let the undercount through in the first place.
-  deckTagList.mockImplementation((_deckId: number, variant: string) =>
-    Promise.resolve(variant === "live" ? TAGS : NO_THEORY_TAGS),
-  );
-  deckTagSuggestions.mockResolvedValue(SUGGESTIONS);
-  deckTagCreate.mockResolvedValue(TAGS[0]);
-  deckTagUpdate.mockResolvedValue(TAGS[0]);
+  deckTagList.mockResolvedValue(TAGS);
+  deckTagAll.mockResolvedValue(EVERY_TAG);
+  deckTagCreate.mockResolvedValue(EVERY_TAG[0]);
+  deckTagUpdate.mockResolvedValue(EVERY_TAG[0]);
   deckTagDelete.mockResolvedValue(undefined);
+  deckTagRemoveFromDeck.mockResolvedValue(3);
 });
 
 /* ----------------------------------------------------------------------- shell ------- */
@@ -112,7 +114,7 @@ describe("TagsDialog", () => {
     // Not merely hidden: a closed dialog must cost no query, which is what lets the editor
     // mount it unconditionally beside five others.
     expect(deckTagList).not.toHaveBeenCalled();
-    expect(deckTagSuggestions).not.toHaveBeenCalled();
+    expect(deckTagAll).not.toHaveBeenCalled();
   });
 
   /**
@@ -147,54 +149,117 @@ describe("TagsDialog", () => {
   });
 
   /**
-   * Both lists, and the second one is the interesting half: it has one consumer, the delete
-   * confirmation, whose reach is not scoped by the variant on screen.
+   * **One `deck_tag_list`, for the variant it was given, and no deck read at all.**
    *
-   * **And no deck read at all.** A tag has no card row behind it, so `useDeck` is absent from
-   * this dialog by construction — the categories half needs the deck's rows for its auto-filer
-   * and this one has no such control. Asserted rather than trusted, because a stray `useDeck`
-   * added later would cost a `deck_get` per open and nothing on screen would say so.
+   * It used to ask twice — the list on screen and the other one — because a delete's reach was
+   * not scoped by the variant and the confirmation needed the total. `deck_tag_all` answers that
+   * off one row now, and answers it about every *deck* rather than about two lists of one, so
+   * the second read is gone.
+   *
+   * The `deck_get` half is asserted rather than trusted: a tag has no card row behind it, so
+   * `useDeck` is absent by construction — the categories dialog needs the deck's rows for its
+   * auto-filer and this one has no such control. A stray `useDeck` added later would cost a
+   * `deck_get` per open and nothing on screen would say so.
    */
-  it("reads both lists' tags for the variant it was given, and never the deck", async () => {
+  it("reads one list's tags for the variant it was given, plus every tag, and never the deck", async () => {
     mount({ variant: "theory" });
     await screen.findByText("Cut candidate");
     expect(deckTagList).toHaveBeenCalledWith(1, "theory");
-    expect(deckTagList).toHaveBeenCalledWith(1, "live");
+    expect(deckTagList).not.toHaveBeenCalledWith(1, "live");
+    expect(deckTagAll).toHaveBeenCalledWith();
     expect(deckGet).not.toHaveBeenCalled();
   });
 
   /**
    * The rules that are not guessable from the controls, each said where its controls are.
    *
-   * **This was one paragraph above the list until the redesign of 2026-08-20**, and it said three
-   * things at once: a card carries at most one, deleting a tag keeps its cards, and the
-   * suggestions come from every deck. The first two are true of the whole dialog and are the
-   * header's line now; the third was never a paragraph's job — it is what the section is
-   * *called*. Asserted on the *words* rather than on a class, because this is copy the dialog
-   * exists to carry, and asserted in both places, because a redesign that dropped one of the
-   * three would leave the other two reading fine.
+   * **The header's second sentence changed with schema v21**, and the change is the feature: it
+   * said "Deleting a tag keeps its cards", which is still true and is now the *less* surprising
+   * half. What a reader cannot see anywhere on this screen is that the labels are shared — that
+   * recolouring one here recolours it in every other deck — so that is what the line says.
+   *
+   * Asserted on the *words* rather than on a class, because this is copy the dialog exists to
+   * carry, and asserted in all three places, because a redesign that dropped one would leave
+   * the others reading fine.
    */
-  it("says the two rules in the header and where the suggestions come from over the chips", async () => {
+  it("says the tags are shared in the header, and names both of its sections", async () => {
     mount();
     expect(await screen.findByText(/A card carries at most one/)).toHaveTextContent(
-      "Deleting a tag keeps its cards",
+      "Tags are shared by all your decks",
     );
-    expect(screen.getByText("Suggestions from your other decks")).toBeInTheDocument();
+    expect(screen.getByText("On cards in this live list")).toBeInTheDocument();
+    expect(screen.getByText("Your other tags")).toBeInTheDocument();
+  });
+
+  /** The first section's heading names the **list**, not the deck, because the live and theory
+   *  lists are treated as separate decks where labels are concerned. */
+  it("names the theory list in the first section's heading when that is what is on screen", async () => {
+    mount({ variant: "theory" });
+    expect(await screen.findByText("On cards in this theory list")).toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------ the two lists ------- */
+
+describe("the two sections", () => {
+  /**
+   * **The split is by what this list wears, and a tag in both answers appears once.**
+   *
+   * `Cut candidate` is in `deck_tag_list` *and* in `deck_tag_all` — the same row seen two ways —
+   * so a dialog that concatenated the two would draw it twice with two different counts, which
+   * is exactly the bug the id-based subtraction prevents.
+   */
+  it("puts what this list wears above, and everything else below, each once", async () => {
+    mount();
+    await screen.findByText("Cut candidate");
+
+    // Its copies **in this list**, which is the list the reader is editing.
+    expect(within(row("Cut candidate")).getByText("3 cards")).toBeInTheDocument();
+    expect(screen.getAllByText("Cut candidate")).toHaveLength(1);
+
+    // The other two say how far they reach instead, which is what the second section's order is
+    // by and what a delete there is about.
+    expect(within(row("Budget swap")).getByText("5 in 2 decks")).toBeInTheDocument();
+    // A tag no card anywhere wears has no number worth printing — "0 in 0 decks" would be
+    // arithmetic about a label that has simply never been used.
+    expect(within(row("Playtest")).getByText("unused")).toBeInTheDocument();
+  });
+
+  /** The two destructive controls are different acts and are labelled as such — the row in this
+   *  list offers the deck-scoped one, and the row below offers the app-wide one. */
+  it("offers Remove on a worn tag and Delete on the rest", async () => {
+    mount();
+    await screen.findByText("Cut candidate");
+
+    const worn = row("Cut candidate");
+    expect(within(worn).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(within(worn).queryByRole("button", { name: "Delete" })).toBeNull();
+
+    const other = row("Budget swap");
+    expect(within(other).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(within(other).queryByRole("button", { name: "Remove" })).toBeNull();
+  });
+
+  it("says so when nothing in this list is tagged", async () => {
+    deckTagList.mockResolvedValue([]);
+    mount();
+    expect(await screen.findByText(/Nothing in this list is tagged yet/)).toBeInTheDocument();
+  });
+
+  it("says so when every tag the reader has is already on a card here", async () => {
+    deckTagAll.mockResolvedValue([EVERY_TAG[0]]);
+    mount();
+    expect(await screen.findByText(/Every tag you have is on a card in this list/)).toBeInTheDocument();
   });
 });
 
 /* ------------------------------------------------------------------------ tags ------- */
 
 describe("tags", () => {
-  it("lists a deck's tags with their colour and their copies", async () => {
-    mount();
-    await screen.findByText("Cut candidate");
-    expect(within(row("Cut candidate")).getByText("3 cards")).toBeInTheDocument();
-  });
-
   /**
    * `deck_tag_update` renames **and** recolours in one command and has no patch shape, so the
-   * field has to send a colour back even when only the name changed.
+   * field has to send a colour back even when only the name changed. The `deckId` leads, because
+   * the write is app-wide and the deck is only where the reader was standing.
    *
    * The caret is asserted here too, on the `RenameField` `metaRows.tsx` now owns.
    * `CategoriesDialog.test.tsx` asks the same question of the same component on a category row
@@ -215,94 +280,112 @@ describe("tags", () => {
     await user.type(field, "On the block");
     await user.click(within(li).getByRole("button", { name: "Save" }));
 
-    expect(deckTagUpdate).toHaveBeenCalledWith(10, "On the block", "ember");
+    expect(deckTagUpdate).toHaveBeenCalledWith(1, 10, "On the block", "ember");
   });
 
-  it("says a deleted tag keeps its cards", async () => {
+  /** A row in the second section renames through the same command — the act is app-wide either
+   *  way, and the section a row is drawn in says nothing about that. */
+  it("renames a tag this list does not wear", async () => {
+    mount();
+    await screen.findByText("Budget swap");
+    const user = userEvent.setup();
+    const li = row("Budget swap");
+
+    await user.click(within(li).getByRole("button", { name: "Rename" }));
+    await user.clear(await within(li).findByLabelText("Rename Budget swap"));
+    await user.type(within(li).getByLabelText("Rename Budget swap"), "Thrift");
+    await user.click(within(li).getByRole("button", { name: "Save" }));
+
+    expect(deckTagUpdate).toHaveBeenCalledWith(1, 12, "Thrift", "moss");
+  });
+
+  /**
+   * **Remove is not delete, and the sentence's job is to say what is *not* happening.**
+   *
+   * The button is red and sits where Delete used to, so a reader who has used this dialog before
+   * will read it as the press that destroys the tag. It is not — and this is the only place that
+   * can be said before the press rather than discovered after it.
+   */
+  it("says a removed tag survives, in this deck's list and in the others using it", async () => {
     mount();
     await screen.findByText("Cut candidate");
     const user = userEvent.setup();
     const li = row("Cut candidate");
 
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
+    await user.click(within(li).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("group", {
+      name: "Remove Cut candidate from this deck",
+    });
     // The trigger and the control inside what it opens must not share an accessible name: the
-    // decks page had to rename three of its heading triggers for exactly that collision. Here
-    // the inner controls are named for the *object* — "Delete tag", "Delete “Ramp”" — so the
-    // trigger stays uniquely addressable, and `getByRole` throwing on two matches is the proof.
+    // decks page had to rename three of its heading triggers for exactly that collision.
+    expect(within(li).getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    expect(within(dialog).getByText(/^Its 3 cards stay in the deck/)).toHaveTextContent(
+      // Three decks wear it, so two of them still will — the number the deck-scoped row cannot
+      // know and the app-wide list carries.
+      "The tag itself stays in your list, and stays on the 2 other decks using it.",
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: "Remove from deck" }));
+    expect(deckTagRemoveFromDeck).toHaveBeenCalledWith(1, 10, "live");
+    expect(deckTagDelete).not.toHaveBeenCalled();
+  });
+
+  /** The clause about other decks is dropped when there are none: a sentence about decks that
+   *  do not exist is chrome, and the outcome for this one is exact either way. */
+  it("does not mention other decks when this is the only one wearing it", async () => {
+    deckTagAll.mockResolvedValue([
+      { id: 10, name: "Cut candidate", color: "ember", cardCount: 3, deckCount: 1 },
+    ]);
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+
+    await user.click(within(row("Cut candidate")).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("group", {
+      name: "Remove Cut candidate from this deck",
+    });
+
+    expect(within(dialog).getByText(/^Its 3 cards stay in the deck/)).toHaveTextContent(
+      "The tag itself stays in your list.",
+    );
+    expect(within(dialog).queryByText(/other deck/)).toBeNull();
+  });
+
+  /**
+   * The delete's reach is **every deck**, which is a widening rather than a rewording: it used
+   * to be every *variant* of the open deck. `GlobalTag` carries both counts off a command that
+   * takes no deck at all, so there is no in-flight case left to spell — the row cannot be drawn
+   * before the read it came from has answered.
+   */
+  it("says how many cards in how many decks a delete reaches", async () => {
+    mount();
+    await screen.findByText("Budget swap");
+    const user = userEvent.setup();
+    const li = row("Budget swap");
+
+    await user.click(within(li).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Budget swap" });
     expect(within(li).getByRole("button", { name: "Delete" })).toBeDisabled();
     // `deck_cards.tag_id` is `ON DELETE SET NULL`: the cards are untagged, never deleted.
-    expect(
-      within(dialog).getByText(/cards stay in the deck and lose the label/),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Its 5 cards, across 2 decks/)).toHaveTextContent(
+      "stay where they are and lose the label",
+    );
 
     await user.click(within(dialog).getByRole("button", { name: "Delete tag" }));
-    expect(deckTagDelete).toHaveBeenCalledWith(10);
+    expect(deckTagDelete).toHaveBeenCalledWith(1, 12);
   });
 
-  /**
-   * The confirmation counts **both lists**, because `deck_cards.tag_id` is `ON DELETE SET NULL`
-   * across both — the same correction the category delete carries, one dialog over.
-   *
-   * **The fixture makes the two numbers differ on purpose**, and that is the whole of why this
-   * test can fail: with an empty theory list, `cardCount` and the both-lists total are the same
-   * number, so a dialog reading the wrong one still prints the right answer. Every other tag
-   * test here has them equal, which is exactly how the bug survived a suite.
-   */
-  it("quotes the copies wearing a tag in both lists, not just the one on screen", async () => {
-    deckTagList.mockImplementation((_deckId: number, variant: string) =>
-      Promise.resolve(
-        variant === "live"
-          ? [{ id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 2 }]
-          : [{ id: 10, deckId: 1, name: "Cut candidate", color: "ember", cardCount: 5 }],
-      ),
-    );
+  /** The zero arm, which is the one a reader presses through without reading. */
+  it("says plainly that no deck is using a tag nothing wears", async () => {
     mount();
-    await screen.findByText("Cut candidate");
+    await screen.findByText("Playtest");
     const user = userEvent.setup();
-    const li = row("Cut candidate");
 
-    // The row is still the list being edited, and is right to be. Only the confirmation
-    // changes scope.
-    expect(within(li).getByText("2 cards")).toBeInTheDocument();
+    await user.click(within(row("Playtest")).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Playtest" });
 
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
-
-    expect(within(dialog).getByText(/^Its 7 cards stay in the deck/)).toHaveTextContent(
-      "both the live and theory lists, not just the one on screen",
-    );
-  });
-
-  /**
-   * The zero arm, which is the one that read as a flat falsehood: "No card is wearing it" over
-   * a theory list with five. Its own test, because it is a different sentence and because the
-   * arm that says "nothing will happen" is the one a reader presses through without reading.
-   */
-  it("does not say a tag is worn by nothing when the other list wears it", async () => {
-    deckTagList.mockImplementation((_deckId: number, variant: string) =>
-      Promise.resolve([
-        {
-          id: 10,
-          deckId: 1,
-          name: "Cut candidate",
-          color: "ember",
-          cardCount: variant === "live" ? 0 : 5,
-        },
-      ]),
-    );
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-    const li = row("Cut candidate");
-
-    await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
-
-    expect(within(dialog).queryByText(/No card in either list is wearing it/)).toBeNull();
-    expect(within(dialog).getByText(/^Its 5 cards stay in the deck/)).toHaveTextContent(
-      "both the live and theory lists",
-    );
+    expect(within(dialog).getByText(/No deck is using it/)).toBeInTheDocument();
   });
 
   /**
@@ -311,12 +394,12 @@ describe("tags", () => {
    */
   it("puts the caret in the tag delete question, and hands it back on Keep it", async () => {
     mount();
-    await screen.findByText("Cut candidate");
+    await screen.findByText("Budget swap");
     const user = userEvent.setup();
-    const li = row("Cut candidate");
+    const li = row("Budget swap");
 
     await user.click(within(li).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("group", { name: "Delete Cut candidate" });
+    const dialog = await screen.findByRole("group", { name: "Delete Budget swap" });
     expect(dialog).toHaveFocus();
 
     await user.tab();
@@ -326,25 +409,12 @@ describe("tags", () => {
     await waitFor(() => expect(within(li).getByRole("button", { name: "Delete" })).toHaveFocus());
   });
 
-  it("makes a tag of this deck from a suggestion, and offers no name it already has", async () => {
-    mount();
-    await screen.findByText("Cut candidate");
-    const user = userEvent.setup();
-
-    expect(screen.queryByRole("button", { name: "Add tag Cut candidate" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Add tag Budget swap" }));
-
-    // The suggestion's own colour travels with it — a name used across decks reads the same
-    // colour in each.
-    expect(deckTagCreate).toHaveBeenCalledWith(1, "Budget swap", "moss");
-  });
-
   /**
    * The empty dialog, and the control that fixes it.
    *
-   * **The field is the first thing in the dialog now**, where it used to be the last: a reader
-   * with no tags met a four-line paragraph about a thing they did not have, with the control
-   * that would give them one below it.
+   * **The field is the first thing in the dialog**, where it used to be the last: a reader with
+   * no tags met a four-line paragraph about a thing they did not have, with the control that
+   * would give them one below it.
    *
    * The colour is a **hex string** and no longer one of six token words — see `tagColors.ts` for
    * what that trades away and why. The six the picker offers first are still the app's own
@@ -352,9 +422,9 @@ describe("tags", () => {
    */
   it("makes a first tag from the field, in the colour the picker is on", async () => {
     deckTagList.mockResolvedValue([]);
-    deckTagSuggestions.mockResolvedValue([]);
+    deckTagAll.mockResolvedValue([]);
     mount();
-    await screen.findByText(/No tags yet/);
+    await screen.findByText(/None yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New tag name"), "Playtest");
@@ -363,6 +433,33 @@ describe("tags", () => {
     await user.click(screen.getByRole("button", { name: "Add tag" }));
 
     expect(deckTagCreate).toHaveBeenCalledWith(1, "Playtest", "#00733e");
+  });
+
+  /**
+   * **The duplicate guard, which is the issue's second half.**
+   *
+   * The backend refuses the name and is the authority — one row per name is a table property,
+   * and two windows racing the same new name is what a UNIQUE index is for. But a reader who
+   * types a name that exists has not made a mistake; they have found the tag they wanted, and
+   * making them press Add and wait for a refusal would be the app knowing the answer and
+   * declining to say so.
+   *
+   * Compared on `tagNames.ts`' key, not on the word — so a different capitalisation is the same
+   * label, which is exactly the case a `===` check would let through to the backend.
+   */
+  it("refuses to offer a name any tag already holds, in any capitalisation", async () => {
+    mount();
+    await screen.findByText("Cut candidate");
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText("New tag name"), "budget SWAP");
+
+    expect(screen.getByRole("button", { name: "Add tag" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "“Budget swap” already exists — every deck shares one list",
+    );
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+    expect(deckTagCreate).not.toHaveBeenCalled();
   });
 
   /**
@@ -375,9 +472,9 @@ describe("tags", () => {
    */
   it("takes a colour the palette has never heard of, typed as hex", async () => {
     deckTagList.mockResolvedValue([]);
-    deckTagSuggestions.mockResolvedValue([]);
+    deckTagAll.mockResolvedValue([]);
     mount();
-    await screen.findByText(/No tags yet/);
+    await screen.findByText(/None yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New tag name"), "Playtest");
@@ -391,7 +488,7 @@ describe("tags", () => {
   });
 
   /**
-   * **Recolouring is the swatch's now, and it sends the name back untouched.**
+   * **Recolouring is the swatch's, and it sends the name back untouched — for every deck.**
    *
    * It used to be reachable only through Rename, which asked a reader who wanted a different red
    * to open the control for changing the word. `deck_tag_update` still renames *and* recolours in
@@ -414,7 +511,7 @@ describe("tags", () => {
     expect(deckTagUpdate).not.toHaveBeenCalled();
 
     await user.click(within(li).getByRole("button", { name: "Done" }));
-    expect(deckTagUpdate).toHaveBeenCalledWith(10, "Cut candidate", "#c8c4bf");
+    expect(deckTagUpdate).toHaveBeenCalledWith(1, 10, "Cut candidate", "#c8c4bf");
   });
 
   /** Done is also how the panel closes, so it is pressed by readers who opened it to look. A
@@ -432,15 +529,25 @@ describe("tags", () => {
   });
 
   it("says why a refusal happened rather than losing it", async () => {
-    deckTagDelete.mockRejectedValue("That tag is not this deck's.");
+    deckTagDelete.mockRejectedValue("That tag is not there any more.");
     mount();
-    await screen.findByText("Cut candidate");
+    await screen.findByText("Budget swap");
     const user = userEvent.setup();
-    const li = row("Cut candidate");
+    const li = row("Budget swap");
 
     await user.click(within(li).getByRole("button", { name: "Delete" }));
     await user.click(screen.getByRole("button", { name: "Delete tag" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("That tag is not this deck's.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("That tag is not there any more.");
+  });
+
+  /** The app-wide read can be refused on its own, and it draws a section of its own — so its
+   *  failure has to reach the banner rather than leaving an empty list that reads as "you have
+   *  no other tags". */
+  it("says why the app-wide list could not be read", async () => {
+    deckTagAll.mockRejectedValue("the tag list could not be read: database is locked");
+    mount();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
   });
 });

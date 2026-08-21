@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { DeckCard, DeckCategory, DeckTag, DeckVariant } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckTag, DeckVariant, GlobalTag } from "@/lib/ipc";
 
 const deckCategoryList = vi.hoisted(() => vi.fn());
 const deckCategoryCreate = vi.hoisted(() => vi.fn());
@@ -14,7 +14,8 @@ const deckTagList = vi.hoisted(() => vi.fn());
 const deckTagCreate = vi.hoisted(() => vi.fn());
 const deckTagUpdate = vi.hoisted(() => vi.fn());
 const deckTagDelete = vi.hoisted(() => vi.fn());
-const deckTagSuggestions = vi.hoisted(() => vi.fn());
+const deckTagRemoveFromDeck = vi.hoisted(() => vi.fn());
+const deckTagAll = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 /** The one read `autoCategorise` makes that is not a deck command: what these cards *do*. */
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
@@ -31,7 +32,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagCreate,
     deckTagUpdate,
     deckTagDelete,
-    deckTagSuggestions,
+    deckTagRemoveFromDeck,
+    deckTagAll,
     deckMoveCard,
     oracleTagsForPrintings,
   },
@@ -64,7 +66,16 @@ const MAIN = category({ id: 1, name: "Main deck", cardCount: 4 });
 const REMOVAL = category({ id: 2, name: "Removal", sortOrder: 1 });
 const MAYBE = category({ id: 3, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 2 });
 
-const CUT: DeckTag = { id: 8, deckId: 4, name: "Cut candidate", color: "ember", cardCount: 1 };
+/** What this deck's live list is wearing — `deck_tag_list`'s row, which since schema v21 can
+ *  only ever be a tag some card here has on. */
+const CUT: DeckTag = { id: 8, name: "Cut candidate", color: "ember", cardCount: 1 };
+
+/** The same tag as the app sees it, plus one nothing wears — `deck_tag_all`'s rows, and the only
+ *  list that can answer the second. */
+const EVERY_TAG: GlobalTag[] = [
+  { id: 8, name: "Cut candidate", color: "ember", cardCount: 6, deckCount: 3 },
+  { id: 9, name: "Combo piece", color: "gold", cardCount: 0, deckCount: 0 },
+];
 
 /** A deck card in a named pile. Only the fields `autoCategorise` reads are interesting; the
  *  rest are filled so the fixture is a real {@link DeckCard} and not a cast. */
@@ -129,7 +140,8 @@ beforeEach(() => {
   deckTagCreate.mockReset().mockResolvedValue(CUT);
   deckTagUpdate.mockReset().mockResolvedValue(CUT);
   deckTagDelete.mockReset().mockResolvedValue(undefined);
-  deckTagSuggestions.mockReset().mockResolvedValue([{ name: "Cut candidate", color: "ember" }]);
+  deckTagRemoveFromDeck.mockReset().mockResolvedValue(1);
+  deckTagAll.mockReset().mockResolvedValue(EVERY_TAG);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   // The shape of a database that has never ingested the taxonomy, which is the app's supported
   // floor: every card answers no slugs and the type line decides. A test about tags says so.
@@ -138,29 +150,50 @@ beforeEach(() => {
 
 describe("useDeckMeta", () => {
   /** The Decks view mounts with no deck open, and the only surface that wants any of this is a
-   *  panel inside an editor — including the palette, which has no deck in its command but no
-   *  reader either until a tag dialog is up. */
+   *  panel inside an editor — including the app-wide tag list, which has no deck in its command
+   *  but no reader either until a tag dialog is up. */
   it("asks for nothing until a deck is open", () => {
     renderHook(() => useDeckMeta(null), { wrapper });
 
     expect(deckCategoryList).not.toHaveBeenCalled();
     expect(deckTagList).not.toHaveBeenCalled();
-    expect(deckTagSuggestions).not.toHaveBeenCalled();
+    expect(deckTagAll).not.toHaveBeenCalled();
   });
 
-  it("reads the piles, the labels and the app-wide palette", async () => {
+  it("reads the piles, what this list wears, and every tag there is", async () => {
     const { result } = renderHook(() => useDeckMeta(4), { wrapper });
 
     await waitFor(() => expect(result.current.categories).toEqual([MAIN, REMOVAL, MAYBE]));
     expect(deckCategoryList).toHaveBeenCalledWith(4, "live", "tcgplayer");
     expect(result.current.tags).toEqual([CUT]);
     expect(deckTagList).toHaveBeenCalledWith(4, "live");
-    // Global: the palette a "New tag" dialog completes from is a property of the app's whole
-    // history, not of the one deck the dialog happens to be open on.
-    await waitFor(() =>
-      expect(result.current.suggestions).toEqual([{ name: "Cut candidate", color: "ember" }]),
-    );
-    expect(deckTagSuggestions).toHaveBeenCalledWith();
+    // App-wide, and it takes no deck at all: one tag list belongs to the app, so the second
+    // row here is a label no card anywhere is wearing — which `deckTagList` can never answer.
+    await waitFor(() => expect(result.current.allTags).toEqual(EVERY_TAG));
+    expect(deckTagAll).toHaveBeenCalledWith();
+  });
+
+  /**
+   * **The two destructive tag writes are different commands**, and the split is the point of
+   * the app-wide list: one takes the label off this deck's list on screen, the other takes the
+   * label out of the app. Conflating them would mean a reader tidying one deck stripping a
+   * label off every other deck wearing it.
+   *
+   * `removeTagFromDeck` carries the hook's own variant, because the row it is pressed on was
+   * drawn from that list.
+   */
+  it("sends the deck it is standing in with every tag write, and scopes the remove by variant", async () => {
+    const { result } = renderHook(() => useDeckMeta(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.tags).toEqual([CUT]));
+
+    result.current.updateTag.mutate({ id: 8, name: "Cut", color: "#0e68ab" });
+    await waitFor(() => expect(deckTagUpdate).toHaveBeenCalledWith(4, 8, "Cut", "#0e68ab"));
+
+    result.current.removeTagFromDeck.mutate(8);
+    await waitFor(() => expect(deckTagRemoveFromDeck).toHaveBeenCalledWith(4, 8, "theory"));
+
+    result.current.deleteTag.mutate(8);
+    await waitFor(() => expect(deckTagDelete).toHaveBeenCalledWith(4, 8));
   });
 
   /**
@@ -234,10 +267,15 @@ describe("useDeckMeta", () => {
     // One command for the rename and the recolour, and both are required: there is no patch
     // shape, so a caller changing one sends the other back unchanged.
     await result.current.updateTag.mutateAsync({ id: 8, name: "Cut", color: "moss" });
-    expect(deckTagUpdate).toHaveBeenCalledWith(8, "Cut", "moss");
+    expect(deckTagUpdate).toHaveBeenCalledWith(4, 8, "Cut", "moss");
 
     await result.current.deleteTag.mutateAsync(8);
-    expect(deckTagDelete).toHaveBeenCalledWith(8);
+    expect(deckTagDelete).toHaveBeenCalledWith(4, 8);
+
+    // The other destructive one, and the distinction the app-wide list needed: it takes the
+    // label off this deck's list and leaves the tag standing.
+    await result.current.removeTagFromDeck.mutateAsync(8);
+    expect(deckTagRemoveFromDeck).toHaveBeenCalledWith(4, 8, "live");
   });
 
   /**

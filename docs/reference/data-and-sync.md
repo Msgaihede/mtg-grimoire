@@ -371,9 +371,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v20**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+- **Schema is v21**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
+  **v21 rebuilds one table and takes one column off it**, and both halves of that sentence are
+  the feature: `deck_tags` loses `deck_id` and gains `name_key`, so a tag belongs to no deck and
+  its grain (`DECK_TAG_GRAIN`) becomes one name, app-wide. `tag_name_key` is what "one name"
+  means — NFC, Unicode lowercase, NFC again — computed in Rust and **stored**, because SQLite
+  cannot answer it: `COLLATE NOCASE` folds ASCII and nothing else, and the bundled build carries
+  no normalisation at all. That is the one dependency the rung added, `unicode-normalization`.
+  **Three things about the step are worth knowing before touching it.** The survivor of a merge
+  is the row worn by the most **copies** (then `updated_at`, then the lowest id) and it **keeps
+  its own id**, so every `deck_cards.tag_id` and every audit row that already named it still
+  does — only the losers are remapped. The rebuild carries the labels across the drop **by hand**
+  (`deck_tags_carry`), because under `PRAGMA foreign_keys=ON` a `DROP TABLE` on a *parent* runs
+  an implicit `DELETE FROM` that fires `deck_cards.tag_id`'s own `ON DELETE SET NULL` — which
+  would untag every card in every deck and leave a perfectly-shaped empty answer behind it — and
+  the pragma cannot be turned off to dodge that, since toggling `foreign_keys` is a documented
+  no-op inside a transaction and `migrate` is always inside one. And it **deletes every
+  `deck_undo` row**: a step names tag ids (`Op::Tags` directly, every *card* step through
+  `CardRow::tag_id`), so one could restore a card's label as a foreign key resolving to nothing,
+  or re-insert a name another deck now holds, which the new grain refuses. `deck_audit` is left
+  alone — the history still reads in full, and only the arrows lose their charge, once.
   v20 adds **six tables, two columns, five indexes and a replay that moved**, and every one of
   them is named below — a bare count is the thing that rots here, and a list is not.
   Five of them: `art_tags`, `art_tag_parents`, `art_taggings`, the closure `art_tag_illustrations`
@@ -587,7 +606,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
   **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
-  **`v18_database`** and v20 to **`v19_database`**. The fixtures it
+  **`v18_database`**, v20 to **`v19_database`** and v21 to **`v20_database`**. The fixtures it
   passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
@@ -625,9 +644,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `v9_database` at all.
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
-  and a count is a fact about a *tree*: `grep -c "{UNDO_V20}" src-tauri/src/schema.rs` is the
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V21}" src-tauri/src/schema.rs` is the
   census of how many fixtures the newest rung reaches, and it answers for the tree you are
-  actually in. **One named `UNDO_V…` constant per rung** is the shape that keeps this
+  actually in. **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
+  fixture**: `UNDO_V21` drops `deck_tags` and recreates the per-deck shape v8 built, because
+  `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways. **One named `UNDO_V…` constant per rung** is the shape that keeps this
   cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
   whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to
   be a v10 must not already hold what the v11 step is being tested for creating.) Rewinding
