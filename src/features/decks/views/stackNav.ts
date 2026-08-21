@@ -11,10 +11,13 @@
  *
  * **The order it walks is the order the view draws**, which `StackView` derives from
  * `splitRail(groups)` as `command`, then `flow`, then `rail` — the command zones being the pinned
- * pair at the head of the desk — each group's `cards` in the order it already holds them. Nothing here re-derives it: this takes the pile sizes already in that order, so the two
- * cannot disagree about what "the next pile" is. `deckWalk.ts` builds that same order for the
- * printings modal to step through, and the agreement is deliberate — a reader pressing
- * ArrowRight and a reader pressing "next printing" are walking one deck.
+ * pair at the head of the desk — each group's `cards` in the order it already holds them. Nothing
+ * here re-derives it: this takes the pile sizes already in that order, so the two cannot disagree
+ * about what "the next card" is. `deckWalk.ts` builds that same order for the printings modal to
+ * step through, and since 2026-08-21 the agreement is exact rather than merely compatible: a
+ * reader pressing ArrowRight on the desk and a reader pressing ArrowRight inside the modal take
+ * **the same step to the same card**, because both are now walking one flat list of every row in
+ * the deck.
  */
 
 /** Where the caret is, or where it is going: a pile in drawn order, and a card in that pile. */
@@ -29,24 +32,32 @@ export interface StackPosition {
 /**
  * One arrow press: where the caret goes, or `null` for a press that moves it nowhere.
  *
+ * **Left and right step one card, and the pile boundary is not a stop** (changed 2026-08-21,
+ * [#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)). Right off the last card of a
+ * pile lands on the **first** card of the next one that has any, left off the first card lands on
+ * the **last** card of the previous one — so the two keys walk the whole deck, one card at a
+ * time, in the order the desk draws it. That is what the reader asked for and it is what the
+ * printings modal already did: two keys are the whole gesture, and there is no second axis to
+ * learn or to lose your place on.
+ *
+ * They used to move a **pile** at a time and land on its top card, with up and down running
+ * through the pile the caret was in. The old rule needed a paragraph about masonry to explain why
+ * it was the shape it was; this one needs none, which is most of the argument for it.
+ *
+ * **Up and down are not handled at all — no branch, no answer, nothing** — and the absence is
+ * deliberate rather than an omission. This view is given no height of its own: the piles wrap and
+ * `DeckEditor`'s page scroller is the one thing that scrolls, so what is under those two keys on
+ * a focused card is the page's own scrolling, which is exactly what a reader pressing them on a
+ * wall of card art wants. Answering `null` here is what leaves the press alone.
+ * `AllPrintingsDialog` states the same thing the same way: "up does nothing" would be a claim,
+ * and leaving the keys alone is the absence of one.
+ *
  * **`null` covers three different nothings on purpose**, because the caller does exactly one
  * thing with all of them — leave the event alone, so the key keeps whatever meaning the browser
- * or a surface above has for it. They are: a key that is not an arrow; a press against a clamp
- * (the top card of a pile, either end of the walk); and a position naming no card at all, which
- * is what a caller holding a stale index has. Telling them apart would hand the caller a branch
- * with nothing different to do in it.
- *
- * **Up and down are clamped inside the pile, and that is not an oversight.** The flow is a
- * masonry — a pile that will not fit on a line starts at the foot of the pile *above* it — so
- * "the pile above this one" is a fact about how wide the window happened to be, and a reader
- * pressing ArrowUp on a pile's top card cannot point at what they would get. Left and right are
- * the only honest way out of a pile, which is why they are the presses that change piles.
- *
- * **Left and right land on the top card (index 0) rather than at the same depth.** Both were on
- * offer and the reader chose this one: the top of a pile is a place that always exists, where
- * "the same depth" is a card a shorter neighbour may not have — and clamping *that* to the last
- * card would make one press mean two different things depending on how deep the pile beside it
- * happened to be.
+ * or a surface above has for it. They are: a key this movement does not answer, which is now
+ * every key but two; a press against a clamp at either end of the walk; and a position naming no
+ * card at all, which is what a caller holding a stale index has. Telling them apart would hand
+ * the caller a branch with nothing different to do in it.
  *
  * **A pile holding no cards is skipped**, because `CardStack` draws nothing at all for one: an
  * empty pile is a heading and the words "Nothing here yet." Landing on it would put the caret on
@@ -62,38 +73,47 @@ export function nextStackPosition(
   key: string,
 ): StackPosition | null {
   // A position that names no card is not a position to move from. Checked here rather than in
-  // each arm because all four would need it, and a caller that read its position out of the DOM
-  // can legitimately be holding one: a card removed between the render that drew it and the
-  // press that reached this.
+  // each arm because both would need it, and a caller that read its position out of the DOM can
+  // legitimately be holding one: a card removed between the render that drew it and the press
+  // that reached this.
   if (at.pile < 0 || at.pile >= sizes.length) return null;
   const held = sizes[at.pile];
   if (at.card < 0 || at.card >= held) return null;
 
   switch (key) {
-    case "ArrowUp":
-      return at.card > 0 ? { pile: at.pile, card: at.card - 1 } : null;
-    case "ArrowDown":
-      return at.card + 1 < held ? { pile: at.pile, card: at.card + 1 } : null;
     case "ArrowLeft":
-      return topOfNextPile(sizes, at.pile, -1);
+      // Inside the pile while there is a card above; otherwise out of its head and onto the
+      // *foot* of the pile before it, which is what makes the two directions each other's undo.
+      return at.card > 0 ? { pile: at.pile, card: at.card - 1 } : edgeOfNextPile(sizes, at.pile, -1);
     case "ArrowRight":
-      return topOfNextPile(sizes, at.pile, 1);
+      return at.card + 1 < held
+        ? { pile: at.pile, card: at.card + 1 }
+        : edgeOfNextPile(sizes, at.pile, 1);
     default:
       return null;
   }
 }
 
 /**
- * The top card of the nearest pile that has one, walking `step` at a time — `null` at the end of
- * the walk, which is the clamp.
+ * The near edge of the nearest pile that holds a card, walking `step` at a time — `null` at the
+ * end of the walk, which is the clamp.
+ *
+ * **"Near" is what makes the walk reversible**: stepping right enters a pile at its first card
+ * and stepping left enters it at its last, so a reader who presses one key and then the other is
+ * back on the card they started on. Enter both from the top and left would strand them a pile
+ * further back every time they changed their mind.
  *
  * A loop rather than a `findIndex` over a slice, because the leftward search runs backwards: a
  * reversed slice is two allocations and an index to translate back, for a walk that is a few
  * dozen piles long at the very most.
  */
-function topOfNextPile(sizes: readonly number[], from: number, step: 1 | -1): StackPosition | null {
+function edgeOfNextPile(
+  sizes: readonly number[],
+  from: number,
+  step: 1 | -1,
+): StackPosition | null {
   for (let pile = from + step; pile >= 0 && pile < sizes.length; pile += step) {
-    if (sizes[pile] > 0) return { pile, card: 0 };
+    if (sizes[pile] > 0) return { pile, card: step === 1 ? 0 : sizes[pile] - 1 };
   }
   return null;
 }
