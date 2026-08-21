@@ -1067,7 +1067,13 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     item crosses, so a `gap-y-5` on a grid of one-pixel rows would draw one 20px gutter per pixel
     of every pile's height. The 20 is added to each pile's own span instead, which puts it once
     under each pile; the visible cost is one trailing gutter at the foot of each column.
-    `gap-x-4`, the horizontal one, is unchanged and is still what the rail is spaced by.
+    The horizontal one was `gap-x-4` here, 16px, the same number the root spaces the rail by —
+    **halved to `gap-x-2`, 8px, on 2026-08-22** at the reader's ask, the root's 16 left alone. The
+    two were one number by descent rather than by argument: the root's separates the deck from the
+    piles played beside it, the grid's is the deck's own rhythm. It moves no pile and no rail — the
+    flowing box is `flex-1` and the leftover is what sits in front of the rail — but it does move
+    `auto-fill`, which is how a line comes to hold one more pile at some desk widths. **Every
+    gutter figure measured below is the 16px build's** and is left as it was read.
 
   **Driven in Storybook over CDP, 2026-08-15 — and _not_ in the shipped window**, which is the
   carve-out to read first: the `app` lock was held by another worktree for the whole session
@@ -1102,6 +1108,35 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     three columns is two per column either way, so both layouts came to the same **1026px** of
     flow. The height is only won where a column holds more than two; what is won at every size is
     that the space is under the _last_ pile instead of in a band across the middle of the desk.
+
+  **Driven for the halving, 2026-08-22 — in the shipped window _and_ in Storybook.** Every reading
+  is a **before/after in one pass**: the shipped 8px read, then `element.style.columnGap = '16px'`
+  on the same box, then read again, so the two numbers are one fixture at one width rather than two
+  builds. That is what makes "it moved nothing else" a measurement instead of an argument.
+
+  - **The shipped window** (`npm run tauri dev`, a **debug** build at 1920×1080, real corpus, a
+    14-card Commander deck of five flowing piles and a rail). Flowing box **1353px**, five 224px
+    tracks, computed `column-gap` **8px** and `row-gap` **normal**. The four piles after the
+    command zone at x **466 / 698 / 930 / 1162** — **232 apart**, which is the column plus the
+    gutter and nothing else. Backed out to 16 in the same pass: **474 / 714 / 954 / 1194**, 240
+    apart, **the same five tracks and the same 1353px box**. `documentElement.scrollWidth` **1920**
+    against a `clientWidth` of **1920** — no horizontal page scrollbar, which the 1024px floor
+    forbids.
+  - **The rail did not move and its gutter is still 16.** The root's computed `gap` read **16px**
+    with the deck's own at 8, and the rail stood at x **1603** — which is the leftover, not the
+    gap. This is the whole reason the two numbers were worth separating: `flex-1` swallows every
+    pixel the rail leaves, so nothing a reader sees in front of the rail is this gutter's doing.
+  - **It moved no line count in Storybook either**, which is the answer to the obvious worry that a
+    smaller gutter buys a line an extra pile. Same before/after, three stories: `WrappedPiles` **3**
+    tracks (flow 757px), `UnevenPiles` **3** (709), `CommandZone` **4** (997) — identical at 8 and
+    at 16. A track is 224 wide, so eight pixels only ever decides the count within eight pixels of
+    a boundary, and no fixture here sits there.
+  - **`TallDesk`'s decorator comment was wrong before this change and is corrected in the same
+    commit.** It was written for four boxes at 74rem (944 = 4 × 224 + 3 × 16) and the story draws
+    **three** — at both gutters — because the meta's fixed 42rem forces a 15px scrollbar that comes
+    out of the flow's width first, leaving **917**. `UnevenPiles`' decorator pays for that
+    scrollbar in as many words; `TallDesk`'s never did, and no play asserted the count, so it went
+    green while demonstrating a different number than it claimed.
 
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
   — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.
@@ -1436,7 +1471,9 @@ owed and was run on 2026-08-21** — see the alignment section below, which is w
   the edge *away* from the corner it is pinned to, which is what makes it read as a banner tucked
   into that corner. Reused unmirrored on the right, the bite lands against the card's own edge and
   leaves a notch. The mirrored pair read as bookends of the marks strip; the unmirrored one read
-  as a mistake. Same idea `GameChangerBanner` already states about its forked tail.
+  as a mistake. Same idea `GameChangerBanner` already states about its forked tail. **What this
+  pass could not see is that the polygon it settled on was a _rotation_ rather than a reflection**
+  — both hide the notch, and only one keeps the taper; issue #182 two sections down.
 - **The Grid tile gets a second drawing, not the same one.** One `CountTag` banner for both card
   faces was the first cut: 22px on a 210px stacked card is 7.5 % of it and the same 22px on a
   150px tile is **15 %**, so a wall of tiles read as a wall of blue flags with cards behind them.
@@ -1485,6 +1522,58 @@ backed out through `element.style` in the same session so the two states are one
   `inset-x-0` now: the face is `overflow-hidden rounded-[7px]`, so the tick gets the same clipped
   corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
   `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant.
+
+### And the sixth, off the same corner and reported the next day (issue #182)
+
+Two more things, from one reader looking at one card: the tick's banner was **widest at its
+bottom** where the quantity tag at the other end of the strip is widest at its top, and at **30px
+on a 208px card face** it was laid across the printed **mana cost**. Both are one line each, and
+the first is the more interesting.
+
+- **"Mirrored" had been implemented as a _rotation_.** `COUNT_TAG_SLANT` bites the bottom-right;
+  `COUNT_TAG_SLANT_MIRRORED` was `polygon(10px 0, 100% 0, 100% 100%, 0 100%)`, which is that
+  polygon turned 180° — the bite in the **top**-left. Reflecting it across the vertical axis gives
+  `polygon(0 0, 100% 0, 100% 100%, 10px 100%)` — the bite in the **bottom**-left. Both move the
+  bite off the card's right edge, which is the whole reason the wrong one survived the 2026-08-20
+  photograph: the notch that pass was looking for was gone either way. What only the rotation also
+  does is flip the **taper**, so the strip held two banners leaning opposite ways. The reader's
+  words were "bigger towards the bottom, whereas the quantity badge is bigger towards the top".
+- **The paddings went `12/6` → `6/1`, and the rule that makes both pairs legal is one line of
+  arithmetic** now written on `COUNT_TAG_BOX_MIRRORED`. At mid-height the slant has eaten `10/2`
+  off the left, so the visible trapezium is `[5px, W]`; equate its centre with the content's and
+  the content width cancels — the glyph is centred exactly when **`pl − pr = 5px`**. `12/6` (a
+  difference of 6, off Tailwind's scale) satisfied it to within the half pixel #158 measured;
+  `6/1` satisfies it exactly *and* gives back 11px. The right-hand padding can be a hairline
+  because lucide's `Check` is drawn `4 → 20` in a 24 viewBox and brings 2px of bearing per side;
+  a **digit** has no such room to give back, which is why `COUNT_TAG_BOX` keeps its `6/12`.
+
+**Driven in the shipped window 2026-08-21** (`npm run tauri dev`, a **debug** build at 1920,
+against the real corpus, on a Live card whose printed cost is `{2}{R}{R}{G}{G}` — five pips, the
+worst case this corner has), with the change backed out through `element.style` in the same
+session so the two states are one pass:
+
+| | before | after |
+| --- | --- | --- |
+| the cut | `polygon(10px 0, 100% 0, 100% 100%, 0 100%)` — **rotated** | `polygon(0 0, 100% 0, 100% 100%, 10px 100%)` — **reflected** |
+| widest edge | its **bottom**, against the tag's top | its **top**, the same as the tag's |
+| width at 1× | **30px**, 14.4 % of the 208px face | **19px**, 9.1 % |
+| paddings | `12 / 6` | `6 / 1` |
+| glyph off its banner's visible mid-height centre | **+0.5px** | **0** |
+| of a five-pip mana cost | **3 pips** left showing | **all five** |
+
+- **It scales at both ends of the ladder rather than agreeing at 1×.** Re-measured at **1.75×**
+  (33.25px wide, paddings 10.5/1.75 — a difference of 8.75, half the 17.5px slant — glyph **0** off
+  centre) and at **0.5×** (9.5px, paddings 3/0.5, the cut computing `polygon(0px 0px, 100% 0px,
+  100% 100%, 5px 100%)`, glyph **0** off centre).
+- **Both marks are still flush to the card's own edges** — the tag's left gap and the tick's right
+  gap both **0** against a face computing `border-radius: 7px` and `overflow: hidden`, which is
+  #158's other half, unchanged.
+- **The tick's ink now clears the slant by 3px and stands 3px off the card's right edge** — the
+  same optical gap on both sides of a glyph that is 12px in a 19px box.
+- **One trap, and it cost a reading**: clearing an inline style React set does not restore what
+  React set — see [live-ui-verification.md](live-ui-verification.md). The `clipPath` read `none`
+  after the back-out, which looks exactly like the component having stopped setting it; switching
+  the variant tabs and back forced the re-render that proved otherwise.
 
 ## The two marks a deck card carries: picked, and just landed
 

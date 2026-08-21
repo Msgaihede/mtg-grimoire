@@ -655,7 +655,7 @@ export function StackView({
           dead desk *inside* this box, between the last pile and the rail, and the rail is flush
           against the right edge of the desk. **The deck's own gutters are untouched, which is the
           half of this the reader asked to keep**: `auto-fill` over a definite width spends whole
-          columns and `gap-x-4` is 16px at every stop on the ladder. **The column count is
+          columns and `gap-x-2` is 8px at every stop on the ladder. **The column count is
           untouched too** — a capped box was exactly `n × (column + gap) − gap` wide, so
           `auto-fill` counts the same `n` either way, and dropping the cap moved no pile.
 
@@ -665,11 +665,20 @@ export function StackView({
           the measurement above safe: a pile's height cannot depend on the span it was given, so
           measure → span → measure cannot oscillate.
 
-          **`gap-x-4` only, and the vertical gutter is inside each span.** A grid gap is drawn at
+          **`gap-x-2` only, and the vertical gutter is inside each span.** A grid gap is drawn at
           every row boundary an item crosses, so a `gap-y` here would put hundreds of gutters
           inside a single pile; {@link FLOW_GAP_Y} carries the same 20px the `gap-y-5` this
-          replaced drew, once, under each pile. The 16px horizontal gutter is unchanged and is
-          still the one the rail is spaced by.
+          replaced drew, once, under each pile.
+
+          **The horizontal gutter is 8px and the rail's is still 16** (halved 2026-08-22). It was
+          `gap-x-4` until then, the same 16 the root's `gap-4` spaces the rail by, and the two were
+          one number by descent rather than by argument. The reader asked for the piles to sit
+          closer together and for that axis only — {@link FLOW_GAP_Y} is untouched — so this is
+          now the deck's own rhythm and the root's is the boundary between the deck and the rail.
+          **The rail is not moved by it**: this box is `flex-1` and swallows every pixel the rail
+          leaves, so what the reader sees in front of the rail is the leftover, not this gap.
+          `auto-fill` does move — 8px of track spacing rather than 16 is how a line comes to hold
+          one more pile at some desk widths, which is the point of asking.
 
           **No `content-start` here, on purpose.** This box is a flex item of a line the outer
           `items-start` never stretches, so its height is exactly its content's, there is no free
@@ -681,7 +690,7 @@ export function StackView({
           gridTemplateColumns: `repeat(auto-fill, ${columnWidth}px)`,
           gridAutoRows: `${FLOW_ROW}px`,
         }}
-        className="grid flex-1 items-start gap-x-4"
+        className="grid flex-1 items-start gap-x-2"
       >
         {/* The command zone, first of the grid's items and the only one that is more than one
             pile — see {@link CommandZone}, which carries the whole of why the commander and the
