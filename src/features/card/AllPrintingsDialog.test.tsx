@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -153,6 +153,11 @@ vi.mock("@/lib/ipc", async (original) => ({
 import { AllPrintingsDialog } from "./AllPrintingsDialog";
 import { CardToDeckProvider } from "./cardMenu";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -189,12 +194,16 @@ beforeEach(() => {
 });
 
 /**
- * The dialog under the two providers `App.tsx` mounts above it, in that order.
+ * The dialog under the three providers `App.tsx` mounts above it, in that order.
  *
  * `ContextMenuProvider` is not scenery: `useContextMenu` answers a **no-op** where no provider is
  * above it, so a tile's right-click would open nothing and the menu test below would pass by
  * never being asked. `CardToDeckProvider` is **outside** it because the menu panel is a sibling
  * of the menu provider's children.
+ *
+ * `TooltipProvider` is here for exactly the same reason one hook over — `useTooltip` answers a
+ * no-op with nothing above it, so the language corner's hover test would hover a mark that binds
+ * nothing and pass by never being asked.
  */
 function renderDialog(): ReactElement {
   const qc = new QueryClient({
@@ -202,11 +211,13 @@ function renderDialog(): ReactElement {
   });
   const tree = (
     <QueryClientProvider client={qc}>
-      <CardToDeckProvider>
-        <ContextMenuProvider>
-          <AllPrintingsDialog />
-        </ContextMenuProvider>
-      </CardToDeckProvider>
+      <TooltipProvider>
+        <CardToDeckProvider>
+          <ContextMenuProvider>
+            <AllPrintingsDialog />
+          </ContextMenuProvider>
+        </CardToDeckProvider>
+      </TooltipProvider>
     </QueryClientProvider>
   );
   render(tree);
@@ -299,6 +310,51 @@ describe("AllPrintingsDialog", () => {
     // The tile that fell out is gone from the wall, not merely uncounted.
     expect(screen.queryByRole("button", { name: /LEA/ })).toBeNull();
     expect(screen.getByRole("button", { name: /LEB/ })).toBeVisible();
+  });
+
+  /**
+   * The corner's two letters say *which* language and nothing about what the letters are for.
+   *
+   * Issue #161: a reader met `PH` on Elesh Norn, hovered it and was told nothing, so the mark
+   * read as a code the app had forgotten to expand. The corner is a mark on a photograph — there
+   * is no room to print "Phyrexian" — so the words are the hover, and this is the assertion that
+   * the mark is a *hoverable* one at all: `CardGrid`'s corners were `pointer-events-none` until
+   * 2026-08-15, and a tooltip inside one of those is bound, correct and unreachable.
+   *
+   * Fake timers rather than a `waitFor`, because the panel opens on a 400ms rest — the whole
+   * point of which is that a pointer merely crossing the wall opens nothing.
+   */
+  it("says what a language corner is short for when the pointer rests on it", async () => {
+    cardPrintings.mockResolvedValue(page([{ ...p("a", "one"), lang: "ph" }]));
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Elesh Norn", deck: null });
+
+    const mark = await screen.findByText("ph");
+    vi.useFakeTimers();
+    fireEvent.pointerEnter(mark);
+    act(() => void vi.advanceTimersByTime(TOOLTIP_OPEN_MS));
+
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Printed in Phyrexian");
+    vi.useRealTimers();
+  });
+
+  /**
+   * The picker's rows are the same abbreviation with the same problem, and they had the room for
+   * the answer all along: the count sentence is what both readers get, so it carries the words
+   * rather than repeating the two letters the row already draws.
+   */
+  it("names the language in full in the picker's row, not just its code", async () => {
+    cardPrintings.mockResolvedValue(
+      page([p("a", "lea"), { ...p("b", "leb"), lang: "ja" }, { ...p("c", "lec"), lang: "ph" }]),
+    );
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    expect(await screen.findByRole("checkbox", { name: "Japanese — 1 printing" })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Phyrexian — 1 printing" })).toBeVisible();
+    // The visible column is still the code — 128px of box, and a column of full names would
+    // truncate to nothing.
+    expect(screen.getByText("JA")).toBeVisible();
   });
 
   /**

@@ -573,7 +573,10 @@ export const Printings: Story = {
 
     // The Japanese printing is marked as one — the badge carries an `sr-only` "Language: " so
     // the two letters are not read as a word. The prefix is a separate node, so the claim is
-    // made against the badge's whole text rather than by looking the sentence up.
+    // made against the badge's whole text rather than by looking the sentence up. What the
+    // letters are *short for* is the badge's hover ("Printed in Japanese", from `languages.ts`),
+    // which is a 400ms rest a play would have to sit through — `AllPrintingsDialog.test.tsx`
+    // holds that assertion on fake timers instead.
     await expect(within(list).getByText("ja")).toHaveTextContent("Language: ja");
   },
 };
