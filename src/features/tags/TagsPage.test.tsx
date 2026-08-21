@@ -62,6 +62,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: {
     searchCards,
     getMarketplace,
+    // The shell mounts `useCardZoomPersistence`, which reads this row once as it launches and
+    // writes back after a gesture. Mocked rather than left off for the event subscriptions'
+    // reason: a `.catch` cannot catch the synchronous TypeError of calling `undefined`. An
+    // empty row is a database nobody has zoomed, so every wall opens at its default.
+    cardZoom: vi.fn().mockResolvedValue({}),
+    setCardZoom: vi.fn().mockResolvedValue(undefined),
     // Answered **cold** — `ready: false`, every map empty — which leaves every filter control
     // live and every accessible name plain, so this file's queries say what they always said.
     // The greying itself is `FilterBar.test.tsx`'s and `facets.test.ts`'s subject.

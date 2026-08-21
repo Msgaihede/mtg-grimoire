@@ -25,6 +25,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: {
     syncStatus,
     syncRun: vi.fn(),
+    // The shell mounts `useCardZoomPersistence`, which reads this row once as it launches and
+    // writes back after a gesture. Mocked rather than left off for the event subscriptions'
+    // reason: a `.catch` cannot catch the synchronous TypeError of calling `undefined`. An
+    // empty row is a database nobody has zoomed, so every wall opens at its default.
+    cardZoom: vi.fn().mockResolvedValue({}),
+    setCardZoom: vi.fn().mockResolvedValue(undefined),
     onSyncProgress: vi.fn().mockResolvedValue(() => {}),
     // The shell listens for the reconcile event too, and a `.catch` cannot catch the
     // synchronous `TypeError` of calling `undefined`.

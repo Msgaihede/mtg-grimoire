@@ -379,13 +379,55 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   cross-surface convenience is what the split costs, and it is the smaller loss — a reader who zooms
   the search wall and then opens a deck now finds the deck at whatever they last left it at, which
   is the same promise ("the size I asked for") read per section instead of per app. Each section
-  starts at `DEFAULT_ZOOM` and every one is still **session-only**: no persistence, no SQLite, no
-  IPC, for the reason that has not changed — zoom is a posture a reader takes for a minute of
-  comparing art, and restoring 200% tiles on launch explains itself to nobody. Two guards keep a
-  fifth section from arriving silently: `DEFAULT_SECTION_ZOOMS` is spelled out as a literal rather
-  than reduced over `ZOOM_SECTIONS`, so `Record<ZoomSection, number>` makes a new section a compile
-  error until somebody has said what it starts at; and `CardGrid`'s `zoomSection` prop is
-  **required**, so a new wall cannot default into sharing another wall's number.
+  starts at `DEFAULT_ZOOM`. Two guards keep a further section from arriving silently:
+  `DEFAULT_SECTION_ZOOMS` is spelled out as a literal rather than reduced over `ZOOM_SECTIONS`, so
+  `Record<ZoomSection, number>` makes a new section a compile error until somebody has said what it
+  starts at; and `CardGrid`'s `zoomSection` prop is **required**, so a new wall cannot default into
+  sharing another wall's number.
+- **Each section's size outlives the process** (issue #175, 2026-08-22). This reverses the second
+  half of the rule above — "**session-only**: no persistence, no SQLite, no IPC, … restoring 200%
+  tiles on launch explains itself to nobody" — and the reversal is the same one the split above
+  made, arriving late. That argument was written when there was **one** number for the whole app,
+  where "the zoom" really was a momentary posture a single card could set for every wall at once.
+  Split seven ways it is not: a reader who sizes the deck editor so a 100-card pile fits the desk
+  has configured *that wall*, and the app forgetting it every launch was the reported complaint.
+  What survives of the old worry is answered by the split itself — a size is restored to the wall
+  it was chosen on and nowhere else, so nothing done in the printings modal is waiting on the search
+  page.
+
+  One `app_meta` row, `card_zoom`, holding a JSON object of section → multiplier
+  (`src-tauri/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
+  `AppShell` is its only mount. Five decisions in it, each with a failure it is avoiding:
+
+  - **The row is an object, not seven keys.** Every wall is seeded in one pass at launch, so seven
+    keys would be seven reads of one table to answer one question. The cost is that a write is a
+    read-modify-write — one extra `SELECT` under a lock the writer already holds.
+  - **A write preserves entries this build cannot use**, which is the one thing an object row has
+    to get right that a bare string does not: an eighth wall, or a multiplier past this build's
+    ceiling, survives a write made beside it rather than being emptied by an older build pointed at
+    the same `mtg.db`. Validation applies to what *this* call writes and never to what it writes
+    beside.
+  - **Rust bounds the number (0.5–2) and deliberately does not know the stops.** Where the rungs sit
+    is a question about how a gesture feels and stays in `cardZoom.ts`; how far a stored value may
+    stray is a question about what may land in a column. So `snapZoom` puts a restored value back on
+    the ladder on this side, which keeps `cardZoom` holding one of sixteen exact numbers — the
+    invariant `zoom === 1` rests on — true of a *restored* session as well as a fresh one.
+  - **The seed does not pulse.** `hydrateCardZoom` is a second door onto `cardZoom` and pulses
+    nothing: the badge is a HUD about a gesture, and a value arriving from storage is not one.
+    Pulsing here would greet every launch with a percentage floating over a wall nobody touched. It
+    also drops itself entirely if `zoomPulse !== 0` — a reader who spun the wheel inside the read's
+    round trip keeps what they asked for, rather than watching the wall snap back under their hand.
+  - **The writes hang off `zoomPulse`, not off `cardZoom`, on a 400ms trailing timer per section.**
+    Watching the value gets two cases wrong in opposite directions: it writes back everything the
+    seed just applied (seven round trips to tell the database what it said a moment earlier), and it
+    *misses* a reader holding the wheel at 200%, whose gestures `stepZoom` answers with 200% forever
+    — the value never moves, so the timer never restarts and the write lands mid-gesture. The
+    debounce is not an optimisation: a trackpad pinch arrives as ctrl-flagged wheel events dozens a
+    second, so per-notch writes would be a run of read-modify-writes for a value obsolete before it
+    committed. What 400ms costs is a zoom made in the last 400ms before the app closes. Both
+    failures — a read that never answers, a write refused with `BUSY` under a first-run sync — are
+    swallowed: the first leaves every wall at `DEFAULT_ZOOM`, which is a complete app, and the
+    second costs only the next launch's starting size.
 - **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
   obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
   of a 672px `display` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
@@ -393,12 +435,50 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   what is painted. Rescaling the numbers keeps text crisp, lets the wall reflow to a new column
   count, and keeps `CardGrid`'s existing `virtualizer.measure()` effect — already keyed on
   `tileHeight` — correct for free.
-- **A ladder of ten stops (0.5×–2×), not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
+- **A ladder, not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
   not a magnitude worth trusting: a mouse notch arrives as 100 through Chromium's line mode and 120
   from a driver reporting raw ticks, while a precision trackpad's pinch reaches the page as a stream
   of ctrl-flagged wheel events in the single digits, dozens a second. The ladder makes the unit the
   **gesture**. It also keeps the value exact — `zoom * 1.1` applied and undone eight times is
   0.9999999999999998, which formats as "100%" while sizing every tile a hair off.
+- **Sixteen stops, evenly spaced ten points apart from 50% to 200%** (changed 2026-08-22). This
+  replaced ten uneven ones shaped like a browser's zoom menu — `0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25,
+  1.5, 1.75, 2`, coarse at the ends and fine either side of 100%. The old shape's argument (the
+  stops near 1× are where a reader is steering) is still true; what it got wrong is the input. A
+  browser's ladder is walked by **pressing a key**, where each press is a deliberate act and a menu
+  shows you the list; this one is walked by **rolling a wheel**, where the stops go past in a
+  continuous run — and above 1× the old ladder moved 10, 15, 25, 25, 25 points a notch, so the same
+  wrist movement moved the cards two and a half times as far at the top of the range as at the
+  bottom. Even spacing costs the top some reach (200% is ten notches up from life size rather than
+  five) and buys the thing a wheel gesture needs: one notch always means the same amount. It also
+  makes every stop a round figure the badge can name — 50%, 60% … 200% and nothing else.
+  `ZOOM_STEPS` is **spelled out as literals rather than generated**, for the reason the ladder
+  exists at all: 0.1 added seven times is 0.7999999999999999. One stop is still not round in binary
+  (1.1 × 100 is 110.00000000000001), which is why `formatZoom` rounds.
+- **Driven in the shipped window 2026-08-22** (`npm run tauri dev`, a **debug** build at 1920×1080,
+  a first-run sync of 116,700 cards, the search wall on `bolt` at 37 results), because the one
+  claim this feature makes — a size surviving a **restart** — is the one thing no jsdom suite can
+  reach. The wheel was dispatched synthetically on the scroller, the same carve-out the 2026-08-14
+  pass recorded: the handler and everything downstream were exercised, the `preventDefault`/WebView2
+  page-zoom interaction was **not** re-proved.
+
+  - **The ladder steps ten points a notch.** The 170px base tile drew **170 → 221 → 272** over six
+    notches up — `scaled(170, 1.3)` and `scaled(170, 1.6)`. On the old ladder six notches up was
+    1.75; three was 1.25, which would have drawn 213 rather than 221.
+  - **The gesture reaches `app_meta` and the row holds one entry per wall.** After the wheel
+    stopped, `select value from app_meta where key = 'card_zoom'` read **`{"search":1.6}`** — the
+    section named, and nothing invented for the six walls nobody had touched.
+  - **The restart is the whole feature and it works.** The process was stopped, `tauri dev`
+    relaunched, and the same search re-run: the wall drew **272px** from its first paint, and **no
+    badge appeared** — the seed does not pulse, so a launch says nothing about a size it restored.
+  - **The write path is live in the restored session too**, which is the half a read-only check
+    would miss. Four notches down drew **204px** (`scaled(170, 1.2)`) and the row read
+    **`{"search":1.2}`** — updated in place rather than accumulating a second entry.
+  - **Two reads that lie, both already on the trap list.** A width read in the *same* `cdp.mjs eval`
+    as the wheel dispatch answers about the frame before React re-rendered — two notches read back
+    as "no change" and looked exactly like a dead handler until the dispatch and the measurement
+    were split into separate evals. And `root.childElementCount` is **0** for a few seconds after
+    `tauri dev` reports the process, which is the blank-window tell rather than a blank window.
 - **The zoom sizes the _tile_, and the column count is what falls out of it** (changed
   2026-08-14). `CardGrid` draws a tile at `scaled(baseTileWidth, cardZoom)` exactly, fits however
   many of that size the wall holds, and splits the remainder either side of the row
@@ -407,11 +487,13 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   gesture its meaning. A stretched tile's width is a function of the **column count**, which is a
   step function of the zoom, so most stops drew exactly what the stop before them drew. Measured
   on the deck editor's docked column, whose wall is **330px** in the running window, the ten stops
-  of `ZOOM_STEPS` collapsed to **three** distinct card widths — 102, 102, 159, 159, 159, 331, 331,
-  331, 331, 331. Seven gestures in a row that moved nothing, which reads as an app that has
+  the ladder had then collapsed to **three** distinct card widths — 102, 102, 159, 159, 159, 331,
+  331, 331, 331, 331. Seven gestures in a row that moved nothing, which reads as an app that has
   stopped listening rather than as a wall that is already right. **Driven in the shipped window
-  2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column now answers all
-  ten, strictly increasing, and stays centred throughout:
+  2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column answered all
+  ten, strictly increasing, and stayed centred throughout — **the stops below are the ladder as it
+  was on that date**, and the even sixteen-stop ladder replaced them on 2026-08-22 without changing
+  anything this measurement was about:
 
   | zoom    | 0.5 | 0.67 | 0.75 | 0.9 | 1   | 1.1 | 1.25 | 1.5 | 1.75 | 2   |
   | ------- | --- | ---- | ---- | --- | --- | --- | ---- | --- | ---- | --- |
@@ -1067,7 +1149,13 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     item crosses, so a `gap-y-5` on a grid of one-pixel rows would draw one 20px gutter per pixel
     of every pile's height. The 20 is added to each pile's own span instead, which puts it once
     under each pile; the visible cost is one trailing gutter at the foot of each column.
-    `gap-x-4`, the horizontal one, is unchanged and is still what the rail is spaced by.
+    The horizontal one was `gap-x-4` here, 16px, the same number the root spaces the rail by —
+    **halved to `gap-x-2`, 8px, on 2026-08-22** at the reader's ask, the root's 16 left alone. The
+    two were one number by descent rather than by argument: the root's separates the deck from the
+    piles played beside it, the grid's is the deck's own rhythm. It moves no pile and no rail — the
+    flowing box is `flex-1` and the leftover is what sits in front of the rail — but it does move
+    `auto-fill`, which is how a line comes to hold one more pile at some desk widths. **Every
+    gutter figure measured below is the 16px build's** and is left as it was read.
 
   **Driven in Storybook over CDP, 2026-08-15 — and _not_ in the shipped window**, which is the
   carve-out to read first: the `app` lock was held by another worktree for the whole session
@@ -1102,6 +1190,35 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     three columns is two per column either way, so both layouts came to the same **1026px** of
     flow. The height is only won where a column holds more than two; what is won at every size is
     that the space is under the _last_ pile instead of in a band across the middle of the desk.
+
+  **Driven for the halving, 2026-08-22 — in the shipped window _and_ in Storybook.** Every reading
+  is a **before/after in one pass**: the shipped 8px read, then `element.style.columnGap = '16px'`
+  on the same box, then read again, so the two numbers are one fixture at one width rather than two
+  builds. That is what makes "it moved nothing else" a measurement instead of an argument.
+
+  - **The shipped window** (`npm run tauri dev`, a **debug** build at 1920×1080, real corpus, a
+    14-card Commander deck of five flowing piles and a rail). Flowing box **1353px**, five 224px
+    tracks, computed `column-gap` **8px** and `row-gap` **normal**. The four piles after the
+    command zone at x **466 / 698 / 930 / 1162** — **232 apart**, which is the column plus the
+    gutter and nothing else. Backed out to 16 in the same pass: **474 / 714 / 954 / 1194**, 240
+    apart, **the same five tracks and the same 1353px box**. `documentElement.scrollWidth` **1920**
+    against a `clientWidth` of **1920** — no horizontal page scrollbar, which the 1024px floor
+    forbids.
+  - **The rail did not move and its gutter is still 16.** The root's computed `gap` read **16px**
+    with the deck's own at 8, and the rail stood at x **1603** — which is the leftover, not the
+    gap. This is the whole reason the two numbers were worth separating: `flex-1` swallows every
+    pixel the rail leaves, so nothing a reader sees in front of the rail is this gutter's doing.
+  - **It moved no line count in Storybook either**, which is the answer to the obvious worry that a
+    smaller gutter buys a line an extra pile. Same before/after, three stories: `WrappedPiles` **3**
+    tracks (flow 757px), `UnevenPiles` **3** (709), `CommandZone` **4** (997) — identical at 8 and
+    at 16. A track is 224 wide, so eight pixels only ever decides the count within eight pixels of
+    a boundary, and no fixture here sits there.
+  - **`TallDesk`'s decorator comment was wrong before this change and is corrected in the same
+    commit.** It was written for four boxes at 74rem (944 = 4 × 224 + 3 × 16) and the story draws
+    **three** — at both gutters — because the meta's fixed 42rem forces a 15px scrollbar that comes
+    out of the flow's width first, leaving **917**. `UnevenPiles`' decorator pays for that
+    scrollbar in as many words; `TallDesk`'s never did, and no play asserted the count, so it went
+    green while demonstrating a different number than it claimed.
 
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
   — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.
@@ -1436,7 +1553,9 @@ owed and was run on 2026-08-21** — see the alignment section below, which is w
   the edge *away* from the corner it is pinned to, which is what makes it read as a banner tucked
   into that corner. Reused unmirrored on the right, the bite lands against the card's own edge and
   leaves a notch. The mirrored pair read as bookends of the marks strip; the unmirrored one read
-  as a mistake. Same idea `GameChangerBanner` already states about its forked tail.
+  as a mistake. Same idea `GameChangerBanner` already states about its forked tail. **What this
+  pass could not see is that the polygon it settled on was a _rotation_ rather than a reflection**
+  — both hide the notch, and only one keeps the taper; issue #182 two sections down.
 - **The Grid tile gets a second drawing, not the same one.** One `CountTag` banner for both card
   faces was the first cut: 22px on a 210px stacked card is 7.5 % of it and the same 22px on a
   150px tile is **15 %**, so a wall of tiles read as a wall of blue flags with cards behind them.
@@ -1485,6 +1604,58 @@ backed out through `element.style` in the same session so the two states are one
   `inset-x-0` now: the face is `overflow-hidden rounded-[7px]`, so the tick gets the same clipped
   corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
   `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant.
+
+### And the sixth, off the same corner and reported the next day (issue #182)
+
+Two more things, from one reader looking at one card: the tick's banner was **widest at its
+bottom** where the quantity tag at the other end of the strip is widest at its top, and at **30px
+on a 208px card face** it was laid across the printed **mana cost**. Both are one line each, and
+the first is the more interesting.
+
+- **"Mirrored" had been implemented as a _rotation_.** `COUNT_TAG_SLANT` bites the bottom-right;
+  `COUNT_TAG_SLANT_MIRRORED` was `polygon(10px 0, 100% 0, 100% 100%, 0 100%)`, which is that
+  polygon turned 180° — the bite in the **top**-left. Reflecting it across the vertical axis gives
+  `polygon(0 0, 100% 0, 100% 100%, 10px 100%)` — the bite in the **bottom**-left. Both move the
+  bite off the card's right edge, which is the whole reason the wrong one survived the 2026-08-20
+  photograph: the notch that pass was looking for was gone either way. What only the rotation also
+  does is flip the **taper**, so the strip held two banners leaning opposite ways. The reader's
+  words were "bigger towards the bottom, whereas the quantity badge is bigger towards the top".
+- **The paddings went `12/6` → `6/1`, and the rule that makes both pairs legal is one line of
+  arithmetic** now written on `COUNT_TAG_BOX_MIRRORED`. At mid-height the slant has eaten `10/2`
+  off the left, so the visible trapezium is `[5px, W]`; equate its centre with the content's and
+  the content width cancels — the glyph is centred exactly when **`pl − pr = 5px`**. `12/6` (a
+  difference of 6, off Tailwind's scale) satisfied it to within the half pixel #158 measured;
+  `6/1` satisfies it exactly *and* gives back 11px. The right-hand padding can be a hairline
+  because lucide's `Check` is drawn `4 → 20` in a 24 viewBox and brings 2px of bearing per side;
+  a **digit** has no such room to give back, which is why `COUNT_TAG_BOX` keeps its `6/12`.
+
+**Driven in the shipped window 2026-08-21** (`npm run tauri dev`, a **debug** build at 1920,
+against the real corpus, on a Live card whose printed cost is `{2}{R}{R}{G}{G}` — five pips, the
+worst case this corner has), with the change backed out through `element.style` in the same
+session so the two states are one pass:
+
+| | before | after |
+| --- | --- | --- |
+| the cut | `polygon(10px 0, 100% 0, 100% 100%, 0 100%)` — **rotated** | `polygon(0 0, 100% 0, 100% 100%, 10px 100%)` — **reflected** |
+| widest edge | its **bottom**, against the tag's top | its **top**, the same as the tag's |
+| width at 1× | **30px**, 14.4 % of the 208px face | **19px**, 9.1 % |
+| paddings | `12 / 6` | `6 / 1` |
+| glyph off its banner's visible mid-height centre | **+0.5px** | **0** |
+| of a five-pip mana cost | **3 pips** left showing | **all five** |
+
+- **It scales at both ends of the ladder rather than agreeing at 1×.** Re-measured at **1.75×**
+  (33.25px wide, paddings 10.5/1.75 — a difference of 8.75, half the 17.5px slant — glyph **0** off
+  centre) and at **0.5×** (9.5px, paddings 3/0.5, the cut computing `polygon(0px 0px, 100% 0px,
+  100% 100%, 5px 100%)`, glyph **0** off centre).
+- **Both marks are still flush to the card's own edges** — the tag's left gap and the tick's right
+  gap both **0** against a face computing `border-radius: 7px` and `overflow: hidden`, which is
+  #158's other half, unchanged.
+- **The tick's ink now clears the slant by 3px and stands 3px off the card's right edge** — the
+  same optical gap on both sides of a glyph that is 12px in a 19px box.
+- **One trap, and it cost a reading**: clearing an inline style React set does not restore what
+  React set — see [live-ui-verification.md](live-ui-verification.md). The `clipPath` read `none`
+  after the back-out, which looks exactly like the component having stopped setting it; switching
+  the variant tabs and back forced the re-render that proved otherwise.
 
 ## The two marks a deck card carries: picked, and just landed
 
@@ -1855,6 +2026,16 @@ Driven in the shipped window **2026-08-18** (`npm run tauri dev`, a **debug** bu
 1024×768, against a real synced corpus). Three surfaces walk with the arrow keys — the search and
 collection walls, the deck's piles, and the printings modal stepping along the open deck — and the
 live pass found one defect behind all three, plus one the suite could not see.
+
+> **The deck's own walk changed on 2026-08-21**
+> ([#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)) and everything below this line
+> describes it as it was on the day it was measured. `StackView`'s left and right now step **one
+> card** through the whole deck, crossing pile boundaries, and up and down reach no branch at all;
+> the two-axis walk both sections below drive — up/down inside a pile, left/right to the
+> neighbouring pile's top card — is gone. Nothing else in either section moved: the caret note,
+> the card's `<li>`, the wall's absolute index and the modal's own two keys are all still the
+> current answer, which is why the pass is kept whole rather than edited into agreement with a
+> later decision. `src/features/decks/CLAUDE.md` states the rule that is live.
 
 ### One cause, three surfaces: the walk was exactly one press long
 

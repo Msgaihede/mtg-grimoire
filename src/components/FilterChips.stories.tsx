@@ -6,7 +6,7 @@ import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
-  FILTER_CONTROL,
+  FILTER_FIELD,
   FILTER_FOCUS,
   LayoutToggle,
   ManaChip,
@@ -355,14 +355,21 @@ export const NothingToReset: Story = {
 };
 
 /**
- * The three exported class recipes, which have no component of their own.
+ * The exported class recipes, which have no component of their own.
  *
- * `FILTER_CONTROL` is the 36px height and the shared border/radius/transition; `FILTER_FOCUS`
- * is the focus outline; `filterChipState` is the on/off pair. They are exported because the
- * controls that ride the filter row without being chips — the search box, the format and sort
- * `<select>`s, the layout pair, the deck editor's group-by buttons — must sit on the same line
- * as the chips, and a control that invents its own height sits 2px off it. This is the only
- * story that draws them together, so it is the only place that mismatch would show.
+ * `FILTER_CONTROL` is the 36px height and the shared border/radius/transition, plus the press
+ * dip; `FILTER_FIELD` is the same control **without** the dip, for the box the reader types
+ * into; `FILTER_FOCUS` is the focus outline; `filterChipState` is the on/off pair. They are
+ * exported because the controls that ride the filter row without being chips — the search box,
+ * the format and sort `<select>`s, the layout pair, the deck editor's group-by buttons — must
+ * sit on the same line as the chips, and a control that invents its own height sits 2px off it.
+ * This is the only story that draws them together, so it is the only place that mismatch would
+ * show.
+ *
+ * **The search box here is drawn with `FILTER_FIELD`, and that is the point of the pair.** A
+ * chip is pressed and a field is typed into: the 3% dip that reads as a button going down
+ * slides the field's own native ✕ out from under the pointer clearing it, which is issue #179.
+ * The two recipes differ by that one utility and by nothing else, so the row still lines up.
  *
  * **The row's wrapping is not here.** `flex-wrap` lives on `FilterBar`'s and
  * `CollectionFilterBar`'s own containers, not on anything this module exports, so how a full
@@ -378,7 +385,7 @@ export const OneFamily: Story = {
         aria-label="Search cards"
         placeholder="Search cards…"
         className={cn(
-          FILTER_CONTROL,
+          FILTER_FIELD,
           FILTER_FOCUS,
           "min-w-56 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
         )}

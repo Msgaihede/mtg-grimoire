@@ -1,5 +1,6 @@
 import {
   FILTER_CONTROL,
+  FILTER_FIELD,
   FILTER_FOCUS,
   LayoutToggle,
   ManaChip,
@@ -45,8 +46,11 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
           value={collection.text}
           onChange={(e) => collection.setText(e.target.value)}
           placeholder="Search your collection…"
+          // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
+          // a box the reader types into must not, or the native ✕ slides out from under the
+          // pointer clearing it. Issue #179 — the reason is on the constant.
           className={cn(
-            FILTER_CONTROL,
+            FILTER_FIELD,
             FILTER_FOCUS,
             "min-w-56 flex-1 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
           )}

@@ -57,6 +57,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // yet", which is what every test in this file is standing in.
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     getMarketplace: vi.fn().mockResolvedValue("tcgplayer"),
+    // The shell mounts `useCardZoomPersistence`, which reads this once as it launches. An empty
+    // row is a database nobody has zoomed, so every wall opens at `DEFAULT_ZOOM` — which is what
+    // every test in this file is standing in.
+    cardZoom: vi.fn().mockResolvedValue({}),
+    setCardZoom: vi.fn().mockResolvedValue(undefined),
     searchCards: vi.fn(),
     // The filter row asks for facet counts beside the page. Answered **cold** — `ready:
     // false`, every map empty — so nothing greys and every control keeps its plain name.

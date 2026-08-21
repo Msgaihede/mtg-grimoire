@@ -815,12 +815,14 @@ describe("CardGrid", () => {
   /**
    * **The defect this change is about.** The zoom used to move a *floor*, and the tiles then
    * stretched to share out the row — so the drawn width was a function of the column count,
-   * which is a step function of the zoom. On this panel's 331px column the ten stops of
-   * `ZOOM_STEPS` collapsed to three distinct widths (102, 102, 159, 159, 159, 331, 331, 331,
-   * 331, 331): seven gestures in a row that moved nothing on screen.
+   * which is a step function of the zoom. On this panel's 331px column the ladder of the day —
+   * ten uneven stops — collapsed to three distinct widths (102, 102, 159, 159, 159, 331, 331,
+   * 331, 331, 331): seven gestures in a row that moved nothing on screen.
    *
-   * Sized directly, every stop is its own width. That is the assertion — ten stops, ten answers,
-   * each strictly bigger than the last — and it is the one a floor cannot pass.
+   * Sized directly, every stop is its own width. That is the assertion — one answer per stop,
+   * each strictly bigger than the last — and it is the one a floor cannot pass. Written against
+   * `ZOOM_STEPS` rather than a count, so it survived the ladder becoming sixteen even stops on
+   * 2026-08-22 with only the expected widths moving.
    *
    * On the exported functions rather than through a render, for the reason the tests around it
    * are: jsdom measures every container at zero, so a 331px wall exists nowhere else.
@@ -828,7 +830,9 @@ describe("CardGrid", () => {
   it("draws a different tile at every stop on the ladder, not only where a column is lost", () => {
     const widths = ZOOM_STEPS.map((zoom) => tileWidthFor(331, scaled(150, zoom)));
 
-    expect(widths).toEqual([75, 101, 113, 135, 150, 165, 188, 225, 263, 300]);
+    expect(widths).toEqual([
+      75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240, 255, 270, 285, 300,
+    ]);
     expect(new Set(widths).size).toBe(ZOOM_STEPS.length);
     for (let i = 1; i < widths.length; i++) expect(widths[i]).toBeGreaterThan(widths[i - 1]);
   });

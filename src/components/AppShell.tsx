@@ -32,6 +32,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
@@ -101,6 +102,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
   // observer — including the one two lines below — reads it back from there.
   useMarketplaceProgress();
+  // The one place the walls' zoom is read from and written to the database, here for the same
+  // "exactly one of these in the app" reason as the two subscriptions above — and because this is
+  // the component that is always mounted, so a size is written whichever view the reader zoomed.
+  // It renders nothing: the sizes go into the zustand store, where every wall already reads them.
+  useCardZoomPersistence();
   // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
   // its own to read the event out of a cache entry, and the ribbon is its only consumer today.

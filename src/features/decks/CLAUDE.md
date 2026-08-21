@@ -463,15 +463,27 @@ reader to configure the deck they had just made; it now asks all of them.
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
     the bar has no accessible name and two of its labels are also headings on the desk behind it.
-- **The arrow keys walk the desk, and the printings modal walks the deck** (2026-08-18).
-  In `StackView`, up/down move within a pile and left/right to the neighbouring pile's **top**
-  card — the reader's own choice over "same depth, clamped" — with empty piles skipped and both
-  ends clamped rather than wrapped. The order is `splitRail`'s, `command` then `flow` then `rail`,
-  which is what the desk draws, so the keys and the layout cannot disagree. (It was two runs until
-  2026-08-20; the command zones are the third and they come first, which changes nothing here
-  because the walk reads whatever that split answers.) **It yields to `CategoryGrip`**,
-  whose arrows already reorder the piles and `preventDefault`, through the same `defaultPrevented`
-  handshake `useDismissOnEscape` runs on; that is the one thing here most easily broken by a tidy.
+- **The arrow keys walk the desk, and they walk it the way the printings modal does** (2026-08-18,
+  rewritten 2026-08-21 for [#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)).
+  In `StackView`, **left and right step one card and a pile boundary is not a stop** — right off
+  the foot of a pile lands on the head of the next, left off the head lands on the **foot** of the
+  one before (the near edge, which is what makes the walk reversible: one press then the other is
+  the card you started on). Empty piles are skipped, both ends clamp rather than wrap, and the two
+  keys therefore read the entire deck. **Up and down reach no branch at all** — no answer, no
+  `preventDefault` — so the press falls to `DeckEditor`'s page scroller, which is the one thing
+  behind this view that scrolls. "Up does nothing" would be a claim; leaving the key alone is the
+  absence of one, and it is `AllPrintingsDialog`'s own wording.
+  It used to be two axes, up/down inside a pile and left/right to the neighbouring pile's top
+  card, which needed a paragraph about masonry to explain; that paragraph is gone with it.
+  The order is `splitRail`'s, `command` then `flow` then `rail`, which is what the desk draws, so
+  the keys and the layout cannot disagree. (It was two runs until 2026-08-20; the command zones
+  are the third and they come first, which changes nothing here because the walk reads whatever
+  that split answers.) **It yields to `CategoryGrip`**, whose arrows already reorder the piles and
+  `preventDefault`, through the same `defaultPrevented` handshake `useDismissOnEscape` runs on;
+  that is the one thing here most easily broken by a tidy. **Driven in the shipped window
+  2026-08-21** — thirteen presses across a fourteen-card deck, and the page scrolling under
+  up/down, which is the half jsdom cannot see:
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   `onSelect` is `openCardFromDeck`, so the gold ring and the card pane follow the caret — one
   `[data-deck-card-selected]` in the DOM, on the focused card, confirmed live.
   **Every selection this view makes goes through `selectCard`, which keeps the caret on the card**
@@ -496,8 +508,13 @@ reader to configure the deck they had just made; it now asks all of them.
 - **A pile can be dragged past its neighbours on the desk, and only in `StackView`'s flow**
   (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
   source and the arrow keys on it are the keyboard's whole path — `CategoriesDialog`'s rule, kept
-  verbatim, position in the accessible name included. Six decisions, each of which is the reason
-  something is where it is:
+  verbatim, position in the accessible name included. **Left and right only, since 2026-08-21**
+  ([#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)): the desk answers two keys
+  everywhere on it, cards and grips alike, so a reader learns one pair rather than finding that a
+  heading takes four presses and a card takes two. The reorder loses nothing — Up did what Left
+  does and Down what Right does. **`CategoriesDialog`'s own grip stays on up/down** and that is
+  not a drift: its piles are a vertical list in a dialog, where those are the two keys that name a
+  place. Six decisions, each of which is the reason something is where it is:
   - **The gesture lives in `categoryDrag.ts`, shared with the Categories dialog**, because the two
     surfaces draw a category completely differently and mean exactly the same write. Its mark is
     **not** `dnd.ts`'s: that one carries a **card** between piles, this one carries a **pile** past
@@ -1259,7 +1276,32 @@ price | type`). An **inactive category stays its own group in all three grouping
   and measure → span → measure oscillates;
   **(4) the vertical gutter cannot be a `row-gap`** — a grid gap is drawn at every row boundary an
   item crosses, so a `gap-y-5` here draws one 20px gutter per _pixel_ of a pile's height, silently.
-  The 20 rides inside each span instead; `gap-x-4` is unchanged.
+  The 20 rides inside each span instead; the horizontal one is a real `column-gap` and is the only
+  gap on the box.
+- **The deck's own gutter is `gap-x-2`, 8px, and the rail's is still 16** (halved 2026-08-22, at the
+  reader's ask — the piles read as too far apart). It was `gap-x-4` from the day the flow stopped
+  packing, the same 16 the root's `gap-4` puts between the flowing box and the rail, and the two
+  were one number **by descent rather than by argument**: the root's is a boundary between the deck
+  and the piles played beside it, the grid's is the deck's own rhythm, and only the second is what
+  was asked about. **The horizontal axis alone** — `FLOW_GAP_Y` still carries 20 inside each span,
+  which is the vertical gutter and was left where it was.
+  - **It does not move the rail**, and that is worth knowing before measuring one: the flowing box
+    is `flex-1` and swallows every pixel the rail leaves, so what a reader sees in front of the rail
+    is the leftover, not this gap. What it _does_ move is `auto-fill` — 8px of track spacing rather
+    than 16 is how a line comes to hold one more pile at some desk widths, which is the point of
+    asking for it.
+  - **Every dated measurement below is the 16px build's**, including the two "gutters **16**"
+    readings from 2026-08-17 and 2026-08-18. They are left as they were read; nothing about _which_
+    pile is where moved, because a gutter is not an input to `splitRail`, to the order or to the
+    masonry's placement.
+  - **Driven in the shipped window 2026-08-22** (debug build, 1920×1080, real corpus, a 14-card
+    Commander deck), as a **before/after in one pass** — `element.style.columnGap = '16px'` on the
+    same box — so "it moved nothing else" is a reading rather than an argument. Piles **232** apart
+    at 8 and **240** at 16, in **the same five 224px tracks and the same 1353px box**; the root's
+    gap still **16** and the rail unmoved at x 1603; `scrollWidth` 1920 = `clientWidth`, no page
+    scrollbar. Repeated over three Storybook fixtures, the track count was identical at both
+    gutters. Every figure:
+    [frontend-design.md](../../../docs/reference/frontend-design.md).
 - **`STACK_ATTR` (`data-deck-stack`) marks one pile in the flow**, and it replaced
   `STACK_COLUMN_ATTR` (`data-stack-column`), which meant "a box `packColumns` produced". It sits on
   `StackGroup`'s own `<section>` — there is no wrapper box left — beside the inline `width` and the
@@ -1367,7 +1409,8 @@ price | type`). An **inactive category stays its own group in all three grouping
   reader's call is that they are looked for **on the right**, at every width and every zoom, and
   that a gap in front of them is the cheaper of the two. So the box is capped by nothing and
   `ml-auto` is back on both rails. **The deck's own gutters were never what moved**: `auto-fill`
-  over a definite width spends whole columns, and `gap-x-4`/`gap-6` is one number at every zoom.
+  over a definite width spends whole columns, and `gap-x-2`/`gap-6` is one number at every zoom
+  (`gap-x-4` on the day this was measured — see the halving above).
   **The margin is inert beside the flow and acts only on the wrapped line** — `flex-1` has already
   eaten the line's free space, so the rail is at the right edge for want of anything to its right;
   see the bullet below for the line where that stops being true. **jsdom can see none of it** — it

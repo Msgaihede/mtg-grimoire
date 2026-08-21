@@ -233,10 +233,18 @@ export function statusLineGap(marginTop: number): EnterExit {
  * Everything a press recipe is except the dip itself — the property list, the tier, the curve
  * and the reduced-motion opt-out.
  *
- * **Module-private, and it exists so that the property list is written once.** {@link PRESS}
- * and {@link PRESS_SOFT} differ by one utility and nothing else; spelling the other eleven
+ * **It exists so that the property list is written once.** {@link PRESS} and
+ * {@link PRESS_SOFT} differ by one utility and nothing else; spelling the other eleven
  * out twice, twelve lines apart, would be the same duplication this pair was extracted to
  * end — one file down from the twelve call sites instead of across them.
+ *
+ * **It was module-private until 2026-08-21, and it is exported now because a control a
+ * reader *types into* wants exactly this and never the dip.** A text field that shrinks 3%
+ * under the pointer pressing it moves its own contents out from under that pointer, and on
+ * an `<input type="search">` that is not a cosmetic complaint — it is what broke the clear
+ * button in issue #179. `FilterChips`' `FILTER_FIELD` is the call site and carries the
+ * measurement; the rule this constant states is the one {@link press} already states about
+ * focus, one gesture along: nothing scales a control the reader is aiming at.
  *
  * **The property list is written out one longhand at a time, and `scale` is named
  * explicitly.** Two reasons, and both have shipped as bugs. A colour utility beside a
@@ -251,7 +259,7 @@ export function statusLineGap(marginTop: number): EnterExit {
  * `active:scale-[0.97]` in it. Every class name here is written out whole for Tailwind's
  * scanner, which reads text and knows nothing about the concatenation.
  */
-const PRESS_BASE =
+export const PRESS_STILL =
   "transition-[color,background-color,border-color,opacity,transform,scale] " +
   "duration-[var(--duration-fast)] ease-standard " +
   "motion-reduce:transition-none";
@@ -261,7 +269,7 @@ const PRESS_BASE =
  * element wears. {@link press} below is the same feedback for one that is.
  *
  * It was hand-copied onto every pressable control in the app, with the paragraph on
- * {@link PRESS_BASE} pasted beside almost all of them, until commit `b0a49aa` — and
+ * {@link PRESS_STILL} pasted beside almost all of them, until commit `b0a49aa` — and
  * `UpdatePanel` had said in writing that its copy was "the same string `ErrorLogPanel`
  * carries, down to the character". So: one string, in the module `src/CLAUDE.md` already
  * names as where timings live.
@@ -282,7 +290,7 @@ const PRESS_BASE =
  * facts about three kinds of control, not drift, and folding them together would put a
  * `disabled:` variant on chips that must never leave the tab order.
  */
-export const PRESS = `${PRESS_BASE} active:scale-[0.97]`;
+export const PRESS = `${PRESS_STILL} active:scale-[0.97]`;
 
 /**
  * {@link PRESS} at 0.99 rather than 0.97, for a control as wide as its panel.
@@ -291,9 +299,9 @@ export const PRESS = `${PRESS_BASE} active:scale-[0.97]`;
  * full-width row that dips 3% reads as the page moving rather than as a button going down.
  * A second number with a reason of its own, which is the bar for adding one here — and the
  * number is the *whole* of the difference, which is why both are built from
- * {@link PRESS_BASE}.
+ * {@link PRESS_STILL}.
  */
-export const PRESS_SOFT = `${PRESS_BASE} active:scale-[0.99]`;
+export const PRESS_SOFT = `${PRESS_STILL} active:scale-[0.99]`;
 
 /** {@link press}'s shape: the two gesture props plus the one transition they share. */
 export interface PressFeedback {
