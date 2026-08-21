@@ -2259,10 +2259,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * prices, no allocation roll-up, no marketplace.
    *
    * **`live` only, and `undefined` everywhere else.** On the Theory tab every row *is* the plan,
-   * so a mark on all of them is noise — and the query is not even mounted there, which is what
-   * makes that a promise rather than a filter. `undefined` rather than an empty set is the
-   * distinction {@link theoryMatchSet} exists to keep: no plan is not the same statement as a
-   * plan that wants none of this.
+   * so a mark on all of them is noise. `undefined` rather than an empty set is the distinction
+   * {@link theoryMatchSet} exists to keep: no plan is not the same statement as a plan that
+   * wants none of this.
+   *
+   * **`enabled` is what stops the fetch and emphatically not what stops the mark** — this note
+   * claimed the opposite until issue #159, and the claim was the bug. A disabled `useQuery` still
+   * serves whatever sits in the cache under its key, and that key is the **deck's** rather than
+   * the tab's, deliberately: both tabs want one entry, so the plan is fetched once and a reader
+   * flipping back and forth pays nothing. So a reader who had Live on screen first — which is
+   * where every deck without a remembered tab opens — pressed `Theory` and carried Live's answer
+   * straight over, onto rows that match it by definition. Anything invalidating `["decks"]` while
+   * Live showed refilled that cache, which is why the report was written from a printing swapped
+   * through `View all printings`, and why it read as intermittent rather than as the plain
+   * consequence of pressing two tabs in order.
+   *
+   * The gate therefore sits on the **derivation**, where the question is actually asked, and
+   * `enabled` is left saying only what it can promise: do not spend a query on a tab with no use
+   * for one.
    *
    * Under `["decks"]` like every other read here, so a theory edit made in this session
    * invalidates it with everything else.
@@ -2272,7 +2286,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     queryFn: () => ipc.deckTheorySlots(deckId),
     enabled: theoryEnabled && variant === "live",
   });
-  const theoryMatches = useMemo(() => theoryMatchSet(planned.data), [planned.data]);
+  const theoryMatches = useMemo(
+    () => (variant === "live" ? theoryMatchSet(planned.data) : undefined),
+    [planned.data, variant],
+  );
 
   /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
