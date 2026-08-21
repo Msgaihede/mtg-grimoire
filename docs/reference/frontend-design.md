@@ -379,13 +379,55 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   cross-surface convenience is what the split costs, and it is the smaller loss — a reader who zooms
   the search wall and then opens a deck now finds the deck at whatever they last left it at, which
   is the same promise ("the size I asked for") read per section instead of per app. Each section
-  starts at `DEFAULT_ZOOM` and every one is still **session-only**: no persistence, no SQLite, no
-  IPC, for the reason that has not changed — zoom is a posture a reader takes for a minute of
-  comparing art, and restoring 200% tiles on launch explains itself to nobody. Two guards keep a
-  fifth section from arriving silently: `DEFAULT_SECTION_ZOOMS` is spelled out as a literal rather
-  than reduced over `ZOOM_SECTIONS`, so `Record<ZoomSection, number>` makes a new section a compile
-  error until somebody has said what it starts at; and `CardGrid`'s `zoomSection` prop is
-  **required**, so a new wall cannot default into sharing another wall's number.
+  starts at `DEFAULT_ZOOM`. Two guards keep a further section from arriving silently:
+  `DEFAULT_SECTION_ZOOMS` is spelled out as a literal rather than reduced over `ZOOM_SECTIONS`, so
+  `Record<ZoomSection, number>` makes a new section a compile error until somebody has said what it
+  starts at; and `CardGrid`'s `zoomSection` prop is **required**, so a new wall cannot default into
+  sharing another wall's number.
+- **Each section's size outlives the process** (issue #175, 2026-08-22). This reverses the second
+  half of the rule above — "**session-only**: no persistence, no SQLite, no IPC, … restoring 200%
+  tiles on launch explains itself to nobody" — and the reversal is the same one the split above
+  made, arriving late. That argument was written when there was **one** number for the whole app,
+  where "the zoom" really was a momentary posture a single card could set for every wall at once.
+  Split seven ways it is not: a reader who sizes the deck editor so a 100-card pile fits the desk
+  has configured *that wall*, and the app forgetting it every launch was the reported complaint.
+  What survives of the old worry is answered by the split itself — a size is restored to the wall
+  it was chosen on and nowhere else, so nothing done in the printings modal is waiting on the search
+  page.
+
+  One `app_meta` row, `card_zoom`, holding a JSON object of section → multiplier
+  (`src-tauri/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
+  `AppShell` is its only mount. Five decisions in it, each with a failure it is avoiding:
+
+  - **The row is an object, not seven keys.** Every wall is seeded in one pass at launch, so seven
+    keys would be seven reads of one table to answer one question. The cost is that a write is a
+    read-modify-write — one extra `SELECT` under a lock the writer already holds.
+  - **A write preserves entries this build cannot use**, which is the one thing an object row has
+    to get right that a bare string does not: an eighth wall, or a multiplier past this build's
+    ceiling, survives a write made beside it rather than being emptied by an older build pointed at
+    the same `mtg.db`. Validation applies to what *this* call writes and never to what it writes
+    beside.
+  - **Rust bounds the number (0.5–2) and deliberately does not know the stops.** Where the rungs sit
+    is a question about how a gesture feels and stays in `cardZoom.ts`; how far a stored value may
+    stray is a question about what may land in a column. So `snapZoom` puts a restored value back on
+    the ladder on this side, which keeps `cardZoom` holding one of sixteen exact numbers — the
+    invariant `zoom === 1` rests on — true of a *restored* session as well as a fresh one.
+  - **The seed does not pulse.** `hydrateCardZoom` is a second door onto `cardZoom` and pulses
+    nothing: the badge is a HUD about a gesture, and a value arriving from storage is not one.
+    Pulsing here would greet every launch with a percentage floating over a wall nobody touched. It
+    also drops itself entirely if `zoomPulse !== 0` — a reader who spun the wheel inside the read's
+    round trip keeps what they asked for, rather than watching the wall snap back under their hand.
+  - **The writes hang off `zoomPulse`, not off `cardZoom`, on a 400ms trailing timer per section.**
+    Watching the value gets two cases wrong in opposite directions: it writes back everything the
+    seed just applied (seven round trips to tell the database what it said a moment earlier), and it
+    *misses* a reader holding the wheel at 200%, whose gestures `stepZoom` answers with 200% forever
+    — the value never moves, so the timer never restarts and the write lands mid-gesture. The
+    debounce is not an optimisation: a trackpad pinch arrives as ctrl-flagged wheel events dozens a
+    second, so per-notch writes would be a run of read-modify-writes for a value obsolete before it
+    committed. What 400ms costs is a zoom made in the last 400ms before the app closes. Both
+    failures — a read that never answers, a write refused with `BUSY` under a first-run sync — are
+    swallowed: the first leaves every wall at `DEFAULT_ZOOM`, which is a complete app, and the
+    second costs only the next launch's starting size.
 - **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
   obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
   of a 672px `display` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
@@ -393,12 +435,26 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   what is painted. Rescaling the numbers keeps text crisp, lets the wall reflow to a new column
   count, and keeps `CardGrid`'s existing `virtualizer.measure()` effect — already keyed on
   `tileHeight` — correct for free.
-- **A ladder of ten stops (0.5×–2×), not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
+- **A ladder, not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
   not a magnitude worth trusting: a mouse notch arrives as 100 through Chromium's line mode and 120
   from a driver reporting raw ticks, while a precision trackpad's pinch reaches the page as a stream
   of ctrl-flagged wheel events in the single digits, dozens a second. The ladder makes the unit the
   **gesture**. It also keeps the value exact — `zoom * 1.1` applied and undone eight times is
   0.9999999999999998, which formats as "100%" while sizing every tile a hair off.
+- **Sixteen stops, evenly spaced ten points apart from 50% to 200%** (changed 2026-08-22). This
+  replaced ten uneven ones shaped like a browser's zoom menu — `0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25,
+  1.5, 1.75, 2`, coarse at the ends and fine either side of 100%. The old shape's argument (the
+  stops near 1× are where a reader is steering) is still true; what it got wrong is the input. A
+  browser's ladder is walked by **pressing a key**, where each press is a deliberate act and a menu
+  shows you the list; this one is walked by **rolling a wheel**, where the stops go past in a
+  continuous run — and above 1× the old ladder moved 10, 15, 25, 25, 25 points a notch, so the same
+  wrist movement moved the cards two and a half times as far at the top of the range as at the
+  bottom. Even spacing costs the top some reach (200% is ten notches up from life size rather than
+  five) and buys the thing a wheel gesture needs: one notch always means the same amount. It also
+  makes every stop a round figure the badge can name — 50%, 60% … 200% and nothing else.
+  `ZOOM_STEPS` is **spelled out as literals rather than generated**, for the reason the ladder
+  exists at all: 0.1 added seven times is 0.7999999999999999. One stop is still not round in binary
+  (1.1 × 100 is 110.00000000000001), which is why `formatZoom` rounds.
 - **The zoom sizes the _tile_, and the column count is what falls out of it** (changed
   2026-08-14). `CardGrid` draws a tile at `scaled(baseTileWidth, cardZoom)` exactly, fits however
   many of that size the wall holds, and splits the remainder either side of the row
@@ -407,11 +463,13 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   gesture its meaning. A stretched tile's width is a function of the **column count**, which is a
   step function of the zoom, so most stops drew exactly what the stop before them drew. Measured
   on the deck editor's docked column, whose wall is **330px** in the running window, the ten stops
-  of `ZOOM_STEPS` collapsed to **three** distinct card widths — 102, 102, 159, 159, 159, 331, 331,
-  331, 331, 331. Seven gestures in a row that moved nothing, which reads as an app that has
+  the ladder had then collapsed to **three** distinct card widths — 102, 102, 159, 159, 159, 331,
+  331, 331, 331, 331. Seven gestures in a row that moved nothing, which reads as an app that has
   stopped listening rather than as a wall that is already right. **Driven in the shipped window
-  2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column now answers all
-  ten, strictly increasing, and stays centred throughout:
+  2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column answered all
+  ten, strictly increasing, and stayed centred throughout — **the stops below are the ladder as it
+  was on that date**, and the even sixteen-stop ladder replaced them on 2026-08-22 without changing
+  anything this measurement was about:
 
   | zoom    | 0.5 | 0.67 | 0.75 | 0.9 | 1   | 1.1 | 1.25 | 1.5 | 1.75 | 2   |
   | ------- | --- | ---- | ---- | --- | --- | --- | ---- | --- | ---- | --- |

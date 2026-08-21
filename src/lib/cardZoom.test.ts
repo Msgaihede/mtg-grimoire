@@ -11,7 +11,9 @@ import {
   ZOOM_STEPS,
   cardScaleVars,
   formatZoom,
+  isZoomSection,
   scaled,
+  snapZoom,
   stepZoom,
 } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
@@ -19,15 +21,16 @@ import { useAppStore } from "@/lib/store";
 describe("the zoom ladder", () => {
   it("climbs and descends one stop at a time", () => {
     expect(stepZoom(1, 1)).toBe(1.1);
-    expect(stepZoom(1.1, 1)).toBe(1.25);
+    expect(stepZoom(1.1, 1)).toBe(1.2);
     expect(stepZoom(1, -1)).toBe(0.9);
-    expect(stepZoom(0.9, -1)).toBe(0.75);
+    expect(stepZoom(0.9, -1)).toBe(0.8);
   });
 
   /**
    * Every stop reachable from every other with nothing skipped, and — the half a spot-check
-   * misses — the values arriving back *identical* rather than 0.6700000000000001. `toEqual`
-   * against the ladder itself is what pins that.
+   * misses — the values arriving back *identical* rather than 1.1000000000000001. `toEqual`
+   * against the ladder itself is what pins that, and it is the assertion that would fail the day
+   * somebody replaced the sixteen literals with a loop that adds 0.1.
    */
   it("walks the whole ladder and back without drifting off it", () => {
     const walk = (from: number, direction: 1 | -1) => {
@@ -57,8 +60,8 @@ describe("the zoom ladder", () => {
 
   /** And the far end is still one step away from a limit. */
   it("leaves a limit in the other direction", () => {
-    expect(stepZoom(MAX_ZOOM, -1)).toBe(1.75);
-    expect(stepZoom(MIN_ZOOM, 1)).toBe(0.67);
+    expect(stepZoom(MAX_ZOOM, -1)).toBe(1.9);
+    expect(stepZoom(MIN_ZOOM, 1)).toBe(0.6);
   });
 
   /**
@@ -71,11 +74,13 @@ describe("the zoom ladder", () => {
     // lands on 1.1 rather than on the 1 the reader was effectively already at.
     expect(stepZoom(1.05, 1)).toBe(1.1);
     expect(stepZoom(1.05, -1)).toBe(0.9);
-    expect(stepZoom(1.3, 1)).toBe(1.5);
-    expect(stepZoom(1.3, -1)).toBe(1.1);
+    // 1.32 is not a stop: it snaps to 1.3 and steps from there, in whichever direction it
+    // was asked for.
+    expect(stepZoom(1.32, 1)).toBe(1.4);
+    expect(stepZoom(1.32, -1)).toBe(1.2);
     // Below the bottom of the ladder — snapped onto it, then clamped there.
     expect(stepZoom(0.1, -1)).toBe(MIN_ZOOM);
-    expect(stepZoom(0.1, 1)).toBe(0.67);
+    expect(stepZoom(0.1, 1)).toBe(0.6);
     expect(stepZoom(9, 1)).toBe(MAX_ZOOM);
   });
 
@@ -84,18 +89,89 @@ describe("the zoom ladder", () => {
     expect(MAX_ZOOM).toBe(2);
     expect(ZOOM_STEPS).toContain(DEFAULT_ZOOM);
   });
+
+  /**
+   * **The stops are evenly spaced ten points apart**, which is the whole of what changed on
+   * 2026-08-22 and the one property a reader can feel: one notch of the wheel always means the
+   * same amount, wherever on the ladder they are.
+   *
+   * `toBeCloseTo` rather than `toBe` because the *gaps* are floating-point subtractions of
+   * literals — 1.1 − 1 is 0.10000000000000009 — while the stops themselves are exact. That
+   * distinction is the point: what has to be identical is the value the store holds, not the
+   * difference nothing ever stores.
+   */
+  it("spaces every stop ten points from the last", () => {
+    for (let i = 1; i < ZOOM_STEPS.length; i++) {
+      expect(ZOOM_STEPS[i] - ZOOM_STEPS[i - 1]).toBeCloseTo(0.1, 10);
+    }
+  });
 });
 
 /**
- * The two stops that are not round in binary. 0.67 × 100 is 67.00000000000001 and 0.9 × 100 is
- * 90.00000000000001 — printed raw, a fifth of the ladder would show a badge fourteen digits wide.
+ * The gate on anything read back out of storage — the row's keys are whatever some build of this
+ * app wrote, so a section that has been renamed or dropped arrives as an ordinary string.
+ */
+describe("isZoomSection", () => {
+  it("accepts every section and nothing else", () => {
+    for (const section of ZOOM_SECTIONS) expect(isZoomSection(section)).toBe(true);
+    for (const other of ["", " deck", "Deck", "eighthWall", "toString", "__proto__"]) {
+      expect(isZoomSection(other)).toBe(false);
+    }
+  });
+});
+
+/**
+ * `snapZoom` is what keeps the ladder's exactness true of a *restored* session. Nothing writes an
+ * off-ladder value today, but three things can leave one in the row: a build whose ladder was
+ * spaced differently, a hand-edited `mtg.db`, and Rust's own bound, which checks 0.5–2 and
+ * deliberately does not know where the stops are.
+ */
+describe("snapZoom", () => {
+  it("returns a stop untouched, by identity", () => {
+    for (const step of ZOOM_STEPS) expect(snapZoom(step)).toBe(step);
+  });
+
+  it("pulls an off-ladder value onto the nearest stop", () => {
+    expect(snapZoom(1.37)).toBe(1.4);
+    expect(snapZoom(0.63)).toBe(0.6);
+    // The stops the *old* ladder had and this one does not — the case a reader upgrading from a
+    // build before 2026-08-22 actually meets. Two of the three sit exactly halfway between two
+    // new stops, and the nearest-stop search gives a tie to the **lower** one — so a restored
+    // 125% opens at 120% rather than 130%.
+    expect(snapZoom(0.67)).toBe(0.7);
+    expect(snapZoom(1.25)).toBe(1.2);
+    expect(snapZoom(1.75)).toBe(1.7);
+  });
+
+  it("clamps a value from outside the ladder to its nearer end", () => {
+    expect(snapZoom(0.01)).toBe(MIN_ZOOM);
+    expect(snapZoom(40)).toBe(MAX_ZOOM);
+  });
+
+  /**
+   * `NaN` compares false against everything, so `nearestIndex` would walk it straight to index 0
+   * and hand a reader 50% tiles for a corrupt row. A value that is not a number has no nearest
+   * stop and is not a zoom — the honest answer is the default.
+   */
+  it("answers the default for anything that is not a finite number", () => {
+    expect(snapZoom(NaN)).toBe(DEFAULT_ZOOM);
+    expect(snapZoom(Infinity)).toBe(DEFAULT_ZOOM);
+    expect(snapZoom(-Infinity)).toBe(DEFAULT_ZOOM);
+  });
+});
+
+/**
+ * The stop that is not round in binary: 1.1 × 100 is 110.00000000000001, so printed raw that one
+ * rung of the ladder would show a badge fourteen digits wide. The sweep below is what says the
+ * other fifteen are covered too, rather than a spot-check that happens to pick the exact ones.
  */
 describe("formatZoom", () => {
   it("prints whole percentages, decimals and all", () => {
-    expect(formatZoom(0.67)).toBe("67%");
+    expect(formatZoom(0.6)).toBe("60%");
     expect(formatZoom(0.9)).toBe("90%");
     expect(formatZoom(1)).toBe("100%");
-    expect(formatZoom(1.25)).toBe("125%");
+    // The one that drifts — 110.00000000000001 without the rounding.
+    expect(formatZoom(1.1)).toBe("110%");
     expect(formatZoom(2)).toBe("200%");
   });
 
@@ -111,8 +187,8 @@ describe("formatZoom", () => {
  */
 describe("scaled", () => {
   it("rounds to a whole pixel", () => {
-    expect(scaled(170, 1.25)).toBe(213);
-    expect(scaled(170, 0.67)).toBe(114);
+    expect(scaled(170, 1.2)).toBe(204);
+    expect(scaled(170, 0.6)).toBe(102);
     expect(scaled(170, 1)).toBe(170);
     expect(scaled(238, 1.1)).toBe(262);
   });
@@ -223,7 +299,7 @@ describe("the zoom the store keeps", () => {
     useAppStore.getState().zoomCards("search", 1);
     useAppStore.getState().zoomCards("deck", -1);
 
-    expect(useAppStore.getState().cardZoom.search).toBe(1.25);
+    expect(useAppStore.getState().cardZoom.search).toBe(1.2);
     expect(useAppStore.getState().cardZoom.deck).toBe(0.9);
     expect(useAppStore.getState().cardZoom.deckSearch).toBe(DEFAULT_ZOOM);
     expect(useAppStore.getState().cardZoom.collection).toBe(DEFAULT_ZOOM);
@@ -291,6 +367,51 @@ describe("the zoom the store keeps", () => {
     stop();
 
     expect(seen).toBe(1);
+  });
+
+  /**
+   * The second door onto `cardZoom`, and it has to hold the same guarantee the first one does —
+   * the store only ever holds one of the sixteen exact stops, whatever a stored row says.
+   */
+  describe("hydrating from what was stored", () => {
+    it("seeds the sections the row names and leaves the rest at their default", () => {
+      useAppStore.getState().hydrateCardZoom({ deck: 0.7, printings: 1.8 });
+
+      expect(useAppStore.getState().cardZoom).toEqual({
+        ...DEFAULT_SECTION_ZOOMS,
+        deck: 0.7,
+        printings: 1.8,
+      });
+    });
+
+    it("snaps an off-ladder value and drops a key that is not a section", () => {
+      useAppStore.getState().hydrateCardZoom({ deck: 1.37, eighthWall: 1.5, "": 2 });
+
+      expect(useAppStore.getState().cardZoom).toEqual({ ...DEFAULT_SECTION_ZOOMS, deck: 1.4 });
+    });
+
+    /** A restored size is not a gesture: raising the badge here would greet every launch with a
+     *  percentage floating over a wall nobody touched. */
+    it("pulses nothing and aims nothing", () => {
+      useAppStore.getState().hydrateCardZoom({ search: 1.5 });
+
+      expect(useAppStore.getState().cardZoom.search).toBe(1.5);
+      expect(useAppStore.getState().zoomPulse).toBe(0);
+      expect(useAppStore.getState().zoomSection).toBeNull();
+    });
+
+    /**
+     * The read is a round trip, so a reader can zoom inside it — and their gesture is the newer
+     * fact. Without this the wall would snap back to last session's size under their hand.
+     */
+    it("gives way entirely to a gesture already made", () => {
+      useAppStore.getState().zoomCards("search", 1);
+
+      useAppStore.getState().hydrateCardZoom({ search: 0.5, deck: 0.5 });
+
+      expect(useAppStore.getState().cardZoom.search).toBe(1.1);
+      expect(useAppStore.getState().cardZoom.deck).toBe(DEFAULT_ZOOM);
+    });
   });
 
   /** Zoom is about how cards are read, not about which list is open — it survives the trip. */

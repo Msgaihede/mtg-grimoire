@@ -66,10 +66,11 @@ export interface GridCard {
  * leftover so the wall reached both edges. Flush was the argument and it cost the gesture its
  * meaning: a stretched tile's width is a function of the **column count**, which is a step
  * function of the zoom, so most stops drew exactly what the stop before them drew. Measured on
- * the deck editor's docked column — 331px of wall, a 150px base — the ten stops of `ZOOM_STEPS`
- * collapsed to **three** distinct card widths: 102, 102, 159, 159, 159, 331, 331, 331, 331, 331.
- * Seven of the ten gestures moved nothing on screen, which reads as an app that has stopped
- * listening. Sized directly, the same column answers all ten.
+ * the deck editor's docked column — 331px of wall, a 150px base — the ladder of the day (ten
+ * uneven stops) collapsed to **three** distinct card widths: 102, 102, 159, 159, 159, 331, 331,
+ * 331, 331, 331. Seven of the ten gestures moved nothing on screen, which reads as an app that
+ * has stopped listening. Sized directly, the same column answers every stop — which is why the
+ * ladder could grow to sixteen even stops on 2026-08-22 without this arrangement changing.
  *
  * A `grid` image is 488px wide, so 2× (340px here, 300px in the deck panel) is still a
  * downscale — the only way to pass it is {@link tileWidthFor}'s clamp on a wall too narrow for
@@ -569,8 +570,8 @@ export function CardGrid<T extends GridCard>({
   //
   // **It used to move a floor and let the tiles stretch to fill the row**, which made the drawn
   // size a function of the column count and therefore a step function of the zoom: on the deck
-  // panel's 331px column, seven of the ten stops on the ladder drew exactly what the stop before
-  // them drew. `TILE_BASE_WIDTH` carries the measurement.
+  // panel's 331px column, seven of the ten stops the ladder had then drew exactly what the stop
+  // before them drew. `TILE_BASE_WIDTH` carries the measurement.
   //
   // The other way to do this would be `transform: scale()` on the tiles, and it is wrong three
   // times over: it resamples the art, it leaves the column count at 1× so the wall no longer

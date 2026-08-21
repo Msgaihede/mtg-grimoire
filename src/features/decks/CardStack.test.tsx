@@ -253,7 +253,7 @@ describe("CardStack geometry", () => {
  *
  * Every claim in the suite above is a claim about 1×, and the constants it pins are the base the
  * functions below answer with when nobody has zoomed. What is tested here is that the ladder
- * still derives — width → face → card → advance → margin → list — at each of the ten stops, and
+ * still derives — width → face → card → advance → margin → list — at every stop, and
  * that the one number which is *not* a proportion keeps its floor.
  *
  * Pure functions rather than rendered pixels, deliberately: jsdom lays nothing out, so a test
@@ -383,7 +383,7 @@ describe("CardStack geometry at a zoom", () => {
       expect(stackHeight(6, zoom) - stackHeight(5, zoom)).toBe(stackAdvance(zoom));
     }
 
-    // And a bigger card really is a taller stack: ten stops, ten different heights, in order.
+    // And a bigger card really is a taller stack: one height per stop, all different, in order.
     const heights = ZOOM_STEPS.map((zoom) => stackHeight(8, zoom));
     expect(heights).toEqual([...heights].sort((a, b) => a - b));
     expect(new Set(heights).size).toBe(ZOOM_STEPS.length);
