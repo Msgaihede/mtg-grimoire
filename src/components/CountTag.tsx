@@ -47,6 +47,21 @@ export const COUNT_TAG_SLANT_MIRRORED =
   "polygon(calc(10px*var(--mark-scale,1)) 0, 100% 0, 100% 100%, 0 100%)";
 
 /**
+ * Everything the two boxes below share — the height, the face and the type, without either
+ * padding.
+ *
+ * 22px, 12px and both paddings are the tag's geometry **at 100% zoom**. It is drawn on a card
+ * face in the deck's stack view, which the reader can zoom from 0.5× to 2×, so every one of them
+ * is multiplied by the card's own `--mark-scale` (`lib/cardZoom.ts`) — a tag that held still was
+ * a sticker on a doubled card and a banner on a halved one. The `, 1` fallback is what any future
+ * surface outside a zoomable card gets, unchanged.
+ */
+const COUNT_TAG_FACE = cn(
+  "flex h-[calc(22px*var(--mark-scale,1))] shrink-0 items-center",
+  "font-mono text-[calc(0.75rem*var(--mark-scale,1))] leading-none tabular-nums",
+);
+
+/**
  * The box the slant is cut out of — the height, the two paddings and the face, without the
  * number.
  *
@@ -58,17 +73,33 @@ export const COUNT_TAG_SLANT_MIRRORED =
  * second content mode inside it would be a branch through the one thing it promises.
  *
  * `pr` is larger than `pl` because the slant eats the right edge — the two paddings are what
- * centre the content inside the visible trapezium rather than inside the box.
+ * centre the content inside the visible trapezium rather than inside the box. A mark cut with
+ * {@link COUNT_TAG_SLANT_MIRRORED} therefore needs them the other way round, and that is
+ * {@link COUNT_TAG_BOX_MIRRORED} rather than this.
  */
 export const COUNT_TAG_BOX = cn(
-  // 22px, 12px and both paddings are the tag's geometry **at 100% zoom**. It is drawn on a
-  // card face in the deck's stack view, which the reader can zoom from 0.5× to 2×, so every
-  // one of them is multiplied by the card's own `--mark-scale` (`lib/cardZoom.ts`) — a tag
-  // that held still was a sticker on a doubled card and a banner on a halved one. The `, 1`
-  // fallback is what any future surface outside a zoomable card gets, unchanged.
-  "flex h-[calc(22px*var(--mark-scale,1))] shrink-0 items-center",
+  COUNT_TAG_FACE,
   "pr-[calc(0.75rem*var(--mark-scale,1))] pl-[calc(0.375rem*var(--mark-scale,1))]",
-  "font-mono text-[calc(0.75rem*var(--mark-scale,1))] leading-none tabular-nums",
+);
+
+/**
+ * The same box for a mark cut with {@link COUNT_TAG_SLANT_MIRRORED} — the two paddings swapped,
+ * and nothing else.
+ *
+ * **Issue #158 is what it is for.** The theory tick in a stacked card's right-hand corner wore
+ * {@link COUNT_TAG_BOX} unchanged, and a reader reported the glyph as left-aligned inside its own
+ * banner. It was: the paddings above centre content in a trapezium whose bite is out of the
+ * **right** edge, and the mirrored slant takes its bite out of the **left** one. At 100% zoom
+ * that puts the mark's visible mid-height centre 5.5px to the *right* of where the content sits —
+ * a quarter of a 22px box, which is why a glyph nobody measures still looked wrong.
+ *
+ * A second constant rather than a `mirrored` flag on the first, because the pairing is the point:
+ * a slant and the paddings that centre content inside it are **one shape** described in two
+ * declarations, and the two now sit where a caller picking either can see it has to pick both.
+ */
+export const COUNT_TAG_BOX_MIRRORED = cn(
+  COUNT_TAG_FACE,
+  "pl-[calc(0.75rem*var(--mark-scale,1))] pr-[calc(0.375rem*var(--mark-scale,1))]",
 );
 
 /**

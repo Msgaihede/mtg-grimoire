@@ -1394,7 +1394,7 @@ lock-free path: a `file://` page linking the **built** `dist/assets/index-*.css`
 out of the image cache, the components' own class strings pasted onto the markup, and
 `msedge --headless=new --screenshot`. Before and after in one frame, and candidates side by side —
 which is the whole reason it can settle a question a test cannot. **The shipped-window pass was
-not run** and is still owed.
+owed and was run on 2026-08-21** — see the alignment section below, which is what it found.
 
 - **The fill is `--color-pie-u`, not `bg-accent`.** Gold was the obvious first choice — a chip on
   a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
@@ -1424,6 +1424,39 @@ not run** and is still owed.
 drawn it in that corner all along, so this is existing shipped behaviour rather than something the
 move introduced — but the stacked card is 210px against a tile's 150 and covers proportionally
 more of it. Worth a look if the illustrator-credit rule above is ever read strictly.
+
+### And the fifth thing, which only the shipped window found (issue #158)
+
+The `file://` frame above pasted the components' class strings onto **its own** markup, so it
+photographed the mark and not the mark *in the card*. Both of the things it therefore could not
+show were reported the next day, by a reader, off one screenshot: the tick read as **left-aligned
+inside its own banner**, and the banner stood short of the card's right edge with a **square**
+corner where the quantity tag at the other end has the card's round one.
+
+Both were real, both were arithmetic, and neither is visible to the suite — jsdom lays nothing
+out. **Driven in the shipped window 2026-08-21** (`npm run tauri dev`, a **debug** build at 1920
+against the real 116 700-card corpus, five Live cards all matching the plan), with the change
+backed out through `element.style` in the same session so the two states are one pass:
+
+| | before | after |
+| --- | --- | --- |
+| tick's right edge, from the card's | **5px short** | **0** — flush, exactly as the quantity tag is at the left |
+| glyph, from its banner's visible mid-height centre | **−5.5px** | **+0.5px** |
+
+- **The glyph was off-centre because a slant and its paddings are one shape.** `COUNT_TAG_BOX`'s
+  `pr` is larger than its `pl` because `COUNT_TAG_SLANT` bites the **right** edge; the tick wears
+  `COUNT_TAG_SLANT_MIRRORED`, which bites the **left**, so it needed the pair swapped and had been
+  wearing them unswapped. `COUNT_TAG_BOX_MIRRORED` is that swap, exported beside the mirrored slant
+  so a caller reaching for one can see it has to take both. Re-measured at **2×** — 24/12px
+  paddings, glyph **+1px** off centre, the same half-pixel doubled — so it scales rather than
+  agreeing at one stop.
+- **The 5px was a rule that outlived its corner.** `CARD_MARKS_STRIP` was inset
+  `right-[calc(5px*var(--mark-scale,1))]` "to keep the strip off the card's own clipped corner",
+  written when the strip's marks were drawn on the **right** and that corner held a `RULE BREAK`
+  box with a hairline border. The marks went left on 2026-08-13 and the inset stayed. It is
+  `inset-x-0` now: the face is `overflow-hidden rounded-[7px]`, so the tick gets the same clipped
+  corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
+  `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant.
 
 ## The two marks a deck card carries: picked, and just landed
 
