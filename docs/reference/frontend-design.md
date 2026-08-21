@@ -1067,7 +1067,13 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     item crosses, so a `gap-y-5` on a grid of one-pixel rows would draw one 20px gutter per pixel
     of every pile's height. The 20 is added to each pile's own span instead, which puts it once
     under each pile; the visible cost is one trailing gutter at the foot of each column.
-    `gap-x-4`, the horizontal one, is unchanged and is still what the rail is spaced by.
+    The horizontal one was `gap-x-4` here, 16px, the same number the root spaces the rail by —
+    **halved to `gap-x-2`, 8px, on 2026-08-22** at the reader's ask, the root's 16 left alone. The
+    two were one number by descent rather than by argument: the root's separates the deck from the
+    piles played beside it, the grid's is the deck's own rhythm. It moves no pile and no rail — the
+    flowing box is `flex-1` and the leftover is what sits in front of the rail — but it does move
+    `auto-fill`, which is how a line comes to hold one more pile at some desk widths. **Every
+    gutter figure measured below is the 16px build's** and is left as it was read.
 
   **Driven in Storybook over CDP, 2026-08-15 — and _not_ in the shipped window**, which is the
   carve-out to read first: the `app` lock was held by another worktree for the whole session
@@ -1102,6 +1108,35 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     three columns is two per column either way, so both layouts came to the same **1026px** of
     flow. The height is only won where a column holds more than two; what is won at every size is
     that the space is under the _last_ pile instead of in a band across the middle of the desk.
+
+  **Driven for the halving, 2026-08-22 — in the shipped window _and_ in Storybook.** Every reading
+  is a **before/after in one pass**: the shipped 8px read, then `element.style.columnGap = '16px'`
+  on the same box, then read again, so the two numbers are one fixture at one width rather than two
+  builds. That is what makes "it moved nothing else" a measurement instead of an argument.
+
+  - **The shipped window** (`npm run tauri dev`, a **debug** build at 1920×1080, real corpus, a
+    14-card Commander deck of five flowing piles and a rail). Flowing box **1353px**, five 224px
+    tracks, computed `column-gap` **8px** and `row-gap` **normal**. The four piles after the
+    command zone at x **466 / 698 / 930 / 1162** — **232 apart**, which is the column plus the
+    gutter and nothing else. Backed out to 16 in the same pass: **474 / 714 / 954 / 1194**, 240
+    apart, **the same five tracks and the same 1353px box**. `documentElement.scrollWidth` **1920**
+    against a `clientWidth` of **1920** — no horizontal page scrollbar, which the 1024px floor
+    forbids.
+  - **The rail did not move and its gutter is still 16.** The root's computed `gap` read **16px**
+    with the deck's own at 8, and the rail stood at x **1603** — which is the leftover, not the
+    gap. This is the whole reason the two numbers were worth separating: `flex-1` swallows every
+    pixel the rail leaves, so nothing a reader sees in front of the rail is this gutter's doing.
+  - **It moved no line count in Storybook either**, which is the answer to the obvious worry that a
+    smaller gutter buys a line an extra pile. Same before/after, three stories: `WrappedPiles` **3**
+    tracks (flow 757px), `UnevenPiles` **3** (709), `CommandZone` **4** (997) — identical at 8 and
+    at 16. A track is 224 wide, so eight pixels only ever decides the count within eight pixels of
+    a boundary, and no fixture here sits there.
+  - **`TallDesk`'s decorator comment was wrong before this change and is corrected in the same
+    commit.** It was written for four boxes at 74rem (944 = 4 × 224 + 3 × 16) and the story draws
+    **three** — at both gutters — because the meta's fixed 42rem forces a 15px scrollbar that comes
+    out of the flow's width first, leaving **917**. `UnevenPiles`' decorator pays for that
+    scrollbar in as many words; `TallDesk`'s never did, and no play asserted the count, so it went
+    green while demonstrating a different number than it claimed.
 
 - **A pinned rail wraps below the flow rather than pushing it sideways, and CSS is what decides
   — never a `ResizeObserver`.** The Sideboard and the Maybeboard were the pack's worst case.

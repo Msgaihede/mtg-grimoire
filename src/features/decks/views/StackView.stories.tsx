@@ -195,18 +195,19 @@ export const Default: Story = {
  * Eight piles in a canvas capped at 768px, in **six** items of the flowing grid: the command zone,
  * which is the Commander alone here, and then five piles each in its own 224px box. 768 less the
  * rail's 224 and the 16px between them leaves **528px** for the flow, which holds two boxes and
- * their gutter (464) and not three (704), so the six wrap onto three lines beside the rail. Every
+ * their gutter (456) and not three (688), so the six wrap onto three lines beside the rail. Every
  * item is one column wide, the command zone included, so the arithmetic is what it was when the
  * Commander was the first of six flowing piles rather than the first item of six. Neither the
  * Sideboard nor the Maybeboard is in any of it — `splitRail` pins both kinds, so both are taken out
  * of the list before the flow is drawn, and drawn in the rail after.
  *
- * **The flowing box is 528 again, and the 64px remainder is inside it** (changed 2026-08-18). It
- * was capped at 464 — two whole boxes and their gutter — for a day, which freed those 64px to sit
- * past the rail at the far right of the canvas and brought the Sideboard to 16px from the deck.
- * The reader's call reverses it: the rail belongs at the **right edge**, so it is back there and
- * the remainder is blank desk between the deck's last box and it — the Sideboard 80px from the
- * deck rather than 16. This story is the one to look at for that gap: the remainder is whatever
+ * **The flowing box is 528 again, and the 72px remainder is inside it** (changed 2026-08-18; the
+ * remainder was 64 until the deck's own gutter was halved on 2026-08-22, and every number in this
+ * paragraph moved 8px with it). It was capped at 464 — two whole boxes and the 16px gutter of the
+ * day — for a day, which freed the remainder to sit past the rail at the far right of the canvas
+ * and brought the Sideboard to 16px from the deck. The reader's call reverses it: the rail belongs
+ * at the **right edge**, so it is back there and the remainder is blank desk between the deck's
+ * last box and it — the Sideboard 88px from the deck rather than 16. This story is the one to look at for that gap: the remainder is whatever
  * the desk's width leaves over, so it is a different number at every canvas width and at every
  * zoom stop, and it is the price of the rail being findable in one place.
  *
@@ -295,9 +296,16 @@ export const PinnedSideboard: Story = {
 export const TallDesk: Story = {
   args: { groups: wideGroups() },
   decorators: [
-    // Wide enough for four boxes and their gutters beside the rail (4 × 224 + 3 × 16 = 944; plus
-    // the rail's 224 and the 16 before it, 1184), so the flow fills a line and wraps once rather
-    // than twice. `shrink-0` for the reason {@link WrappedPiles}' decorator carries it.
+    // Wide enough that the flow fills a line and wraps once rather than twice. **The line is
+    // three boxes and the arithmetic written here said four**, which is worth leaving written
+    // down: 74rem less the rail's 224 and the root's 16 is 944, four boxes' worth when the
+    // deck's gutter was 16 (4 × 224 + 3 × 16), and the flow measured **917** — because the
+    // meta's decorator hands this view a fixed 42rem, the deck is taller, and the 15px vertical
+    // scrollbar the root then draws comes out of the width before `auto-fill` counts anything.
+    // That is `UnevenPiles`' trap two decorators down, unpaid for here. Measured in Storybook
+    // over CDP on 2026-08-22, backing the gutter out to 16px in the same pass: **three tracks at
+    // both 8 and 16**, so halving it moved nothing in this story and the count it draws is the
+    // count it drew. `shrink-0` for the reason {@link WrappedPiles}' decorator carries it.
     (Story) => (
       <div className="flex w-[74rem] shrink-0">
         <Story />
@@ -340,9 +348,9 @@ export const WrappedPiles: Story = {
     // which is the width the sideways run was forbidden at. A story's own decorators run
     // *inside* the meta's, so this box takes its 42rem of height from the column above rather
     // than declaring a second one — two boxes each setting a height would leave the inner one
-    // deciding and the outer one lying. 1024 less the rail's 224 and the 16px gap leaves 784px,
-    // which is three boxes to a line (704) and not four (944), so the last three take a second
-    // line. `shrink-0` because that box is a flex item: without it a docs canvas narrower than
+    // deciding and the outer one lying. 1024 less the rail's 224 and the root's 16px gap leaves
+    // 784px, which is three boxes to a line (688) and not four (920), so the last three take a
+    // second line. `shrink-0` because that box is a flex item: without it a docs canvas narrower than
     // 1024px would shrink the decorator instead of scrolling, and the story would be a picture of
     // a width nobody asked for.
     (Story) => (
@@ -368,10 +376,15 @@ export const WrappedPiles: Story = {
     // until a box no longer fits beside it, and this fails instead of silently drawing a
     // single line under a name that promises two.
     const desk = 1024; // the decorator's own `w-[64rem]`
-    const gap = 16; // `gap-4`/`gap-x-4`, on the root and on the flowing box alike
+    // **Two numbers since 2026-08-22, and one before it.** The root's `gap-4` is what stands
+    // between the flow and the rail and is still 16; the flowing box's own gutter was halved to
+    // `gap-x-2`. Reading them as one number would count the wrong capacity the moment either
+    // moves again, which is exactly what a story asserting a wrap is here to notice.
+    const railGap = 16;
+    const flowGap = 8;
     const columnWidth = Number.parseFloat(stacks[0].style.width);
-    const flowWidth = desk - Number.parseFloat(rail.style.width) - gap;
-    const perLine = Math.floor((flowWidth + gap) / (columnWidth + gap));
+    const flowWidth = desk - Number.parseFloat(rail.style.width) - railGap;
+    const perLine = Math.floor((flowWidth + flowGap) / (columnWidth + flowGap));
     // **What wraps is the grid's *items*, and the command zone is one of them** — five piles and
     // the box the Commander is drawn in, which claims a track of exactly the same width. Reading
     // that width off the box rather than assuming it is what keeps this honest at every zoom stop:
@@ -487,8 +500,8 @@ function unevenGroups() {
 export const UnevenPiles: Story = {
   args: { groups: unevenGroups() },
   decorators: [
-    // 736px, which is three boxes and their two gutters (3 × 224 + 2 × 16 = 704) **plus room for
-    // a scrollbar**, and the 32 is not slack. There is no rail to leave room for here, so 704
+    // 736px, which is three boxes and their two gutters (3 × 224 + 2 × 8 = 688) **plus room for
+    // a scrollbar**, and the 48 is not slack. There is no rail to leave room for here, so 688
     // would be the exact fit — and it draws two columns, because the meta's decorator hands this
     // view a fixed 42rem of height, the deck is taller than that, and the 15px vertical scrollbar
     // the root then draws comes out of the flow's width before `auto-fill` counts anything. The
@@ -777,7 +790,7 @@ export const CommandZone: Story = {
   args: { groups: commandZoneGroups() },
   decorators: [
     // 1024px, the narrowest window this app promises to be usable in, and no rail in this deck to
-    // take a column of it — so the line holds four items (4 × 224 + 3 × 16 = 944, against 1184 for
+    // take a column of it — so the line holds four items (4 × 224 + 3 × 8 = 920, against 1152 for
     // five) and the seven here wrap onto two. Width only and `shrink-0`, for {@link WrappedPiles}'
     // reasons.
     (Story) => (
