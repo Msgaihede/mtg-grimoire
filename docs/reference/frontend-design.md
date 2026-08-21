@@ -2469,7 +2469,7 @@ the reader could look at and not read. `split` (347, of which 96 are Aftermath),
 `flip` (45); `meld` (72) is the fourth case and is a different problem, below.
 
 **The direction each one turns is a fact about the cardboard, and it was settled against the
-printed images rather than reasoned about** (2026-08-22, Scryfall's own `normal` JPEGs):
+printed images rather than reasoned about** (2026-08-21, Scryfall's own `normal` JPEGs):
 
 | Layout | Where the title reads from | Turn |
 | --- | --- | --- |
