@@ -95,7 +95,7 @@ const meta = {
   // app itself gives when there is no section element to measure — which is exactly the state a
   // story page is in — and because it keeps the catalogue in step with `ZOOM_BADGE_INSET` instead
   // of restating it. {@link WhileZooming} is where an anchor is *chosen* rather than passed.
-  args: { zoom: 1.25, anchor: anchorFor(null) },
+  args: { zoom: 1.2, anchor: anchorFor(null) },
   decorators: [
     // The badge is `fixed`, so on the docs page every story would stack in the corner of the
     // article. A **transformed** ancestor is the containing block for `position: fixed`
@@ -132,7 +132,7 @@ const meta = {
           "a hand that keeps going.\n\n" +
           "**It is `aria-hidden`, and that is a decision rather than an omission.** This is " +
           "transient feedback for a mouse-and-trackpad gesture; a live region here would " +
-          "announce “60%… 75%… 90%…” once per wheel notch, which is a burst of noise a " +
+          "announce “60%… 70%… 80%…” once per wheel notch, which is a burst of noise a " +
           "screen-reader reader cannot act on and did not ask for. It is also " +
           "`pointer-events-none` — it is drawn over the very scroller that carries the wheel " +
           "listener, and a layer that took the pointer would swallow the very ctrl+wheel events " +

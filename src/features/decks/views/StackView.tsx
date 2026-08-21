@@ -442,12 +442,14 @@ export function StackView({
   // is asking for the pile they can see to the right, and the piles the deck holds that this desk
   // is not drawing are the editor's to thread back in ({@link DeckCardActions.moveCategory}).
   const flowIds = flow.flatMap((group) => (group.categoryId === null ? [] : [group.categoryId]));
-  // **Every pile the arrows walk, in the order they are drawn** — the command zone, then the flow,
-  // then the rail, each pile's cards in the order it already holds them. It is the same
+  // **Every card the arrows walk, in the order they are drawn** — the command zone, then the
+  // flow, then the rail, each pile's cards in the order it already holds them. It is the same
   // `splitRail` answer the view is drawn from and deliberately not a second derivation of it: a
   // walk that disagreed with the layout by one pile would send the caret somewhere the reader is
-  // not looking, and nothing on screen would say so. `deckWalk.ts` builds this order for the
-  // printings modal off the same function, and the two are meant to agree.
+  // not looking, and nothing on screen would say so. `deckWalk.ts` flattens this same order for
+  // the printings modal off the same function, and since 2026-08-21 the two do not merely agree
+  // on the order — they take the same step, because left and right here now cross pile
+  // boundaries exactly as the modal's chevrons do.
   //
   // Both of the other boxes are **in** it: their piles are drawn on the desk like any other, so a
   // reader arrowing left off the first flowing pile is asking for the commander and one arrowing
@@ -480,9 +482,15 @@ export function StackView({
   };
 
   /**
-   * The arrows, for the whole view — left and right to the neighbouring pile's top card, up and
-   * down through the pile the caret is in. {@link nextStackPosition} is the movement; this is
+   * The arrows, for the whole view — **left and right, one card at a time, through the whole
+   * deck**, pile boundaries included. {@link nextStackPosition} is the movement; this is
    * everything about it that needs a document.
+   *
+   * **Up and down reach no branch here at all** (changed 2026-08-21): the movement answers `null`
+   * for them, so the press falls through to the page, which is the one thing that scrolls behind
+   * this view. Two keys are the whole gesture, and they are the two the printings modal has
+   * always used — a reader stepping through their deck presses the same pair whichever surface
+   * they are on.
    *
    * **One handler on the root rather than one per card**, which is this file's standing rule for
    * a view that draws hundreds of them: a keydown bubbles from whichever button the caret is on,
@@ -490,9 +498,9 @@ export function StackView({
    * closure per card to learn something the DOM already knows.
    */
   const onArrowKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    // **The grip's arrows are these arrows, and the grip goes first.** `CategoryGrip` binds all
-    // four to *reordering the pile* and calls `preventDefault()` on every one of them, including
-    // the presses that step past the end and send nothing — and it is the same synthetic event
+    // **The grip's arrows are these arrows, and the grip goes first.** `CategoryGrip` binds the
+    // same two to *reordering the pile* and calls `preventDefault()` on both, including the
+    // presses that step past the end and send nothing — and it is the same synthetic event
     // bubbling up to here, so the flag is readable. With the caret on a grip an arrow moves the
     // pile; anywhere else it moves the selection. Yielding to whatever claimed the press is also
     // what keeps this from swallowing a key some later control binds inside the view.
@@ -655,7 +663,7 @@ export function StackView({
           dead desk *inside* this box, between the last pile and the rail, and the rail is flush
           against the right edge of the desk. **The deck's own gutters are untouched, which is the
           half of this the reader asked to keep**: `auto-fill` over a definite width spends whole
-          columns and `gap-x-4` is 16px at every stop on the ladder. **The column count is
+          columns and `gap-x-2` is 8px at every stop on the ladder. **The column count is
           untouched too** — a capped box was exactly `n × (column + gap) − gap` wide, so
           `auto-fill` counts the same `n` either way, and dropping the cap moved no pile.
 
@@ -665,11 +673,20 @@ export function StackView({
           the measurement above safe: a pile's height cannot depend on the span it was given, so
           measure → span → measure cannot oscillate.
 
-          **`gap-x-4` only, and the vertical gutter is inside each span.** A grid gap is drawn at
+          **`gap-x-2` only, and the vertical gutter is inside each span.** A grid gap is drawn at
           every row boundary an item crosses, so a `gap-y` here would put hundreds of gutters
           inside a single pile; {@link FLOW_GAP_Y} carries the same 20px the `gap-y-5` this
-          replaced drew, once, under each pile. The 16px horizontal gutter is unchanged and is
-          still the one the rail is spaced by.
+          replaced drew, once, under each pile.
+
+          **The horizontal gutter is 8px and the rail's is still 16** (halved 2026-08-22). It was
+          `gap-x-4` until then, the same 16 the root's `gap-4` spaces the rail by, and the two were
+          one number by descent rather than by argument. The reader asked for the piles to sit
+          closer together and for that axis only — {@link FLOW_GAP_Y} is untouched — so this is
+          now the deck's own rhythm and the root's is the boundary between the deck and the rail.
+          **The rail is not moved by it**: this box is `flex-1` and swallows every pixel the rail
+          leaves, so what the reader sees in front of the rail is the leftover, not this gap.
+          `auto-fill` does move — 8px of track spacing rather than 16 is how a line comes to hold
+          one more pile at some desk widths, which is the point of asking.
 
           **No `content-start` here, on purpose.** This box is a flex item of a line the outer
           `items-start` never stretches, so its height is exactly its content's, there is no free
@@ -681,7 +698,7 @@ export function StackView({
           gridTemplateColumns: `repeat(auto-fill, ${columnWidth}px)`,
           gridAutoRows: `${FLOW_ROW}px`,
         }}
-        className="grid flex-1 items-start gap-x-4"
+        className="grid flex-1 items-start gap-x-2"
       >
         {/* The command zone, first of the grid's items and the only one that is more than one
             pile — see {@link CommandZone}, which carries the whole of why the commander and the
@@ -1167,19 +1184,27 @@ export const GRIP_ATTR = "data-category-grip";
  * accessible name: the only other way to know where a pile landed is to look at it, and a reader
  * pressing the arrow keys is the one reader who may not be able to.
  *
- * **All four arrows, and they mean "one place earlier" and "one place later" rather than a
+ * **Left and right only, and they mean "one place earlier" and "one place later" rather than a
  * direction on the desk.** The flow is a masonry — a pile wraps to the foot of the pile above it
- * — so "the pile below" is a fact about how much room the window had, not about the order. Left
- * and Up are the same press, Right and Down are the same press, and both are the move
- * `movedTo` makes.
+ * — so "the pile below" is a fact about how much room the window had, not about the order, which
+ * is why the two keys that name a *place in a list* are the two that are bound.
  *
- * **These four presses win over the view's own arrows, and `preventDefault` is the whole of the
- * handshake.** The root binds the same four keys to moving the *caret* between cards
+ * **Up and down were bound to the same two moves and are not any more** (changed 2026-08-21,
+ * [#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)). The desk now answers exactly two
+ * keys everywhere on it — cards and grips alike — so a reader learns one pair rather than
+ * discovering that a heading takes four presses and a card takes two. The keyboard reorder loses
+ * nothing it could do: Up did what Left does and Down did what Right does, so both moves are
+ * still one press away. `CategoriesDialog`'s grip is untouched and stays on up/down, and that is
+ * not an inconsistency — its piles are a **vertical list** in a dialog, where those are the two
+ * keys that name a place.
+ *
+ * **These two presses win over the view's own arrows, and `preventDefault` is the whole of the
+ * handshake.** The root binds the same two keys to moving the *caret* between cards
  * ({@link nextStackPosition}), and it returns early on `defaultPrevented` — so this handler
- * marking every one of the four, including the two that step past an end and send nothing, is
- * what keeps an arrow on a grip meaning "move this pile" while an arrow anywhere else means
- * "move the selection". One key with two meanings, told apart by where the caret is; drop the
- * `preventDefault()` on the no-op arms and a grip at either end of the flow would silently start
+ * marking both, including the one that steps past an end and sends nothing, is what keeps an
+ * arrow on a grip meaning "move this pile" while an arrow anywhere else means "move the
+ * selection". One key with two meanings, told apart by where the caret is; drop the
+ * `preventDefault()` on the no-op arm and a grip at either end of the flow would silently start
  * moving the selection instead.
  *
  * **The neighbour is named rather than counted**, because {@link DeckCardActions.moveCategory}
@@ -1218,16 +1243,16 @@ function CategoryGrip({
       type="button"
       {...{ [GRIP_ATTR]: "" }}
       onKeyDown={(e) => {
-        if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        if (e.key === "ArrowLeft") {
           e.preventDefault();
           step(index - 1);
-        } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        } else if (e.key === "ArrowRight") {
           e.preventDefault();
           step(index + 1);
         }
       }}
       aria-label={`Move ${name}, ${index + 1} of ${flowIds.length}`}
-      {...tip("Drag to reorder, or press the arrow keys")}
+      {...tip("Drag to reorder, or press the left and right arrow keys")}
       className={cn(
         "shrink-0 cursor-grab rounded-sm text-dim",
         "transition-colors duration-150 hover:text-text motion-reduce:transition-none",

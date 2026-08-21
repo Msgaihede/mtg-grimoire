@@ -28,7 +28,7 @@
  */
 import { useId, useMemo, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { FILTER_CONTROL, ToggleChip } from "@/components/FilterChips";
+import { FILTER_CONTROL, FILTER_FIELD, ToggleChip } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import { plural } from "@/lib/counts";
@@ -297,8 +297,12 @@ export function PrintingsFilterBar({
         value={filter.text}
         onChange={(e) => onFilterChange({ ...filter, text: e.target.value })}
         placeholder="Set, number or artist"
+        // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and a
+        // box the reader types into must not, or the native ✕ slides out from under the pointer
+        // clearing it. Issue #179 — the reason is on the constant. This box is `w-64`, where the
+        // press still caught 7 of the button's 10 pixels — the row's `flex-1` boxes caught none.
         className={cn(
-          FILTER_CONTROL,
+          FILTER_FIELD,
           FOCUS,
           "w-64 min-w-0 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
         )}

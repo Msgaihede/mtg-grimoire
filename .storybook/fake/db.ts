@@ -104,6 +104,7 @@ import {
   PRINTING_GROUP_BY_OPTIONS,
   isPrintingGroupBy,
 } from "@/features/card/printings";
+import { MAX_ZOOM, MIN_ZOOM } from "@/lib/cardZoom";
 import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
@@ -776,6 +777,22 @@ export interface FakeDb {
    */
   lastDeckFormat: string | null;
   /**
+   * `app_meta.card_zoom` — how large each wall of cards was last left drawn, as section name →
+   * multiplier.
+   *
+   * The fourth row of the same key/value table and the only one whose value is an *object*, which
+   * is why it is `Record<string, number>` rather than `Record<ZoomSection, number>`: the keys are
+   * whatever some build of this app wrote, and both states a narrowed field could not reach are
+   * ones a story wants — a section this build has never drawn, and a multiplier outside the
+   * ladder. `{}` rather than `null` for "nothing stored", because there is no single default to
+   * fall back on here: seven walls have each been zoomed or not, and an absent key *is* the
+   * answer for one nobody has touched.
+   *
+   * **The reads drop what they cannot use and the write refuses it**, `set_marketplace`'s split
+   * one more time — see {@link readHandlers.card_zoom} and {@link writeHandlers.set_card_zoom}.
+   */
+  cardZoom: Record<string, number>;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -982,6 +999,20 @@ export interface FakeTagMeta {
 const PRINTING_GROUP_BY_MODES: readonly string[] = PRINTING_GROUP_BY_OPTIONS.map((o) => o.value);
 
 /**
+ * `zoom::is_storable` — the bound the card-zoom row is kept inside.
+ *
+ * `MIN_ZOOM` and `MAX_ZOOM` are imported rather than re-typed, for `PRINTING_GROUP_BY_MODES`'
+ * reason above: the ends are the ladder's, the Rust holds a copy of them, and a third copy here
+ * would be the one nothing checks. **The stops themselves are not consulted and must not be** — the
+ * backend bounds the number and leaves the ladder to the frontend, so a value between the ends
+ * but off the ladder is stored here exactly as it is stored there, and reaches `snapZoom` on the
+ * way back out.
+ */
+function isStorableZoom(zoom: number): boolean {
+  return Number.isFinite(zoom) && zoom >= MIN_ZOOM && zoom <= MAX_ZOOM;
+}
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -1070,6 +1101,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // writes it, so a world whose decks were seeded rather than created has never written it —
     // which is the state the dialog's own Commander default stands in for.
     lastDeckFormat: null,
+    // The fourth row, empty: every wall opens at `DEFAULT_ZOOM`, which is what every story that
+    // says nothing about zoom is standing in. A story that wants a restored session passes the
+    // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
+    cardZoom: {},
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -4837,6 +4872,29 @@ export function readHandlers(db: FakeDb) {
     deck_last_format: (): string | null => db.lastDeckFormat,
 
     /**
+     * `zoom::card_zoom` — every wall's remembered size, with the unusable entries dropped.
+     *
+     * The fourth `app_meta` setting, and **the one where the fallback is per entry rather than
+     * for the whole row**: a marketplace or a grouping this build cannot place costs the reader
+     * that one setting, while a single hand-edited zoom must cost one wall its memory and leave
+     * the other six intact. That is the behaviour a fake most easily gets wrong by reaching for
+     * the neighbours' shape, so it is re-implemented rather than shared.
+     *
+     * `isStorableZoom` and nothing about the ladder: the Rust bounds the number and deliberately
+     * does not know where the ten stops are, so a value between the ends but off the ladder
+     * arrives here intact and is snapped on the *frontend* side by `snapZoom`. A fake that
+     * snapped would hide the one thing this split exists to make visible.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    card_zoom: (): Record<string, number> =>
+      Object.fromEntries(
+        Object.entries(db.cardZoom).filter(
+          ([section, zoom]) => section !== "" && isStorableZoom(zoom),
+        ),
+      ),
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -7848,6 +7906,40 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.printingGroupBy = args.mode;
+    },
+
+    /**
+     * `zoom::set_card_zoom` — remember one wall's size, and refuse a value that could not be read
+     * back.
+     *
+     * **The refusal is the half a fake is easiest to leave out**, `set_printing_group_by`'s
+     * sentence and the same trap: the read side drops an entry it cannot use, so a fake that
+     * accepted any number would let a story save 40×, read back nothing, and look like it worked.
+     *
+     * **What it does *not* refuse is a section name**, which is the asymmetry worth the note: the
+     * seven walls are TypeScript's vocabulary and `zoom.rs` deliberately does not know them, so
+     * anything but a blank string is stored. A fake that checked against `ZOOM_SECTIONS` would be
+     * telling a story about a validation the backend does not do — and would hide the case the
+     * frontend's own `isZoomSection` exists for.
+     *
+     * The other half of that asymmetry is here too: only the named section is touched, so an entry
+     * this build cannot use survives a write made beside it. That is the one thing an object row
+     * has to get right that a bare string does not.
+     *
+     * It honours `busy` like every other ordinary write here — `zoom.rs` takes the write
+     * connection through `sync::with_write`. **The lock comes first and the value is checked
+     * inside it**, which is the Rust's own order and `set_marketplace`'s.
+     */
+    set_card_zoom: (args: { section: string; zoom: number }): void => {
+      refuseIfBusy(db);
+      if (args.section === "") throw refuse("A card section cannot be blank.");
+      if (!isStorableZoom(args.zoom)) {
+        throw refuse(
+          `${args.zoom} is not a card zoom this app stores. ` +
+            `Expected a number between ${MIN_ZOOM} and ${MAX_ZOOM}.`,
+        );
+      }
+      db.cardZoom = { ...db.cardZoom, [args.section]: args.zoom };
     },
 
     /**

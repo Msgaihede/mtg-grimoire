@@ -289,19 +289,33 @@ Every one of these has its measurement and its story in
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
 - **Ctrl+wheel zooms the card sections and nothing else, and every section zooms on its own.**
-  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the four card sections named in
-  `src/lib/cardZoom.ts` — `search` and `collection` (the two walls), `deckSearch` (the deck editor's
-  docked search column) and `deck` (the editor's desk, where **Stacks and Grid share one key**
-  because they are two drawings of the same pile and switching view must not resize the cards). Each
-  starts at `DEFAULT_ZOOM`, each is stepped along the same ten-stop ladder (0.5×–2×), and each is
-  remembered for the rest of the session and handed back when the reader returns to that section.
+  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the card sections named in
+  `src/lib/cardZoom.ts` — `ZOOM_SECTIONS` is the census, and it has grown twice since this
+  paragraph first said “four”. `deck` is one key for **both** deck views, because Stacks and Grid
+  are two drawings of the same pile and switching view must not resize the cards. Each starts at
+  `DEFAULT_ZOOM`, each is stepped along the same ladder, and each is handed back when the reader
+  returns to that section.
   **This reverses the single shared `cardZoom` that was here until 2026-08-14**, whose argument was
   that zoom is a statement about how a reader reads cards rather than about one list: it holds
   across a navigation and breaks in the deck editor, where two card sections are on screen at once
   and zooming the docked search column also resized the deck laid out beside it — "how big are the
   cards I am browsing" and "how big is my deck laid out" answered together when only one was asked.
-  Still session-only by design: no persistence, no SQLite, no IPC, matching
-  `searchView`/`collectionView`. The gesture is attached through `useCardZoomGesture(ref, section)`
+  **Each section's size now outlives the process** (issue #175, 2026-08-22), which reverses the
+  “session-only, no persistence, no SQLite, no IPC” rule that stood here: one `app_meta` row of
+  section → multiplier, read once at launch and written on a trailing timer after a gesture stops.
+  `src/lib/useCardZoomPersistence.ts` is the whole mechanism and `AppShell` is its **only** mount;
+  the store still reaches nothing itself. Two things carry it — the seed goes through
+  `hydrateCardZoom`, which snaps to the ladder, drops a key this build does not draw and **does not
+  pulse** (a restored size is not a gesture and must not raise the badge); and the writes hang off
+  `zoomPulse`, not off `cardZoom`, so the seed is not written straight back and a reader holding the
+  wheel at the ladder's end still gets one write when they stop.
+  **The ladder is sixteen even stops, 50%–200% ten points apart** (2026-08-22). It replaced ten
+  uneven ones shaped like a browser's zoom menu: a browser's is walked by *pressing a key*, this one
+  by *rolling a wheel*, and above 1× the old ladder moved 10, 15, 25, 25, 25 points a notch — the
+  same wrist movement moving the cards two and a half times as far at the top as at the bottom.
+  `ZOOM_STEPS` is spelled out as literals rather than generated, for the reason `stepZoom` exists:
+  0.1 added seven times is 0.7999999999999999.
+  The gesture is attached through `useCardZoomGesture(ref, section)`
   on `CardGrid`'s scroller, `StackView`'s root and `GridView`'s root; `CardGrid`'s `zoomSection` prop
   is **required**, because a wall that has not thought about which section it is must not silently
   share another wall's number. The shell, the tables and the card pane never scale. Three rules
@@ -343,8 +357,8 @@ Every one of these has its measurement and its story in
   fits however many of those the wall holds, and centres the row with `sideGutterFor`. It used to
   scale a **floor** and stretch the tiles to fill the row, which kept the wall flush to both edges
   and made the drawn size a function of the *column count* — a step function of the zoom. On the
-  deck panel's 330px wall the ten stops of `ZOOM_STEPS` collapsed to **three** distinct widths, so
-  seven gestures in a row moved nothing on screen. `minTileWidth` is `baseTileWidth` now and
+  deck panel's 330px wall the ladder of the day — ten uneven stops — collapsed to **three** distinct
+  widths, so seven gestures in a row moved nothing on screen. `minTileWidth` is `baseTileWidth` now and
   `TILE_MIN_WIDTH` is `TILE_BASE_WIDTH`: it is a **width**, not a floor. Two things follow.
   **`tileWidthFor` caps at the wall** — `columnsFor` floors at one column whatever the arithmetic
   says, so without the cap a 300px tile in a 206px column is a horizontal scrollbar across the
@@ -584,7 +598,7 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   in `src/lib/motion.ts`** (and `PRESS_SOFT`, the settings rows' 0.99), where it joined the
   timings on 2026-08-16 — until then it was hand-copied onto every pressable control in the
   app, with the paragraph explaining why pasted beside almost all of them (`b0a49aa`). Both are
-  built from one private `PRESS_BASE`, because they differ by a single utility and the property
+  built from one `PRESS_STILL`, because they differ by a single utility and the property
   list must be written once. **Both are template literals now, which is a second reason the
   check belongs in `dist/`**: a join that breaks a class name in half emits no rule at all and
   source still reads correctly. **What a control does when it is out of reach is not in the
@@ -592,6 +606,17 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   the rest never grey; that is three facts about three kinds of control rather than drift, and
   `grep active:scale-100` is the census. The settings panels' button box is
   `src/features/settings/controls.ts`.
+- **Nothing that a reader types into takes the dip** — `PRESS_STILL` is the recipe without it,
+  and `FilterChips`' `FILTER_FIELD` is `FILTER_CONTROL` built on it. On an
+  `<input type="search">` this is not cosmetic: Chromium draws the ✕ inside the field's own
+  shadow tree, a `scale` pivots on the field's centre, and `click` goes to the common ancestor
+  of the press and the release — so the button slides out from under the pointer and the box
+  dips **without clearing** (issue #179). It is a width bug, which is why it read as one box
+  working: swept a pixel at a time against a 10px button, a 176px field still cleared over 8 of
+  them, a 256px field over 7, a 700px field over none, and the filter row's boxes are `flex-1`.
+  **jsdom has no layout engine and no user-agent shadow tree, so nothing can go red for the
+  behaviour** — `motion.test.ts` sweeps `src/` for the class instead, and the numbers come from
+  a browser.
 - **Under jsdom the animations are real and timing-dependent**, which is why
   `MotionGlobalConfig.skipAnimations = true` is set in `src/test-setup.ts`. **The flag alone was
   not enough and the gap it left was a CI flake** (fixed 2026-08-20): `skipAnimations` applies
