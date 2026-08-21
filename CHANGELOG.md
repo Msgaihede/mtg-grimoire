@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.13.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.12.0...v0.13.0) (2026-08-21)
+
+
+### Features
+
+* **card:** name a printing's language on hover ([f7f87f8](https://github.com/Msgaihede/mtg-grimoire/commit/f7f87f80425d533ebfd8759e02a16875d3c45faa))
+* **card:** name a printing's language on hover ([7f07b7d](https://github.com/Msgaihede/mtg-grimoire/commit/7f07b7d267e6dfaf5c2bdb200fed1581c4f3d2a9))
+* narrow facet counts by tag terms ([f55f6b3](https://github.com/Msgaihede/mtg-grimoire/commit/f55f6b32d5b2765d65b1b7b723c451e6ceaf11c1))
+* the Tags page ([f3df897](https://github.com/Msgaihede/mtg-grimoire/commit/f3df897454acbd8a5ddedbd9e106fd2f86404a0a))
+
+
+### Bug Fixes
+
+* address the Task 13 review ([6f14c3d](https://github.com/Msgaihede/mtg-grimoire/commit/6f14c3d81bbb12aa30cf14917760a3ec8b18de65))
+* **decks:** centre the theory tick and take it to the card's edge ([1612ef1](https://github.com/Msgaihede/mtg-grimoire/commit/1612ef12e4149a30a5140c186ab00866fa2a651a))
+* **decks:** take the theory tick off every row of the plan ([c2de5de](https://github.com/Msgaihede/mtg-grimoire/commit/c2de5de59d16f523a9caac17397a1ef715d588a3))
+* **decks:** take the theory tick off every row of the plan ([60a90ef](https://github.com/Msgaihede/mtg-grimoire/commit/60a90ef4d356734cdc4033215a634b29f4925008)), closes [#159](https://github.com/Msgaihede/mtg-grimoire/issues/159)
+* **images:** draw card walls and deck views at display size ([562e25e](https://github.com/Msgaihede/mtg-grimoire/commit/562e25e4b5b4a57bc241c3aa46cdc9796997683d))
+* **printings:** three quarters of the window, not all of it ([27ae956](https://github.com/Msgaihede/mtg-grimoire/commit/27ae956d4ae53c3347d7c1f6ad3d92b7534ba3fc))
+* **printings:** three quarters of the window, not all of it ([a1a5449](https://github.com/Msgaihede/mtg-grimoire/commit/a1a5449ce79ae26160f566d199bd22a538532a7e))
+* **tags:** warm the Tags wall at the size its tiles draw ([64067ad](https://github.com/Msgaihede/mtg-grimoire/commit/64067ad32c66d8320f177e23113fc752b9a19d98))
+* the art taxonomy notice heals itself, and one key derivation instead of two ([0c90373](https://github.com/Msgaihede/mtg-grimoire/commit/0c903738c24b5a4549b0a79fea1557c5e89d7810))
+* the Tags page does pair a card-text box with the tag chips ([b1d9a22](https://github.com/Msgaihede/mtg-grimoire/commit/b1d9a224e039c6fe2476092b91b59a30fa96ad5b))
+* what driving the Tags page in the real window found ([affa30e](https://github.com/Msgaihede/mtg-grimoire/commit/affa30e19ea6399e652268b91b78337397987be5))
+
 ## [0.12.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.11.0...v0.12.0) (2026-08-20)
 
 

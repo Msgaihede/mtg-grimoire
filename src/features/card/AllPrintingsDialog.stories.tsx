@@ -426,7 +426,9 @@ type Story = StoryObj<typeof meta>;
  * off, so this modal makes no `list_sets` call at all; and the language picker exists because the
  * non-English rows are most of what crowds a heavily reprinted card's wall — the corner of the one
  * Japanese tile says `JA`, and none of the seven English ones says anything, because a wall where
- * every tile says `EN` says nothing.
+ * every tile says `EN` says nothing. **Both the corner and the picker's row hover as
+ * `Japanese`**: the code is what fits, and the words are what a reader who has not met `PH`
+ * before needs (issue #161).
  *
  * **The three chips at zero are the state worth looking at.** No printing of this card is a
  * promo, a showcase or extended art, so those chips are drawn **greyed rather than dropped** —
@@ -464,8 +466,11 @@ export const Default: Story = {
     );
 
     // The one non-English printing, counted rather than merely present: `JA 1` is what makes the
-    // row worth pressing on a card whose other seven rows are the same language.
-    await expect(modal.getByRole("checkbox", { name: "JA — 1 printing" })).toBeInTheDocument();
+    // row worth pressing on a card whose other seven rows are the same language — and the row is
+    // *named* `Japanese`, because the two letters are the column's width rather than the fact.
+    await expect(
+      modal.getByRole("checkbox", { name: "Japanese — 1 printing" }),
+    ).toBeInTheDocument();
 
     // A tile, by the name that tells it from the other seven. **The first one in artist order**
     // rather than a count of them: jsdom lays nothing out, so how many tiles a virtualised wall

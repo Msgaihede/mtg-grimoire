@@ -35,6 +35,7 @@ import {
   type DeckFinish,
   type Printing,
 } from "@/lib/ipc";
+import { languageHint } from "@/lib/languages";
 import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { dialog, PRESS } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -1099,10 +1100,22 @@ function Facts({
   );
 }
 
-/** The two-letter printing language, shown only when it is not the assumed one. */
+/**
+ * The two-letter printing language, shown only when it is not the assumed one.
+ *
+ * **The code is the label and the words are the hover** — the split issue #161 asked for. `PH`
+ * beside a set code and a collector number is unreadable to anyone who has not learned that
+ * Scryfall files Phyrexian as a language, and there is no room on either line this badge sits in
+ * to print "Phyrexian" instead. `aria-describedby` is left on (the binder's default) so the
+ * sentence reaches a screen reader too, after the `sr-only` word that says what the code is.
+ */
 function LangBadge({ lang }: { lang: string }) {
+  const tip = useTooltip();
   return (
-    <span className="rounded border border-border px-1 font-mono text-[0.65rem] uppercase leading-4">
+    <span
+      {...tip(languageHint(lang))}
+      className="rounded border border-border px-1 font-mono text-[0.65rem] uppercase leading-4"
+    >
       <span className="sr-only">Language: </span>
       {lang}
     </span>
