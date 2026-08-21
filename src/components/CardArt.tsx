@@ -3,7 +3,7 @@ import { FinishMark } from "@/components/FinishMark";
 import { GAME_CHANGER_LABEL, GameChangerMark } from "@/components/GameChangerMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
-import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
+import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 
@@ -67,7 +67,7 @@ export function CardArt({
   cardId,
   name,
   face = 0,
-  variant = "grid",
+  variant = WALL_CARD_VARIANT,
   selected = false,
   hoverZoom = false,
   finish = null,
@@ -90,7 +90,11 @@ export function CardArt({
   name: string;
   /** Which physical side. `0` unless the caller is drawing a flipped card. */
   face?: number;
-  /** Which stored size. `grid` is a full card frame; `art` is the 626×457 crop. */
+  /**
+   * Which stored size. The default is {@link WALL_CARD_VARIANT} — a full card frame at
+   * 672×936, big enough that the top of the zoom ladder does not upscale it; `art` is the
+   * 626×457 crop, which a caller drawing a cover passes explicitly.
+   */
   variant?: ImageVariant;
   /**
    * Ringed, because this is the card an open pane is about. Gold says "focus" as an outline

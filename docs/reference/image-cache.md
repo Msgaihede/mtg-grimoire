@@ -22,6 +22,32 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - A `grid` image averages **59.6 KB**. 600 browsed cards cost ~36 MB, so all 116 k
   printings at `grid` would be ~7 GB — which is why Plan 3's pre-warm is scoped to what
   the user owns rather than to the database.
+- **Those are `grid`'s figures, and every card surface moved to `display` on 2026-08-20.**
+  `display` is 672×936 against `grid`'s 488×680 and averages **~93 KB** (Scryfall's own
+  published figure; the 59.6 KB above was measured here and the equivalent re-measurement has
+  not been taken), so the same 600 browsed cards are ~56 MB and the 116 k extrapolation is
+  ~11 GB. The scoping argument is unchanged and the ratio is the thing to carry forward, not
+  the absolute.
+
+  **The reason is that the walls zoom and the variant did not.** A tile is 170px at 1× and
+  340px at the top of `cardZoom`'s ladder; on a monitor at 200% scaling that is 680 device
+  pixels drawn from a 488px source, a 39% upscale, and it is the blur readers reported.
+  `display`'s 672 covers that worst case. The variant is still chosen per surface rather than
+  per rendered size — nothing reads `devicePixelRatio` — so the rule to keep is that **a
+  variant argued from a tile's base width is the wrong measurement**: both constants that moved
+  had been justified at 100% zoom on an unscaled display.
+
+  **The +50% per card is the wall-only case and the worst one.** `CardDetailPane` and
+  `PrintingPreview` were already on `display`, so a card the reader opens used to cost two
+  cache keys (~62 KB + ~93 KB) and now costs one. Cards already cached at `grid` are **not
+  migrated or deleted** — a variant is its own directory, so the old files simply stop being
+  read and stay until the user deletes `data/images`, which is always safe. Every such card
+  re-fetches once at the new URL; nothing paces that and `cards.scryfall.io` has no rate limit.
+
+  Scryfall's `png` (745×1040) is larger still and was rejected: ~11% more linear resolution for
+  roughly ten times the bytes, and it is not in the database at all — the ingest keeps four of
+  the eleven image keys and drops the JPG/PNG family Scryfall's own docs mark as *replaced*
+  (`card_row::webp_uris`), so it would need a schema migration and a backfill.
 - Warm serve **2–3 ms**, cold single image **~127 ms**. A cold screenful of 20 tiles is
   **80–270 ms** after the query lands — re-measured 2026-08-09, against **2 348–2 676 ms**
   for the same five searches on the commit before (same machine, same corpus, `data/images`

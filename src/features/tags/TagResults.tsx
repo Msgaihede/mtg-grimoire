@@ -20,6 +20,7 @@ import {
 } from "@/features/search/SearchPage";
 import type { CardSearch } from "@/features/search/useCardSearch";
 import { parseFinishes } from "@/lib/finish";
+import { WALL_CARD_VARIANT } from "@/lib/images";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
@@ -92,7 +93,9 @@ export function TagResults({ search }: { search: CardSearch }) {
     void ipc
       .prefetchImages(
         latestPage.map((c) => c.id),
-        "grid",
+        // The wall's own variant, never a literal: warming a size the tiles do not ask for
+        // reports success and leaves every tile to fetch cold — see `WALL_CARD_VARIANT`.
+        WALL_CARD_VARIANT,
       )
       .catch(() => {});
     // `latestPage` and `view` are both deliberately out of the dependency list, for the reasons

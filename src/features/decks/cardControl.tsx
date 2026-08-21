@@ -61,18 +61,27 @@ import {
  * One constant because two surfaces draw one object — `CardStack` and `views/GridView` — and
  * because a third thing has to agree with them: `images::DECK_PREWARM` warms exactly this
  * variant, and warming the wrong one is invisible (the pre-warm reports every deck card as
- * warmed and the builder then fetches every tile cold). It is `grid`, which is what
- * `COLLECTION_PREWARM` is, so a card that is both owned and in a deck is one cache key rather
- * than two.
+ * warmed and the builder then fetches every tile cold). It is `display`, which is what
+ * `WALL_CARD_VARIANT` and `COLLECTION_PREWARM` are, so a card that is both owned and in a deck
+ * is one cache key rather than two.
  *
- * `grid` rather than `display`: at the stack's 210px and the grid tile's 150px, 488px of width is
- * already a 2× downscale, and `display` would be 672 for no visible gain.
+ * **It was `grid`, and the argument for that was measured at one zoom stop on one monitor.** It
+ * ran: at the stack's 210px and the grid tile's 150px, 488px of width is already a 2× downscale,
+ * so `display` would be 672 for no visible gain. Both figures are sizes at **100% zoom** — the
+ * reader can take either to 2× on `cardZoom`'s ladder, and a CSS pixel is not a device pixel on
+ * a scaled display. A 210px stack card at 2× on a monitor at 125% scaling is 525 device pixels
+ * asking a 488px source, and at 200% scaling it is 840. That is the blur, and it is why a
+ * variant chosen against a tile's *base* width is the wrong measurement to have taken.
+ *
+ * Still its own literal rather than an alias of `WALL_CARD_VARIANT`, for the reason the two
+ * pre-warm constants stay two: they answer two questions, and a deck surface that wanted a
+ * different picture again should be able to move without dragging every wall with it.
  *
  * The surfaces that draw a **cover** stay on `art` and are not this — a cover is 626×457 by
  * construction, because `images::encode_cover` re-encodes a user's own file to that exact shape so
  * the two kinds are interchangeable in one tile.
  */
-export const DECK_CARD_VARIANT: ImageVariant = "grid";
+export const DECK_CARD_VARIANT: ImageVariant = "display";
 
 /**
  * **Picked**: this is the card the detail pane is open on.

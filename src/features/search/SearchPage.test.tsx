@@ -6,6 +6,7 @@ import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/ad
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
@@ -1241,10 +1242,32 @@ describe("the result layout toggle", () => {
 describe("page image prefetch", () => {
   beforeEach(() => useAppStore.setState({ searchView: "grid", selectedCardId: null }));
 
-  it("warms the front faces of the page that just landed, at grid size", async () => {
+  it("warms the front faces of the page that just landed, at the wall's own size", async () => {
     wrap(<SearchPage />);
 
-    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], "grid"));
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], WALL_CARD_VARIANT));
+  });
+
+  /**
+   * The assertion above is through the constant, so it cannot see the failure that actually
+   * matters: the pre-warm and the tiles are two call sites, and a variant is a whole separate
+   * URL on the CDN and directory in the cache. Warming one size while the wall draws another
+   * reports every card warmed and then fetches every tile cold — which is not hypothetical, it
+   * is what the deck arm did until 2026-08-11 (`images::DECK_PREWARM`).
+   *
+   * So this reads the variant back out of a **mounted tile's `src`** and holds the prefetch to
+   * it. Nothing here names a size; the two sites simply have to agree.
+   */
+  it("warms the same size the tiles actually draw", async () => {
+    wrap(<SearchPage />);
+
+    const tile = await screen.findByRole("img", { name: BOLT.name });
+    // Read against the id and face the URL ends with rather than by parsing it: `mtgimg:` is a
+    // custom scheme, and what this needs is the one segment in front of `/<id>/<face>`.
+    const drawn = /\/([a-z]+)\/1\/0$/.exec(tile.getAttribute("src") ?? "")?.[1];
+
+    expect(drawn).toBeDefined();
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], drawn));
   });
 
   /**
@@ -1256,11 +1279,11 @@ describe("page image prefetch", () => {
   it("warms a new search's first page even when the page count did not change", async () => {
     searchCards.mockResolvedValueOnce(page([BOLT])).mockResolvedValue(page([SPARSE]));
     wrap(<SearchPage />);
-    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], "grid"));
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["1"], WALL_CARD_VARIANT));
 
     await userEvent.type(screen.getByPlaceholderText(/search cards/i), "race");
 
-    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["2"], "grid"));
+    await waitFor(() => expect(prefetchImages).toHaveBeenCalledWith(["2"], WALL_CARD_VARIANT));
   });
 
   it("asks once per page, not once per render", async () => {

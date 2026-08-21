@@ -1339,7 +1339,19 @@ pub const MAX_PREWARM: usize = 2_000;
 /// Spec §5 says `thumb` + `grid`; the app has no `thumb` surface yet (the tables show no
 /// art), and fetching 9 KB per card for a view that does not exist is a download rather
 /// than a pre-warm.
-pub const COLLECTION_PREWARM: Variant = Variant::Grid;
+///
+/// **`Display` since 2026-08-20, mirroring TypeScript's `WALL_CARD_VARIANT`.** It was `Grid`,
+/// which is 488×680 — and the walls zoom while the variant does not, so a 170px tile at the top
+/// of `cardZoom`'s ladder is 340 CSS pixels and, on a monitor at 200% scaling, 680 device pixels
+/// drawn from a 488px source. That upscale is the blur readers reported. `display`'s 672 covers
+/// the worst case; Scryfall's larger `png` is 745×1040 for roughly ten times the bytes and is
+/// not stored here at all, because the ingest keeps four of its eleven image keys and drops the
+/// JPG/PNG family its own docs mark as replaced (`card_row::webp_uris`).
+///
+/// It costs about 93 KB a card against `grid`'s ~62 KB, and less than that sum suggests: it is
+/// what `CardDetailPane` and `PrintingPreview` already draw, so a card the reader opens is now
+/// one cache key instead of two.
+pub const COLLECTION_PREWARM: Variant = Variant::Display;
 
 /// The variant a **deck card** is drawn at — the two views that draw one as a picture, which is
 /// `CardStack` and `views/GridView`. Mirrored in TypeScript as `cardControl.tsx`'s
@@ -1353,12 +1365,17 @@ pub const COLLECTION_PREWARM: Variant = Variant::Grid;
 /// empty collection and wishlist, so the deck arm was the *only* work pre-warming had to do
 /// and it warmed a variant no deck surface asked for.
 ///
-/// **It is `Grid` now, which is [`COLLECTION_PREWARM`], and the two arms coalescing is the point
-/// rather than a coincidence to tidy away.** The deck's stack and grid views draw the whole card
-/// instead of the bare art crop, so a card that is both owned and in a deck is one cache key
+/// **It is `Display` now, which is [`COLLECTION_PREWARM`], and the two arms coalescing is the
+/// point rather than a coincidence to tidy away.** The deck's stack and grid views draw the whole
+/// card instead of the bare art crop, so a card that is both owned and in a deck is one cache key
 /// rather than two — half the bytes, and one warm picture serving both screens. They stay two
 /// named constants because they answer two questions and a future surface could move one without
 /// the other.
+///
+/// **Both moved from `Grid` together on 2026-08-20**, for [`COLLECTION_PREWARM`]'s reason: the
+/// deck views zoom too, and the argument that had kept this at `Grid` — 488px is already a 2×
+/// downscale of a 210px stack card — was a measurement taken at 100% zoom on an unscaled display.
+/// The same card at 2× on a monitor at 200% scaling is 840 device pixels.
 ///
 /// **Four deck surfaces are deliberately not covered by this and still draw `Art`**: the
 /// gallery's deck tiles and its folder strips, `DeckSettingsDialog`'s cover picker and preview —
@@ -1367,7 +1384,7 @@ pub const COLLECTION_PREWARM: Variant = Variant::Grid;
 /// picture is a 32×44 decoration in a list that spells the card's name out beside it. Those fetch
 /// on demand; a dialog the reader opens deliberately does not need warming, and the gallery warms
 /// its own covers in `DecksPage`.
-pub const DECK_PREWARM: Variant = Variant::Grid;
+pub const DECK_PREWARM: Variant = Variant::Display;
 
 /// The cards the user owns, wants, or has put in a deck, that have no cached image yet —
 /// **each paired with the variant the screen that shows it actually draws**.
@@ -3214,7 +3231,7 @@ mod tests {
         assert!(keys.iter().all(|k| k.face == 0));
 
         // **The pairing this whole function exists to get right**: each arm is warmed at the
-        // variant the screen showing it actually draws. All three are [`Variant::Grid`] today —
+        // variant the screen showing it actually draws. All three are [`Variant::Display`] today —
         // the collection and the wishlist draw whole cards, and so do the deck's stack and grid
         // views since they stopped drawing the bare art crop.
         //
@@ -3287,10 +3304,13 @@ mod tests {
             "a cached `art` must not stand in for the whole card the screens draw"
         );
 
+        // And the picture that *was* asked for retires it. Bound from the constant rather than
+        // spelled, for the reason the assertions above are: the word here has to be whatever the
+        // screens draw, and a literal would quietly stop meaning that the day one arm moved.
         conn.execute(
             "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
-             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,'grid','https://x?1',10,unixepoch())",
-            [],
+             VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d',0,?1,'https://x?1',10,unixepoch())",
+            [COLLECTION_PREWARM.key()],
         )
         .unwrap();
         assert_eq!(prewarm_keys(&conn, 100).unwrap().len(), 2);
