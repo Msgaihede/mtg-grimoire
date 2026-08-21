@@ -195,6 +195,16 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   *reuse*, so the pass that introduced the name looked fine. Wrap anything with a binding in an
   IIFE — `(() => { const row = …; return row.innerText; })()` — which also makes each command
   independent of the order the others ran in. Measured 2026-08-17.
+- **Backing a change out through `element.style` is undone by a _re-render_, not by clearing the
+  property** — and where the element already carries a React `style` prop, clearing it leaves the
+  element with **neither** value. React writes an inline `style` and only writes it again when it
+  re-renders; a probe that sets `el.style.clipPath = 'the old polygon'` and then restores with
+  `el.style.clipPath = ''` has deleted the declaration the component put there. Nothing looks
+  wrong — the class-driven half of the mark still measures correctly — so the next reading of the
+  cleared property answers `none` and reads as the component having stopped setting it. Force a
+  real re-render before believing anything about an inline-styled property (in the deck editor,
+  the variant tabs do it), and prefer taking the "after" reading from a state the component
+  rendered itself. Measured 2026-08-21 on the theory tick's `clipPath` (issue #182).
 
 Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug/data/mtg.db`
 **while the app holds it** (WAL allows it). Delete every seeded row afterwards — `data/` is

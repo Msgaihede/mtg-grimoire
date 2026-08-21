@@ -1390,16 +1390,29 @@ describe("CardStack marks", () => {
     expect(ticks[0].className).toContain("ml-auto");
     expect(ticks[0].className).not.toContain("absolute");
 
-    // **Issue #158, and both halves of it are geometry jsdom cannot see** — it lays nothing out,
-    // so a tick 5px short of the card's edge with its glyph 5.5px left of its own banner's centre
-    // is invisible to every other assertion here. Classes are what is left, as they are for the
-    // drop-mark padding one folder over.
+    // **Issues #158 and #182, and every half of both is geometry jsdom cannot see** — it lays
+    // nothing out, so a tick 5px short of the card's edge, with its glyph 5.5px left of its own
+    // banner's centre and its banner tapering the opposite way to the tag at the other end of the
+    // strip, is invisible to every other assertion here. Classes and the inline `clipPath` are
+    // what is left, as classes are for the drop-mark padding one folder over.
     //
     // The paddings are `COUNT_TAG_BOX_MIRRORED`'s: the larger one on the **left**, because the
     // mirrored slant takes its bite out of that edge and the pair is what centres the glyph in
-    // the visible trapezium rather than in the box.
-    expect(ticks[0].className).toContain("pl-[calc(0.75rem*var(--mark-scale,1))]");
-    expect(ticks[0].className).toContain("pr-[calc(0.375rem*var(--mark-scale,1))]");
+    // the visible trapezium rather than in the box. `6/1` rather than #158's `12/6` since #182 —
+    // the constant carries the `pl − pr = 5px` arithmetic that makes both pairs centre, and the
+    // 11px this one gives back is 11px of the card's printed mana cost left showing.
+    expect(ticks[0].className).toContain("pl-[calc(0.375rem*var(--mark-scale,1))]");
+    expect(ticks[0].className).toContain("pr-[calc(0.0625rem*var(--mark-scale,1))]");
+
+    // **The cut is a _reflection_ of `COUNT_TAG_SLANT` and not a rotation of it** (issue #182).
+    // Both move the bite off the card's right edge, which is why the wrong one shipped; only the
+    // reflection keeps the **taper**, so the quantity tag at the left of this strip and the tick
+    // at the right of it are both widest along their top edge. Rotated, the tick was widest along
+    // its bottom and the pair read as two banners leaning opposite ways. The declaration rather
+    // than a computed value: jsdom resolves no `calc()` and has no stylesheet for `--mark-scale`.
+    expect((ticks[0] as HTMLElement).style.clipPath).toBe(
+      "polygon(0 0, 100% 0, 100% 100%, calc(10px*var(--mark-scale,1)) 100%)",
+    );
 
     // And the strip it rides is flush to **both** of the card's edges, so the face's own
     // `rounded-[7px]` clips this mark's corner exactly as it has always clipped the quantity
