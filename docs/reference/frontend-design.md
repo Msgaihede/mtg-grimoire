@@ -1945,6 +1945,16 @@ Driven in the shipped window **2026-08-18** (`npm run tauri dev`, a **debug** bu
 collection walls, the deck's piles, and the printings modal stepping along the open deck — and the
 live pass found one defect behind all three, plus one the suite could not see.
 
+> **The deck's own walk changed on 2026-08-21**
+> ([#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)) and everything below this line
+> describes it as it was on the day it was measured. `StackView`'s left and right now step **one
+> card** through the whole deck, crossing pile boundaries, and up and down reach no branch at all;
+> the two-axis walk both sections below drive — up/down inside a pile, left/right to the
+> neighbouring pile's top card — is gone. Nothing else in either section moved: the caret note,
+> the card's `<li>`, the wall's absolute index and the modal's own two keys are all still the
+> current answer, which is why the pass is kept whole rather than edited into agreement with a
+> later decision. `src/features/decks/CLAUDE.md` states the rule that is live.
+
 ### One cause, three surfaces: the walk was exactly one press long
 
 `CardDetailPane` renders `<Body key={cardId}>` and that body's mount effect focuses the pane —
