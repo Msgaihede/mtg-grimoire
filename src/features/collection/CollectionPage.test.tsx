@@ -80,6 +80,7 @@ import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { useAppStore } from "@/lib/store";
 
 const BOLT: CollectionRow = {
+  promoTypes: null,
   id: 7,
   cardId: "c1",
   name: "Lightning Bolt",

@@ -134,6 +134,7 @@ function collectionEntry(
   over: Partial<CollectionRow> = {},
 ): CollectionRow {
   return {
+    promoTypes: null,
     id: 1,
     cardId: card.id,
     name: card.name,

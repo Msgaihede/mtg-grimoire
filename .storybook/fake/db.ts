@@ -2543,6 +2543,9 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary 
     layout: c.layout,
     oracleId: c.oracleId,
     finishes: c.finishes,
+    // The column the *kind* of foil is read from, verbatim, exactly as `search.rs` selects it
+    // — the naming is `@/lib/treatment`'s and no backend, real or fake, does any of it.
+    promoTypes: c.promoTypes,
     // The column, read straight through and never re-derived from a list of names — an
     // **oracle**-level fact, so every printing agrees and {@link collapseToCards} inherits
     // the representative's like `rarity`, with no aggregate needed to make a group agree
@@ -2701,6 +2704,7 @@ function toCardDetail(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardDetail {
     // no blob to hand over — `card_detail` takes a marketplace like every other priced read.
     finishPrices: finishPricesAt(db, c, mp),
     finishes: c.finishes,
+    promoTypes: c.promoTypes,
     imageStatus: c.imageStatus,
     faces: parseFaces(c.faces),
   };
@@ -2720,6 +2724,7 @@ function toPrinting(db: FakeDb, c: FakeCard, mp: MarketplaceId): Printing {
     finishes: c.finishes,
     finishPrices: finishPricesAt(db, c, mp),
     promo: c.promo,
+    promoTypes: c.promoTypes,
     fullArt: c.fullArt,
     frameEffects: c.frameEffects,
     borderColor: c.borderColor,
@@ -2766,6 +2771,9 @@ function toCollectionRow(
     notes: e.notes,
     needsReview: e.needsReview,
     updatedAt: e.updatedAt,
+    // From the *card*, like every other `cards`-derived field here, and `null` for an orphan.
+    // The entry's own `finish` above says which copy this is; together they are what names it.
+    promoTypes: card?.promoTypes ?? null,
   };
 }
 
@@ -3361,6 +3369,10 @@ function toDeckCard(
     // A **printing** fact, not a deck fact: `deck_cards` stores no finish, and the LEFT JOIN
     // to `cards` is where this comes from — so an orphan's is `null`, exactly as the SQL's is.
     finishes: card?.finishes ?? null,
+    // The same LEFT JOIN, for the same reason. What a deck row *draws* pairs this with the
+    // row's own `finish` — the printing says what its foil is called, the deck says which
+    // copy it sleeves, and a plain copy of a Surge Foil printing is drawn plain.
+    promoTypes: card?.promoTypes ?? null,
     // Printed at uncommon on **any** printing of this oracle card, which is Pauper Commander
     // eligibility. Read off the column, never recomputed over `db.cards`: the generator took
     // it from the full 116 k-row corpus, and re-deriving it would make a fact about the

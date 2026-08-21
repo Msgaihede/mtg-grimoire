@@ -10,6 +10,7 @@ import {
 } from "./printings";
 
 const printing = (over: Partial<Printing>): Printing => ({
+  promoTypes: null,
   id: "p",
   setCode: "lea",
   setName: "Limited Edition Alpha",

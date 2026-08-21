@@ -174,6 +174,16 @@ pub struct CardDetail {
     /// two of the four marketplaces, and the pane has to be able to quote the other two.
     pub finish_prices: FinishPrices,
     pub finishes: Option<String>,
+    /// JSON, verbatim: Scryfall's `promo_types`, which is where the **kind** of foil lives.
+    ///
+    /// `finishes` says how shiny a copy is and has only three words for it; this says whether
+    /// the shiny one is a Surge Foil, a Halo Foil or a Serialized card. Handed over unread —
+    /// naming these is a judgement and CLAUDE.md puts those in TypeScript, so `src/lib/
+    /// treatment.ts` owns the table and this column is copied the way `legalities` is.
+    ///
+    /// Open-ended by construction: 113 distinct members are live and Scryfall adds more without
+    /// asking. 32 174 of 116 712 rows carry one, averaging 22.7 bytes.
+    pub promo_types: Option<String>,
     pub image_status: Option<String>,
     /// Empty for a single-faced card.
     pub faces: Vec<CardFace>,
@@ -199,6 +209,13 @@ pub struct Printing {
     /// carries, for the printing this row is. See [`FinishPrices`].
     pub finish_prices: FinishPrices,
     pub promo: bool,
+    /// JSON, verbatim — the **kind** of foil this printing's shiny copy is. See the identical
+    /// field on [`CardDetail`]; read on the other side with `src/lib/treatment.ts`.
+    ///
+    /// Distinct from [`Self::promo`] despite the name they share: that is a boolean about how
+    /// the card was *distributed*, this is a list of what the cardboard *is*. 5 428 of 107 355
+    /// paper printings carry a member this app names.
+    pub promo_types: Option<String>,
     pub full_art: bool,
     pub frame_effects: Option<String>,
     pub border_color: Option<String>,
@@ -241,7 +258,7 @@ pub fn get_card(
         "SELECT c.id, c.oracle_id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                 c.layout, c.lang, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
                 c.illustration_id, c.artist, c.released_at, c.legalities, c.finishes,
-                c.image_status, c.faces, {prices}
+                c.image_status, c.faces, c.promo_types, {prices}
          FROM cards c WHERE c.id = ?1",
         prices = finish_price_columns(market)
     );
@@ -265,8 +282,9 @@ pub fn get_card(
             artist: r.get(14)?,
             released_at: r.get(15)?,
             legalities: r.get(16)?,
-            finish_prices: read_finish_prices(r, 20)?,
+            finish_prices: read_finish_prices(r, 21)?,
             finishes: r.get(17)?,
+            promo_types: r.get(20)?,
             image_status: r.get(18)?,
             faces: parse_faces(faces.as_deref()),
         })
@@ -345,7 +363,7 @@ pub fn list_printings(
     let sql = format!(
         "SELECT c.id, c.set_code, c.set_name, c.collector_number, c.released_at, c.rarity,
                 c.illustration_id, c.artist, c.lang, c.finishes, c.promo, c.full_art,
-                c.frame_effects, c.border_color, c.layout, {prices}
+                c.frame_effects, c.border_color, c.layout, c.promo_types, {prices}
          FROM cards c WHERE {PRINTINGS_WHERE}
          ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
          LIMIT ?2",
@@ -365,8 +383,9 @@ pub fn list_printings(
                 artist: r.get(7)?,
                 lang: r.get(8)?,
                 finishes: r.get(9)?,
-                finish_prices: read_finish_prices(r, 15)?,
+                finish_prices: read_finish_prices(r, 16)?,
                 promo: r.get(10)?,
+                promo_types: r.get(15)?,
                 full_art: r.get(11)?,
                 frame_effects: r.get(12)?,
                 border_color: r.get(13)?,
@@ -694,6 +713,72 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    /// One printing carrying `promo_types` — the column the *kind* of foil is read from, and
+    /// the one the three-printing seed above deliberately leaves NULL, like 84 538 of the
+    /// corpus's 116 712 rows.
+    ///
+    /// MUL 133's real payload. It is the second card in issue #160's screenshot, where it drew
+    /// the same glyph as every other foil.
+    fn seed_promo(conn: &Connection) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                released_at, rarity, finishes, promo_types, prices, search_text, raw)
+             VALUES ('halo','o-halo','Elesh Norn, Grand Cenobite','mul','133','en','normal',
+                '2023-04-21','mythic', '[\"foil\"]', '[\"halofoil\"]',
+                '{\"usd\":\"95.79\",\"usd_foil\":\"95.79\"}',
+                'Elesh Norn', '{}')",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// **Both reads of `cards` carry `promo_types` through, at the position each SELECT put
+    /// it.** Issue #160: `finishes` has three words for how shiny a copy is and none for
+    /// *which* shiny, so a Surge Foil and an ordinary foil were one glyph with one word behind
+    /// it. The naming is TypeScript's (`src/lib/treatment.ts`); this is the fact reaching it.
+    ///
+    /// Worth a test of its own rather than leaning on the two camelCase pins, which serialise a
+    /// hand-built struct and never run the SQL. Both statements are read **positionally**, and
+    /// both had to renumber to take this column: `list_printings` moved `read_finish_prices`
+    /// from 15 to 16 and `get_card` from 20 to 21. A wrong offset there does not fail — SQLite
+    /// hands back whatever is at the index, and `Option<String>` accepts a great deal.
+    #[test]
+    fn a_printings_promo_types_reach_both_reads() {
+        let conn = seeded();
+        seed_promo(&conn);
+
+        let listed = list_printings(&conn, "o-halo", TCG, None).unwrap();
+        assert_eq!(listed.items.len(), 1);
+        assert_eq!(
+            listed.items[0].promo_types.as_deref(),
+            Some(r#"["halofoil"]"#),
+            "the printings list carries the column the treatment is named from"
+        );
+        // The neighbouring fields, because a one-off index would still have produced *a*
+        // string: `promo` is the boolean one letter away, and `frame_effects` is the other
+        // nullable JSON column in the same SELECT.
+        assert!(!listed.items[0].promo);
+        assert_eq!(listed.items[0].frame_effects, None);
+        assert_eq!(listed.items[0].collector_number, "133");
+        // And the prices still land where the shifted offset says they do.
+        assert_eq!(listed.items[0].finish_prices.foil, Some(95.79));
+
+        let detail = get_card(&conn, "halo", TCG).unwrap().unwrap();
+        assert_eq!(detail.promo_types.as_deref(), Some(r#"["halofoil"]"#));
+        assert_eq!(detail.finishes.as_deref(), Some(r#"["foil"]"#));
+        assert_eq!(detail.image_status, None);
+        assert_eq!(detail.finish_prices.foil, Some(95.79));
+
+        // A printing with no treatment answers `None` rather than an empty array — the column
+        // is NULL on four fifths of the corpus and that is the shape every reader fences on.
+        let plain = get_card(&conn, "p1", TCG).unwrap().unwrap();
+        assert_eq!(plain.promo_types, None);
+        assert_eq!(
+            list_printings(&conn, "o1", TCG, None).unwrap().items[0].promo_types,
+            None
+        );
     }
 
     /// One row of `marketplace_prices` — what `marketplace_feed.rs` writes, and the only thing
@@ -1146,6 +1231,10 @@ mod tests {
                 etched: None,
             },
             finishes: Some(r#"["nonfoil","foil"]"#.into()),
+            // A real payload rather than `None`: `promo_types` is the column the *kind* of
+            // foil is read from, and pinning it against a value says which of the two similarly
+            // named fields this is — `promo` is a boolean about distribution, this is a list.
+            promo_types: Some(r#"["prerelease"]"#.into()),
             image_status: Some("highres_scan".into()),
             faces: vec![
                 CardFace {
@@ -1192,6 +1281,7 @@ mod tests {
                 "legalities": r#"{"modern":"legal"}"#,
                 "finishPrices": { "nonfoil": 0.35, "foil": 4.10, "etched": null },
                 "finishes": r#"["nonfoil","foil"]"#,
+                "promoTypes": r#"["prerelease"]"#,
                 "imageStatus": "highres_scan",
                 "faces": [
                     {
@@ -1245,6 +1335,9 @@ mod tests {
                     etched: None,
                 },
                 promo: false,
+                // Absent for the same reason as `frame_effects` below: Alpha predates every
+                // treatment this column names, so `null` is the true answer and not a gap.
+                promo_types: None,
                 full_art: false,
                 // Absent, not empty: an Alpha printing has no frame effects at all.
                 frame_effects: None,
@@ -1272,6 +1365,7 @@ mod tests {
                     "finishes": r#"["nonfoil"]"#,
                     "finishPrices": { "nonfoil": 400.50, "foil": null, "etched": null },
                     "promo": false,
+                    "promoTypes": null,
                     "fullArt": false,
                     "frameEffects": null,
                     "borderColor": "black",

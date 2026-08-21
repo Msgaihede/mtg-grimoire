@@ -13,6 +13,7 @@ import {
 /** One printing, with every field the filters read and sane defaults for the rest. */
 function printing(over: Partial<Printing> = {}): Printing {
   return {
+    promoTypes: null,
     id: "p1",
     setCode: "lea",
     setName: "Limited Edition Alpha",
@@ -77,6 +78,7 @@ describe("filterPrintings", () => {
       printing({ id: "borderless", borderColor: "borderless" }),
       printing({ id: "showcase", frameEffects: '["showcase"]' }),
       printing({ id: "extended", frameEffects: '["extendedart"]' }),
+      printing({ id: "special", promoTypes: '["surgefoil"]' }),
       printing({ id: "plain" }),
     ];
     const only = (t: string) =>
@@ -88,6 +90,27 @@ describe("filterPrintings", () => {
     expect(only("borderless")).toEqual(["borderless"]);
     expect(only("showcase")).toEqual(["showcase"]);
     expect(only("extendedart")).toEqual(["extended"]);
+    expect(only("specialfoil")).toEqual(["special"]);
+  });
+
+  /**
+   * **The chip asks about the printing, not about a copy of it.** `promo_types` is the only
+   * field on this row read per-*copy* anywhere else — a foil word describes the shiny half of a
+   * printing sold in both — and a filter that inherited that fence would hide `msc 143` from a
+   * reader who pressed "Special foil" to find their Surge Foil Swords. So `hasTreatment` reads
+   * `cardTreatments`, and this is what pins the difference.
+   */
+  it("keeps a printing sold in both finishes, whose plain copy is not the named one", () => {
+    const rows = [
+      printing({ id: "both", finishes: '["nonfoil","foil"]', promoTypes: '["surgefoil"]' }),
+      printing({ id: "nonfoil-trait", finishes: '["nonfoil"]', promoTypes: '["serialized"]' }),
+      printing({ id: "unnamed", promoTypes: '["prerelease","boosterfun"]' }),
+      printing({ id: "none", promoTypes: null }),
+    ];
+    const kept = filterPrintings(rows, all({ treatments: ["specialfoil"] })).map((p) => p.id);
+    // The two the app names; not the printing whose every promo type it has never heard of,
+    // and not the one with no column at all.
+    expect(kept).toEqual(["both", "nonfoil-trait"]);
   });
 
   it("ORs the treatments with each other and ANDs them with the rest", () => {
@@ -150,10 +173,16 @@ describe("the option lists", () => {
   });
 
   it("counts every treatment, including the ones with none", () => {
-    const rows = [printing({ promo: true }), printing({ fullArt: true }), printing()];
+    const rows = [
+      printing({ promo: true }),
+      printing({ fullArt: true }),
+      printing({ promoTypes: '["halofoil"]' }),
+      printing(),
+    ];
     const counts = Object.fromEntries(treatmentOptions(rows).map((o) => [o.id, o.count]));
     expect(counts.promo).toBe(1);
     expect(counts.fullart).toBe(1);
+    expect(counts.specialfoil).toBe(1);
     expect(counts.showcase).toBe(0);
   });
 });

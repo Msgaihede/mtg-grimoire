@@ -19,6 +19,7 @@ import type { CardWalkStop } from "@/features/decks/deckWalk";
  * that drift are two suites testing two different cards.
  */
 const p = (id: string, setCode: string, setName = "Limited Edition Alpha"): Printing => ({
+  promoTypes: null,
   id,
   setCode,
   setName,

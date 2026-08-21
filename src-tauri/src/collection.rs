@@ -844,6 +844,14 @@ pub struct CollectionRow {
     /// A sentence when this row needs the user's attention, `None` otherwise.
     pub needs_review: Option<String>,
     pub updated_at: i64,
+    /// JSON, verbatim: Scryfall's `promo_types` for the printing this entry names — the column
+    /// the **kind** of foil lives in, and `None` for an orphan whose card has left `cards`.
+    ///
+    /// From the *card*, unlike [`Self::finish`] two fields up, and the two are read together:
+    /// the entry says which copy the reader owns and this says what that copy is called, so a
+    /// `foil` entry on a Surge Foil printing is a Surge Foil and a `nonfoil` one on the same
+    /// printing is not. `src/lib/treatment.ts` owns the naming.
+    pub promo_types: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1081,7 +1089,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 {price} AS {UNIT_PRICE_ALIAS},
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
-                e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id
+                e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types
          FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
@@ -1134,6 +1142,10 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     // every index above stays exactly what it was — one changed line instead
                     // of thirty.
                     oracle_id: r.get(30)?,
+                    // 31, appended for the same reason — and `oracle_id` and this are both
+                    // nullable TEXT, so an insertion above would have swapped two fields that
+                    // each still held a plausible string.
+                    promo_types: r.get(31)?,
                 })
             },
         )
@@ -1257,6 +1269,57 @@ mod tests {
             quantity,
             ..Default::default()
         }
+    }
+
+    /// **A collection row carries the printing's `promo_types` beside the entry's own
+    /// `finish`, and the two are read together.**
+    ///
+    /// Issue #160: the entry says which copy the reader owns and this says what that copy is
+    /// called, so the foil of a Surge Foil printing is a Surge Foil and the plain copy of the
+    /// same printing is not. That distinction is `src/lib/treatment.ts`' to draw; this test is
+    /// about the column arriving, and arriving at the right index.
+    ///
+    /// Appended after `c.oracle_id` on that field's own argument — every index above stays what
+    /// it was. Both are **nullable TEXT**, which is exactly why it is worth an assertion: an
+    /// insertion above would have swapped two fields that each still held a plausible string,
+    /// and `oracle_id` is what the card menu reads to tell an orphan from a healthy row.
+    #[test]
+    fn a_collection_row_carries_the_printings_promo_types() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'bolt-jp'",
+            [],
+        )
+        .unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+
+        let rows = list_entries(&conn, &CollectionQuery::default())
+            .unwrap()
+            .items;
+        let of = |card: &str, finish: &str| {
+            rows.iter()
+                .find(|r| r.card_id == card && r.finish == finish)
+                .unwrap_or_else(|| panic!("no {finish} row for {card}"))
+        };
+
+        // Both copies of the treated printing carry the column — the printing is a Surge Foil
+        // printing either way, and *which copy this is* is the other field on the same row.
+        assert_eq!(
+            of("bolt-jp", "foil").promo_types.as_deref(),
+            Some(r#"["surgefoil"]"#)
+        );
+        assert_eq!(
+            of("bolt-jp", "nonfoil").promo_types.as_deref(),
+            Some(r#"["surgefoil"]"#)
+        );
+        // The neighbour an insertion would have displaced, and the field that is not the card's.
+        assert_eq!(of("bolt-jp", "foil").oracle_id.as_deref(), Some("o1"));
+        assert!(of("bolt-jp", "foil").updated_at > 0);
+
+        // A printing with no treatment answers `None` rather than an empty array.
+        assert_eq!(of("bolt-lea", "nonfoil").promo_types, None);
     }
 
     /// One line of a bulk import, in the shape [`commit_import`]'s tests use it.
@@ -2883,6 +2946,9 @@ mod tests {
             notes: None,
             needs_review: None,
             updated_at: 1_800_000_000,
+            // From the card, not the entry — and the entry above owns the plain copy, which is
+            // the pair the two fields exist to tell apart.
+            promo_types: Some(r#"["surgefoil"]"#.into()),
         })
         .unwrap();
 
@@ -2898,7 +2964,8 @@ mod tests {
                 "purchaseCurrency": "USD", "acquiredAt": "2020-05-01",
                 "acquisitionSource": "Local shop", "serialNumber": null, "altered": false,
                 "signed": true, "proxy": false, "misprint": false, "grading": null,
-                "tags": "[]", "notes": null, "needsReview": null, "updatedAt": 1800000000
+                "tags": "[]", "notes": null, "needsReview": null,
+                "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]"
             })
         );
 

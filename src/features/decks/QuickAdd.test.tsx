@@ -29,6 +29,7 @@ const SETTLE = { timeout: 4000 };
  *  editor files by, so a fixture here and one there are the same card. */
 function found(name: string): CardSummary {
   return {
+    promoTypes: null,
     id: `s-${name}`,
     name,
     setCode: "mh2",

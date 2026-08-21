@@ -66,6 +66,7 @@ const UNPRICED = row({
 });
 
 const DETAIL: CardDetail = {
+  promoTypes: null,
   id: "bolt-lea",
   oracleId: "oracle-bolt",
   name: "Lightning Bolt",

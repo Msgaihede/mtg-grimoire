@@ -24,6 +24,7 @@ import { FoilOverlay } from "@/components/CardArt";
 import { FinishMark } from "@/components/FinishMark";
 import { consumeCaretNote } from "@/lib/caretWalk";
 import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
+import { finishTreatments, treatmentName } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import {
@@ -837,6 +838,10 @@ function Art({
   // `soleFinish` speaks only for a printing with one finish and `foilable` only for one with at
   // least two.
   const marked = foilView && foilable ? foilable : soleFinish(card.finishes);
+  // What that mark is *called*, against the finish it is drawn for — so the pane's own art says
+  // "Halo Foil" where the printings wall behind it does, and the foil **view** names the
+  // treatment it is previewing rather than the generic word.
+  const markedTreatments = finishTreatments(card.promoTypes, marked);
   const FoilGlyph = foilable === "etched" ? Gem : Sparkles;
 
   /**
@@ -914,7 +919,7 @@ function Art({
             className="w-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
           />
         )}
-        <FoilOverlay finish={marked} />
+        <FoilOverlay finish={marked} treatments={markedTreatments} />
       </span>
       {/* The two ways of looking at the card, on one line under it.
           **A row rather than two stacked bars**, because a double-faced card that also has a
@@ -1065,7 +1070,18 @@ function Facts({
                 different quote, and printing it here would invent one. */}
             {finishes.map((f) => (
               <div key={f} className="flex items-baseline gap-1.5">
-                <dt className="text-dim">{FINISH_LABEL[f]}</dt>
+                {/* **The treatment's word where the copy has one** — `Halo Foil  $95.79` rather
+                    than `Foil  $95.79`, which is the whole of issue #160 stated in the one place
+                    on this screen that has room for words. `treatmentName` and not
+                    `treatmentTitle`: this row has a single column for the label and a price
+                    beside it, so "Silver Foil · Scroll" would push the number out of the row.
+                    The joined reading belongs to the marks, which are tooltips.
+
+                    Per finish, so the fence does the work: the nonfoil row of a Surge Foil
+                    printing still reads `Nonfoil`, because the plain copy is not a Surge Foil. */}
+                <dt className="text-dim">
+                  {treatmentName(finishTreatments(card.promoTypes, f)) ?? FINISH_LABEL[f]}
+                </dt>
                 <dd className="font-mono tabular-nums">
                   {formatPrice(card.finishPrices[f], marketplace.currency)}
                 </dd>
@@ -1630,7 +1646,7 @@ function PrintingRow({
             {/* A glyph rather than the letters `F` and `E` this used to draw. Nonfoil is
                 still unmarked — it is the finish a price is assumed to be — and the full
                 word rides in the accessible name, as the `<abbr>`'s title did. */}
-            <FinishMark finish={f} />
+            <FinishMark finish={f} treatments={finishTreatments(printing.promoTypes, f)} />
             {formatPrice(printing.finishPrices[f], marketplace.currency)}
           </span>
         ))}

@@ -48,6 +48,7 @@ import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
 const BOLT: CardSummary = {
+  promoTypes: null,
   id: "1",
   name: "Lightning Bolt",
   setCode: "lea",

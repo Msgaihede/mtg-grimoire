@@ -6,6 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { Trash2 } from "lucide-react";
+import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
@@ -14,7 +15,8 @@ import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip"
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardDraggable } from "@/features/decks/dnd";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
-import { finishLabel } from "@/lib/finish";
+import { finishLabel, isFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import type { CollectionRow, CollectionSortKey } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -25,6 +27,18 @@ import { cn } from "@/lib/utils";
 
 /** The band a flagged row grows by, to say what the reconciler found. */
 const REVIEW_HEIGHT = 20;
+
+/**
+ * What the copy on a collection row is *called*, or `[]`.
+ *
+ * The **entry's** finish against the **card's** `promoTypes`, which is the pairing this whole
+ * feature rests on: the printing says what its shiny copy is named, the entry says which copy
+ * the reader actually owns. An orphan — a row whose printing has left `cards` — carries `null`
+ * there and is unnamed, like every other card-derived field on the row.
+ */
+function treatmentsOf(row: CollectionRow) {
+  return finishTreatments(row.promoTypes, isFinish(row.finish) ? row.finish : null);
+}
 
 /** The grade spelled out, for the same reason `finishLabel` exists. */
 function conditionLabel(raw: string): string {
@@ -77,6 +91,25 @@ function columnsFor(
               copied at write time for exactly this. */}
             <span className="truncate">{row.name ?? "—"}</span>
             <ManaText source={row.manaCost} className="shrink-0 text-xs" />
+            {/* **What this copy is called**, where the cardboard has a name of its own — a
+              Surge Foil, a Halo Foil, a serialized card. Here rather than in the
+              `Finish · condition` column beside it, which is 5.5rem and truncates
+              "Nonfoil · NM" as it is: that column answers *which finish*, which is a word this
+              table sorts on and must keep spelling the same way, and "Step-and-Compleat Foil"
+              would leave it showing three letters. The glyph carries the name as its accessible
+              name and its tooltip, exactly as the search table's does one screen over.
+
+              The entry's own `finish` decides what applies: this reader owns *this* copy, so
+              the plain half of a Surge Foil printing is not marked. An unrecognised finish —
+              the column is TEXT with a CHECK, and `finishLabel` prints whatever it holds —
+              names no treatment rather than guessing at one. */}
+            {treatmentsOf(row).length > 0 && (
+              <FinishMark
+                finish={isFinish(row.finish) ? row.finish : "nonfoil"}
+                treatments={treatmentsOf(row)}
+                className="self-center"
+              />
+            )}
           </span>
           {row.needsReview && (
             // Inside the name's cell rather than beside it, so a screen reader reads it with

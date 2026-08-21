@@ -20,6 +20,7 @@ import type { PaneDeckContext } from "@/lib/store";
 import { startDrag } from "@/test-drag";
 
 const detail: CardDetail = {
+  promoTypes: null,
   id: "p1",
   oracleId: "o1",
   name: "Delver of Secrets // Insectile Aberration",
@@ -61,6 +62,7 @@ const detail: CardDetail = {
 };
 
 const printing = (over: Partial<Printing> = {}): Printing => ({
+  promoTypes: null,
   id: "p1",
   setCode: "isd",
   setName: "Innistrad",

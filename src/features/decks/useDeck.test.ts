@@ -123,6 +123,7 @@ const MAYBE: DeckCategory = {
 };
 
 const BOLT: DeckCard = {
+  promoTypes: null,
   id: 9,
   cardId: "p1",
   finish: null,

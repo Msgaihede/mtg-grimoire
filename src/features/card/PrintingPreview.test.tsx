@@ -6,6 +6,7 @@ import type { MarketplaceId } from "@/lib/marketplace";
 import { fireDragEvent } from "@/test-drag";
 
 const detail: CardDetail = {
+  promoTypes: null,
   id: "p1",
   oracleId: "o1",
   name: "Lightning Bolt",
@@ -30,6 +31,7 @@ const detail: CardDetail = {
 };
 
 const printing = (over: Partial<Printing> = {}): Printing => ({
+  promoTypes: null,
   id: "p1",
   setCode: "lea",
   setName: "Limited Edition Alpha",

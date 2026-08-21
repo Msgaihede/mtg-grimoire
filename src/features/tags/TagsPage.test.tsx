@@ -109,6 +109,7 @@ import { TagsPage } from "./TagsPage";
  * a reader three pictures with no lightning in them.
  */
 const BOLT: CardSummary = {
+  promoTypes: null,
   id: "c-bolt-lea",
   name: "Lightning Bolt",
   setCode: "lea",

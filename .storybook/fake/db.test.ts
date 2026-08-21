@@ -304,10 +304,10 @@ describe("the paper filter", () => {
     const withDigital = readHandlers(db).search_cards({
       req: { paperOnly: false, limit: 200, offset: 0 },
     });
-    // 43 fixture rows, 2 of them `isPaper: false` (Black Lotus `vma`, A-Vivi Ornitier
-    // `fin`) — measured 2026-08-09 over `CARDS`.
-    expect(withDigital.items).toHaveLength(43);
-    expect(all.items).toHaveLength(41);
+    // 47 fixture rows, 2 of them `isPaper: false` (Black Lotus `vma`, A-Vivi Ornitier
+    // `fin`) — measured 2026-08-21 over `CARDS`.
+    expect(withDigital.items).toHaveLength(47);
+    expect(all.items).toHaveLength(45);
   });
 
   it("is off for the collection, which lists what the user owns", () => {
@@ -421,11 +421,11 @@ describe("the playable filter", () => {
       expect(/"(legal|restricted)"/.test(card.legalities)).toBe(false);
     }
 
-    expect(seen({})).toHaveLength(41);
-    expect(seen({ playableOnly: false })).toHaveLength(41);
+    expect(seen({})).toHaveLength(45);
+    expect(seen({ playableOnly: false })).toHaveLength(45);
 
     const playable = seen({ playableOnly: true });
-    expect(playable).toHaveLength(38);
+    expect(playable).toHaveLength(42);
     for (const name of UNPLAYABLE) expect(playable).not.toContain(name);
     // `restricted` counts as playable — a Vintage search that hid Black Lotus would be wrong.
     expect(playable).toContain("Black Lotus");
@@ -463,10 +463,10 @@ describe("facet counts", () => {
 
   it("sends every set code in the corpus, zeros included", () => {
     const f = facets(makeDb(), { text: "bolt" });
-    // 33 distinct codes over the 43 fixture rows; the four Bolt printings are in four of
-    // them, so 29 arrive as an explicit 0. `FacetResponse.sets` promises a key is never
+    // 35 distinct codes over the 47 fixture rows; the four Bolt printings are in four of
+    // them, so 31 arrive as an explicit 0. `FacetResponse.sets` promises a key is never
     // absent, which is what lets the picker grey a row instead of dropping it.
-    expect(Object.keys(f.sets)).toHaveLength(33);
+    expect(Object.keys(f.sets)).toHaveLength(35);
     expect(f.sets.lea).toBe(1);
     expect(f.sets["2ed"]).toBe(0);
   });
@@ -482,23 +482,23 @@ describe("facet counts", () => {
 
   it("reports a colour as the result after toggling it, because colours broaden", () => {
     const none = facets(makeDb(), {});
-    expect(none.total).toBe(41);
+    expect(none.total).toBe(45);
     // Subset semantics, so this is mono-R plus the colourless cards — a narrowing count.
     expect(none.colors.R).toBe(15);
 
     const red = facets(makeDb(), { colors: "R" });
     expect(red.total).toBe(15);
     // Pressing W with R on asks for "castable in RW", a superset — never a shrink.
-    expect(red.colors.W).toBe(22);
+    expect(red.colors.W).toBe(26);
     // Pressing R again clears the filter.
-    expect(red.colors.R).toBe(41);
+    expect(red.colors.R).toBe(45);
   });
 
   it("makes the colourless chip exclusive both ways, as `toggleColor` does", () => {
     expect(facets(makeDb(), { colors: "R" }).colors.C).toBe(9);
     const c = facets(makeDb(), { colors: "C" });
     expect(c.total).toBe(9);
-    expect(c.colors.C).toBe(41);
+    expect(c.colors.C).toBe(45);
     // W/R replaces it rather than joining it: `"RC"` would silently mean plain `"R"`.
     expect(c.colors.R).toBe(15);
   });
@@ -513,8 +513,8 @@ describe("facet counts", () => {
     const off = facets(makeDb(), {});
     const on = facets(makeDb(), { playableOnly: true });
 
-    expect(off.total).toBe(41);
-    expect(on.total).toBe(38);
+    expect(off.total).toBe(45);
+    expect(on.total).toBe(42);
     // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), which is one of the three.
     expect(on.manaValues["8"]).toBe(off.manaValues["8"] - 1);
     for (const key of ["modern", "vintage", "commander", "pauper"]) {
@@ -573,12 +573,12 @@ describe("facet counts", () => {
 
   it("counts the chips and the format select with their own filter removed", () => {
     const mana = facets(makeDb(), { manaValues: [1] });
-    expect(mana.total).toBe(12);
+    expect(mana.total).toBe(14);
     expect(mana.manaValues["2"]).toBe(5);
 
     const standard = facets(makeDb(), { format: "standard" });
     expect(standard.total).toBe(4);
-    expect(standard.formats.modern).toBe(27);
+    expect(standard.formats.modern).toBe(29);
   });
 
   it("empties the result on a format it has never heard of, but not the format select", () => {
@@ -587,14 +587,14 @@ describe("facet counts", () => {
     expect(f.sets.lea).toBe(0);
     // The way out stays open: greying every format at the one moment the reader needs to
     // pick a different one would strand them there.
-    expect(f.formats.modern).toBe(27);
+    expect(f.formats.modern).toBe(29);
   });
 
   it("counts both sides of the owned cycle as if `owned` were not set", () => {
     const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
     const f = facets(db, { owned: true });
     expect(f.total).toBe(1);
-    expect(f.owned).toEqual({ owned: 1, missing: 40 });
+    expect(f.owned).toEqual({ owned: 1, missing: 44 });
   });
 
   it("answers the number the search does, because both derive from one filter mirror", () => {
@@ -1935,8 +1935,8 @@ describe("the tables that are not tables", () => {
 
   it("derives the set list from the cards, counting paper printings only", () => {
     const sets = readHandlers(makeDb()).list_sets();
-    // 33 distinct set codes over the 43 fixture rows, measured 2026-08-09.
-    expect(sets).toHaveLength(33);
+    // 35 distinct set codes over the 47 fixture rows, measured 2026-08-21.
+    expect(sets).toHaveLength(35);
     // `vma` holds one fixture row and it is digital, so the picker offers a 0 — the state
     // the real `list_sets` reaches through its `FILTER (WHERE is_paper = 1)`.
     expect(sets.find((s) => s.code === "vma")!.cardCount).toBe(0);
@@ -1946,7 +1946,7 @@ describe("the tables that are not tables", () => {
 
   it("reports the fixture's own card count and the faults the sync surfaces", () => {
     expect(readHandlers(makeDb()).sync_status()).toMatchObject({
-      cardCount: 43,
+      cardCount: 47,
       syncing: false,
       lastError: null,
       imageStoreFailures: 0,
@@ -3430,7 +3430,7 @@ describe("the whole command table", () => {
     const db = makeDb();
     expect(writeHandlers(db).sync_run()).toEqual({
       updated: false,
-      cardCount: 43,
+      cardCount: 47,
       updatedAt: null,
     });
     expect(() => writeHandlers(makeDb({ fault: "syncError" })).sync_run()).toThrow(/rate limited/);
@@ -3482,13 +3482,16 @@ describe("the Oracle tag taxonomy", () => {
    * are both basic lands, Delver of Secrets, Tarmogoyf and Little Girl — deliberately untagged,
    * so every `starter` deck holds cards on both sides of the type-line fallback.
    */
-  it("covers 32 of the corpus's oracle cards and 38 of its printings", () => {
+  it("covers 32 of the corpus's oracle cards and 42 of its printings", () => {
     const tagged = new Set(oracleTagCards(CARDS).map((r) => r.oracleId));
 
     expect(ORACLE_TAGGED_NAMES).toHaveLength(32);
     expect(tagged.size).toBe(32);
-    expect(CARDS.filter((c) => tagged.has(c.oracleId))).toHaveLength(38);
-    expect(CARDS).toHaveLength(43);
+    // 42 rather than 38 since 2026-08-21: the four named-treatment printings are all
+    // reprints of oracle cards this list already covers, so they widen the *printing* reach
+    // without touching the 32 oracle cards — which is the distinction this test is for.
+    expect(CARDS.filter((c) => tagged.has(c.oracleId))).toHaveLength(42);
+    expect(CARDS).toHaveLength(47);
   });
 
   /** Keyed by **oracle card**: all four Lightning Bolt printings share one set of rows, which

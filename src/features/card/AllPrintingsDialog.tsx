@@ -82,6 +82,7 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { plural } from "@/lib/counts";
 import { soleFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
@@ -173,6 +174,21 @@ function printingRows(printings: readonly Printing[], name: string): PrintingRow
  * every tile on every scrolled row.
  */
 const tileFinish = (row: PrintingRow) => soleFinish(row.finishes);
+
+/**
+ * What a tile's printing is *called* — the answer issue #160 asked for, on the exact screen it
+ * was reported from.
+ *
+ * Elesh Norn is the card in that report: three of its eleven printings drew the identical
+ * `Sparkles`, and they are a Halo Foil (`mul 133`), a serialized Double Rainbow (`mul 133z`)
+ * and an ordinary Secret Lair foil (`sld 811`). This is what tells them apart.
+ *
+ * Paired with {@link tileFinish} rather than read off the printing alone, so a foil word is
+ * withheld from a printing that is also sold plain — see `finishTreatments`. Module scope for
+ * {@link tileFinish}'s reason: a fresh arrow per render re-registers every tile on every
+ * scrolled row.
+ */
+const tileTreatment = (row: PrintingRow) => finishTreatments(row.promoTypes, tileFinish(row));
 
 /**
  * The top-left corner: this printing's language, **only when it is not English**.
@@ -819,6 +835,7 @@ function Body({
             label={`Printings of ${request.name}`}
             topLeft={tileLanguage}
             finish={tileFinish}
+            treatment={tileTreatment}
             action={tilePrice}
             cardMenu={cardMenu}
             cardMenuKey={cardMenuKey}

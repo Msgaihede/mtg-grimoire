@@ -41,6 +41,7 @@ let nextId = 1;
  */
 function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}): CollectionRow {
   return {
+    promoTypes: null,
     id: nextId++,
     cardId: card.id,
     name: card.name,

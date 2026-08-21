@@ -70,6 +70,7 @@ const CUT: DeckTag = { id: 8, deckId: 4, name: "Cut candidate", color: "ember", 
  *  rest are filled so the fixture is a real {@link DeckCard} and not a cast. */
 function card(over: Partial<DeckCard> & { cardId: string }): DeckCard {
   return {
+    promoTypes: null,
     id: 1,
     categoryId: MAIN.id,
     categoryName: MAIN.name,
