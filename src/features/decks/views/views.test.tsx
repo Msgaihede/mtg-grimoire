@@ -1257,6 +1257,10 @@ describe("StackView flow", () => {
    * adjusted — would draw one 20px gutter per *pixel* of every pile's height. Nothing would go
    * red, and the deck would be some hundreds of times taller than the window.
    *
+   * **`gap-x-2` is pinned as a number, not as "whatever the rail is spaced by"** (halved from
+   * `gap-x-4` on 2026-08-22). The two were 16 together until then, and a reader tidying them back
+   * into one class would be undoing a change the reader asked for rather than fixing a drift.
+   *
    * jsdom lays nothing out, so this is the declaration and never the layout; what the rule
    * actually does to a deck is the live pass's.
    */
@@ -1271,7 +1275,7 @@ describe("StackView flow", () => {
     const box = (stacks()[0] as HTMLElement).parentElement!;
     const classes = box.className.split(" ");
     expect(classes).toContain("grid");
-    expect(classes).toContain("gap-x-4");
+    expect(classes).toContain("gap-x-2");
     expect(classes).not.toContain("flex-wrap");
     expect(box.className).not.toContain("gap-y");
     expect(box.style.gridTemplateColumns).toBe(
