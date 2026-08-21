@@ -31,7 +31,7 @@
  * Adding a mark here means asking which of those two says it in words.
  */
 import { Check, Crown } from "lucide-react";
-import { COUNT_TAG_BOX, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
+import { COUNT_TAG_BOX_MIRRORED, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { playedFinish } from "@/lib/finish";
@@ -186,8 +186,8 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * in a *different* shape beside it reads as a second kind of object. The catch is that the two
  * card-face views do not draw the *same* quantity badge: the stack draws {@link CountTag}'s
  * 22px slanted banner, and the Grid tile draws a flat 9px chip of its own. So this echoes
- * whichever one it is standing next to — `"banner"` and `"chip"` — and `COUNT_TAG_BOX` and
- * `COUNT_TAG_SLANT_MIRRORED` are exported for the first of them and nothing else.
+ * whichever one it is standing next to — `"banner"` and `"chip"` — and `COUNT_TAG_BOX_MIRRORED`
+ * and `COUNT_TAG_SLANT_MIRRORED` are exported for the first of them and nothing else.
  *
  * **One drawing was tried first and the tile is why it did not survive.** The banner is 22px on a
  * 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card against 15 % of it —
@@ -260,7 +260,11 @@ export function TheoryMatchMark({
       style={banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : undefined}
       className={cn(
         banner
-          ? COUNT_TAG_BOX
+          ? // **The mirrored box, and the pairing is not optional** (issue #158). The slant above
+            // and the paddings that centre content inside it are one shape: worn with
+            // `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's visible
+            // centre and was reported as left-aligned.
+            COUNT_TAG_BOX_MIRRORED
           : // The Grid tile's copy count, verbatim but for the fill: `rounded-sm`, the mono face
             // and the same two scaled sizes. Written out rather than imported because that chip is
             // `GridView`'s own inline markup and not a component — if it ever becomes one, both
