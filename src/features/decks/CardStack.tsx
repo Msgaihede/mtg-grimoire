@@ -359,12 +359,22 @@ export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
  * hides a character of it.
  */
 const CARD_MARKS_STRIP = cn(
-  "absolute top-0 left-0 flex items-start",
-  // 27px is the printed title bar's height **on a card at 100% zoom**, and 5px is the inset that
-  // keeps the strip off the card's own clipped corner. Both scale with the card: the strip is a
-  // scrim over a band of the picture, so a fixed 27px is most of a halved card's art and a sliver
-  // of a doubled one's. `--mark-scale` is the card's own factor — `lib/cardZoom.ts`.
-  "right-[calc(5px*var(--mark-scale,1))] h-[calc(27px*var(--mark-scale,1))]",
+  // **Flush to both of the card's edges, and the right one stopped being an exception on
+  // 2026-08-21** (issue #158). It was inset `5px × --mark-scale` "to keep the strip off the card's
+  // own clipped corner" — a rule from when the strip's marks were drawn on the *right* and the
+  // corner they were tucked into was a `RULE BREAK` box with a hairline border, which a radius
+  // really would have clipped a side off. The marks went left in 2026-08-13 and the inset stayed,
+  // so the only thing left at that end was {@link TheoryMatchMark}: a filled banner, standing 5px
+  // short of an edge its opposite number sits flush against, with a square corner floating where
+  // the card's is round. The face is `overflow-hidden rounded-[7px]`, so `right-0` gets that mark
+  // the same clipped corner {@link QuantityTag} has always had at `left-0` — the two are bookends
+  // now in radius as well as in slant.
+  "absolute inset-x-0 top-0 flex items-start",
+  // 27px is the printed title bar's height **on a card at 100% zoom**. It scales with the card:
+  // the strip is a scrim over a band of the picture, so a fixed 27px is most of a halved card's
+  // art and a sliver of a doubled one's. `--mark-scale` is the card's own factor —
+  // `lib/cardZoom.ts`.
+  "h-[calc(27px*var(--mark-scale,1))]",
 );
 
 /**
