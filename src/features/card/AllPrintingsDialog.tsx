@@ -445,26 +445,45 @@ export function AllPrintingsDialog() {
       // what `Dialog`'s doc says a host must not need.
       title={request?.name ?? ""}
       closeLabel="Close printings"
-      // **The whole column the shell reserves for a panel, and no number of its own.**
+      // **Three quarters of the window, floored at the window floor and ceilinged at the column
+      // the shell reserves.**
       //
       // This is the one dialog in the builder whose body is a *grid to pick out of* rather than a
-      // form or a list, so every tile the window can hold is a tile the reader does not scroll
-      // past. A fixed `w-[72rem]` — 1152px — was that at the app's own 1280 default, where
-      // `max-w-full` clamped it to 1120 and it filled the window anyway; on a 2560 display it went
-      // on drawing six 170px tiles in the middle of a 2400px scrim and left the rest to the dim.
+      // form or a list, and that argument has now been run to both of its ends. A fixed
+      // `w-[72rem]` — 1152px — drew six 170px tiles in the middle of a 2400px scrim on a 2560
+      // display and left the rest to the dim; `w-full` (2026-08-20) answered that by asking for
+      // the whole reserved column, 13 tiles across. Issue #157 is what the second one costs at
+      // the other end of the list, and it is not a wide-display problem: a card with **two**
+      // printings drew two tiles against the left edge of a panel that was the window, at every
+      // size. A modal nobody can see past is a modal that has stopped reading as a modal.
       //
-      // `w-full` is 100% of the panel's grid area, which is exactly the room the shell has already
-      // worked out: `p-4 sm:p-6` off the scrim, and — this is the part the number could not track
-      // — `Dialog`'s `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for.
-      // **So the chevrons keep their room by construction rather than by arithmetic here agreeing
-      // with arithmetic there.** They are `absolute right-full mr-2` off this panel's edges, a
-      // 36px disc plus an 8px gap into a 56px column, and a width spelled as `calc(100vw - 10rem)`
-      // would have had to restate both of those constants to say the same thing and would have
-      // gone quietly wrong the first time either moved.
+      // So the request is a proportion, and the guard either side of it is doing the work the
+      // number used to do badly:
       //
-      // 13 tiles across at 2560 maximised, 6 at the 1280 default (which is what it drew before),
-      // and 4 at the 1024 floor — 5 where there is no walk and so no flank column to reserve.
-      width="w-full"
+      // * `100%` is `w-full`'s meaning kept as a **ceiling**, so nothing below is a length this
+      //   file has to keep in step with the shell. The grid area is `p-4 sm:p-6` off the scrim
+      //   and — this is the part a `calc(100vw - 10rem)` could not track — `Dialog`'s
+      //   `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for. **The chevrons
+      //   therefore keep their room by construction rather than by arithmetic here agreeing with
+      //   arithmetic there**: they are `absolute right-full mr-2` off this panel's edges, a 36px
+      //   disc plus an 8px gap into a 56px column, and they travel with whatever the panel is.
+      // * `64rem` is the **floor**, and it is the app's own 1024px window floor spelled as a
+      //   panel width rather than a second opinion about how small is too small. At that window
+      //   the reserved column is 864 and 75vw would ask for 768 — less than
+      //   `PrintingsFilterBar` above the wall wants, and a narrowing that buys scrim nobody
+      //   asked for on the one screen with none to spare. There the floor loses to the ceiling,
+      //   which is the right answer: a window with nothing to give gives nothing.
+      //
+      // Measured in Storybook 2026-08-21, both the plain and the flanked story: **1920 at 2560,
+      // 1024 at 1280, and the whole column at the 1024 floor**, centred at every one of them,
+      // with `documentElement.scrollWidth` equal to `clientWidth` and both chevrons inside the
+      // window. The panel is the same three numbers with or without flanks above the floor,
+      // because 75vw is a fact about the *window* and binds before the column does.
+      //
+      // Tiles across at 100% zoom with no walk to flank the panel: 10 at 2560 maximised (13
+      // before), 7 at 1920 (9), 5 at the 1280 default (6), and 5 at the 1024 floor, where nothing
+      // moves at all — 4 there once a walk buys its flank columns, as it drew before.
+      width="w-[min(100%,max(64rem,75vw))]"
       flanks={flanks}
       onPanelKeyDown={onPanelKeyDown}
       onDismiss={close}
