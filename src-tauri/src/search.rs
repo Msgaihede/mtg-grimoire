@@ -190,6 +190,17 @@ pub struct CardSummary {
     /// (`oracle_id` is most of it), so a 50-row page carries ~2.5 KB more. That is the whole
     /// price of the trade the brief declined; it buys a correct entry on every surface.
     pub finishes: Option<String>,
+    /// JSON, verbatim: Scryfall's `promo_types`, the column the **kind** of foil lives in.
+    ///
+    /// [`Self::finishes`] has three words for how shiny a copy is and no way to say *which*
+    /// shiny — a Surge Foil and an ordinary foil were one glyph and one word until issue #160.
+    /// Handed over unread: naming these is a judgement, so `src/lib/treatment.ts` owns the
+    /// table and this is copied the way `legalities` is on the card pane's DTO.
+    ///
+    /// **22.7 bytes on the 32 174 of 116 712 rows that carry one**, so a 50-row page grows by
+    /// under 1 KB — the same trade [`Self::finishes`] records above it, at a fifth the size.
+    /// 5 428 of 107 355 paper printings carry a member this app names.
+    pub promo_types: Option<String>,
     /// One of the cards the Commander bracket system counts as a **game changer** — the
     /// wall and the table draw a crown from it, beside the foil and etched finish marks.
     ///
@@ -901,10 +912,10 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
              )
              SELECT c.id, g.nm, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
-                    c.oracle_id, c.finishes,
+                    c.oracle_id, c.finishes, c.promo_types,
                     -- `c.`, not an aggregate: being a game changer is a fact about the
                     -- oracle card, so every printing in the group already agrees and the
-                    -- representative's own column is the group's answer. Position 12 in
+                    -- representative's own column is the group's answer. Position 13 in
                     -- **both** branches — the two share one row mapping, and only the three
                     -- collapse-only aggregates may follow it.
                     c.game_changer,
@@ -923,7 +934,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
-                    c.oracle_id, c.finishes, c.game_changer,
+                    c.oracle_id, c.finishes, c.promo_types, c.game_changer,
                     coalesce((SELECT sum(e.quantity) FROM collection_entries e
                                WHERE e.card_id = c.id), 0),
                     EXISTS (SELECT 1 FROM wishlist_entries w
@@ -959,29 +970,30 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             layout: row.get(9).map_err(|e| e.to_string())?,
             oracle_id: row.get(10).map_err(|e| e.to_string())?,
             finishes: row.get(11).map_err(|e| e.to_string())?,
+            promo_types: row.get(12).map_err(|e| e.to_string())?,
             // Read as an `Option` and flattened: the column is nullable and a NULL means
             // "not on the list". A bare `row.get::<_, bool>` is not a `false` there, it is
             // an `InvalidColumnType` that fails the whole search.
             game_changer: row
-                .get::<_, Option<bool>>(12)
+                .get::<_, Option<bool>>(13)
                 .map_err(|e| e.to_string())?
                 .unwrap_or(false),
-            owned_quantity: row.get(13).map_err(|e| e.to_string())?,
-            wishlisted: row.get(14).map_err(|e| e.to_string())?,
+            owned_quantity: row.get(14).map_err(|e| e.to_string())?,
+            wishlisted: row.get(15).map_err(|e| e.to_string())?,
             // Uncollapsed, a row is a printing: it stands for one, and the "range" is its own
             // price. Collapsed, the three ride on the group step's aggregates.
             printings: if collapse {
-                row.get(15).map_err(|e| e.to_string())?
+                row.get(16).map_err(|e| e.to_string())?
             } else {
                 1
             },
             price_low: if collapse {
-                row.get(16).map_err(|e| e.to_string())?
+                row.get(17).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
             price_high: if collapse {
-                row.get(17).map_err(|e| e.to_string())?
+                row.get(18).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
@@ -1679,6 +1691,10 @@ mod tests {
                 layout: "normal".into(),
                 oracle_id: Some("o-bolt".into()),
                 finishes: Some(r#"["nonfoil","foil"]"#.into()),
+                // Alpha carries none, so the payload is invented — the point of pinning it
+                // against a value rather than `null` is that `promoTypes` and `promo` are one
+                // letter apart on the wire and only one of them is on this DTO.
+                promo_types: Some(r#"["surgefoil"]"#.into()),
                 game_changer: true,
                 owned_quantity: 0,
                 wishlisted: false,
@@ -1700,6 +1716,7 @@ mod tests {
                     "manaCost": null, "price": 400.5,
                     "layout": "normal",
                     "oracleId": "o-bolt", "finishes": "[\"nonfoil\",\"foil\"]",
+                    "promoTypes": "[\"surgefoil\"]",
                     "gameChanger": true,
                     "ownedQuantity": 0, "wishlisted": false,
                     "printings": 1,
@@ -1774,6 +1791,91 @@ mod tests {
         );
         assert_eq!(shocks[0].price_low, Some(1.5));
         assert_eq!(shocks[0].price_high, Some(400.0));
+    }
+
+    /// **`promo_types` comes back from both branches, and the three collapse aggregates still
+    /// land where they were.**
+    ///
+    /// Issue #160: the column names *which* foil a printing's shiny copy is — Surge, Halo,
+    /// Serialized — where `finishes` only has three words for how shiny it is. Rust hands it
+    /// over unread; `src/lib/treatment.ts` does the naming.
+    ///
+    /// The test is about **positions**, not about the value. This read is positional and the
+    /// two branches share one row mapping, so a column added to one and not the other, or
+    /// added without renumbering, is silent: `promo_types` went in at 13, which pushed
+    /// `game_changer` to 13→14 (`Option<bool>`, which would have taken a JSON *string* as a
+    /// hard error) and the three collapse-only aggregates from 15/16/17 to 16/17/18 — where
+    /// `printings` and `wishlisted` would have collided on 15 and answered each other's
+    /// question as plausible integers.
+    #[test]
+    fn a_promo_type_survives_both_branches_of_the_row_mapping() {
+        let conn = seeded();
+        // Two printings of one oracle card, one treated and one not, so the collapsed branch
+        // has a group to represent — MUL 133's real payload against MUL 3's absent one.
+        for (id, cn, released, promo) in [
+            ("halo", "133", "2023-04-21", Some(r#"["halofoil"]"#)),
+            ("plain", "3", "2023-04-20", None),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
+                    layout, released_at, rarity, finishes, promo_types, price_usd, is_paper,
+                    search_text, raw)
+                 VALUES (?1,'o-norn','Elesh Norn','mul',?2,'en','normal',?3,'mythic',
+                    '[\"foil\"]', ?4, 95.79, 1, 'Elesh Norn', '{}')",
+                rusqlite::params![id, cn, released, promo],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        let uncollapsed = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("elesh".into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let treated = uncollapsed.items.iter().find(|c| c.id == "halo").unwrap();
+        assert_eq!(treated.promo_types.as_deref(), Some(r#"["halofoil"]"#));
+        // The neighbours on either side of the new column, which is what an off-by-one moves.
+        assert_eq!(treated.finishes.as_deref(), Some(r#"["foil"]"#));
+        assert!(!treated.game_changer);
+        assert_eq!(treated.owned_quantity, 0);
+        assert!(!treated.wishlisted);
+        assert_eq!(treated.printings, 1, "uncollapsed, a row is one printing");
+        // Untreated is `None`, not an empty array: the column is NULL on four fifths of the
+        // corpus, and that is the shape every reader fences on.
+        let plain = uncollapsed.items.iter().find(|c| c.id == "plain").unwrap();
+        assert_eq!(plain.promo_types, None);
+
+        let collapsed = run_search(
+            &conn,
+            &SearchRequest {
+                text: Some("elesh".into()),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let group: Vec<&CardSummary> = collapsed
+            .items
+            .iter()
+            .filter(|c| c.name == "Elesh Norn")
+            .collect();
+        assert_eq!(group.len(), 1, "two printings, one row");
+        assert_eq!(
+            group[0].promo_types.as_deref(),
+            Some(r#"["halofoil"]"#),
+            "the representative's own column, like `game_changer` beside it"
+        );
+        // The three aggregates that had to renumber past it.
+        assert_eq!(group[0].printings, 2);
+        assert_eq!(group[0].price_low, Some(95.79));
+        assert_eq!(group[0].price_high, Some(95.79));
     }
 
     /// Printings of one card, in the shape the representative rule is argued over: a set, a

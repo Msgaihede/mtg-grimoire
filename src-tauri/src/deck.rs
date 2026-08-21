@@ -2896,6 +2896,14 @@ pub struct DeckCardRow {
     /// leaves no choice at all, which is true of 12 366 foil-only and 892 etched-only paper
     /// printings. `None` for an orphan, whose card has left `cards`.
     pub finishes: Option<String>,
+    /// JSON, verbatim: Scryfall's `promo_types`, the column the **kind** of foil lives in.
+    ///
+    /// [`Self::finishes`] says how shiny the object can be and [`DeckCardRow::finish`] which
+    /// one this deck sleeves; neither can say *which* shiny, which is issue #160. Handed over
+    /// unread — `src/lib/treatment.ts` owns the naming, and a deck view draws it from that
+    /// stored finish rather than from the printing, so a plain copy of a Surge Foil printing
+    /// is still drawn plain. `None` for an orphan, whose card has left `cards`.
+    pub promo_types: Option<String>,
     /// Printed at uncommon on **any** printing of this oracle card. Computed, not read: a
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
@@ -3029,7 +3037,12 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- into a field of the same SQLite type, silently. `finish` is TEXT and would have
             -- landed in `needs_review` — a sentence field — had it gone beside `lang` where it
             -- reads best.
-            dc.finish
+            dc.finish,
+            -- 35, after `dc.finish`, for the reason written directly above it — and this one
+            -- is that rule's fourth proof: `promo_types` is TEXT and reads like it belongs
+            -- beside `c.finishes` at 30, where it would have handed a printing's finishes to
+            -- its treatments and a set name to its finishes, both still plausible strings.
+            c.promo_types
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN deck_tags t ON t.id = dc.tag_id
@@ -3139,6 +3152,8 @@ fn read_deck_cards(
                 ever_uncommon: r.get(33)?,
                 // 34, at the end of the list, for the reason written at the column.
                 finish: r.get(34)?,
+                // 35, after it, for the same reason.
+                promo_types: r.get(35)?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -7613,6 +7628,53 @@ mod tests {
         );
     }
 
+    /// **A deck row carries the printing's `promo_types`, from the end of a 36-column
+    /// positional read.**
+    ///
+    /// Issue #160: `finishes` says how shiny the object can be and `finish` which copy this
+    /// deck sleeves, and neither can say *which* shiny. The naming is TypeScript's
+    /// (`src/lib/treatment.ts`); this is the column reaching it.
+    ///
+    /// The column went in **after `dc.finish`**, which is [`deck_row`]'s stated rule and not a
+    /// preference: this read is positional, and `promo_types` reads like it belongs beside
+    /// `c.finishes` at 30 — where it would have handed a printing's finishes to its treatments
+    /// and a set name to its finishes, both still plausible strings with nothing going red. So
+    /// the three fields that sit between the two candidate positions are asserted alongside it,
+    /// and `unit_price` is the one that cannot be got right by accident: this printing is sold
+    /// in both finishes at **different** prices, so a shifted index is a wrong number rather
+    /// than a null.
+    #[test]
+    fn a_deck_row_carries_the_printings_promo_types() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'bolt-m10'",
+            [],
+        )
+        .unwrap();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add_foil(&conn, deck.id, "bolt-m10", main, 2);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+
+        let cards = read_deck_cards(&conn, deck.id, LIVE, ANY_MARKET).unwrap();
+        let treated = cards.iter().find(|c| c.card_id == "bolt-m10").unwrap();
+        assert_eq!(treated.promo_types.as_deref(), Some(r#"["surgefoil"]"#));
+        assert_eq!(treated.finish.as_deref(), Some("foil"));
+        assert_eq!(treated.finishes.as_deref(), Some(r#"["nonfoil","foil"]"#));
+        assert_eq!(
+            treated.unit_price,
+            Some(6.00),
+            "the foil rate, not the chain"
+        );
+        assert!(!treated.ever_uncommon);
+
+        // A printing with no treatment answers `None`, not an empty array — four fifths of the
+        // corpus is NULL here and that is the shape every reader fences on.
+        let plain = cards.iter().find(|c| c.card_id == "bolt-lea").unwrap();
+        assert_eq!(plain.promo_types, None);
+        assert_eq!(plain.finish, None);
+    }
+
     /// Every `live` row of a deck as `(finish, quantity)`, ordered so a regular row sorts before
     /// a foil one. The shape almost every test in this group asserts on.
     fn live_rows(conn: &Connection, deck_id: i64) -> Vec<(Option<String>, i64)> {
@@ -8539,6 +8601,9 @@ mod tests {
             // tell from an absent key: `finish` is what every deck surface reads to draw the
             // sheen and what every card command addresses by.
             finish: Some("foil".to_owned()),
+            // The printing's, not the row's: this deck sleeves the foil copy, and the column
+            // beside it is what names which foil that is.
+            promo_types: Some(r#"["surgefoil"]"#.to_owned()),
             owned_quantity: 3,
         })
         .unwrap();
@@ -8557,6 +8622,7 @@ mod tests {
                 "layout": "normal", "rarity": "common", "faces": null,
                 "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
                 "everUncommon": false, "unitPrice": 400.0, "finish": "foil",
+                "promoTypes": "[\"surgefoil\"]",
                 "ownedQuantity": 3
             })
         );

@@ -89,6 +89,7 @@ const PICTURED: DeckRow = { ...MADE, coverKind: "custom", updatedAt: 1786266100 
 /** One search result — the cover picker's grid reads a name and an id and nothing else. */
 function found(name: string): CardSummary {
   return {
+    promoTypes: null,
     id: `s-${name}`,
     name,
     setCode: "mh2",
@@ -120,6 +121,7 @@ function found(name: string): CardSummary {
  */
 function detail(id: string, artist: string | null): CardDetail {
   return {
+    promoTypes: null,
     id,
     oracleId: `o-${id}`,
     name: "Shivan Dragon",

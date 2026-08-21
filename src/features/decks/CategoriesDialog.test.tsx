@@ -144,6 +144,7 @@ const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, ta
  */
 function deckCard(over: Partial<DeckCard> & { cardId: string }): DeckCard {
   return {
+    promoTypes: null,
     id: 1,
     categoryId: 9,
     categoryName: "Main deck",

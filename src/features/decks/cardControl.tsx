@@ -42,6 +42,7 @@ import {
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { FINISH_LABEL, playedFinish } from "@/lib/finish";
+import { finishTreatments, treatmentName } from "@/lib/treatment";
 import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -347,11 +348,20 @@ export function deckCardName(
   // named — so this is where it is said. `null` for the regular copy, which is the finish a
   // card is assumed to be and the one that needs no word.
   const finish = playedFinish(card.finish, card.finishes);
+  // And what that object is *called*, where it has a name of its own — the word every view's
+  // mark now carries, said here for the same reason the finish is. `treatmentName` rather than
+  // the joined title: this is one clause of a comma-separated sentence a screen reader speaks,
+  // so "surge foil" belongs and "surge foil · serialized" would be a list inside a list.
+  //
+  // It replaces the finish's word rather than joining it — a copy announced as "surge foil,
+  // foil" says one thing twice — and it can speak where the finish cannot, because a trait is
+  // true of the plain copy too.
+  const named = treatmentName(finishTreatments(card.promoTypes, finish));
   return [
     card.name,
     card.quantity > 1 ? `${card.quantity} copies` : null,
     short ? `you own ${card.ownedQuantity} of ${card.quantity}` : null,
-    finish === null ? null : FINISH_LABEL[finish].toLowerCase(),
+    named?.toLowerCase() ?? (finish === null ? null : FINISH_LABEL[finish].toLowerCase()),
     card.tagName,
     card.gameChanger === true ? "game changer" : null,
     // Before the rule break, because it is the milder fact and this list runs from what the card

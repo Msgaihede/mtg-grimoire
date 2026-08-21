@@ -150,6 +150,34 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   sheen on 61 % of every wall. A collection row passes its entry's own stored finish instead;
   a deck row gets the glyph rather than the sheen, because its picture is a 48×36 art crop
   where a gradient is a smudge.
+- **Which _kind_ of foil is a different column, and it renames the mark rather than adding one**
+  (2026-08-21, issue #160). `cards.finishes` holds three words across all 116 712 rows —
+  `nonfoil`, `foil`, `etched` — and has no way to say that this foil is a Surge Foil and that one
+  a Halo Foil; a reader on the All Printings wall saw three identical `Sparkles` on Elesh Norn's
+  `sld 811`, `mul 133` and `mul 133z`. `cards.promo_types` answers it, was already synced and
+  stored, and had simply never crossed into TypeScript. So a **treatment is an annotation on a
+  finish and never a fourth finish**: no migration, no `CHECK` change, nothing in any import
+  format. `src/lib/treatment.ts` owns the naming, because naming is a judgement; Rust hands the
+  column over unread on all five card-shaped DTOs, at **22.7 bytes** on the 32 174 rows that
+  carry one.
+  **32 names over 5 428 of 107 355 paper printings (5.1 %)**, in two kinds, and the split is what
+  the data forced: **25 foil words** (Surge, Halo, Galaxy, Silver, Ripple, Double Rainbow…) name
+  the *shiny* copy, and **7 traits** (Serialized, Thick Stock, Metal, Plastic, Glossy, Poster,
+  Scroll) name the cardboard in any finish. A foil word is withheld from a plain copy — 1 434
+  treated printings are also sold in plain nonfoil, and calling that copy a Silver Foil is the
+  claim `soleFinish` above already refuses to make; a trait outlives the finish, which is what
+  lets **1 718 printings that draw nothing today** carry a mark at all. `oilslick` + `raisedfoil`
+  collapses to the one name a player says.
+  **The glyph is `Aperture` and it replaces the finish's**, so the corner chip still holds at
+  most a crown and one finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that
+  corner means the corner is full. Iris blades because they have to be told from `Sparkles` and
+  `Gem` at 12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without
+  its facets. The **words** follow the same rule the chip already had: joined with ` · ` where
+  there is room for a sentence (a tooltip, an accessible name — "Double Rainbow Foil ·
+  Serialized"), and the first one alone where there is room for a column (the pane's per-finish
+  price rows, which read `Halo Foil  $95.79`). The collection table keeps the glyph in its
+  **Name** cell rather than lengthening `Finish · condition`, which is 5.5rem and truncates
+  "Nonfoil · NM" as it stands.
 - **`mix-blend-mode: overlay` is invisible over card art, and only a screenshot says so.**
   The first foil sheen was a rainbow gradient at 12 % in `overlay`; magnifying one foil tile
   over CDP and shooting it with the sheen shown and hidden produced **indistinguishable

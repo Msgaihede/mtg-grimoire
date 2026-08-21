@@ -58,6 +58,7 @@ const quickAdd = (card: CardSummary) => (
 );
 
 const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSummary => ({
+  promoTypes: null,
   id,
   name,
   setCode: "lea",

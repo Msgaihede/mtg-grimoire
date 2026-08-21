@@ -103,6 +103,15 @@ const SELECTIONS = [
   ["Llanowar Elves", "dom", "168", "en", "Green, common, a 1/1 body: the ordinary creature every P/T column is sized for."],
   ["Jace, the Mind Sculptor", "wwk", "31", "en", "A planeswalker: mythic, four loyalty abilities, 362 characters of oracle text (measured 2026-08-09) — the long end of the same box."],
   ["Ragavan, Nimble Pilferer", "mh2", "138", "en", "Mythic at one mana, with five of the six price keys filled — only `usd_etched` is null, because it has no etched printing. The row a price column reads with almost nothing missing."],
+  // --- Named treatments (`promo_types`), which are a *kind* of foil rather than a finish.
+  // One row per branch of `finishTreatments` in `@/lib/treatment`, and every one of them a
+  // reprint of an oracle card already above, so the printings list is where they show up
+  // rather than the wall being four cards longer.
+  ["Elesh Norn, Grand Cenobite", "mul", "133", "en", "**Halo Foil, foil-only.** The second card in issue #160's screenshot, where it drew the same `Sparkles` as every ordinary foil. The plainest treated row: one foil word, no choice of finish to fence against."],
+  ["Elesh Norn, Grand Cenobite", "mul", "133z", "en", "**Two treatments at once** — `serialized` and `doublerainbow` — so the mark has to join them (\"Double Rainbow Foil · Serialized\") and lead with the foil word rather than the order Scryfall wrote them in. The third card on the same screenshot."],
+  ["Swords to Plowshares", "msc", "143", "en", "**A foil word on a printing sold in both finishes** — `surgefoil`, `[\"nonfoil\",\"foil\"]`. The fence: 1 434 printings are like this, and the plain copy must not be called a Surge Foil. Nothing else in the corpus can catch that arm. **Swords rather than the newer Sol Ring that also fits**: `db.test.ts` resolves a bare `Sol Ring` to the *newest* printing of that name, so a 2025 reprint would have silently rewritten what two decklist-import tests are about."],
+  ["Swords to Plowshares", "sld", "713", "en", "**A trait on a nonfoil-only printing** — `serialized`, `[\"nonfoil\"]`. The half of the widened reading that reaches a card which draws no mark at all today: serialized cardboard is serialized in whatever finish you hold it."],
+
   ["A-Vivi Ornitier", "fin", "A-248", "en", "An Alchemy rebalance: `isPaper: false`, so the search's `paperOnly` default has a second thing to hide and the two are not one set's quirk. Also the second printing whose oracle card the printings list must therefore return nothing extra for."],
 ];
 
@@ -155,7 +164,7 @@ const SELECT = `
          c.colors, c.color_identity, c.power, c.toughness,
          c.legalities, c.prices, c.price_usd, c.finishes, c.faces,
          c.artist, c.illustration_id, c.released_at, c.image_status,
-         c.promo, c.full_art, c.frame_effects, c.border_color, c.game_changer,
+         c.promo, c.promo_types, c.full_art, c.frame_effects, c.border_color, c.game_changer,
          c.is_paper, c.digital,
          CAST(c.raw AS BLOB) AS raw,
          EXISTS(SELECT 1 FROM cards u
@@ -220,6 +229,7 @@ function toFakeCard(r, label) {
     releasedAt: r.released_at,
     imageStatus: r.image_status,
     promo: r.promo === 1,
+    promoTypes: r.promo_types,
     fullArt: r.full_art === 1,
     frameEffects: r.frame_effects,
     borderColor: r.border_color,
@@ -301,9 +311,11 @@ export interface FakeCard {
    *  A **finish's** price is a lookup in here and nowhere else. */
   prices: string;
   /**
-   * The \`cards.price_usd\` column — the number a search result shows, and the *only* source
-   * \`CardSummary.priceUsd\` has (\`search.rs\` selects this column; it does not touch
-   * {@link FakeCard.prices}).
+   * The \`cards.price_usd\` column — the number a search result shows **on a marketplace priced
+   * from Scryfall's data**, and the only source \`CardSummary.price\` has there (\`search.rs\`
+   * selects this column; it does not touch {@link FakeCard.prices}). Card Kingdom and Mana Pool
+   * price the same row out of \`marketplace_prices\` instead, so this column is one of four
+   * answers rather than the answer.
    *
    * It is a **display and sort fallback chain**, not a finish's price: \`card_row.rs\` fills it
    * \`usd\` → \`usd_foil\` → \`usd_etched\`, so on a foil-only printing it quotes the foil. Never
@@ -329,6 +341,18 @@ export interface FakeCard {
   releasedAt: string;
   imageStatus: string | null;
   promo: boolean;
+  /**
+   * JSON array: Scryfall's \`promo_types\`, \`null\` on four fifths of the corpus.
+   *
+   * The column the **kind** of foil lives in — \`finishes\` has three words for how shiny a
+   * copy is and none for *which* shiny. Read with \`cardTreatments\` / \`finishTreatments\`
+   * from \`@/lib/treatment\`, which owns the naming; the row carries the column verbatim.
+   *
+   * Distinct from \`promo\` above despite the shared word: that is a boolean about how the
+   * card was *distributed*, this is a list of what the cardboard *is*. A Surge Foil is not a
+   * promo and a prerelease stamp is not a treatment.
+   */
+  promoTypes: string | null;
   fullArt: boolean;
   frameEffects: string | null;
   borderColor: string | null;

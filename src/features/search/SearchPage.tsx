@@ -16,6 +16,7 @@ import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/Ad
 import type { DragPayload } from "@/features/decks/dnd";
 import { count } from "@/lib/counts";
 import { parseFinishes, soleFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -80,7 +81,9 @@ export function columnsFor(
           <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
           {/* The table shows no art, so the glyph carries the whole of what the wall's sheen
             says: this printing exists in one finish and it is not the assumed one. */}
-          {tileFinish(card) && <FinishMark finish={tileFinish(card)!} />}
+          {(tileFinish(card) || tileTreatment(card).length > 0) && (
+            <FinishMark finish={tileFinish(card) ?? "nonfoil"} treatments={tileTreatment(card)} />
+          )}
           {/* And the crown, beside it, for the most card-level fact of the lot: the Commander
             bracket counts this one. Over the art it shares the finish chip; here it is a
             sibling of the finish glyph, because a 12px mark in the identifying cell is what
@@ -226,6 +229,22 @@ export const tileDrag = (card: CardSummary): DragPayload => ({
  * Tags page's wall share this one rather than hold a fourth copy.
  */
 export const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
+
+/**
+ * What a result row's printing is *called* — Surge Foil, Halo Foil, Serialized — for the chip
+ * over its art and the glyph in the table's Name cell.
+ *
+ * Read against {@link tileFinish} rather than against the printing, and that pairing is the
+ * whole rule: a foil word describes the *shiny* copy, so a printing sold in both finishes gets
+ * none of it here (1 434 of them are). A trait — serialized, thick stock, a poster — survives
+ * that fence, because the cardboard is that in either finish; those are what let a row with no
+ * sole finish carry a mark at all.
+ *
+ * Module scope for {@link tileFinish}'s reason, and shared with the Tags page's wall the same
+ * way.
+ */
+export const tileTreatment = (card: CardSummary) =>
+  finishTreatments(card.promoTypes, tileFinish(card));
 
 /**
  * Whether a tile's card is one the Commander bracket counts — the crown, in the same top-right
@@ -575,6 +594,7 @@ function Results({ search }: { search: CardSearch }) {
             // The 12 366 foil-only and 892 etched-only printings, which Scryfall's art has
             // no way to show — see `soleFinish`.
             finish={tileFinish}
+            treatment={tileTreatment}
             // The crown, in the same chip as that mark. Held still at module scope like every
             // other callback this wall is handed.
             gameChanger={tileGameChanger}

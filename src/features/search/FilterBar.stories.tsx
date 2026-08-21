@@ -31,7 +31,7 @@ const AT_MIN_WIDTH = "w-[776px]";
  * `toggleColor` makes colourless exclusive both ways (`useCardSearch.ts:125-129`), and
  * `toggleOwned` is a three-state cycle through one boolean — so the badge and the chips would
  * drift from the app while every story here stayed green. The hook is cheap: it queries the
- * seeded fake backend, and the 43-printing corpus answers at once.
+ * seeded fake backend, and the 47-printing corpus answers at once.
  *
  * **The preset is applied from an effect, once.** The only initial state `useCardSearch` takes
  * is a default *format*, which this wrapper does not pass — so every filter a story here opens
@@ -265,7 +265,7 @@ export const Cleared: Story = {
  * The greying, on an ordinary search: **one colour on, and four mana chips out of reach.**
  *
  * The rule is one sentence — *an option greys when turning it on would not change the result
- * set* — and this is the plain reading of it. 13 of the 38 printings this row searches over
+ * set* — and this is the plain reading of it. 13 of the 42 printings this row searches over
  * are castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
  * ignore a press. Standard goes with them in the format select — and **falls to the bottom of
  * it**, which is the second rule this row reads plainly: everything still pickable is listed
@@ -273,7 +273,7 @@ export const Cleared: Story = {
  * pinned rows "Any card" and "Any format". `FORMATS` writes Standard *first*; that order is a
  * fact about the keys and reaches the screen nowhere.
  *
- * 38 rather than the corpus' 41 paper printings, because `playableOnly` is on: the art card,
+ * 42 rather than the corpus' 45 paper printings, because `playableOnly` is on: the art card,
  * `Kozilek, Compleated` and `Little Girl` are legal in no format, and every row of that select
  * but its first — "Any card" — hides them.
  *
@@ -294,10 +294,10 @@ export const SomeUnavailable: Story = {
     // **The exact settled count, not a prefix.** The count rides in the accessible name, so
     // waiting on one is how a story waits for the facets — but the row wears the *previous*
     // search's counts while the next answer is in flight (`keepPreviousData`), and every
-    // state this passes through is also called "Red — N printings". 38 is the answer for a
+    // state this passes through is also called "Red — N printings". 42 is the answer for a
     // red search: pressing Red again would clear the filter, so its own chip counts the whole
     // searchable corpus — paper and playable — rather than the red part of it.
-    await canvas.findByRole("button", { name: "Red — 38 printings" }, { timeout: 5000 });
+    await canvas.findByRole("button", { name: "Red — 42 printings" }, { timeout: 5000 });
 
     // Empty over a red search, and saying so where a reader can hover it. The count rides in
     // the accessible name as well as the tooltip (`ValueChip`'s own rule), so the exact name —
@@ -382,7 +382,7 @@ export const MostlyUnavailable: Story = {
     const canvas = within(canvasElement);
     // **Waited on the exact count**, and the timeout is generous, because the search box is
     // debounced by `DEBOUNCE_MS` (300 ms) before a keystroke becomes a query. A prefix match
-    // here passed against the *unfiltered* answer — "White — 14 printings" — which is the row
+    // here passed against the *unfiltered* answer — "White — 18 printings" — which is the row
     // as it stands for the third of a second before the term lands, and every assertion below
     // then read a live chip and failed. That is the same window a reader can press into; the
     // live pass measured it at ~300–330 ms.

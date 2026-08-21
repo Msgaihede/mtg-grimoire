@@ -13,18 +13,28 @@
  * over a cosmetic field.
  */
 import type { Printing } from "@/lib/ipc";
+import { cardTreatments } from "@/lib/treatment";
 
 /**
- * The seven treatments worth a chip.
+ * The eight treatments worth a chip.
  *
  * Each is a *different field*, which is why this is a hand-written list rather than a derivation:
  * `foil` and `etched` come out of the `finishes` array, `promo` and `fullArt` are booleans,
- * `borderless` is a border colour, and `showcase`/`extendedart` are members of `frameEffects`.
- * The chip's label is what a Magic player calls the thing, not what the column does.
+ * `borderless` is a border colour, `showcase`/`extendedart` are members of `frameEffects`, and
+ * `specialfoil` is a member of `promoTypes`. The chip's label is what a Magic player calls the
+ * thing, not what the column does.
+ *
+ * **`specialfoil` is one chip and not twenty-five**, which is a judgement about this row rather
+ * than a shortcut. `@/lib/treatment` names 32 treatments; a chip each would be a filter bar of
+ * 39, almost every one of them greyed at zero on any given card — the exact noise
+ * {@link treatmentOptions}' zero-count rule exists to keep *legible*, applied at a scale it
+ * cannot survive. What a reader wants of this row is "show me the fancy ones"; which fancy one
+ * each is, the tile's own mark says.
  */
 export const TREATMENTS = [
   { id: "foil", label: "Foil" },
   { id: "etched", label: "Etched" },
+  { id: "specialfoil", label: "Special foil" },
   { id: "promo", label: "Promo" },
   { id: "fullart", label: "Full art" },
   { id: "borderless", label: "Borderless" },
@@ -116,6 +126,11 @@ function hasTreatment(p: Printing, treatment: Treatment): boolean {
       return jsonList(p.finishes).includes("foil");
     case "etched":
       return jsonList(p.finishes).includes("etched");
+    // `cardTreatments`, not `finishTreatments`: the question is whether this *printing* has a
+    // named treatment at all, and a filter that answered per-copy would hide the plain half of
+    // a Surge Foil printing from a reader who pressed the chip to find it.
+    case "specialfoil":
+      return cardTreatments(p.promoTypes).length > 0;
     case "promo":
       return p.promo;
     case "fullart":

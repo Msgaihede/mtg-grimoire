@@ -234,6 +234,9 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     faces: card.faces,
     gameChanger: card.gameChanger,
     finishes: card.finishes,
+    // The printing's, like `finishes` above it: what its foil is *called*. A deck row draws
+    // this against its own `finish`, so a story that wants a named copy sets both.
+    promoTypes: card.promoTypes,
     everUncommon: card.everUncommon,
     unitPrice:
       finishPrice(card.prices, "nonfoil", "usd") ??
@@ -325,6 +328,7 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     faces: null,
     gameChanger: null,
     finishes: null,
+    promoTypes: null,
     // `false` for an orphan, because nothing is known about a card that is not there.
     everUncommon: false,
     // `null` for the row's reason rather than the marketplace's: there is no card to price at

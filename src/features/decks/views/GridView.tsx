@@ -10,6 +10,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Currency, Marketplace } from "@/lib/marketplace";
@@ -408,6 +409,12 @@ function GridCard({
             // The whole card, the same `grid` variant the stack draws.
             variant={DECK_CARD_VARIANT}
             finish={playedFinish(card.finish, card.finishes)}
+            // In the same chip, whose glyph and word it replaces — so a Surge Foil in a deck
+            // says so here exactly as it does on the search wall docked beside this view.
+            treatments={finishTreatments(
+              card.promoTypes,
+              playedFinish(card.finish, card.finishes),
+            )}
             // The crown, in the same chip as the finish and in the same corner the search wall
             // puts it — which is why this view no longer draws `GameChangerBadge`'s `GC`. The
             // two abbreviations of one fact are still right where there is no room for a glyph

@@ -245,6 +245,19 @@ export interface CardSummary {
    */
   finishes: string | null;
   /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
+  /**
    * One of the cards the Commander bracket system counts as a **game changer** — a crown on
    * the tile and in the table's Name cell, beside the foil and etched marks.
    *
@@ -445,6 +458,19 @@ export interface CardDetail {
   /** Per finish, at the marketplace `cardDetail` was called with. See {@link FinishPrices}. */
   finishPrices: FinishPrices;
   finishes: string | null;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
   imageStatus: string | null;
   faces: CardFace[];
 }
@@ -467,6 +493,19 @@ export interface Printing {
    *  compares printings by. See {@link FinishPrices}. */
   finishPrices: FinishPrices;
   promo: boolean;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
   fullArt: boolean;
   frameEffects: string | null;
   borderColor: string | null;
@@ -777,6 +816,19 @@ export interface CollectionRow {
   needsReview: string | null;
   /** Unix seconds. */
   updatedAt: number;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
 }
 
 export interface CollectionPage {
@@ -1850,6 +1902,19 @@ export interface DeckCard {
    * choice. Read it with `soleFinish` from `@/lib/finish`.
    */
   finishes: string | null;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
   /** Printed at uncommon on **any** printing of this oracle card, which is what makes a
    *  Pauper Commander commander eligible. Computed, not read: the `paupercommander` legality
    *  key answers a different question (the 99). `false` for an orphan — nothing is known

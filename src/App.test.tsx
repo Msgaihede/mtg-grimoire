@@ -195,6 +195,7 @@ const BURN: DeckRow = {
 };
 
 const BOLT: CardSummary = {
+  promoTypes: null,
   id: "c1",
   name: "Lightning Bolt",
   setCode: "lea",
@@ -276,6 +277,7 @@ const OTHER_BOLT: DeckCard = card({
 });
 
 const ALPHA: Printing = {
+  promoTypes: null,
   id: "c1",
   setCode: "lea",
   setName: "Limited Edition Alpha",
@@ -308,6 +310,7 @@ const M10: Printing = {
 
 /** The same card as a collection row, for the Escape-from-a-stepper test below. */
 const BOLT_ENTRY: CollectionRow = {
+  promoTypes: null,
   id: 7,
   cardId: "c1",
   name: "Lightning Bolt",
@@ -365,6 +368,7 @@ const BOLT_WISH: WishRow = {
 };
 
 const BOLT_DETAIL: CardDetail = {
+  promoTypes: null,
   id: "c1",
   oracleId: "o1",
   name: "Lightning Bolt",

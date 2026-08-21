@@ -297,6 +297,7 @@ function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
 /** One search result, for the tests that drive the docked panel or the quick add. */
 function found(name: string): CardSummary {
   return {
+    promoTypes: null,
     id: `s-${name}`,
     name,
     setCode: "mh2",

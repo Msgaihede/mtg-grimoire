@@ -116,13 +116,13 @@ const meta = {
           "the six rows rather than the thousand — a fact about the card, not about this " +
           "control.\n\n" +
           "**Four of its states cannot be reached from the story corpus, and none is faked " +
-          "here.** The fake backend derives `list_sets` from the 43 fixture printings, which is " +
-          "**31 sets with a paper printing** (measured by the `Open` story's own assertion): " +
+          "here.** The fake backend derives `list_sets` from the 47 fixture printings, which is " +
+          "**33 sets with a paper printing** (measured by the `Open` story's own assertion): " +
           "too few for the `Showing N of M` footer *and the `Show 50 more` button beside it* — " +
           "they appear and disappear together — which need more than the 100 options " +
           "`MAX_OPTIONS` renders, and far too few for the ceiling sentence, which needs " +
           "`MAX_SETS` (64) picked. The `large` seed does not " +
-          "help: its 5 200 synthetic printings take their `setCode` from the same 33 real rows, " +
+          "help: its 5 200 synthetic printings take their `setCode` from the same 35 real rows, " +
           "so it is a bigger corpus in the same sets. `Loading sets…` and " +
           "`Could not read the set list` are the query's pending and error states: the fake " +
           "resolves in a microtask and its `list_sets` handler cannot throw, so neither is " +
@@ -188,12 +188,12 @@ export const Selected: Story = {
 };
 
 /**
- * Open, and what the whole list is: **31 sets**, not the 33 the fixture corpus prints cards in.
+ * Open, and what the whole list is: **33 sets**, not the 35 the fixture corpus prints cards in.
  *
  * A set with no paper printing can never match a search, so offering it would be offering an
  * empty result (`SetCombobox.tsx:182`). The two missing here are the two the corpus knows only
  * as digital printings — Vintage Masters and Final Fantasy — and the assertion names them,
- * because "31" alone would pass just as happily if the filter had dropped the wrong two. Final
+ * because "33" alone would pass just as happily if the filter had dropped the wrong two. Final
  * Fantasy: Through the Ages is the control: same words at the front of its name, a paper
  * printing, and it is offered.
  *
@@ -216,7 +216,7 @@ export const Open: Story = {
 
     const list = canvas.getByRole("listbox");
     const options = within(list).getAllByRole("option");
-    await expect(options).toHaveLength(31);
+    await expect(options).toHaveLength(33);
     await expect(within(list).queryByText("Vintage Masters")).toBeNull();
     await expect(within(list).queryByText("Final Fantasy")).toBeNull();
     await expect(within(list).getByText("Final Fantasy: Through the Ages")).toBeInTheDocument();

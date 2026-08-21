@@ -16,6 +16,7 @@ import {
   summaryOf,
   tileDrag,
   tileFinish,
+  tileTreatment,
   tileGameChanger,
 } from "@/features/search/SearchPage";
 import type { CardSearch } from "@/features/search/useCardSearch";
@@ -258,6 +259,7 @@ export function TagResults({ search }: { search: CardSearch }) {
             }
             // The foil-only and etched-only printings, which Scryfall's art has no way to show.
             finish={tileFinish}
+            treatment={tileTreatment}
             // The crown, in the same chip as that mark.
             gameChanger={tileGameChanger}
             cardMenu={cardMenu}

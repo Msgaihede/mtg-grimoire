@@ -15,6 +15,7 @@ import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
+import { type Treatment, treatmentTitle } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
@@ -247,6 +248,7 @@ export function CardGrid<T extends GridCard>({
   badge,
   topLeft,
   finish,
+  treatment,
   gameChanger,
   action,
   caption,
@@ -320,6 +322,22 @@ export function CardGrid<T extends GridCard>({
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
    */
   finish?: (card: T) => Finish | null;
+  /**
+   * What a tile's card is *called*, if anything — `finishTreatments` from `@/lib/treatment`,
+   * drawn by `CardArt` in the **same chip** as {@link finish}, whose glyph and word it
+   * replaces.
+   *
+   * A second callback beside `finish` rather than a widening of it, which is what the two
+   * existing marks already do for each other's reason: they answer about different columns
+   * (`finishes` and `promo_types`), a caller may honestly have one and not the other, and a
+   * `{finish, treatments}` pair would make every existing call site build an object per tile
+   * on every render. Absent means no tile is named, which is what a wall with no
+   * `promoTypes` on its rows must draw.
+   *
+   * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}. A fresh arrow
+   * per render tears every tile's drag registration down and rebuilds it on every scrolled row.
+   */
+  treatment?: (card: T) => readonly Treatment[];
   /**
    * Whether a tile's card is one of the cards the Commander bracket counts — a small gold
    * crown, drawn by `CardArt` in the **same top-right chip** as the finish mark beside it.
@@ -819,6 +837,7 @@ export function CardGrid<T extends GridCard>({
                 badge={badge}
                 topLeft={topLeft}
                 finish={finish}
+                treatment={treatment}
                 gameChanger={gameChanger}
                 action={action}
                 caption={caption}
@@ -852,6 +871,7 @@ function Tile<T extends GridCard>({
   badge,
   topLeft,
   finish,
+  treatment,
   gameChanger,
   action,
   caption,
@@ -886,6 +906,7 @@ function Tile<T extends GridCard>({
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
   finish?: (card: T) => Finish | null;
+  treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
   caption?: (card: T) => ReactNode;
@@ -897,7 +918,11 @@ function Tile<T extends GridCard>({
   const mark = badge?.(card);
   const corner = topLeft?.(card);
   const tileFinish = finish?.(card) ?? null;
-  const finishWord = tileFinish ? FINISH_LABEL[tileFinish] : null;
+  const tileTreatments = treatment?.(card) ?? [];
+  // The treatment's words where there are any, the finish's otherwise — the same swap the
+  // chip makes, so the `sr-only` statement below and the picture above cannot disagree.
+  const finishWord =
+    treatmentTitle(tileTreatments) ?? (tileFinish ? FINISH_LABEL[tileFinish] : null);
   const crowned = gameChanger?.(card) ?? false;
   /**
    * Opening the card, or nothing at all — see {@link GridCard.id} for the row that has no
@@ -1030,6 +1055,7 @@ function Tile<T extends GridCard>({
             name={card.name}
             selected={selected}
             finish={tileFinish}
+            treatments={tileTreatments}
             gameChanger={crowned}
             hoverZoom
           />

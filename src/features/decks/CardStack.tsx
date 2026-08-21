@@ -8,6 +8,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardScaleVars, DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { playedFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
@@ -806,6 +807,9 @@ function StackedCard({
     card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
   );
   const finish = playedFinish(card.finish, card.finishes);
+  // What that copy is *called*, if anything — the same reading the deck's other three views
+  // make, so one card is not marked two ways on one screen.
+  const treatments = finishTreatments(card.promoTypes, finish);
   // The allocator claims no copy for an inactive category, so every row in one reads 0 owned
   // by construction — a shortage mark there would report one the reader does not have. The
   // switch, never the kind: a Maybeboard switched *on* is short of copies like any other pile.
@@ -1152,11 +1156,14 @@ function StackedCard({
         >
           {card.setCode.toUpperCase()} · {card.collectorNumber}
         </span>
-        {/* `Sparkles` for foil, `Gem` for etched — never one glyph with a modifier, because
-            etched is a third thing and not a kind of foil. A printing sold in both finishes is
-            `null` here and draws nothing: the mark states what the object *is*, and 61 % of the
-            corpus has a foil version. */}
-        {finish !== null && <FinishMark finish={finish} />}
+        {/* `Sparkles` for foil, `Gem` for etched, `Aperture` for a copy with a name of its own
+            — never one glyph with a modifier, because etched is a third thing and not a kind of
+            foil. A printing sold in both finishes is `null` here and draws nothing: the mark
+            states what the object *is*, and 61 % of the corpus has a foil version. A **trait**
+            outlives that rule, because serialized cardboard is serialized either way. */}
+        {(finish !== null || treatments.length > 0) && (
+          <FinishMark finish={finish ?? "nonfoil"} treatments={treatments} />
+        )}
         <span className="shrink-0 tabular-nums text-text">
           {formatPrice(card.unitPrice, currency)}
         </span>

@@ -41,6 +41,10 @@ const REPRINTED = largeCard("Ancient Aegis");
  *  other Sol Ring, which is what makes two printings enough to prove a swap. */
 const SOL_RING_C21 = printing("c21", "263");
 
+/** **The card issue #160 was reported on**, and the reason its three printings are in the
+ *  fixture: `nph 9` plain, `mul 133` Halo Foil, `mul 133z` a serialized Double Rainbow. */
+const ELESH_NORN = printing("nph", "9");
+
 /**
  * The page size the modal asks the backend for, copied from `AllPrintingsDialog`'s own
  * `PRINTINGS_PAGE` because that constant is module-private.
@@ -472,6 +476,77 @@ export const Default: Story = {
     // rather than a count of them: jsdom lays nothing out, so how many tiles a virtualised wall
     // draws under `src/stories.test.tsx` is an artefact of that file's stubbed viewport.
     await expect(await modal.findByAltText("Ancient Aegis (UNF 8)")).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Three printings of one card, and three different answers to "what is this?"** — the wall
+ * issue #160 was reported from, on the card it was reported with.
+ *
+ * The report said: *the second card in the image is "Surge Foil"*, and the app drew it exactly
+ * like the ordinary foil beside it. It is in fact a **Halo Foil** (`mul 133`), and its neighbour
+ * `mul 133z` is a serialized **Double Rainbow Foil** — three rows that were one `Sparkles` with
+ * one word, `Foil`, behind all of them.
+ *
+ * **The kind of foil is a different column from the finish, and that is the whole shape of the
+ * fix.** `cards.finishes` holds three words across all 116 712 rows — `nonfoil`, `foil`, `etched`
+ * — and can never say *which* shiny; `cards.promo_types` can, and was already synced and stored
+ * and never read on this side. So a treatment is an **annotation on a finish** and never a fourth
+ * one: no migration, no `CHECK` change, nothing in any import format moves.
+ *
+ * `@/lib/treatment` does the naming, because naming is a judgement and CLAUDE.md puts those in
+ * TypeScript — Rust hands the column over unread. It names **32** of the 113 promo types live in
+ * the corpus, covering 5 428 of 107 355 paper printings (5.1 %), which is why a mark on one is
+ * information rather than decoration.
+ *
+ * **The glyph is `Aperture` and it replaces the finish's rather than joining it.** The corner
+ * chip still holds at most a crown and one finish mark — `src/CLAUDE.md`'s rule that a third mark
+ * wanting that corner means the corner is full — and the chip is `aria-hidden`, so the words a
+ * reader is *told* ride in the tile's caption, which is where this story reads them.
+ *
+ * **The eighth chip.** `Special foil` joins the seven, and it is one chip rather than 32: a chip
+ * each would be a filter bar of 39, almost all greyed at zero on any one card. It asks about the
+ * *printing* and not about a copy — see {@link printingFilters}' own tests for why that
+ * difference matters on a printing sold in both finishes.
+ */
+export const NamedFoils: Story = {
+  args: { oracleId: ELESH_NORN.oracleId, name: ELESH_NORN.name },
+  parameters: { fake: { seed: "starter" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: /Elesh Norn/ });
+    const modal = within(dialog);
+    await modal.findByText("3 printings");
+
+    // **The two named rows, in the words a reader is told.** The chip over the art is
+    // `aria-hidden` — it sits inside the tile's button, where any text of its own would join the
+    // button's name — so `CardGrid` states the same words in the caption beside it, and these are
+    // that statement. Two of them are the two facts one card carries, joined the way the app
+    // joins card facts everywhere else.
+    await expect(await modal.findByText(", Halo Foil")).toBeInTheDocument();
+    await expect(modal.getByText(", Double Rainbow Foil · Serialized")).toBeInTheDocument();
+    // And the third row says nothing, which is the half that keeps the mark meaning something:
+    // `nph 9` is sold in both finishes and is neither.
+    await expect(modal.queryByText(", Foil")).toBeNull();
+
+    // The eighth chip, counting the two — an ordinary offer rather than a greyed one, unlike
+    // `Etched` beside it, which no printing of this card has.
+    await expect(
+      modal.getByRole("button", { name: "Special foil — 2 printings" }),
+    ).not.toHaveAttribute("aria-disabled");
+    await expect(modal.getByRole("button", { name: "Etched — 0 printings" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    // Pressing it narrows the wall to them, and the plain row is **gone** rather than merely
+    // uncounted.
+    await userEvent.click(modal.getByRole("button", { name: "Special foil — 2 printings" }));
+    await expect(await modal.findByText("showing 2 of 3 printings")).toBeInTheDocument();
+    await expect(modal.queryByAltText("Elesh Norn, Grand Cenobite (NPH 9)")).toBeNull();
+    await expect(
+      await modal.findByAltText("Elesh Norn, Grand Cenobite (MUL 133)"),
+    ).toBeInTheDocument();
   },
 };
 

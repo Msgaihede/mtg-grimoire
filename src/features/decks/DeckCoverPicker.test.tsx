@@ -30,6 +30,7 @@ import { coverChoices, DeckCoverPicker, type DeckCoverPickerProps } from "./Deck
 /** One search result — `DeckEditor.test.tsx`'s builder, cut to what a cover tile reads. */
 function found(name: string): CardSummary {
   return {
+    promoTypes: null,
     id: `s-${name}`,
     name,
     setCode: "mh2",

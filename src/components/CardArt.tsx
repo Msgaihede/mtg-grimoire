@@ -4,6 +4,7 @@ import { GAME_CHANGER_LABEL, GameChangerMark } from "@/components/GameChangerMar
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
+import { type Treatment, treatmentTitle } from "@/lib/treatment";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +72,7 @@ export function CardArt({
   selected = false,
   hoverZoom = false,
   finish = null,
+  treatments,
   gameChanger = false,
   loading,
   className,
@@ -117,6 +119,16 @@ export function CardArt({
    * own stored finish, which is the one place the answer is known outright.
    */
   finish?: Finish | null;
+  /**
+   * What this copy is *called*, if anything — `finishTreatments(promoTypes, finish)` from
+   * `@/lib/treatment`, passed straight to {@link FoilOverlay}.
+   *
+   * Empty (the default) is every card that has no name beyond its finish, which is 95 % of the
+   * corpus. Non-empty renames the chip's glyph and its word: a Surge Foil says so instead of
+   * saying "Foil". It changes the **chip only** — see {@link FoilOverlay.treatments} for why
+   * the sheen is not its business.
+   */
+  treatments?: readonly Treatment[];
   /**
    * Whether this card is one the Commander bracket counts, drawn as a crown in the same corner
    * chip as {@link finish}.
@@ -210,7 +222,7 @@ export function CardArt({
         </span>
       )}
 
-      <FoilOverlay finish={finish} gameChanger={gameChanger} />
+      <FoilOverlay finish={finish} treatments={treatments} gameChanger={gameChanger} />
     </span>
   );
 }
@@ -238,10 +250,26 @@ export function CardArt({
  */
 export function FoilOverlay({
   finish,
+  treatments,
   gameChanger = false,
   mark = true,
 }: {
   finish: Finish | null;
+  /**
+   * What this copy is *called* — `finishTreatments` from `@/lib/treatment`, `[]` for the 95 %
+   * of printings with no name beyond their finish.
+   *
+   * **The chip's business and never the sheen's.** The sheen is a photograph of what the
+   * cardboard does to light and this app draws one gradient; a Halo Foil and a Surge Foil do
+   * different things to light and neither is that gradient, so a second sheen would be a
+   * claim the art cannot support. The chip is where a name belongs — it is the half that
+   * *says* foil, as the comment on the sheen below puts it.
+   *
+   * It is also what lets a **plain** copy carry a mark: `Serialized` and `Poster` are true of
+   * the cardboard in any finish, so `finish === null` with a non-empty list draws the chip and
+   * no sheen, which is exactly the right picture of a serialized nonfoil card.
+   */
+  treatments?: readonly Treatment[];
   /**
    * Optional, and it has to stay optional: two callers outside `CardArt` draw this overlay
    * (the card detail pane's main art and the deck stack's card) and neither says anything about
@@ -272,7 +300,8 @@ export function FoilOverlay({
   const tip = useTooltip();
   // Two marks, one chip, and either of them is reason enough to draw it — but only if the
   // caller wanted a chip at all.
-  const chip = mark && (finish !== null || gameChanger);
+  const named = treatments !== undefined && treatments.length > 0;
+  const chip = mark && (finish !== null || gameChanger || named);
   if (!finish && !chip) return null;
   // What the chip's own padding says on hover, covering the gap between the two glyphs as
   // well as each glyph's own tooltip (bound separately, in `FinishMark`/`GameChangerMark`
@@ -281,7 +310,13 @@ export function FoilOverlay({
   // glyph, so this is only ever seen over the padding between or around them; it still needs
   // the words, because "Game changer · Foil" is a fact this chip alone states. Joined with the
   // separator the app uses between card facts everywhere else.
-  const chipTitle = [gameChanger ? GAME_CHANGER_LABEL : null, finish ? FINISH_LABEL[finish] : null]
+  // The finish's own word only where nothing has renamed it: `FinishMark` says
+  // "Surge Foil · Serialized" for a named copy, and this padding tooltip must not answer
+  // "Foil" over the same chip.
+  const chipTitle = [
+    gameChanger ? GAME_CHANGER_LABEL : null,
+    named ? treatmentTitle(treatments) : finish ? FINISH_LABEL[finish] : null,
+  ]
     .filter((word) => word !== null)
     .join(" · ");
   return (
@@ -358,7 +393,7 @@ export function FoilOverlay({
           )}
         >
           {gameChanger && <GameChangerMark />}
-          {finish && <FinishMark finish={finish} />}
+          {(finish || named) && <FinishMark finish={finish ?? "nonfoil"} treatments={treatments} />}
         </span>
       )}
     </span>

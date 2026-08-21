@@ -62,6 +62,7 @@ import { useAppStore } from "@/lib/store";
 import { needsNextPage, nextOffset } from "./useCardSearch";
 
 const BOLT: CardSummary = {
+  promoTypes: null,
   id: "1",
   name: "Lightning Bolt",
   setCode: "lea",
@@ -90,6 +91,7 @@ const BOLT: CardSummary = {
 
 /** Every nullable column at once — the shape a token or an unpriced printing arrives in. */
 const SPARSE: CardSummary = {
+  promoTypes: null,
   id: "2",
   name: "Nameless Race",
   setCode: "chr",

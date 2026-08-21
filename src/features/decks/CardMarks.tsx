@@ -35,6 +35,7 @@ import { COUNT_TAG_BOX_MIRRORED, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/co
 import { FinishMark } from "@/components/FinishMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { playedFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
@@ -503,12 +504,22 @@ export function RuleBreakMark({ text, className }: { text: string; className?: s
  * carries the finish on every view, so this is free to be either.
  *
  * Nothing at all for the regular copy, which is the rule `soleFinish` and `FINISH_LABEL` are
- * both written by: nonfoil is the finish a card is assumed to be.
+ * both written by: nonfoil is the finish a card is assumed to be — **unless the cardboard has a
+ * name of its own**, which is what a trait like Serialized or Poster is (`@/lib/treatment`).
+ *
+ * The treatment is read against `playedFinish`'s answer and not against the printing, so the
+ * deck's own statement still leads: a row that says it sleeves the plain copy of a Surge Foil
+ * printing is not called a Surge Foil.
  */
-export function DeckFinishMark({ card }: { card: Pick<DeckCard, "finish" | "finishes"> }) {
+export function DeckFinishMark({
+  card,
+}: {
+  card: Pick<DeckCard, "finish" | "finishes" | "promoTypes">;
+}) {
   const finish = playedFinish(card.finish, card.finishes);
-  if (finish === null) return null;
-  return <FinishMark finish={finish} />;
+  const treatments = finishTreatments(card.promoTypes, finish);
+  if (finish === null && treatments.length === 0) return null;
+  return <FinishMark finish={finish ?? "nonfoil"} treatments={treatments} />;
 }
 
 export function rowMarkColor(ruleBreakText: string | null, gameChanger: boolean | null): string {

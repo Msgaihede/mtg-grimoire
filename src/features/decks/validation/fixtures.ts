@@ -320,6 +320,7 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
   const kind = overrides.categoryKind ?? "main";
   const category = CATEGORIES[kind];
   return {
+    promoTypes: null,
     id: nextRow++,
     cardId: `c-${name}`,
     categoryId: category.id,

@@ -158,6 +158,7 @@ const DECK: DeckRow = {
  */
 function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
   return {
+    promoTypes: null,
     id: 1,
     cardId: "sol-ring",
     categoryId: 9,
