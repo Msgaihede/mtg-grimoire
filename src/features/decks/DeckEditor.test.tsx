@@ -30,7 +30,9 @@ import {
   LANDED_ATTR,
   SELECTED_ATTR,
 } from "./cardControl";
+import { THEORY_MATCH_ATTR } from "./CardMarks";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
+import { theorySlot } from "./theoryMatch";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
 import { card, resetRowIds, spec } from "./validation/fixtures";
 
@@ -90,6 +92,10 @@ const deckUndoState = vi.hoisted(() => vi.fn());
 const deckUndoApply = vi.hoisted(() => vi.fn());
 const deckRedoApply = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
+// Which rows of the plan the Live list is standing in for -- the four views' theory tick.
+// Two columns of one indexed scan, and the only read the editor makes of the list the
+// reader is *not* looking at.
+const deckTheorySlots = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet".
@@ -147,6 +153,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckUndoApply,
     deckRedoApply,
     deckTheoryDiff,
+    deckTheorySlots,
     deckFolderList,
     importResolve,
     deckImportCommit,
@@ -581,6 +588,9 @@ beforeEach(() => {
   deckUndoApply.mockReset().mockResolvedValue(undefined);
   deckRedoApply.mockReset().mockResolvedValue(undefined);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
+  // A plan that asks for nothing: the tick is drawn by the tests that are about it and by
+  // no other, so a card name assertion elsewhere never has to know this mark exists.
+  deckTheorySlots.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
@@ -2937,6 +2947,40 @@ describe("DeckEditor", () => {
     await screen.findByRole("group", { name: "Deck list" });
     expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
     expect(tab("Theory")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /**
+   * **The tick is a statement the Live list makes, and pressing `Theory` has to take it off
+   * every row** (issue #159).
+   *
+   * On the plan every row *is* the plan, so a tick on all of them is a mark that says nothing —
+   * which is why `theoryMatchSet` keeps `undefined` apart from the empty set and why the slots
+   * query is not enabled on this tab. **Not being enabled turned out not to be enough.**
+   * `useQuery` serves whatever sits in the cache under its key whether or not it may fetch, and
+   * that key is the *deck*'s rather than the tab's — so a reader who had Live on screen first,
+   * which is where every deck without a remembered tab opens, carried its answer straight over.
+   * Anything that invalidates `["decks"]` while Live is showing refills it, which is why the
+   * report was written from a printing swapped through `View all printings` and why it read as
+   * intermittent.
+   *
+   * Both halves in one press, because "no ticks on the plan" passes on its own for a deck that
+   * never drew one.
+   */
+  it("takes the theory tick off every row when the reader switches to the plan", async () => {
+    withPlan();
+    deckTheorySlots.mockResolvedValue([theorySlot(bolt())]);
+
+    await open();
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
+    );
+
+    await userEvent.click(tab("Theory"));
+
+    // The plan's own card, so the press has actually landed before the count below is read.
+    await screen.findByRole("button", { name: /^Bear/ });
+    expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(0);
   });
 
   /**

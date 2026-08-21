@@ -601,11 +601,21 @@ reader to configure the deck they had just made; it now asks all of them.
   disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
   twice), while this asks for rows no command answers. The **cost** half is answered by the
   command: two columns of one indexed scan, no join to `cards`, no prices, no allocation roll-up,
-  no marketplace — against a `deck_get` that does all four. It is mounted only when
+  no marketplace — against a `deck_get` that does all four. It is enabled only when
   `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
   nothing at all.
   `undefined` rather than an empty set is the other distinction `theoryMatchSet` keeps: no plan is
   not the same statement as a plan that wants none of this.
+  **That `enabled` is a statement about _cost_ and never about the mark, and reading it as both
+  was issue #159.** A disabled `useQuery` still serves whatever sits in the cache under its key,
+  and the key is `["decks", "theorySlots", deckId]` — the **deck's**, deliberately, so both tabs
+  share one entry — so pressing `Theory` after Live had loaded carried Live's answer over and
+  ticked every row of the plan, which matches it by definition. The gate that means it lives on
+  the **derivation** in `DeckEditor` (`variant === "live" ? theoryMatchSet(…) : undefined`);
+  `enabled` promises only that no query is spent. It read as intermittent because it needs the
+  Live tab to have been on screen first — the report came from a printing swapped through
+  `View all printings`, which invalidates `["decks"]` and refills that cache. **Any second reader
+  of these slots takes the same care**: not fetching is not the same as not answering.
   **What moved to make room: the `RULE BREAK` mark, out of the stacked card's top-right corner and
   down to its bottom-left** (2026-08-20), where `GridView` had always drawn it. A tick is the one
   glyph a reader could take for "this card is fine", so `CardMarks.tsx`'s four separations stopped
