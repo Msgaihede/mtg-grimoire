@@ -320,10 +320,20 @@ function tagLine(p: Record<string, unknown>): AuditLine {
       };
     case "recolour":
     case "recolor":
+      // **Written since schema v21, where before it was only ever read.** A recolour used to
+      // share the `rename` verb, because a colour was one of six palette tokens and never
+      // appeared in a sentence. It is the reader's own hex now, and the same hex in every deck,
+      // so it is a change worth being able to find again.
       return { text: `Recoloured tag ${name}`, detail: text(p.color) };
+    case "remove":
+      // Taking a label off one deck's list, which is **not** deleting it — the distinction the
+      // per-deck tag never had to make. The sentence names the deck rather than the tag as the
+      // thing that changed, which is what tells the two lines apart in a history.
+      return { text: `Took tag ${name} off this deck`, detail: moved("untagged") };
     case "delete":
-      // Deleting a tag untags its cards rather than deleting them, which is the half of this
-      // sentence a reader would otherwise have to go and check.
+      // Deleting a tag untags its cards rather than deleting them — in **every** deck wearing
+      // it, since v21 — which is the half of this sentence a reader would otherwise have to go
+      // and check.
       return { text: `Deleted tag ${name}`, detail: moved("untagged") };
     default:
       return { text: `Changed tag ${name}`, detail: null };

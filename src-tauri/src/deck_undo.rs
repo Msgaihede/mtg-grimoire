@@ -213,6 +213,20 @@ pub struct TagRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Carrier {
+    /// Which deck the card is in — **not the step's**, since schema v21.
+    ///
+    /// A tag belongs to no deck now, so a delete's carriers are every card wearing it *in every
+    /// deck*, while the step recording that delete is filed under the one deck the reader was
+    /// standing in. Without this field the reversal would put the label back on that deck's
+    /// cards and quietly leave the other decks' bare — the failure mode being that undo looks
+    /// like it worked, on the screen that is open.
+    ///
+    /// `#[serde(default)]` and `Option`, so a step written before v21 still deserialises;
+    /// [`apply`] reads `None` as the step's own deck, which is what such a step meant. Nothing
+    /// in a shipped database can be in that state — schema v21 clears `deck_undo` — but a step
+    /// is a serialised format and the cheap fallback is worth more than the assertion.
+    #[serde(default)]
+    pub deck_id: Option<i64>,
     pub variant: String,
     pub category_id: i64,
     pub card_id: String,
@@ -574,17 +588,53 @@ pub fn read_tag(conn: &Connection, id: i64) -> Result<Option<TagRow>, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Every card wearing one tag, as cells — what a tag delete's `SET NULL` is about to clear.
+/// Every card wearing one tag **in every deck**, as cells — what a tag delete's `SET NULL` is
+/// about to clear.
+///
+/// Deck-blind since v8 and *correct* only since v21: while a tag belonged to one deck, every
+/// carrier was in that deck by construction and the missing `WHERE deck_id` was a distinction
+/// with no difference. A tag is the app's now, so this genuinely spans decks — which is why
+/// [`Carrier::deck_id`] exists.
 pub fn read_carriers(conn: &Connection, tag_id: i64) -> Result<Vec<Carrier>, String> {
+    carriers_where(conn, "tag_id = ?1", params![tag_id], tag_id)
+}
+
+/// The same, narrowed to one list of one deck — [`crate::deck_meta::remove_tag_from_deck`]'s
+/// read, which is about a deck's cards rather than about the tag.
+pub fn read_carriers_in(
+    conn: &Connection,
+    tag_id: i64,
+    deck_id: i64,
+    variant: &str,
+) -> Result<Vec<Carrier>, String> {
+    carriers_where(
+        conn,
+        "tag_id = ?1 AND deck_id = ?2 AND variant = ?3",
+        params![tag_id, deck_id, variant],
+        tag_id,
+    )
+}
+
+/// The one statement both reads are. `where_sql` is a literal from this module and never a
+/// caller's string, so building it with `format!` carries no injection risk.
+fn carriers_where(
+    conn: &Connection,
+    where_sql: &str,
+    args: impl rusqlite::Params,
+    tag_id: i64,
+) -> Result<Vec<Carrier>, String> {
     let mut stmt = conn
-        .prepare("SELECT variant, category_id, card_id FROM deck_cards WHERE tag_id = ?1")
+        .prepare(&format!(
+            "SELECT deck_id, variant, category_id, card_id FROM deck_cards WHERE {where_sql}"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![tag_id], |r| {
+        .query_map(args, |r| {
             Ok(Carrier {
-                variant: r.get(0)?,
-                category_id: r.get(1)?,
-                card_id: r.get(2)?,
+                deck_id: Some(r.get(0)?),
+                variant: r.get(1)?,
+                category_id: r.get(2)?,
+                card_id: r.get(3)?,
                 tag_id: Some(tag_id),
             })
         })
@@ -718,23 +768,34 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                 delete,
                 carriers,
             } => {
+                // No `AND deck_id = ?`, and none of the three statements in this arm has one
+                // since schema v21: a tag is one app-wide row, so the id *is* the whole
+                // address. A deck-scoped clause here would silently match nothing and report a
+                // successful undo that undid nothing.
                 for id in delete {
                     tx.execute(
-                        "DELETE FROM deck_tags WHERE id = ?1 AND deck_id = ?2",
-                        params![remap.tag(Some(*id)), deck_id],
+                        "DELETE FROM deck_tags WHERE id = ?1",
+                        params![remap.tag(Some(*id))],
                     )
                     .map_err(|e| e.to_string())?;
                 }
                 for row in restore {
-                    restore_tag(tx, deck_id, row, &mut remap)?;
+                    restore_tag(tx, row, &mut remap)?;
                 }
                 for row in patch {
                     let id = remap.tag(Some(row.id));
                     let changed = tx
                         .execute(
-                            "UPDATE deck_tags SET name = ?2, color = ?3, updated_at = unixepoch()
-                              WHERE id = ?1 AND deck_id = ?4",
-                            params![id, row.name, row.color, deck_id],
+                            "UPDATE deck_tags
+                                SET name = ?2, name_key = ?3, color = ?4,
+                                    updated_at = unixepoch()
+                              WHERE id = ?1",
+                            params![
+                                id,
+                                row.name,
+                                crate::schema::tag_name_key(&row.name),
+                                row.color
+                            ],
                         )
                         .map_err(|e| e.to_string())?;
                     if changed == 0 {
@@ -742,12 +803,14 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                     }
                 }
                 for carrier in carriers {
+                    // The carrier's own deck, falling back to the step's for a step written
+                    // before v21 — see `Carrier::deck_id`.
                     tx.execute(
                         "UPDATE deck_cards SET tag_id = ?5, updated_at = unixepoch()
                           WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3
                             AND card_id = ?4",
                         params![
-                            deck_id,
+                            carrier.deck_id.unwrap_or(deck_id),
                             carrier.variant,
                             remap.category(carrier.category_id),
                             carrier.card_id,
@@ -929,27 +992,29 @@ fn patch_category(
 }
 
 /// Bring one tag back from a delete — [`restore_category`]'s two cases, over `deck_tags`.
-fn restore_tag(
-    tx: &Connection,
-    deck_id: i64,
-    row: &TagRow,
-    remap: &mut Remap,
-) -> Result<(), String> {
+///
+/// **No `deck_id`, since schema v21**, and one refusal that is new with it: the tag being
+/// restored may have had its *name* taken in the meantime, by another deck, because the grain
+/// is app-wide. The UNIQUE index answers that with an error the reader sees, which is the right
+/// outcome — the alternative is a silent second row spelling the same word, which is the one
+/// thing the new grain exists to prevent.
+fn restore_tag(tx: &Connection, row: &TagRow, remap: &mut Remap) -> Result<(), String> {
+    let key = crate::schema::tag_name_key(&row.name);
     if taken(tx, "deck_tags", row.id)? {
         let fresh: i64 = tx
             .query_row(
-                "INSERT INTO deck_tags (deck_id, name, color, created_at, updated_at)
+                "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
                  VALUES (?1, ?2, ?3, unixepoch(), unixepoch()) RETURNING id",
-                params![deck_id, row.name, row.color],
+                params![row.name, key, row.color],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
         remap.tags.insert(row.id, fresh);
     } else {
         tx.execute(
-            "INSERT INTO deck_tags (id, deck_id, name, color, created_at, updated_at)
+            "INSERT INTO deck_tags (id, name, name_key, color, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, unixepoch(), unixepoch())",
-            params![row.id, deck_id, row.name, row.color],
+            params![row.id, row.name, key, row.color],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -1295,11 +1360,12 @@ mod tests {
             .unwrap()
             .map(Result::unwrap),
         );
-        let mut tags = conn
-            .prepare("SELECT name, color FROM deck_tags WHERE deck_id = ?1")
-            .unwrap();
+        // **Every tag, not this deck's**, since schema v21 — there is no such thing as this
+        // deck's. A tag write is app-wide now, so a snapshot narrowed to one deck would let a
+        // botched reversal leave another deck's label renamed and call the deck restored.
+        let mut tags = conn.prepare("SELECT name, color FROM deck_tags").unwrap();
         out.extend(
-            tags.query_map(params![deck_id], |r| {
+            tags.query_map([], |r| {
                 Ok(format!(
                     "tag {}|{}",
                     r.get::<_, String>(0)?,
@@ -1825,13 +1891,11 @@ mod tests {
                 crate::deck_meta::create_tag(c, id, "Keep", "jade").unwrap();
             }),
             (
-                // A recolour shares the `rename` verb because the palette token never reaches a
-                // sentence — so the colour is a thing only the step records.
                 "deck_tag_update (renaming and recolouring)",
                 nothing,
                 |c, id| {
                     let tag = tag_id(c, id);
-                    crate::deck_meta::update_tag(c, tag, "Cut", "jade").unwrap();
+                    crate::deck_meta::update_tag(c, id, tag, "Cut", "jade").unwrap();
                 },
             ),
             (
@@ -1839,7 +1903,7 @@ mod tests {
                 "deck_tag_delete (un-labelling its cards)",
                 nothing,
                 |c, id| {
-                    crate::deck_meta::delete_tag(c, tag_id(c, id)).unwrap();
+                    crate::deck_meta::delete_tag(c, id, tag_id(c, id)).unwrap();
                 },
             ),
             ("deck_card_set_tag", nothing, |c, id| {
@@ -1862,14 +1926,11 @@ mod tests {
         ]
     }
 
-    /// The tag [`fresh`] seeds.
-    fn tag_id(conn: &Connection, deck_id: i64) -> i64 {
-        conn.query_row(
-            "SELECT id FROM deck_tags WHERE deck_id = ?1",
-            params![deck_id],
-            |r| r.get(0),
-        )
-        .unwrap()
+    /// The tag [`fresh`] seeds. **No deck in the lookup**, since v21 there is none on the row
+    /// — and no ambiguity either: these fixtures seed one deck and one tag.
+    fn tag_id(conn: &Connection, _deck_id: i64) -> i64 {
+        conn.query_row("SELECT id FROM deck_tags", [], |r| r.get(0))
+            .unwrap()
     }
 
     /// One line of an imported decklist.

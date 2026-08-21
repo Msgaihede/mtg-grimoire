@@ -700,7 +700,7 @@ mod tests {
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::update_tag(&conn, tag, "New", "jade").unwrap();
+                    crate::deck_meta::update_tag(&conn, id, tag, "New", "jade").unwrap();
                 }),
             ),
             (
@@ -711,7 +711,7 @@ mod tests {
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::delete_tag(&conn, tag).unwrap();
+                    crate::deck_meta::delete_tag(&conn, id, tag).unwrap();
                 }),
             ),
             (
@@ -1000,18 +1000,32 @@ mod tests {
             json!({ "action": "create", "tag": "Cut candidate", "previous": null })
         );
 
-        crate::deck_meta::update_tag(&conn, tag, "Cut", "jade").unwrap();
+        crate::deck_meta::update_tag(&conn, id, tag, "Cut", "jade").unwrap();
         let (_, payload) = newest(&conn, id);
+        // `color` rides along since v21: one row means one colour, so a recolour is a change a
+        // reader may come back looking for — and a rename that also recoloured says both.
         assert_eq!(
             payload,
-            json!({ "action": "rename", "tag": "Cut", "previous": "Cut candidate" })
+            json!({ "action": "rename", "tag": "Cut", "previous": "Cut candidate",
+                    "color": "jade" })
         );
 
-        crate::deck_meta::delete_tag(&conn, tag).unwrap();
+        // Same name, different colour: the other verb, and `previous` is null because nothing
+        // was renamed.
+        crate::deck_meta::update_tag(&conn, id, tag, "Cut", "amber").unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
-            json!({ "action": "delete", "tag": "Cut", "previous": null })
+            json!({ "action": "recolour", "tag": "Cut", "previous": null, "color": "amber" })
+        );
+
+        crate::deck_meta::delete_tag(&conn, id, tag).unwrap();
+        let (_, payload) = newest(&conn, id);
+        // `cards` is what `auditText` renders "N cards untagged" from. It reads the key for a
+        // delete and always has; nothing wrote it until the reach became app-wide.
+        assert_eq!(
+            payload,
+            json!({ "action": "delete", "tag": "Cut", "previous": null, "cards": 0 })
         );
     }
 

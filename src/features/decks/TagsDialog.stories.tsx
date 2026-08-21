@@ -10,24 +10,26 @@ import { TagsDialog } from "./TagsDialog";
 const FRAME_WAIT = 5_000;
 
 /**
- * The labels of one deck — **driven end to end by `.storybook/fake/`.**
+ * The reader's labels — **driven end to end by `.storybook/fake/`.**
  *
- * All four of this dialog's commands are the fake's (`deck_tag_list`, `deck_tag_create`,
- * `deck_tag_update`, `deck_tag_delete`, plus `deck_tag_suggestions`), so a rename here is a row
- * changing in a table and a delete really takes the label off cards. There is no `deck_get` and
- * no marketplace in this file at all: a tag carries a name, a colour and a count, and none of
- * those is a fact about a card row or about money.
+ * All six of this dialog's commands are the fake's (`deck_tag_list`, `deck_tag_all`,
+ * `deck_tag_create`, `deck_tag_update`, `deck_tag_remove_from_deck`, `deck_tag_delete`), so a
+ * rename here is a row changing in a table and a delete really takes the label off cards — in
+ * every deck. There is no `deck_get` and no marketplace in this file at all: a tag carries a
+ * name, a colour and a count, and none of those is a fact about a card row or about money.
  *
  * The deck's *piles* are `Decks/CategoriesDialog`, which is the other half of the drawer these
  * two were split out of.
  *
- * **Two seeded decks are two shapes of deck**, and which one a story opens is the story's whole
- * setup:
+ * **The seed is three app-wide labels and the two sections split them by what a deck wears**:
+ * `Cut candidate` is on two of `Rhystic Testbed`'s live cards, `Budget swap` is worn only in
+ * another deck, and `Combo piece` is worn by nothing at all. Which deck a story opens is
+ * therefore the story's whole setup:
  *
- * * **Deck 4, `Rhystic Testbed`** — two labels, one of them worn by a card. This is the dialog
- *   with something in it.
- * * **Deck 2, `Kenrith Two-Drops`** — an older deck with no tags at all. This is the dialog on
- *   the day it was opened for the first time, which is the state that has to invite.
+ * * **Deck 4, `Rhystic Testbed`** — one label in use here, two below it. This is the dialog with
+ *   something in both of its sections.
+ * * **Deck 2, `Kenrith Two-Drops`** — a deck with no tagged cards. Its first section is empty and
+ *   its second holds every label the reader owns, which is the state that has to invite.
  */
 const meta = {
   title: "Decks/TagsDialog",
@@ -39,7 +41,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Two labels — one on a card, one waiting to be used. */
+/** One label on this list's cards, and the reader's other two under it. */
 export const Default: Story = {
   play: async ({ canvas }) => {
     // `findByText` alone is not enough here: it waits for the row to **exist**, and the shell's
@@ -47,28 +49,33 @@ export const Default: Story = {
     await waitFor(async () => await expect(await canvas.findByText("Cut candidate")).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
+    await expect(canvas.getByText("On cards in this live list")).toBeVisible();
+    await expect(canvas.getByText("Your other tags")).toBeVisible();
+    // Worn by nothing anywhere: the row `deck_tag_list` could never answer, and the reason the
+    // app-wide read exists.
+    await expect(canvas.getByText("Combo piece")).toBeVisible();
   },
 };
 
 /**
- * A deck with not one tag.
+ * A deck with nothing tagged.
  *
- * The empty state is the one that has to invite, and since the redesign it says what to do rather
- * than only what is absent — the field it points at is now the first thing in the dialog rather
- * than the last.
+ * The empty state is the one that has to invite, and it says what to do rather than only what is
+ * absent. **Every label the reader owns is still here**, one section down — which is the whole
+ * difference the app-wide list makes: a deck they have not tagged yet is not a deck with no tags
+ * available to it.
  */
 export const FirstOpen: Story = {
   args: { deckId: 2 },
   play: async ({ canvas }) => {
     // The panel's arrival, waited out once — everything under it is visible in the same tick,
-    // which is why the suggestion below needs no wait of its own. See {@link FRAME_WAIT}.
+    // which is why the rows below need no wait of their own. See {@link FRAME_WAIT}.
     await waitFor(
-      async () => await expect(await canvas.findByText(/No tags yet/)).toBeVisible(),
+      async () => await expect(await canvas.findByText(/Nothing in this list is tagged yet/)).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
-    // The palette is global, so a deck with no tags of its own is still offered every name the
-    // reader has typed into another one.
-    await expect(await canvas.findByRole("button", { name: "Add tag Cut candidate" })).toBeVisible();
+    await expect(await canvas.findByText("Cut candidate")).toBeVisible();
+    await expect(await canvas.findByText("Budget swap")).toBeVisible();
   },
 };
 
@@ -81,11 +88,11 @@ export const Closed: Story = {
 };
 
 /**
- * A tag renamed — the word only, since the redesign.
+ * A tag renamed — the word only, and **in every deck at once**.
  *
- * `deck_tag_update` still renames **and** recolours in one command with no patch shape, so this
- * field sends the row's existing colour back untouched. The other half is `RecolouringATag`
- * below, which sends the name back the same way.
+ * `deck_tag_update` renames **and** recolours in one command with no patch shape, so this field
+ * sends the row's existing colour back untouched. The other half is `RecolouringATag` below,
+ * which sends the name back the same way.
  */
 export const RenamingATag: Story = {
   play: async ({ canvas }) => {
@@ -104,11 +111,11 @@ export const RenamingATag: Story = {
 };
 
 /**
- * The colour, reached from the swatch that is already showing it.
+ * The colour, reached from the swatch that is already showing it — and changed for every deck.
  *
- * **This is what the redesign moved.** Recolouring used to be reachable only by pressing Rename,
- * which asked a reader who wanted a different red to open the control for changing the word. The
- * swatch is a button now: it opens the picker under the row, and Done is the write.
+ * The swatch is a button: it opens the picker under the row, and Done is the write. That is
+ * the issue's headline made pressable, since one row means one colour and there is no longer a
+ * way for the same word to be red here and blue there.
  */
 export const RecolouringATag: Story = {
   play: async ({ canvas }) => {
@@ -137,22 +144,75 @@ export const RecolouringATag: Story = {
 };
 
 /**
- * A name typed into another deck, offered in this one.
+ * **The two destructive acts, and the one this story is about is the gentler one.**
  *
- * The palette is a property of the app's whole history rather than of the deck that happens to be
- * open — `deck_tag_suggestions` takes no deck id at all. Picking one makes a tag *of this deck*;
- * a suggestion this deck already has is not an offer, which is why "Cut candidate" is absent and
- * "Budget swap" is not.
+ * They used to be one press. While a tag belonged to a deck, "I am done with this label here"
+ * and "this label should stop existing" were the same thing; conflating them now would mean a
+ * reader tidying one deck stripping a label off nine others. So a row in the deck's own section
+ * offers **Remove**, which untags this list's cards and leaves the tag standing — and the row
+ * then reappears under "Your other tags", which is the visible proof that nothing was destroyed.
  */
-export const TagFromASuggestion: Story = {
+export const RemovingATagFromTheDeck: Story = {
   play: async ({ canvas }) => {
-    await canvas.findByText("Cut candidate");
-    await expect(canvas.queryByRole("button", { name: "Add tag Cut candidate" })).toBeNull();
+    const tag = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;
+    await userEvent.click(within(tag).getByRole("button", { name: "Remove" }));
 
-    await userEvent.click(canvas.getByRole("button", { name: "Add tag Budget swap" }));
-    await waitFor(async () => {
-      await expect(canvas.queryByRole("button", { name: "Add tag Budget swap" })).toBeNull();
+    const confirm = await canvas.findByRole("group", {
+      name: "Remove Cut candidate from this deck",
     });
+    await expect(confirm).toHaveTextContent("The tag itself stays in your list");
+    await userEvent.click(within(confirm).getByRole("button", { name: "Remove from deck" }));
+
+    // Nothing in this list wears it any more...
+    await waitFor(async () => {
+      await expect(await canvas.findByText(/Nothing in this list is tagged yet/)).toBeVisible();
+    });
+    // ...and the label is still the reader's, one section down, offering the app-wide delete.
+    const moved = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;
+    await expect(within(moved).getByRole("button", { name: "Delete" })).toBeVisible();
+  },
+};
+
+/**
+ * The app-wide delete, and the sentence that has to precede it.
+ *
+ * `deck_cards.tag_id` is `ON DELETE SET NULL`, so no card is destroyed — but the label comes off
+ * every deck wearing it, which is a reach nothing on screen could otherwise show.
+ * {@link GlobalTag.deckCount} is on the row so the confirmation can say the number before the
+ * press rather than after it.
+ */
+export const DeletingATagEverywhere: Story = {
+  play: async ({ canvas }) => {
+    const tag = (await canvas.findByText("Budget swap")).closest("li") as HTMLElement;
+    await userEvent.click(within(tag).getByRole("button", { name: "Delete" }));
+
+    const confirm = await canvas.findByRole("group", { name: "Delete Budget swap" });
+    await expect(confirm).toHaveTextContent("Delete “Budget swap” everywhere?");
+    await userEvent.click(within(confirm).getByRole("button", { name: "Delete tag" }));
+
+    await waitFor(async () => {
+      await expect(canvas.queryByText("Budget swap")).toBeNull();
+    });
+  },
+};
+
+/**
+ * **A name is a name, whatever capitals it is typed in.**
+ *
+ * One row per name is a table property and the backend is the authority, but a reader who types
+ * one that exists has not made a mistake — they have found the tag they wanted. So the field
+ * disables Add and points at the row rather than spending a round trip on a refusal.
+ */
+export const RefusingADuplicateName: Story = {
+  play: async ({ canvas }) => {
+    await waitFor(async () => await expect(await canvas.findByText("Cut candidate")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
+
+    await userEvent.type(canvas.getByLabelText("New tag name"), "budget SWAP");
+
+    await expect(await canvas.findByRole("status")).toHaveTextContent("already exists");
+    await expect(canvas.getByRole("button", { name: "Add tag" })).toBeDisabled();
   },
 };
 

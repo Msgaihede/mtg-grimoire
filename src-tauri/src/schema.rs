@@ -25,7 +25,7 @@
 //!
 //! CASCADE is the common case — `deck_cards.deck_id`, `deck_cards.category_id`,
 //! `deck_allocations.deck_id`, `deck_allocations.collection_entry_id`,
-//! `deck_categories.deck_id`, `deck_tags.deck_id`, `deck_audit.deck_id` and
+//! `deck_categories.deck_id`, `deck_audit.deck_id` and
 //! `deck_folders.parent_id` all take it, because a deleted deck's cards and reservations, a
 //! deleted category's cards, and a deleted folder's sub-folders have nowhere else to be. It
 //! is right, too, at the app's one *non-user* delete: [`crate::reconcile`]'s fold repoints
@@ -35,8 +35,14 @@
 //! filing decision, and the decks inside it are the user's work, not the folder's to take
 //! down with it) and `deck_cards.tag_id` (deleting a tag must never delete a card) — named
 //! here so this list can be checked against the DDL rather than trusted on its own.
+//!
+//! **`deck_tags` left the CASCADE list at v21** and has no key of its own at all: a tag belongs
+//! to no deck, so deleting the deck a label was first typed in must not take it off the others
+//! wearing it. [`crate::reset::clear_decks`] sweeps that table by hand, which is the one case —
+//! every deck at once — where clearing it is right.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 /// The `cards` columns **as version 1 created them. FROZEN.**
 ///
@@ -217,7 +223,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 20;
+pub const SCHEMA_VERSION: i64 = 21;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -328,12 +334,53 @@ pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id, coale
 /// and for the test that keeps this constant honest about what that index holds.
 pub const DECK_CATEGORY_GRAIN: &str = "deck_id, name";
 
-/// What makes two tag rows the same row: one name per deck, [`DECK_CATEGORY_GRAIN`]'s shape
-/// for the same reason. A tag is picked by name from the app's fixed colour palette, and a
-/// deck cannot hold two tags called the same thing.
+/// What makes two tag rows the same row: **one name, app-wide** — no deck in it at all.
+///
+/// It was `deck_id, name` until schema v21, which is the shape [`DECK_CATEGORY_GRAIN`] still
+/// has and the reason the two used to read alike. A category says *where in a deck* a card
+/// lives, so it is a thing the deck owns; a tag says what the reader thinks of a card, and a
+/// reader who has decided what "Cut candidate" means did not decide it per deck. So a tag is
+/// one row shared by every deck that uses it, and recolouring it recolours it everywhere.
+///
+/// **`name_key` rather than `name`**, because the answer this grain has to give is "is that the
+/// same label", and two spellings of one word are. The key is [`tag_name_key`]'s: NFC, Unicode
+/// lowercase, NFC again. It is computed in Rust and stored because SQLite cannot answer it —
+/// `COLLATE NOCASE` folds ASCII and nothing else, and the bundled build carries no Unicode
+/// normalisation at all.
 ///
 /// Read by no SQL at all, like [`DECK_CATEGORY_GRAIN`].
-pub const DECK_TAG_GRAIN: &str = "deck_id, name";
+pub const DECK_TAG_GRAIN: &str = "name_key";
+
+/// What makes two tag names the same name — [`DECK_TAG_GRAIN`]'s value, computed.
+///
+/// Three passes, and each one answers a way two labels a reader cannot tell apart would
+/// otherwise be two rows:
+///
+/// * **NFC** folds a combining accent onto the letter before it, so `Cafe` + U+0301 and the
+///   precomposed `Café` are one string. Both are typeable; which one arrives depends on the
+///   reader's keyboard and operating system, not on what they meant.
+/// * **`to_lowercase`** is the case-insensitive half the issue asks for, and it is the full
+///   Unicode mapping rather than `to_ascii_lowercase` — `RAMPE` and `rampe` fold, and so do
+///   `İ` and the Greek sigma's two lowercase forms.
+/// * **NFC again**, because lowercasing can un-normalise: a handful of codepoints map to
+///   sequences that are not in composed form. Without the second pass those names would key to
+///   something no re-normalised lookup ever matches again.
+///
+/// Trimmed first, for the reason `valid_name` trims: a name is what a reader typed minus the
+/// whitespace they did not mean.
+///
+/// **Not a colour and not a display name.** The key is never shown and never written back to
+/// `deck_tags.name`, which keeps whatever capitals the reader chose — this answers only
+/// "is that the same label", which is a question about identity rather than about spelling.
+pub fn tag_name_key(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.trim()
+        .nfc()
+        .collect::<String>()
+        .to_lowercase()
+        .nfc()
+        .collect()
+}
 
 /// The two decks every deck secretly is: `live`, what is actually sleeved up and playable,
 /// and `theory`, what it is being built toward. CHECK-constrained on `deck_cards.variant`
@@ -557,6 +604,153 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
 /// The v1 `CREATE` describes what version 1 built; a fresh install replays the whole
 /// history, so a column added to v1 would make the later `ALTER` fail on new machines
 /// only.
+/// Schema v21's whole body: fold every deck's private tag list into one app-wide one.
+///
+/// ## What comes out
+///
+/// `deck_tags` loses `deck_id` and gains `name_key`, and its grain becomes [`DECK_TAG_GRAIN`]
+/// — one row per name, app-wide. Two decks that both wrote "Removal" had two rows and have one
+/// now, so every card that wore either wears the survivor.
+///
+/// ## Which row survives a merge, and why the loudest one wins
+///
+/// Most *copies* first (`sum(quantity)` over the cards wearing it, both variants and every
+/// deck), then most recently touched, then lowest id. So the spelling and the colour that come
+/// out are the ones the reader has seen most — a label on sixty cards keeps its red where a
+/// two-card namesake in a deck opened once was blue. Ties fall to `updated_at` because the
+/// later edit is the later decision, and to `id` last so the answer is deterministic on a
+/// database where nothing else separates the two.
+///
+/// It is a real loss and worth naming at its least flattering: the losing colour is gone, and a
+/// reader who genuinely wanted "Removal" red here and blue there cannot have that any more.
+/// That is the feature rather than a side effect — one label, one colour, everywhere.
+///
+/// ## The rebuild, and the trap in it
+///
+/// `deck_cards.tag_id` is `REFERENCES deck_tags(id) ON DELETE SET NULL`, and under
+/// `PRAGMA foreign_keys=ON` **`DROP TABLE` on a parent runs an implicit `DELETE FROM` that
+/// fires exactly that action** — so the obvious build-swap-rename would untag every card in
+/// every deck and leave a perfectly-shaped empty answer behind it. The pragma cannot be turned
+/// off to dodge that: toggling `foreign_keys` is a documented no-op inside a transaction and
+/// `migrate` is always inside one. (The v8 step says the same sentence from the other side,
+/// where the table being dropped was the *child* and there was nothing to dodge.)
+///
+/// So the labels are carried across the drop by hand — `deck_tags_carry` holds
+/// `(deck_cards.id, tag_id)` over the swap and is read back after it. It and `deck_tags_merge`
+/// are both dropped before this returns: a migration that left its scaffolding behind would be
+/// a table in a reader's database that nothing ever cleans up.
+///
+/// ## Every undo step is discarded, and that is not collateral
+///
+/// `deck_undo` rows name tag ids — `Op::Tags` directly, and every *card* step through
+/// `CardRow::tag_id`, which is how undoing a move puts a card's label back. This rung deletes
+/// the ids of merged-away rows, so such a step would restore a card's label as a foreign key
+/// resolving to nothing. Worse, and reachable even where nothing merged at all: a step that
+/// *restores* a deleted tag re-inserts a name another deck now holds, which the new grain
+/// refuses — so the step fails at the moment the reader presses Ctrl+Z, having already applied
+/// the ops recorded before it.
+///
+/// `deck_audit` is deliberately untouched, which is the half a reader can see: the history
+/// still reads in full, and it is only the arrows that lose their charge, once, on the upgrade.
+fn globalise_tags(tx: &Connection) -> rusqlite::Result<()> {
+    // Everything the survivor pick needs, in one read: the row, and how many copies wear it.
+    let rows: Vec<(i64, String, String, i64, i64, i64)> = tx
+        .prepare(
+            "SELECT t.id, t.name, t.color, t.created_at, t.updated_at,
+                    coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
+                               WHERE dc.tag_id = t.id), 0)
+               FROM deck_tags t
+              ORDER BY t.id",
+        )?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // key -> the winning row so far. A `HashMap` rather than SQL because the key is
+    // `tag_name_key`'s, which no SQLite build in this app can compute.
+    let mut winner: HashMap<String, (i64, String, String, i64, i64, i64)> = HashMap::new();
+    for row in rows.iter().cloned() {
+        let key = tag_name_key(&row.1);
+        match winner.get(&key) {
+            // Copies, then `updated_at`, then the *lowest* id — hence the negation, so that one
+            // comparison spells all three and they cannot drift apart.
+            Some(held) if (held.5, held.4, -held.0) >= (row.5, row.4, -row.0) => {}
+            _ => {
+                winner.insert(key, row);
+            }
+        }
+    }
+
+    tx.execute_batch(
+        "CREATE TABLE deck_tags_merge (old_id INTEGER PRIMARY KEY, new_id INTEGER NOT NULL);
+         CREATE TABLE deck_tags_v21 (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            -- The uniqueness grain, and never shown to anyone: see `tag_name_key`.
+            name_key TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );",
+    )?;
+
+    for (key, row) in &winner {
+        // The survivor keeps its own id, so every `deck_cards.tag_id` and every audit row that
+        // already named it still does.
+        tx.execute(
+            "INSERT INTO deck_tags_v21 (id, name, name_key, color, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![row.0, row.1, key, row.2, row.3, row.4],
+        )?;
+    }
+    for row in &rows {
+        tx.execute(
+            "INSERT INTO deck_tags_merge (old_id, new_id) VALUES (?1, ?2)",
+            params![row.0, winner[&tag_name_key(&row.1)].0],
+        )?;
+    }
+
+    tx.execute_batch(
+        "-- Every card onto its survivor, before anything is dropped.
+         UPDATE deck_cards
+            SET tag_id = (SELECT new_id FROM deck_tags_merge WHERE old_id = deck_cards.tag_id)
+          WHERE tag_id IS NOT NULL;
+
+         -- The labels, held by hand across the drop. See this function's doc: the drop below
+         -- fires `ON DELETE SET NULL` on every one of them, and there is no pragma that can
+         -- stop it from inside a transaction.
+         CREATE TABLE deck_tags_carry AS
+            SELECT id, tag_id FROM deck_cards WHERE tag_id IS NOT NULL;
+
+         DROP TABLE deck_tags;
+         ALTER TABLE deck_tags_v21 RENAME TO deck_tags;
+
+         UPDATE deck_cards
+            SET tag_id = (SELECT c.tag_id FROM deck_tags_carry c WHERE c.id = deck_cards.id)
+          WHERE id IN (SELECT id FROM deck_tags_carry);
+
+         DROP TABLE deck_tags_carry;
+         DROP TABLE deck_tags_merge;
+
+         -- The old grain index went down with the table it was on. Frozen as a literal, exactly
+         -- as every grain index in every step before it: a migration step is history the day it
+         -- ships, and must keep building the index it built that day.
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_tags_grain ON deck_tags (name_key);
+
+         -- Every recorded reversal, discarded. The paragraph in this function's doc is the whole
+         -- of the argument; `deck_audit` is left alone on purpose.
+         DELETE FROM deck_undo;",
+    )
+}
+
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v < 1 {
@@ -1861,6 +2055,18 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //
         // Literal `20`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 20;")?;
+        tx.commit()?;
+    }
+    if v < 21 {
+        let tx = conn.unchecked_transaction()?;
+        // **`deck_tags` stops being a deck's and becomes the app's.** [`DECK_TAG_GRAIN`] holds
+        // the argument; [`globalise_tags`] is what it costs to carry out on a database that has
+        // been filing labels per deck since v8.
+        globalise_tags(&tx)?;
+        // Nothing here is FTS-indexed and no `cards` rowid moves, so no rebuild is owed.
+        //
+        // Literal `21`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 21;")?;
         tx.commit()?;
     }
 
@@ -5073,6 +5279,32 @@ pub(crate) mod tests {
          DROP TABLE art_tag_meta;
          DROP TABLE muted_tags;";
 
+    /// And v21's app-wide tag list, back to the per-deck one v8 built.
+    ///
+    /// **The rewind is a rebuild rather than a column swap**, because the shape changed both
+    /// ways: `deck_id` came off and `name_key` went on, and `ALTER TABLE … DROP COLUMN` refuses
+    /// a column named by an index in any case. Dropping the table takes
+    /// `idx_deck_tags_grain` with it — [`UNDO_V20`]'s rule about which index needs a line of
+    /// its own, applied here.
+    ///
+    /// **It restores the shape and not the rows, and nothing needs it to.** Every fixture is
+    /// `migrate`d into an empty in-memory database and rewound before anything is seeded, so
+    /// there has never been a tag in one at this moment. A rewind that tried to invent a
+    /// `deck_id` for a row that has none would be inventing the very fact v21 deleted.
+    ///
+    /// **It runs first, with [`UNDO_V20`]**, for that constant's stated reason: newest-first is
+    /// the order every rewind always meant.
+    const UNDO_V21: &str = "DROP TABLE deck_tags;
+         CREATE TABLE deck_tags (
+            id INTEGER PRIMARY KEY,
+            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (deck_id, name);";
+
     /// A database that stopped at version 9 — the version below the step that *widens*
     /// `idx_cards_collapse`, which is the property this fixture exists for.
     ///
@@ -5119,7 +5351,7 @@ pub(crate) mod tests {
              ALTER TABLE cards DROP COLUMN legal_mask;
              CREATE INDEX idx_cards_collapse
                  ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
-             {UNDO_V20}
+             {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -5320,7 +5552,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
-             {UNDO_V20}
+             {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -5348,7 +5580,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
@@ -5422,7 +5654,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
@@ -5736,7 +5968,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
+            "{UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -6034,7 +6266,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
+            "{UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -6209,7 +6441,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
+            "{UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -6232,7 +6464,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+            "{UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
         ))
         .unwrap();
         conn
@@ -6336,9 +6568,231 @@ pub(crate) mod tests {
     fn v19_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V20} PRAGMA user_version = 19;"))
+        conn.execute_batch(&format!("{UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"))
             .unwrap();
         conn
+    }
+
+    // ---- v21: one tag list, app-wide ------------------------------------------------
+
+    /// A database at version 20: everything v20 left behind, and none of v21.
+    ///
+    /// The "one step below head" fixture now, the title [`v19_database`] held for exactly one
+    /// rung. Rewinding v21 alone is enough because v21 touches one table and no other rung
+    /// above it exists.
+    fn v20_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V21} PRAGMA user_version = 20;"))
+            .unwrap();
+        conn
+    }
+
+    /// A deck, a category and a card in it, in a fixture that is below the version the deck
+    /// commands were written against — so every insert here is by hand.
+    fn v20_deck(conn: &Connection, name: &str) -> i64 {
+        conn.execute(
+            "INSERT INTO decks (name, created_at, updated_at) VALUES (?1, 0, 0)",
+            params![name],
+        )
+        .unwrap();
+        let deck_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO deck_categories (deck_id, name, kind, sort_order, created_at, updated_at)
+             VALUES (?1, 'Main deck', 'main', 0, 0, 0)",
+            params![deck_id],
+        )
+        .unwrap();
+        deck_id
+    }
+
+    /// One tag of one deck, the way v8 through v20 stored one.
+    fn v20_tag(conn: &Connection, deck_id: i64, name: &str, color: &str, updated: i64) -> i64 {
+        conn.execute(
+            "INSERT INTO deck_tags (deck_id, name, color, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 0, ?4)",
+            params![deck_id, name, color, updated],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    /// One card wearing one tag.
+    fn v20_card(conn: &Connection, deck_id: i64, card: &str, tag: i64, qty: i64) {
+        let cat: i64 = conn
+            .query_row(
+                "SELECT id FROM deck_categories WHERE deck_id = ?1",
+                params![deck_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO deck_cards
+                (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                 name, tag_id, quantity, created_at, updated_at)
+             VALUES (?1, ?2, 'live', ?3, 'lea', '1', 'en', ?3, ?4, ?5, 0, 0)",
+            params![deck_id, cat, card, tag, qty],
+        )
+        .unwrap();
+    }
+
+    /// The whole of v21, on the shape it was written for: two decks that each wrote the same
+    /// word become one row, and every card that wore either wears it.
+    ///
+    /// **The colour assertion is the one that would have failed silently.** `DROP TABLE` on a
+    /// parent under `PRAGMA foreign_keys=ON` runs an implicit `DELETE FROM` that fires
+    /// `ON DELETE SET NULL` — so a rebuild that did not carry the labels by hand would leave
+    /// every card untagged and every count zero, which reads exactly like a deck nobody had
+    /// tagged. The pragma is ON here for that reason: `Connection::open_in_memory` leaves it
+    /// off, so a test that did not set it would prove nothing about the app, where `db::open`
+    /// always sets it.
+    #[test]
+    fn the_v21_step_folds_every_decks_tags_into_one_list_and_keeps_the_cards_wearing_them() {
+        let conn = v20_database();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let burn = v20_deck(&conn, "Burn");
+        let control = v20_deck(&conn, "Control");
+
+        // The same word in two decks, in two colours, with the smaller one edited later — so
+        // "most copies" and "most recently touched" disagree and the first has to win.
+        let big = v20_tag(&conn, burn, "Removal", "#d3202a", 10);
+        let small = v20_tag(&conn, control, "removal", "#0e68ab", 99);
+        // And a word only one deck ever wrote.
+        let ramp = v20_tag(&conn, burn, "Ramp", "#00733e", 0);
+
+        v20_card(&conn, burn, "bolt", big, 4);
+        v20_card(&conn, control, "swords", small, 1);
+        v20_card(&conn, burn, "llanowar", ramp, 2);
+
+        migrate(&conn).unwrap();
+
+        let rows: Vec<(i64, String, String, String)> = conn
+            .prepare("SELECT id, name, name_key, color FROM deck_tags ORDER BY name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (ramp, "Ramp".to_owned(), "ramp".to_owned(), "#00733e".to_owned()),
+                (
+                    big,
+                    "Removal".to_owned(),
+                    "removal".to_owned(),
+                    "#d3202a".to_owned()
+                ),
+            ],
+            "one row per name; the four-copy spelling and colour survive, the one-copy              namesake does not, and the survivor keeps its own id"
+        );
+
+        // Every card still wears something, and the two that wore either spelling of `Removal`
+        // now wear the one row.
+        let wearing: Vec<(String, i64)> = conn
+            .prepare("SELECT card_id, tag_id FROM deck_cards ORDER BY card_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            wearing,
+            vec![
+                ("bolt".to_owned(), big),
+                ("llanowar".to_owned(), ramp),
+                ("swords".to_owned(), big),
+            ],
+            "no card was untagged by the swap"
+        );
+
+        // The grain refuses the second row from here on.
+        let taken = conn.execute(
+            "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+             VALUES ('REMOVAL', 'removal', '#000000', 0, 0)",
+            [],
+        );
+        assert!(
+            taken.is_err(),
+            "the app-wide grain is enforced by the index"
+        );
+
+        // And the scaffolding is gone.
+        for table in ["deck_tags_v21", "deck_tags_merge", "deck_tags_carry"] {
+            assert_eq!(table_count(&conn, table), 0, "{table} must not survive");
+        }
+    }
+
+    /// The other half of the merge rule: when two rows are worn by the same number of copies,
+    /// the one edited most recently wins.
+    #[test]
+    fn the_v21_step_breaks_a_copy_count_tie_on_the_later_edit() {
+        let conn = v20_database();
+        let burn = v20_deck(&conn, "Burn");
+        let control = v20_deck(&conn, "Control");
+        let older = v20_tag(&conn, burn, "Cut", "#d3202a", 10);
+        let newer = v20_tag(&conn, control, "cut", "#0e68ab", 20);
+        v20_card(&conn, burn, "bolt", older, 3);
+        v20_card(&conn, control, "swords", newer, 3);
+
+        migrate(&conn).unwrap();
+
+        let (id, name): (i64, String) = conn
+            .query_row("SELECT id, name FROM deck_tags", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((id, name.as_str()), (newer, "cut"));
+    }
+
+    /// A tag no card wears has nothing to weigh it, and survives anyway: it is still a label
+    /// the reader made, and after v21 it is one the whole app can reach.
+    #[test]
+    fn the_v21_step_keeps_a_tag_no_card_is_wearing() {
+        let conn = v20_database();
+        let burn = v20_deck(&conn, "Burn");
+        v20_tag(&conn, burn, "Someday", "#d9b95c", 0);
+
+        migrate(&conn).unwrap();
+
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM deck_tags")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(names, vec!["Someday"]);
+    }
+
+    /// The undo stack goes and the history stays — [`globalise_tags`]'s last paragraph, as an
+    /// assertion, because the two halves are easy to conflate and only one of them is a loss
+    /// the reader can see.
+    #[test]
+    fn the_v21_step_discards_every_undo_step_and_keeps_the_history() {
+        let conn = v20_database();
+        let burn = v20_deck(&conn, "Burn");
+        conn.execute(
+            "INSERT INTO deck_audit (id, deck_id, at, kind, payload) VALUES (1, ?1, 0, 'add', '{}')",
+            params![burn],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deck_undo (audit_id, deck_id, step) VALUES (1, ?1, '{\"undo\":[]}')",
+            params![burn],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let undo: i64 = conn
+            .query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
+            .unwrap();
+        let audit: i64 = conn
+            .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(undo, 0, "the arrows lose their charge");
+        assert_eq!(audit, 1, "the history does not");
     }
 
     /// The step's own tables, and the index that is not one of them.
@@ -6722,8 +7176,10 @@ pub(crate) mod tests {
     fn v18_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -6797,12 +7253,34 @@ pub(crate) mod tests {
     /// the whole reason it is written against `SCHEMA_VERSION - 1` rather than a number.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v19_database();
+        let conn = v20_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(
+            has_column(&conn, "deck_tags", "name_key"),
+            0,
+            "the v21 column must not be there yet"
+        );
+        assert_eq!(
+            has_column(&conn, "deck_tags", "deck_id"),
+            1,
+            "and the column v21 removes must still be"
+        );
+    }
+
+    /// [`v19_database`] is one below *that*, and the assertions it used to carry as the
+    /// head-minus-one fixture are still worth making about it.
+    #[test]
+    fn the_v19_fixture_carries_none_of_v20() {
+        let conn = v19_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 19);
         assert_eq!(
             has_column(&conn, "oracle_tags", "slug_norm"),
             0,
@@ -6843,7 +7321,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
+            "{UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
         ))
         .unwrap();
         conn
@@ -7077,14 +7555,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_twenty() {
+    fn the_schema_version_is_twenty_one() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 20);
+        assert_eq!(SCHEMA_VERSION, 21);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular
@@ -7292,6 +7770,7 @@ pub(crate) mod tests {
             // entering the ladder *above* v10 gets every index from the new step or from
             // nowhere. This row is what says which.
             ("v19", v19_database()),
+            ("v20", v20_database()),
         ] {
             migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
 

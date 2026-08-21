@@ -737,9 +737,10 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
  *   and filed under the inactive "Cut list" it produces no issue at all — the same silence the
  *   Maybeboard gives, from a category with no special kind. Switch it on and the deck reports a
  *   banned card.
- * * **A tagged card.** One label on one row; the deck's other label is worn by nothing, which
- *   is the state `DeckDetail.tags` exists to describe — a palette exists whether or not a row
- *   is using it.
+ * * **A tagged card.** One label on one row — and since schema v21 that is the *whole* of what
+ *   `DeckDetail.tags` describes: a tag belongs to no deck, so what this deck has is a card
+ *   wearing one. The labels no card here wears are `deck_tag_all`'s, one section down in the
+ *   Tags dialog.
  */
 function testbedDeckCards(
   categories: FakeDeckCategory[],
@@ -747,7 +748,7 @@ function testbedDeckCards(
   startId: number,
 ): FakeDeckCard[] {
   let id = startId;
-  const cut = tags.find((t) => t.deckId === 4 && t.name === "Cut candidate")!;
+  const cut = tags.find((t) => t.name === "Cut candidate")!;
   const filed = (
     card: FakeCard,
     name: string,
@@ -788,23 +789,27 @@ function testbedDeckCards(
 }
 
 /**
- * Two labels on the deck that has a plan, and two on the archived deck.
+ * **Three labels, belonging to no deck** — one app-wide list, since schema v21.
  *
- * The archived deck's exist for `deck_tag_suggestions` and for nothing else: that command is
- * **global**, grouping on the `(name, colour)` pair across every deck and answering most-used
- * first, so a palette that came from one deck could never show the ordering it is built around.
- * Two decks spelling "Cut candidate" the same way is what puts it above the other two, and
- * `Budget swap` is the one name deck 4 has *not* used — so the panel opened on deck 4 has
- * exactly one offer to make, which is the state a suggestion list is worth drawing in.
+ * There were four, two of them a second `Cut candidate` made by a second deck, because a tag was
+ * per-deck data and a name used twice was two rows. That is exactly what the app-wide grain
+ * refuses now, so the duplicate is gone and what is left is the shape both tag surfaces are
+ * about: one label a deck's list is **wearing** (`Cut candidate`, on `Rhystic Testbed`'s two
+ * Ramp copies), one worn only elsewhere (`Budget swap`), and one worn by nothing at all
+ * (`Combo piece`).
+ *
+ * That third row is the one no `deck_tag_list` can answer and is why `deck_tag_all` exists: a
+ * label the reader made before any card wore it is still a label they own. Between them the
+ * three seed every state the Tags dialog's two sections and the "More tags…" dialog draw.
  */
 function starterTags(): FakeDeckTag[] {
   return [
-    { id: 1, deckId: 3, name: "Cut candidate", color: "ember" },
-    { id: 2, deckId: 3, name: "Budget swap", color: "moss" },
-    { id: 3, deckId: 4, name: "Cut candidate", color: "ember" },
-    // Worn by no row. A tag is a label the reader made, and it exists before anything is
-    // wearing it — which is the state a palette has to be able to draw.
-    { id: 4, deckId: 4, name: "Combo piece", color: "gold" },
+    { id: 1, name: "Cut candidate", color: "ember" },
+    { id: 2, name: "Budget swap", color: "moss" },
+    // Worn by no row, which is the state the Tags dialog's second section and the "More tags…"
+    // dialog both exist to draw: a label the reader made that no card in the open list wears.
+    // There is no second `Cut candidate` any more — one name is one row, app-wide.
+    { id: 3, name: "Combo piece", color: "gold" },
   ];
 }
 

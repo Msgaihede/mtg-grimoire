@@ -6,9 +6,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   declared `REFERENCES cards(id)` aborts every sync, because `swap_staging` drops the table.
   The `ON DELETE` action is chosen per delete-site, not fixed once. **CASCADE** on
   `deck_cards.deck_id`, `deck_cards.category_id`, `deck_allocations.deck_id`,
-  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`, `deck_tags.deck_id`,
+  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`,
   `deck_audit.deck_id` and `deck_folders.parent_id`: a deleted deck's cards and reservations,
   a deleted category's cards and a deleted folder's sub-folders have nowhere else to be.
+  **`deck_tags.deck_id` was on that list until schema v21 and no longer exists**: a tag belongs
+  to no deck, so deleting the deck where a label was first typed must not take it off the nine
+  other decks wearing it. The one place that still clears the table is `reset::clear_decks`,
+  by hand, because every deck at once is the case where clearing them is right.
   **SET NULL** on exactly two — `decks.folder_id` (a folder is a filing decision; the decks in
   it are the user's work, not the folder's to take down) and `deck_cards.tag_id` (deleting a
   tag must never delete a card). `schema.rs`'s module doc carries this list; check it against
@@ -17,10 +21,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   _before_ the DELETE, so that cascade fires over nothing.
 - **`reset::decks_clear` is the one delete-site that clears `deck_folders` too, and it needs a
   second statement to do it** (added 2026-08-20 with the Settings page's danger zone).
-  `DELETE FROM decks` takes `deck_cards`, `deck_categories`, `deck_tags`, `deck_audit`,
+  `DELETE FROM decks` takes `deck_cards`, `deck_categories`, `deck_audit`,
   `deck_undo` and `deck_allocations` by cascade — but `decks.folder_id` is SET NULL for the
   reason above, so a wipe that stopped there hands the reader an empty folder tree to delete by
-  hand. The covers are a third step and are swept **whole** rather than removed one id at a
+  hand, and **`deck_tags` needs a statement of its own since schema v21** for the reason one
+  bullet up: nothing cascades onto it any more, and a reader who has just deleted every deck they
+  own would otherwise open the Tags dialog onto forty labels attached to nothing, with no deck
+  left to reach them from. The covers are a third step and are swept **whole** rather than removed one id at a
   time, which `deck::delete_deck` must not do: after this command there are no decks left, so
   every `<id>.webp` in `data/covers/` is an orphan by construction — including one left by the
   seam `set_cover_image` documents, a commit that failed after the bytes landed. The sweep runs

@@ -594,18 +594,35 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     // One command for the rename **and** the recolour, and both are required: there is no
-    // patch shape here, so a caller changing one sends the other back unchanged.
-    await ipc.deckTagUpdate(3, "Cut", "moss");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_update", { id: 3, name: "Cut", color: "moss" });
+    // patch shape here, so a caller changing one sends the other back unchanged. `deckId` is
+    // where the reader was standing — the write itself is app-wide.
+    await ipc.deckTagUpdate(4, 3, "Cut", "moss");
+    expect(invoke).toHaveBeenCalledWith("deck_tag_update", {
+      deckId: 4,
+      id: 3,
+      name: "Cut",
+      color: "moss",
+    });
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckTagDelete(3);
-    expect(invoke).toHaveBeenCalledWith("deck_tag_delete", { id: 3 });
+    await ipc.deckTagDelete(4, 3);
+    expect(invoke).toHaveBeenCalledWith("deck_tag_delete", { deckId: 4, id: 3 });
 
-    invoke.mockResolvedValue([{ name: "Cut candidate", color: "ember" }]);
-    const palette = await ipc.deckTagSuggestions();
-    expect(invoke).toHaveBeenCalledWith("deck_tag_suggestions");
-    expect(palette).toEqual([{ name: "Cut candidate", color: "ember" }]);
+    // The other destructive one, and the distinction the app-wide list needed: this takes the
+    // label off one deck's one list and leaves the tag standing.
+    invoke.mockResolvedValue(2);
+    expect(await ipc.deckTagRemoveFromDeck(4, 3, "theory")).toBe(2);
+    expect(invoke).toHaveBeenCalledWith("deck_tag_remove_from_deck", {
+      deckId: 4,
+      tagId: 3,
+      variant: "theory",
+    });
+
+    const every = [{ id: 3, name: "Cut candidate", color: "ember", cardCount: 9, deckCount: 2 }];
+    invoke.mockResolvedValue(every);
+    const palette = await ipc.deckTagAll();
+    expect(invoke).toHaveBeenCalledWith("deck_tag_all");
+    expect(palette).toEqual(every);
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckCardSetTag(4, "p1", 7, "live", null, 3);

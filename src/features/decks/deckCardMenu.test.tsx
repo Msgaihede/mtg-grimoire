@@ -61,8 +61,8 @@ const CATEGORIES: DeckCategory[] = [
 const CATEGORY_ORDER = ["Commander", "Main deck", "Recursion", "Sideboard", "Companion"];
 
 const TAGS: DeckTag[] = [
-  { id: 8, deckId: 4, name: "Budget swap", color: "moss", cardCount: 2 },
-  { id: 9, deckId: 4, name: "Cut candidate", color: "ember", cardCount: 1 },
+  { id: 8, name: "Budget swap", color: "moss", cardCount: 2 },
+  { id: 9, name: "Cut candidate", color: "ember", cardCount: 1 },
 ];
 
 function bolt(over: Partial<DeckCard> = {}): DeckCard {
@@ -79,7 +79,7 @@ function deps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
     moveTo: vi.fn(),
     setTag: vi.fn(),
     tags: TAGS,
-    newTag: vi.fn(),
+    addTag: vi.fn(),
     remove: vi.fn(),
     ...over,
   };
@@ -405,26 +405,26 @@ describe("buildDeckCardMenu", () => {
   it("builds the tag rows as a plain submenu, with nothing to mount", () => {
     const row = find(buildDeckCardMenu(bolt(), deps()), "Tag card") as MenuSubmenu;
     expect(row.kind).toBe("submenu");
-    expect(labels(row.items)).toEqual(["None", "Budget swap", "Cut candidate", "New tag…"]);
+    expect(labels(row.items)).toEqual(["None", "Budget swap", "Cut candidate", "More tags…"]);
   });
 
   /**
-   * The row that opens `NewTagDialog`, and the whole of what it does: hand the card up.
+   * The row that opens `AddTagDialog`, and the whole of what it does: hand the card up.
    *
    * **It must not write.** The field this replaced created the label and attached it, and the
    * attach belonged to an observer the panel took with it when it closed — so a create still in
    * flight at a dismissal lost its second half silently. The surface owns both halves now, and
    * a row that reached for either would be that bug coming back.
    */
-  it("hands the card to the surface when New tag… is pressed", () => {
+  it("hands the card to the surface when More tags… is pressed", () => {
     const target = bolt();
     const wired = deps();
     const row = find(buildDeckCardMenu(target, wired), "Tag card") as MenuSubmenu;
-    const item = find(row.items, "New tag…") as MenuAction;
+    const item = find(row.items, "More tags…") as MenuAction;
 
     item.onSelect();
 
-    expect(wired.newTag).toHaveBeenCalledWith(target);
+    expect(wired.addTag).toHaveBeenCalledWith(target);
     expect(wired.setTag).not.toHaveBeenCalled();
   });
 });
@@ -447,28 +447,32 @@ describe("deckCardTagRows", () => {
   });
 
   /**
-   * **The app's collator, not SQLite's BINARY collation.**
+   * **The backend's order is kept, and that reverses a fix made on 2026-08-14.**
    *
-   * `deck_meta.rs`'s `ORDER BY t.name` is a `TEXT` column with no `COLLATE NOCASE`, so the list
-   * arrives in byte order: every capitalised label sorts above every lower-case one, and a
-   * reader looking for "budget" under B finds it at the bottom. Ordering is a *display* decision
-   * and lives in TS — `sortOptions`' `Intl.Collator("en", { sensitivity: "base" })`, which is
-   * what every other option list in this app is drawn through — so Rust's `ORDER BY` is not the
-   * bug and is not what changed.
+   * The list used to be drawn through `sortOptions`, and for a good reason: `deck_meta.rs`'
+   * `ORDER BY t.name` was a `TEXT` column with no `COLLATE NOCASE`, so it arrived in byte order
+   * — every capitalised label above every lower-case one, and a reader looking for "budget"
+   * under B finding it at the bottom. An alphabet the reader cannot predict is worth replacing
+   * with one they can.
+   *
+   * The premise is gone. `deck_tag_list` answers **most-used first** since schema v21, which is
+   * the first of the two exemptions this app grants — an order that *is* the information.
+   * Re-sorting here would throw away a fact the backend went and counted, and would bury the
+   * label this deck reaches for most under whatever its first letter is.
    *
    * "None" stays pinned in front: it is the row that takes a label *off*, not one of the labels.
    */
-  it("draws the labels through the app's collator rather than in the order they arrived", () => {
+  it("keeps the backend's most-used-first order rather than re-sorting the labels", () => {
     const arrived: DeckTag[] = [
-      { id: 1, deckId: 4, name: "Cut", color: "ember", cardCount: 0 },
-      { id: 2, deckId: 4, name: "budget", color: "moss", cardCount: 0 },
-      { id: 3, deckId: 4, name: "Ramp", color: "gold", cardCount: 0 },
+      { id: 1, name: "Cut", color: "ember", cardCount: 9 },
+      { id: 2, name: "budget", color: "moss", cardCount: 4 },
+      { id: 3, name: "Ramp", color: "gold", cardCount: 1 },
     ];
 
     expect(labels(deckCardTagRows(bolt(), arrived, vi.fn()))).toEqual([
       "None",
-      "budget",
       "Cut",
+      "budget",
       "Ramp",
     ]);
   });

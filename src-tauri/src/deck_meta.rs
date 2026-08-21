@@ -83,14 +83,16 @@ fn predefined_refusal(name: &str) -> String {
 /// What an *adjustment* to a tag says when the id it names is not there.
 pub const TAG_GONE: &str = "That tag is not there any more.";
 
-/// [`CATEGORY_NAME_TAKEN`]'s twin for [`DECK_TAG_GRAIN`](crate::schema::DECK_TAG_GRAIN).
-pub const TAG_NAME_TAKEN: &str = "This deck already has a tag with that name.";
-
-/// [`CATEGORY_WRONG_DECK`]'s twin: what [`set_card_tag`] says when the `tagId` it was handed
-/// belongs to a deck other than the card's own. A tag is per-deck by
-/// [`DECK_TAG_GRAIN`](crate::schema::DECK_TAG_GRAIN); nothing in `deck_cards.tag_id`'s FK
-/// stops a caller from naming one that resolves but belongs elsewhere.
-const TAG_WRONG_DECK: &str = "That tag belongs to a different deck.";
+/// [`CATEGORY_NAME_TAKEN`]'s twin for [`DECK_TAG_GRAIN`](crate::schema::DECK_TAG_GRAIN) —
+/// and it says **app-wide** where the category one says "this deck", because since schema v21
+/// that is the difference between the two grains. The name it refuses is refused by
+/// `tag_name_key`'s comparison rather than by the word: `removal` collides with `Removal`, and
+/// so does a `Café` spelled with a combining accent against one spelled without.
+///
+/// The sentence names the way out, because a reader who typed a name that exists has not made
+/// a mistake — they have found the tag they wanted and are one press away from using it.
+pub const TAG_NAME_TAKEN: &str =
+    "A tag with that name already exists. Pick it from the list instead of making a second one.";
 
 /// What [`set_card_tag`] says when the `(deckId, cardId, categoryId, variant)` it was handed
 /// does not resolve to a row — [`crate::deck::card_gone`]'s reason, generalised: a category
@@ -195,12 +197,18 @@ pub struct DeckCategoryRow {
     pub total_price: Option<f64>,
 }
 
-/// One tag of one deck.
+/// One tag **in use in one list of one deck** — what [`list_tags`] answers.
+///
+/// It carried a `deck_id` until schema v21 and does not any more, because there is no such
+/// fact: a tag is one app-wide row ([`DECK_TAG_GRAIN`](crate::schema::DECK_TAG_GRAIN)) and
+/// what a deck has is not a list of tags but a list of *cards*, some of which wear one. So
+/// this row is a tag **and** a fact about the deck the caller asked by — which is why the two
+/// arguments are not symmetric and why `deck_tag_list` cannot answer a tag nothing is wearing.
+/// [`GlobalTag`] is the other half: every tag there is, including those.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckTagRow {
     pub id: i64,
-    pub deck_id: i64,
     pub name: String,
     pub color: String,
     /// Copies carrying this tag, `sum(quantity)` for [`DeckCategoryRow::card_count`]'s reason,
@@ -226,12 +234,24 @@ pub struct DeckFolderRow {
     pub sort_order: i64,
 }
 
-/// A tag name and colour, and how many decks have picked it — [`tag_suggestions`]'s row.
+/// One tag as a thing in itself — [`list_all_tags`]'s row, and what every tag *write* answers.
+///
+/// **No deck in it, and that is the whole shape of the feature.** A tag is one row the app
+/// owns; the two counts say how far its reach goes, which is the fact a reader needs before
+/// recolouring or deleting one. Both span every deck and both variants, deliberately: the
+/// question these numbers answer is "what else moves if I change this", and an answer scoped to
+/// the deck on screen would understate it in exactly the way that matters.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TagSuggestion {
+pub struct GlobalTag {
+    pub id: i64,
     pub name: String,
     pub color: String,
+    /// Copies wearing it anywhere — `sum(quantity)`, [`DeckCategoryRow::card_count`]'s unit.
+    pub card_count: i64,
+    /// Decks with at least one card wearing it. `0` for a tag made and never used, which is
+    /// the one row `deck_tag_list` can never answer and this list always can.
+    pub deck_count: i64,
 }
 
 /// A name good enough for a category, a tag or a folder — trimmed, non-empty.
@@ -1030,76 +1050,174 @@ pub fn delete_category(
 // Tags
 // ---------------------------------------------------------------------------------------
 
-const TAG_SELECT: &str = "SELECT t.id, t.deck_id, t.name, t.color,
-            coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
-                       WHERE dc.tag_id = t.id AND dc.variant = ?2), 0)
-       FROM deck_tags t";
-
-fn tag_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckTagRow> {
-    Ok(DeckTagRow {
-        id: r.get(0)?,
-        deck_id: r.get(1)?,
-        name: r.get(2)?,
-        color: r.get(3)?,
-        card_count: r.get(4)?,
-    })
-}
-
-fn read_tag(conn: &Connection, id: i64) -> Result<Option<DeckTagRow>, String> {
-    conn.query_row(
-        &format!("{TAG_SELECT} WHERE t.id = ?1"),
-        params![id, READBACK_VARIANT],
-        tag_row,
-    )
-    .optional()
-    .map_err(|e| e.to_string())
-}
-
-/// Every tag of one deck, alphabetically, with its counts in the variant asked for —
-/// [`list_categories`]'s signature, for [`DeckTagRow::card_count`]'s reason: the two lists
-/// come back from one read and must be counted over one list of cards.
+/// Every tag in use in one list of one deck, **most-used first** — [`DeckTagRow`]'s read.
+///
+/// ## Why membership is a join and not a column
+///
+/// It was `WHERE t.deck_id = ?1` until schema v21, when tags became app-wide. There is no
+/// deck on the row to filter by any more, so "this deck's tags" is derived from the only place
+/// the fact now lives: the cards. A tag is in this list because something in it is wearing the
+/// tag, which is also exactly what the right-click menu wants to offer — one definition of
+/// "in use", serving the menu, the dialog and the counts.
+///
+/// ## `variant` scopes membership now, where it used to scope only the count
+///
+/// **A deliberate widening, and the issue asks for it in those words**: the live list and the
+/// theory list are treated as different decks where tags are concerned. A label worn only by
+/// theory rows is not offered while the reader is editing live, because offering it there would
+/// be offering a fact about a list they are not looking at. It costs nothing to reach — the
+/// tag is still in [`list_all_tags`], one section down in the dialog.
+///
+/// ## The order
+///
+/// Copies descending, then name, where this used to be alphabetical throughout. Most-used
+/// first is what the issue asks for and it is right for a menu: the label a reader reaches for
+/// is overwhelmingly the one they have already used most in this very deck, and an alphabet
+/// puts that wherever its first letter happens to fall. `t.name` breaks the tie so the answer
+/// is stable rather than SQLite's row order.
 pub fn list_tags(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
 ) -> Result<Vec<DeckTagRow>, String> {
     let variant = valid_variant(variant)?;
-    let sql = format!("{TAG_SELECT} WHERE t.deck_id = ?1 ORDER BY t.name");
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.id, t.name, t.color, sum(dc.quantity)
+               FROM deck_tags t
+               JOIN deck_cards dc ON dc.tag_id = t.id
+              WHERE dc.deck_id = ?1 AND dc.variant = ?2
+              GROUP BY t.id, t.name, t.color
+              ORDER BY sum(dc.quantity) DESC, t.name",
+        )
+        .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![deck_id, variant], tag_row)
+        .query_map(params![deck_id, variant], |r| {
+            Ok(DeckTagRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+                card_count: r.get(3)?,
+            })
+        })
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
 }
 
-/// Make a new tag. Refuses a name the deck already has, [`create_category`]'s rule.
+/// Every tag there is, most-used first — [`GlobalTag`]'s read, and **the only list that can
+/// answer a tag no card is wearing**.
+///
+/// It replaced `tag_suggestions`, which grouped `deck_tags` on `(name, color)` and answered
+/// names rather than rows. That shape existed because two decks could hold two rows spelling
+/// one word, and picking a "suggestion" *copied* it into the deck you were in. Schema v21
+/// removed the thing it was working around: there is one row per name now, so this answers ids,
+/// and picking one **uses** that tag rather than making a second one.
+///
+/// `LEFT JOIN`, so a tag worn by nothing is a row with two zeroes rather than a row that is not
+/// there. That is the whole reason a reader can make a tag in the Tags dialog before any card
+/// wears it and still find it afterwards.
+pub fn list_all_tags(conn: &Connection) -> Result<Vec<GlobalTag>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.id, t.name, t.color,
+                    coalesce(sum(dc.quantity), 0),
+                    count(DISTINCT dc.deck_id)
+               FROM deck_tags t
+               LEFT JOIN deck_cards dc ON dc.tag_id = t.id
+              GROUP BY t.id, t.name, t.color
+              ORDER BY coalesce(sum(dc.quantity), 0) DESC, t.name",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(GlobalTag {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+                card_count: r.get(3)?,
+                deck_count: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// One tag by id, as [`GlobalTag`] — every write's readback.
+///
+/// **A write answers the global row, not a [`DeckTagRow`]**, and the change is not cosmetic:
+/// a create, a rename and a recolour are all app-wide acts now, so the honest answer is the
+/// thing that changed rather than one deck's view of it. It also retires `READBACK_VARIANT` for
+/// tags — that constant existed because a rename carries no variant and something had to pick
+/// one to count by, and a global row's counts are not scoped by a variant at all.
+fn read_global_tag(conn: &Connection, id: i64) -> Result<Option<GlobalTag>, String> {
+    conn.query_row(
+        "SELECT t.id, t.name, t.color,
+                coalesce(sum(dc.quantity), 0),
+                count(DISTINCT dc.deck_id)
+           FROM deck_tags t
+           LEFT JOIN deck_cards dc ON dc.tag_id = t.id
+          WHERE t.id = ?1
+          GROUP BY t.id, t.name, t.color",
+        params![id],
+        |r| {
+            Ok(GlobalTag {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+                card_count: r.get(3)?,
+                deck_count: r.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// Whether some **other** row already holds this name, by
+/// [`tag_name_key`](crate::schema::tag_name_key)'s comparison rather than by the word.
+///
+/// `except` is the row allowed to hold it — `None` for a create, the row's own id for a rename,
+/// which is what lets a reader recapitalise `removal` to `Removal` without being told the name
+/// is taken by itself.
+fn tag_name_is_taken(conn: &Connection, key: &str, except: Option<i64>) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM deck_tags
+                        WHERE name_key = ?1 AND id IS NOT ?2)",
+        params![key, except],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Make a tag. **App-wide** — `deck_id` says where the reader was standing, for the history
+/// row and the undo step, and is not stored on the tag.
+///
+/// Refuses a name any tag already holds ([`TAG_NAME_TAKEN`]). That refusal is the issue's
+/// second half and it is enforced here rather than in the webview, because uniqueness is a
+/// property of the table: the dialog steering a reader away from a duplicate is a courtesy, and
+/// two windows racing the same new name is what a UNIQUE index is for.
 pub fn create_tag(
     conn: &Connection,
     deck_id: i64,
     name: &str,
     color: &str,
-) -> Result<DeckTagRow, String> {
+) -> Result<GlobalTag, String> {
     let name = valid_name(name, "A tag")?;
     let color = valid_color(color)?;
+    let key = crate::schema::tag_name_key(name);
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let exists: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM deck_tags WHERE deck_id = ?1 AND name = ?2)",
-            params![deck_id, name],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if exists {
+    if tag_name_is_taken(&tx, &key, None)? {
         return Err(TAG_NAME_TAKEN.to_owned());
     }
     crate::deck::touch_deck(&tx, deck_id)?;
     let id: i64 = tx
         .query_row(
-            "INSERT INTO deck_tags (deck_id, name, color, created_at, updated_at)
+            "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
              VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
              RETURNING id",
-            params![deck_id, name, color],
+            params![name, key, color],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -1127,58 +1245,64 @@ pub fn create_tag(
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
+    read_global_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
 }
 
-/// Rename and/or recolour a tag. Refuses a name the deck already has under a different id.
+/// Rename and/or recolour a tag, **everywhere at once**.
+///
+/// This is the change the issue is chiefly about: one row means one colour, so a reader who
+/// recolours "Cut candidate" here recolours it in the nine other decks wearing it, and there is
+/// no longer a way for the same word to be two colours. Refuses a name another row holds.
+///
+/// `deck_id` is the deck the reader was standing in and is used for nothing but the history row
+/// and the undo step. It is honest rather than arbitrary: the change is global, but the *act*
+/// happened somewhere, and a history that could not say where would be a worse record than one
+/// that names the deck the reader pressed it in.
 pub fn update_tag(
     conn: &Connection,
+    deck_id: i64,
     id: i64,
     name: &str,
     color: &str,
-) -> Result<DeckTagRow, String> {
+) -> Result<GlobalTag, String> {
     let name = valid_name(name, "A tag")?;
     let color = valid_color(color)?;
+    let key = crate::schema::tag_name_key(name);
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    // The old name travels with the deck id, for the history: `previous` is what makes a
-    // rename readable, and this statement is the last moment the old name exists.
-    let tag: Option<(i64, String)> = tx
+    // The old name, for the history and for the choice of verb: this statement is the last
+    // moment it still exists.
+    let tag: Option<String> = tx
         .query_row(
-            "SELECT deck_id, name FROM deck_tags WHERE id = ?1",
+            "SELECT name FROM deck_tags WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let (deck_id, previous) = tag.ok_or_else(|| TAG_GONE.to_owned())?;
-    let exists: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM deck_tags WHERE deck_id = ?1 AND name = ?2 AND id <> ?3)",
-            params![deck_id, name, id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if exists {
+    let previous = tag.ok_or_else(|| TAG_GONE.to_owned())?;
+    if tag_name_is_taken(&tx, &key, Some(id))? {
         return Err(TAG_NAME_TAKEN.to_owned());
     }
     crate::deck::touch_deck(&tx, deck_id)?;
-    // The colour as well as the name. The history row carries only the two names — a recolour
-    // shares the `rename` verb because the palette token never appears in a sentence — so this
-    // is the second thing an audit-log reversal would have got wrong, quietly.
     let before = tag_step_row(&tx, id)?;
     tx.execute(
-        "UPDATE deck_tags SET name = ?2, color = ?3, updated_at = unixepoch() WHERE id = ?1",
-        params![id, name, color],
+        "UPDATE deck_tags SET name = ?2, name_key = ?3, color = ?4, updated_at = unixepoch()
+          WHERE id = ?1",
+        params![id, name, key, color],
     )
     .map_err(|e| e.to_string())?;
-    // `rename` covers a recolour too, which is the honest simplification: the colour is a
-    // token from a fixed palette and never appears in a history line, so a second verb would
-    // name a distinction no reader could see.
-    let audit_id = record_tag(
-        &tx,
-        deck_id,
-        &json!({ "action": "rename", "tag": name, "previous": previous }),
-    )?;
+    // **Two verbs now, where `rename` used to cover both.** It covered both because a colour
+    // was one of six palette tokens and never appeared in a sentence, so a second verb would
+    // have named a distinction no reader could see. Both halves of that have gone: the colour
+    // is the reader's own hex, and it is the same colour in every deck — so "Recoloured tag
+    // Ramp" is a line a reader may well come back looking for. `auditText` has rendered
+    // `recolour` since before anything wrote it.
+    let payload = if previous == name {
+        json!({ "action": "recolour", "tag": name, "previous": null, "color": color })
+    } else {
+        json!({ "action": "rename", "tag": name, "previous": previous, "color": color })
+    };
+    let audit_id = record_tag(&tx, deck_id, &payload)?;
     record_category_step(
         &tx,
         audit_id,
@@ -1197,44 +1321,135 @@ pub fn update_tag(
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
+    read_global_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
 }
 
-/// Delete a tag. `deck_cards.tag_id` is `ON DELETE SET NULL`, so every card carrying it is
-/// left in place, untagged — deleting a tag must never delete a card. Like
-/// [`crate::deck::delete_deck`], an id that resolves to nothing is a success: the caller
-/// wanted that tag gone, and it is gone (and touches no deck, having none left to touch).
-pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), String> {
-    // Read rather than `owning_deck`, because the history needs the name as well as the owner
-    // — and this is the last statement in which either is knowable.
-    let tag: Option<(i64, String)> = conn
+/// Take a tag off **this deck's cards in one list**, leaving the tag itself alone.
+///
+/// **The action the global list needed and the per-deck one never did.** While a tag belonged
+/// to a deck, "I am done with this label here" and "this label should stop existing" were the
+/// same press. They are not any more, and conflating them would mean a reader tidying one deck
+/// silently stripping the label off nine others. So the row in the deck's own section offers
+/// this, and deleting a tag outright is a separate act on the app-wide list.
+///
+/// Scoped to `variant` for [`list_tags`]'s reason: the row this press is on was drawn from one
+/// list, so the press is about that list. A label worn by theory rows survives being removed
+/// from live.
+///
+/// Answers how many rows lost the label. Zero is a success, not a refusal — the caller wanted
+/// this deck's cards not to wear it and they do not.
+pub fn remove_tag_from_deck(
+    conn: &Connection,
+    deck_id: i64,
+    tag_id: i64,
+    variant: &str,
+) -> Result<i64, String> {
+    let variant = valid_variant(variant)?;
+    let name: Option<String> = conn
         .query_row(
-            "SELECT deck_id, name FROM deck_tags WHERE id = ?1",
-            params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            "SELECT name FROM deck_tags WHERE id = ?1",
+            params![tag_id],
+            |r| r.get(0),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((deck_id, name)) = tag else {
+    let name = name.ok_or_else(|| TAG_GONE.to_owned())?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Exactly the rows about to be cleared, read before the UPDATE that clears them — the only
+    // place the fact still exists once it has run.
+    let carriers = crate::deck_undo::read_carriers_in(&tx, tag_id, deck_id, variant)?;
+    if carriers.is_empty() {
+        return Ok(0);
+    }
+    crate::deck::touch_deck(&tx, deck_id)?;
+    let cleared = tx
+        .execute(
+            "UPDATE deck_cards SET tag_id = NULL, updated_at = unixepoch()
+              WHERE deck_id = ?1 AND variant = ?2 AND tag_id = ?3",
+            params![deck_id, variant, tag_id],
+        )
+        .map_err(|e| e.to_string())? as i64;
+    let audit_id = record_tag(
+        &tx,
+        deck_id,
+        &json!({ "action": "remove", "tag": name, "previous": null, "cards": cleared }),
+    )?;
+    // No `restore`, no `delete`: the label was never touched. The whole of the change is which
+    // cards were wearing it, so the whole of the reversal is the carriers.
+    record_category_step(
+        &tx,
+        audit_id,
+        deck_id,
+        vec![crate::deck_undo::Op::Tags {
+            restore: vec![],
+            patch: vec![],
+            delete: vec![],
+            carriers: carriers.clone(),
+        }],
+        vec![crate::deck_undo::Op::Tags {
+            restore: vec![],
+            patch: vec![],
+            delete: vec![],
+            // The same cells, wearing nothing: a redo re-clears exactly what the undo put
+            // back, and does it by address rather than by re-running the UPDATE.
+            carriers: carriers
+                .iter()
+                .map(|c| crate::deck_undo::Carrier {
+                    tag_id: None,
+                    ..c.clone()
+                })
+                .collect(),
+        }],
+    )?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(cleared)
+}
+
+/// Delete a tag **from the whole app**. `deck_cards.tag_id` is `ON DELETE SET NULL`, so every
+/// card carrying it anywhere is left in place, untagged — deleting a tag must never delete a
+/// card. Like [`crate::deck::delete_deck`], an id that resolves to nothing is a success: the
+/// caller wanted that tag gone, and it is gone.
+///
+/// **The reach is the app's now, and the confirmation is what owes the reader that.** A tag
+/// worn in six decks loses its label in six decks; [`GlobalTag::deck_count`] exists so the
+/// dialog can say the number before the press rather than after it.
+///
+/// `deck_id` is where the reader was standing — [`update_tag`]'s argument, for its reason.
+pub fn delete_tag(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String> {
+    // Read rather than `owning_deck`, which no longer means anything for a tag: the history
+    // needs the name, and this is the last statement in which it is knowable.
+    let name: Option<String> = conn
+        .query_row(
+            "SELECT name FROM deck_tags WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(name) = name else {
         return Ok(());
     };
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
-    // **The label, and every card wearing it.** `deck_cards.tag_id` is `ON DELETE SET NULL`, so
-    // the DELETE below silently un-labels N cards and the history row says only that a tag went
-    // — `auditText` renders "N cards untagged" from a count. Undo has to put the label back
-    // *and* put it back on those cards, which is the only place either fact still exists.
+    // **The label, and every card wearing it in every deck.** The DELETE below silently
+    // un-labels them through the FK's `SET NULL`, and the history row says only that a tag
+    // went — so undo has to put the label back *and* put it back on those cards, which is the
+    // only place either fact still exists. `Carrier` carries its own `deck_id` for exactly this
+    // reason: the carriers of a global delete are not all in the deck the press happened in.
     let before = tag_step_row(&tx, id)?;
     let carriers = crate::deck_undo::read_carriers(&tx, id)?;
+    let cards: i64 = carriers.len() as i64;
     tx.execute("DELETE FROM deck_tags WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     // `previous` is null: this row is about the label, and the label it is about is `tag`.
     // `previous` carries the *former* name of a renamed one and nothing else, so filling it
-    // here would make a delete read as a rename that went nowhere.
+    // here would make a delete read as a rename that went nowhere. `cards` is what
+    // `auditText`'s "N cards untagged" is rendered from — it has always been read and was
+    // never written until the reach became worth stating.
     let audit_id = record_tag(
         &tx,
         deck_id,
-        &json!({ "action": "delete", "tag": name, "previous": null }),
+        &json!({ "action": "delete", "tag": name, "previous": null, "cards": cards }),
     )?;
     // The carriers ride on the same op as the restore, so they are written after it and can be
     // rewritten through the remap when the label comes back under a fresh id. On the redo side
@@ -1260,41 +1475,19 @@ pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// Every tag name and colour ever used, across every deck, most-used first. **Global** —
-/// unlike [`list_tags`], this takes no deck id at all: a tag is per-deck data
-/// (`DECK_TAG_GRAIN`), but the palette a "New tag" dialog offers to autocomplete from is a
-/// property of the app's whole history, not of the one deck the dialog happens to be open on.
-///
-/// Grouped on `(name, color)` rather than `name` alone: the schema does not force every deck
-/// to pick the same colour for a name, only [`create_tag`]/[`update_tag`]'s own discipline
-/// (and the fixed palette the webview offers) makes that true in practice. Grouping on the
-/// pair is exact either way — when every deck agrees, as expected, one group is one name.
-pub fn tag_suggestions(conn: &Connection) -> Result<Vec<TagSuggestion>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT name, color FROM deck_tags GROUP BY name, color ORDER BY count(*) DESC, name",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(TagSuggestion {
-                name: r.get(0)?,
-                color: r.get(1)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())
-}
-
 /// Set (or clear) the one tag a deck card carries. **A card carries 0 or 1 tags** — the whole
 /// of that rule is the `tag_id` column itself; nothing here enforces it beyond writing to it.
 ///
 /// Identifies the row by `(deckId, cardId, categoryId, variant)` —
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) exactly, so at most one row can match.
-/// A `tagId` that resolves to a different deck's tag is refused before anything is written
-/// ([`TAG_WRONG_DECK`]); a row that no longer matches — moved, folded, stepped to zero since
-/// the editor last read it — answers [`CARD_NOT_IN_CATEGORY`], `deck::card_gone`'s reason.
+/// A row that no longer matches — moved, folded, stepped to zero since the editor last read it
+/// — answers [`CARD_NOT_IN_CATEGORY`], `deck::card_gone`'s reason.
+///
+/// **The wrong-deck fence went with schema v21 and left nothing behind.** It refused a `tagId`
+/// that resolved to another deck's tag, which was a real hazard while a tag was per-deck: the
+/// FK only checked that the id existed. There is no other deck's tag any more — every row in
+/// `deck_tags` is every deck's — so the only refusal left is [`TAG_GONE`], for an id that
+/// resolves to nothing at all.
 pub fn set_card_tag(
     conn: &Connection,
     deck_id: i64,
@@ -1309,23 +1502,19 @@ pub fn set_card_tag(
     // and the foil as two rows, and a label belongs to one of them.
     let finish = crate::deck::normalise_finish(finish)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    // The new label's own name, gathered by the ownership fence rather than by a second query:
-    // the fence has to read the row anyway, and the history needs the word rather than the id.
+    // The new label's own name — the history needs the word rather than the id, and the same
+    // read is what stands between a stale editor and a `tag_id` pointing at nothing.
     let applied: Option<String> = match tag_id {
         Some(tag) => {
-            let row: Option<(i64, String)> = tx
+            let row: Option<String> = tx
                 .query_row(
-                    "SELECT deck_id, name FROM deck_tags WHERE id = ?1",
+                    "SELECT name FROM deck_tags WHERE id = ?1",
                     params![tag],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| r.get(0),
                 )
                 .optional()
                 .map_err(|e| e.to_string())?;
-            match row {
-                Some((d, name)) if d == deck_id => Some(name),
-                Some(_) => return Err(TAG_WRONG_DECK.to_owned()),
-                None => return Err(TAG_GONE.to_owned()),
-            }
+            Some(row.ok_or_else(|| TAG_GONE.to_owned())?)
         }
         None => None,
     };
@@ -1699,7 +1888,7 @@ pub async fn deck_tag_create(
     deck_id: i64,
     name: String,
     color: String,
-) -> Result<DeckTagRow, String> {
+) -> Result<GlobalTag, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| create_tag(c, deck_id, &name, &color))
@@ -1708,44 +1897,66 @@ pub async fn deck_tag_create(
     .map_err(unfinished)?
 }
 
+/// `deck_id` is where the reader was standing, not what is being changed — see
+/// [`update_tag`], which is app-wide.
 #[tauri::command]
 pub async fn deck_tag_update(
     state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
     id: i64,
     name: String,
     color: String,
-) -> Result<DeckTagRow, String> {
+) -> Result<GlobalTag, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| update_tag(c, id, &name, &color))
+        with_write(&state, |c| update_tag(c, deck_id, id, &name, &color))
     })
     .await
     .map_err(unfinished)?
 }
 
+/// Deletes the tag **everywhere**, and answers nothing. `deck_id` is where the reader was.
 #[tauri::command]
 pub async fn deck_tag_delete(
     state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
     id: i64,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| delete_tag(c, id)))
+    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| delete_tag(c, deck_id, id)))
         .await
         .map_err(unfinished)?
 }
 
-/// **Read-only**, and the one command in this module with no deck id at all — see
-/// [`tag_suggestions`]'s doc.
+/// Answers how many rows lost the label — see [`remove_tag_from_deck`], which leaves the tag
+/// itself alone.
 #[tauri::command]
-pub async fn deck_tag_suggestions(
+pub async fn deck_tag_remove_from_deck(
     state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Vec<TagSuggestion>, String> {
+    deck_id: i64,
+    tag_id: i64,
+    variant: String,
+) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        tag_suggestions(&crate::sync::lock_db_read(&state))
+        with_write(&state, |c| {
+            remove_tag_from_deck(c, deck_id, tag_id, &variant)
+        })
     })
     .await
-    .map_err(|e| format!("the tag palette could not be read: {e}"))?
+    .map_err(unfinished)?
+}
+
+/// **Read-only**, and the one command in this module with no deck id at all — see
+/// [`list_all_tags`]'s doc.
+#[tauri::command]
+pub async fn deck_tag_all(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<GlobalTag>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || list_all_tags(&crate::sync::lock_db_read(&state)))
+        .await
+        .map_err(|e| format!("the tag list could not be read: {e}"))?
 }
 
 #[tauri::command]
@@ -2893,61 +3104,301 @@ mod tests {
         assert!(elsewhere > 0, "the control deck exists and was left alone");
     }
 
-    // -- Rule 4: deck_tag_suggestions is global ---------------------------------------------
+    // -- Rule 4: one tag list, app-wide, one row per name ------------------------------------
+
+    /// A card in one deck's live list, wearing one tag. The tag rules below all need the same
+    /// shape and none of them is about building it.
+    ///
+    /// The category is found before it is made, because a deck's `Main deck` is unique by
+    /// `DECK_CATEGORY_GRAIN` and half these tests put two cards in one deck.
+    fn tagged(conn: &Connection, deck_id: i64, card: &str, tag: i64, qty: i64) -> i64 {
+        let cat = conn
+            .query_row(
+                "SELECT id FROM deck_categories WHERE deck_id = ?1 AND name = 'Main deck'",
+                params![deck_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+            .unwrap_or_else(|| category(conn, deck_id, "main", "Main deck"));
+        crate::schema::tests::seed_card(conn, card, "lea", "161");
+        deck_card(conn, deck_id, card, cat, qty);
+        set_card_tag(conn, deck_id, card, cat, "live", None, Some(tag)).unwrap();
+        cat
+    }
 
     #[test]
-    fn deck_tag_suggestions_is_global_and_ordered_by_use_then_name() {
+    fn deck_tag_all_is_global_and_ordered_by_copies_then_name() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let deck_c = deck(&conn, "Midrange");
-        create_tag(&conn, deck_a, "Removal", "red").unwrap();
-        create_tag(&conn, deck_b, "Removal", "red").unwrap();
-        create_tag(&conn, deck_c, "Removal", "red").unwrap();
-        create_tag(&conn, deck_a, "Ramp", "green").unwrap();
-        create_tag(&conn, deck_b, "Ramp", "green").unwrap();
+        // One row per name, made once — a second deck does not get its own copy any more, which
+        // is the whole of the change. `Draw` is worn by nothing at all.
+        let removal = create_tag(&conn, deck_a, "Removal", "red").unwrap();
+        let ramp = create_tag(&conn, deck_a, "Ramp", "green").unwrap();
         create_tag(&conn, deck_a, "Draw", "blue").unwrap();
 
-        let suggestions = tag_suggestions(&conn).unwrap();
-        let names: Vec<&str> = suggestions.iter().map(|s| s.name.as_str()).collect();
+        tagged(&conn, deck_a, "bolt-lea", removal.id, 4);
+        tagged(&conn, deck_b, "swords-lea", removal.id, 3);
+        tagged(&conn, deck_a, "llanowar-lea", ramp.id, 2);
+
+        let all = list_all_tags(&conn).unwrap();
+        let seen: Vec<(&str, i64, i64)> = all
+            .iter()
+            .map(|t| (t.name.as_str(), t.card_count, t.deck_count))
+            .collect();
         assert_eq!(
-            names,
-            vec!["Removal", "Ramp", "Draw"],
-            "used by 3 decks, then 2, then 1 — ties broken by name"
+            seen,
+            vec![("Removal", 7, 2), ("Ramp", 2, 1), ("Draw", 0, 0)],
+            "copies descending, then name — and a tag nothing wears is still a row"
         );
     }
 
     #[test]
-    fn deck_tag_create_refuses_a_duplicate_name() {
+    fn deck_tag_create_refuses_a_duplicate_name_in_any_deck() {
+        let conn = conn();
+        let deck_a = deck(&conn, "Burn");
+        let deck_b = deck(&conn, "Control");
+        create_tag(&conn, deck_a, "Removal", "red").unwrap();
+
+        // The same deck, and then a *different* one: while a tag was per-deck the second of
+        // these was allowed and made the second row this feature exists to prevent.
+        assert_eq!(
+            create_tag(&conn, deck_a, "Removal", "blue").unwrap_err(),
+            TAG_NAME_TAKEN
+        );
+        assert_eq!(
+            create_tag(&conn, deck_b, "Removal", "blue").unwrap_err(),
+            TAG_NAME_TAKEN
+        );
+    }
+
+    #[test]
+    fn deck_tag_create_compares_names_case_insensitively_and_normalised() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         create_tag(&conn, deck_id, "Removal", "red").unwrap();
-        let err = create_tag(&conn, deck_id, "Removal", "blue").unwrap_err();
-        assert_eq!(err, TAG_NAME_TAKEN);
+
+        for spelling in ["removal", "REMOVAL", "  Removal  "] {
+            assert_eq!(
+                create_tag(&conn, deck_id, spelling, "blue").unwrap_err(),
+                TAG_NAME_TAKEN,
+                "`{spelling}` is the same label"
+            );
+        }
+
+        // The Unicode half, which `COLLATE NOCASE` could not answer: a combining acute against
+        // a precomposed one. Both are typeable and which one arrives is the keyboard's choice.
+        create_tag(&conn, deck_id, "Caf\u{e9}", "red").unwrap();
+        assert_eq!(
+            create_tag(&conn, deck_id, "Cafe\u{301}", "blue").unwrap_err(),
+            TAG_NAME_TAKEN
+        );
+        assert_eq!(
+            create_tag(&conn, deck_id, "CAF\u{c9}", "blue").unwrap_err(),
+            TAG_NAME_TAKEN
+        );
     }
 
     #[test]
-    fn deck_tag_update_writes_the_new_name_and_color() {
+    fn deck_tag_create_keeps_the_capitals_the_reader_typed() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let tag = create_tag(&conn, deck_id, "Removal", "red").unwrap();
+        let tag = create_tag(&conn, deck_id, "Cut Candidate", "red").unwrap();
+        assert_eq!(
+            tag.name, "Cut Candidate",
+            "the key is never the display name"
+        );
+        let stored: String = conn
+            .query_row(
+                "SELECT name_key FROM deck_tags WHERE id = ?1",
+                params![tag.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "cut candidate");
+    }
 
-        let returned = update_tag(&conn, tag.id, "Interaction", "blue").unwrap();
+    #[test]
+    fn deck_tag_update_writes_the_new_name_and_color_for_every_deck() {
+        let conn = conn();
+        let deck_a = deck(&conn, "Burn");
+        let deck_b = deck(&conn, "Control");
+        let tag = create_tag(&conn, deck_a, "Removal", "red").unwrap();
+        tagged(&conn, deck_b, "swords-lea", tag.id, 1);
+
+        let returned = update_tag(&conn, deck_a, tag.id, "Interaction", "blue").unwrap();
         assert_eq!(returned.name, "Interaction");
         assert_eq!(returned.color, "blue");
 
-        let (stored_name, stored_color): (String, String) = conn
+        let (stored_name, stored_color, stored_key): (String, String, String) = conn
             .query_row(
-                "SELECT name, color FROM deck_tags WHERE id = ?1",
+                "SELECT name, color, name_key FROM deck_tags WHERE id = ?1",
                 params![tag.id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(
-            stored_name, "Interaction",
-            "the row itself must carry the new name"
-        );
+        assert_eq!(stored_name, "Interaction");
         assert_eq!(stored_color, "blue", "and the new colour");
+        assert_eq!(stored_key, "interaction", "the key follows the name");
+
+        // The other deck reads the same row, which is the issue's headline: recolouring here
+        // recoloured it there, with nothing to propagate.
+        let elsewhere = list_tags(&conn, deck_b, "live").unwrap();
+        assert_eq!(elsewhere.len(), 1);
+        assert_eq!(elsewhere[0].name, "Interaction");
+        assert_eq!(elsewhere[0].color, "blue");
+    }
+
+    #[test]
+    fn deck_tag_update_refuses_a_name_another_tag_holds_but_allows_recapitalising_its_own() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let removal = create_tag(&conn, deck_id, "Removal", "red").unwrap();
+        create_tag(&conn, deck_id, "Ramp", "green").unwrap();
+
+        assert_eq!(
+            update_tag(&conn, deck_id, removal.id, "ramp", "red").unwrap_err(),
+            TAG_NAME_TAKEN
+        );
+        // Its own name in different capitals is not taken — by itself.
+        let fixed = update_tag(&conn, deck_id, removal.id, "REMOVAL", "red").unwrap();
+        assert_eq!(fixed.name, "REMOVAL");
+    }
+
+    #[test]
+    fn deck_tag_list_answers_only_what_this_deck_and_variant_wears_most_first() {
+        let conn = conn();
+        let deck_a = deck(&conn, "Burn");
+        let deck_b = deck(&conn, "Control");
+        let removal = create_tag(&conn, deck_a, "Removal", "red").unwrap();
+        let ramp = create_tag(&conn, deck_a, "Ramp", "green").unwrap();
+        let elsewhere = create_tag(&conn, deck_a, "Elsewhere", "blue").unwrap();
+        create_tag(&conn, deck_a, "Unworn", "amber").unwrap();
+
+        let cat = tagged(&conn, deck_a, "bolt-lea", ramp.id, 2);
+        crate::schema::tests::seed_card(&conn, "swords-lea", "lea", "161");
+        deck_card(&conn, deck_a, "swords-lea", cat, 4);
+        set_card_tag(
+            &conn,
+            deck_a,
+            "swords-lea",
+            cat,
+            "live",
+            None,
+            Some(removal.id),
+        )
+        .unwrap();
+        tagged(&conn, deck_b, "llanowar-lea", elsewhere.id, 9);
+
+        let rows = list_tags(&conn, deck_a, "live").unwrap();
+        let seen: Vec<(&str, i64)> = rows
+            .iter()
+            .map(|t| (t.name.as_str(), t.card_count))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![("Removal", 4), ("Ramp", 2)],
+            "in use here, most copies first, and nothing else"
+        );
+    }
+
+    #[test]
+    fn deck_tag_list_treats_the_two_variants_as_different_decks() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let live_only = create_tag(&conn, deck_id, "Live only", "red").unwrap();
+        let theory_only = create_tag(&conn, deck_id, "Theory only", "blue").unwrap();
+        let cat = tagged(&conn, deck_id, "bolt-lea", live_only.id, 1);
+
+        crate::schema::tests::seed_card(&conn, "swords-lea", "lea", "161");
+        conn.execute(
+            "INSERT INTO deck_cards
+                (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                 name, tag_id, quantity, created_at, updated_at)
+             VALUES (?1, ?2, 'theory', 'swords-lea', 'lea', '161', 'en', 'Swords', ?3, 1, 0, 0)",
+            params![deck_id, cat, theory_only.id],
+        )
+        .unwrap();
+
+        let live: Vec<String> = list_tags(&conn, deck_id, "live")
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        let theory: Vec<String> = list_tags(&conn, deck_id, "theory")
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(live, vec!["Live only"]);
+        assert_eq!(theory, vec!["Theory only"]);
+    }
+
+    #[test]
+    fn removing_a_tag_from_a_deck_untags_that_list_and_leaves_the_tag_and_every_other_deck() {
+        let conn = conn();
+        let deck_a = deck(&conn, "Burn");
+        let deck_b = deck(&conn, "Control");
+        let tag = create_tag(&conn, deck_a, "Removal", "red").unwrap();
+        tagged(&conn, deck_a, "bolt-lea", tag.id, 4);
+        tagged(&conn, deck_b, "swords-lea", tag.id, 3);
+
+        let cleared = remove_tag_from_deck(&conn, deck_a, tag.id, "live").unwrap();
+
+        assert_eq!(cleared, 1, "one row lost the label");
+        assert!(list_tags(&conn, deck_a, "live").unwrap().is_empty());
+        assert_eq!(
+            list_tags(&conn, deck_b, "live").unwrap().len(),
+            1,
+            "the other deck is untouched"
+        );
+        let all = list_all_tags(&conn).unwrap();
+        assert_eq!(all.len(), 1, "and the tag itself is still there");
+        assert_eq!(all[0].deck_count, 1);
+    }
+
+    #[test]
+    fn removing_a_tag_no_card_here_wears_is_a_success_that_writes_nothing() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let tag = create_tag(&conn, deck_id, "Removal", "red").unwrap();
+        let before: i64 = conn
+            .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
+            .unwrap();
+
+        assert_eq!(remove_tag_from_deck(&conn, deck_id, tag.id, "live"), Ok(0));
+
+        let after: i64 = conn
+            .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, before, "nothing happened, so nothing is recorded");
+    }
+
+    #[test]
+    fn deleting_a_tag_takes_it_off_every_deck_and_deletes_no_card() {
+        let conn = conn();
+        let deck_a = deck(&conn, "Burn");
+        let deck_b = deck(&conn, "Control");
+        let tag = create_tag(&conn, deck_a, "Removal", "red").unwrap();
+        tagged(&conn, deck_a, "bolt-lea", tag.id, 4);
+        tagged(&conn, deck_b, "swords-lea", tag.id, 3);
+
+        delete_tag(&conn, deck_a, tag.id).unwrap();
+
+        assert!(list_all_tags(&conn).unwrap().is_empty());
+        let cards: i64 = conn
+            .query_row("SELECT count(*) FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cards, 2, "both cards are still in their decks");
+        let tagged_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_cards WHERE tag_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tagged_rows, 0, "and neither is wearing anything");
     }
 
     // -- Rule 5: a card carries 0 or 1 tags --------------------------------------------------
@@ -2991,27 +3442,46 @@ mod tests {
         assert_eq!(tag_of(&conn), None);
     }
 
+    /// The refusal this replaced was `set_card_tag_refuses_a_tag_from_a_different_deck`, and
+    /// its disappearance is the feature rather than a regression: there is no other deck's tag
+    /// any more. A tag made while standing in one deck goes straight onto a card in another.
     #[test]
-    fn set_card_tag_refuses_a_tag_from_a_different_deck() {
+    fn set_card_tag_accepts_a_tag_made_in_another_deck() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
         let cat = category(&conn, deck_a, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_a, "bolt-lea", cat, 4);
-        let other_deck_tag = create_tag(&conn, deck_b, "Removal", "red").unwrap();
+        let made_elsewhere = create_tag(&conn, deck_b, "Removal", "red").unwrap();
 
-        let err = set_card_tag(
+        set_card_tag(
             &conn,
             deck_a,
             "bolt-lea",
             cat,
             "live",
             None,
-            Some(other_deck_tag.id),
+            Some(made_elsewhere.id),
         )
-        .unwrap_err();
-        assert_eq!(err, TAG_WRONG_DECK);
+        .unwrap();
+
+        let rows = list_tags(&conn, deck_a, "live").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, made_elsewhere.id);
+    }
+
+    #[test]
+    fn set_card_tag_refuses_a_tag_id_that_resolves_to_nothing() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", cat, 4);
+
+        let err =
+            set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, Some(999_999)).unwrap_err();
+        assert_eq!(err, TAG_GONE);
     }
 
     #[test]
@@ -3064,7 +3534,7 @@ mod tests {
         assert!(updated_at(&conn, deck_id) > 0, "tag create moved the deck");
 
         backdate(&conn, deck_id);
-        update_tag(&conn, tag.id, "Interaction", "red").unwrap();
+        update_tag(&conn, deck_id, tag.id, "Interaction", "red").unwrap();
         assert!(updated_at(&conn, deck_id) > 0, "so does tag update");
 
         backdate(&conn, deck_id);
@@ -3072,7 +3542,14 @@ mod tests {
         assert!(updated_at(&conn, deck_id) > 0, "and tagging a card");
 
         backdate(&conn, deck_id);
-        delete_tag(&conn, tag.id).unwrap();
+        remove_tag_from_deck(&conn, deck_id, tag.id, "live").unwrap();
+        assert!(
+            updated_at(&conn, deck_id) > 0,
+            "and taking it off this deck"
+        );
+
+        backdate(&conn, deck_id);
+        delete_tag(&conn, deck_id, tag.id).unwrap();
         assert!(updated_at(&conn, deck_id) > 0, "and tag delete");
     }
 

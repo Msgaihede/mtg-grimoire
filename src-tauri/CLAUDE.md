@@ -280,9 +280,43 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **Enforced foreign keys exist only _between user tables_, never against `cards.id`.** The
   `ON DELETE` action is chosen per delete-site: **CASCADE** where a row has nowhere else to be
   (`deck_cards.deck_id`/`.category_id`, both `deck_allocations` keys, `deck_categories.deck_id`,
-  `deck_tags.deck_id`, `deck_audit.deck_id`, `deck_folders.parent_id`), **SET NULL** on exactly
-  two — `decks.folder_id` and `deck_cards.tag_id`, because deleting a folder must not delete the
-  decks in it and deleting a tag must never delete a card.
+  `deck_audit.deck_id`, `deck_folders.parent_id`), **SET NULL** on exactly two —
+  `decks.folder_id` and `deck_cards.tag_id`, because deleting a folder must not delete the decks
+  in it and deleting a tag must never delete a card. **`deck_tags` left that list at schema v21**
+  and has no `deck_id` to cascade from — see the tag rule below.
+- **A tag is one app-wide row, and `deck_tags` has no `deck_id`** (schema v21). Its grain is
+  `schema::DECK_TAG_GRAIN` — `name_key`, one name for the whole app — where it was `deck_id, name`
+  from v8. A category says *where in a deck* a card lives and belongs to that deck; a tag says
+  what the reader thinks of a card, and a reader who has decided what "Cut candidate" means did
+  not decide it per deck. So recolouring one recolours it everywhere, and no second tag can take a
+  name one already holds. Six things follow, and each is somewhere the old shape's assumption is
+  still the tempting one:
+  - **`schema::tag_name_key` is what "the same name" means**: NFC, Unicode lowercase, NFC again,
+    computed in Rust and *stored* in `name_key`, because SQLite cannot answer it — `COLLATE
+    NOCASE` folds ASCII and nothing else, and the bundled build carries no normalisation at all.
+    `unicode-normalization` is in the tree for this and nothing else. The display `name` keeps
+    whatever capitals the reader typed; the key is never shown.
+  - **`deck_tag_list` answers what a deck's list is *wearing*, most-used first** — a join over
+    `deck_cards`, not a `WHERE t.deck_id`, so `variant` scopes membership as well as the counts
+    and the live and theory lists are treated as separate decks where labels are concerned. It
+    structurally cannot answer a tag nothing wears; `deck_tag_all` is the list that can.
+  - **`deck_tag_create`, `deck_tag_update` and `deck_tag_delete` all take a `deck_id` that is not
+    stored.** It is where the reader was standing — the history row and the undo step — because
+    the change is global but the *act* happened somewhere, and a history that could not say where
+    would be the worse record.
+  - **`deck_tag_remove_from_deck` is the act the app-wide list needed.** "I am done with this
+    label here" and "this label should stop existing" were one press while a tag belonged to a
+    deck; conflating them now would mean a reader tidying one deck stripping a label off nine
+    others. It untags one deck's cards in one variant and leaves the tag standing. Zero rows is a
+    success that writes nothing.
+  - **A tag outlives the deck it was made in**, because the CASCADE is gone. `reset::clear_decks`
+    sweeps `deck_tags` **by hand** for exactly that reason — every deck at once is the one case
+    where clearing them is right, and no cascade reaches it any more. `deck::duplicate_deck`
+    copies **no** tags: the copied cards keep the very `tag_id` they had.
+  - **`deck_undo::Carrier` carries its own `deck_id`.** A global delete's carriers span decks
+    while the step is filed under one, so a reversal scoped to the step's deck would put the label
+    back on that deck's cards and quietly leave the others bare — undo that *looks* like it
+    worked, on the screen that is open.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`). `variant` is `live` (sleeved up) or `theory` (being built toward)
   and `finish` is `NULL | 'foil' | 'etched'` (schema v19); every card command takes all of them.

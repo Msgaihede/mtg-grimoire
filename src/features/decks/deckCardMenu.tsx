@@ -41,7 +41,6 @@ import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
 import type { DeckCard, DeckCategory, DeckFinish, DeckTag, FormatSpec } from "@/lib/ipc";
-import { sortOptions } from "@/lib/options";
 import { commanderIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 
@@ -105,8 +104,9 @@ export interface DeckCardMenuDeps {
   setTag: (card: DeckCard, tagId: number | null) => void;
   /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
   setFinish: (card: DeckCard, to: DeckFinish) => void;
-  /** The deck's labels, already in hand from `deck_get` — the tag rows are built from these
-   *  rather than from a second `deck_tag_list`, which is what lets the submenu be `submenu`
+  /** The labels **this list is wearing**, already in hand from `deck_get`, most-used first —
+   *  the tag rows are built from these rather than from a second `deck_tag_list`, which is what
+   *  lets the submenu be `submenu`
    *  rather than `lazy`. */
   tags: readonly DeckTag[];
   /**
@@ -126,7 +126,7 @@ export interface DeckCardMenuDeps {
    * second half to an Escape landing during the round trip: the label made and silently never
    * attached. The editor's observer outlives both the menu and the dialog.
    */
-  newTag: (card: DeckCard) => void;
+  addTag: (card: DeckCard) => void;
   /**
    * **Remove card** — take this row out of the pile it is in.
    *
@@ -168,9 +168,13 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
         {
           kind: "action",
           id: "tag-new",
-          label: "New tag…",
+          // **"More tags…" rather than "New tag…", because there are more.** A tag is one
+          // app-wide row since schema v21, so the rows above this line are the tags *this list
+          // is wearing* and every other label the reader owns is behind this one — along with
+          // making a genuinely new one, which is what the row used to be for alone.
+          label: "More tags…",
           Icon: Plus,
-          onSelect: () => deps.newTag(card),
+          onSelect: () => deps.addTag(card),
         },
       ],
     },
@@ -453,19 +457,23 @@ const REGULAR = "Regular";
  * `tagId: number | null`, and `deck_cards.tag_id` is a single column. A checkbox list would be
  * a control promising something the model cannot store.
  *
- * **Drawn through `sortOptions`, like every other option list in this app** — and "the list
- * arrives sorted" is not the exemption it was written down as (fixed 2026-08-14). What
- * `deck_get` answers is `deck_meta.rs`' `ORDER BY t.name` over a `TEXT` column with **no
- * `COLLATE NOCASE`**, which is SQLite's BINARY collation: byte order, so a deck tagged `Cut`,
- * `budget` and `Ramp` drew `Cut, Ramp, budget` and a reader looking for "budget" under B found
- * it below every capitalised label. `sortOptions` is `Intl.Collator("en", { sensitivity:
- * "base" })`, so case stops splitting the alphabet. Ordering is a **display** decision and lives
- * in TS; Rust's `ORDER BY` is not the bug and did not change. The two exemptions this app grants
- * — an order that *is* the information, and an order the reader arranged themselves — are
- * neither of them this list, which is why the comment they were claimed in is gone.
+ * **Only the tags this list is already wearing, and the backend's order is kept.** Both halves
+ * changed with schema v21 and both are the issue's own request. `deck_get` answers the tags
+ * *worn by cards in this deck and variant*, most-used first — so the row a reader reaches for
+ * is near the top, and a menu no longer fills with every label they have ever made. The rest
+ * are behind "More tags…".
  *
- * "None" is pinned in front of the sort rather than sorted into it: it is the row that takes a
- * label *off*, not one of the labels — `Any card`'s and `Top level`'s arrangement.
+ * **This list is therefore not `sortOptions`'d, and that reverses a fix made on 2026-08-14.**
+ * The reasoning then was sound and its premise is gone: `deck_get` answered
+ * `ORDER BY t.name` over a `TEXT` column with no `COLLATE NOCASE`, which is byte order, so a
+ * deck tagged `Cut`, `budget` and `Ramp` drew `Cut, Ramp, budget` and a reader looking for
+ * "budget" under B found it below every capitalised label. An alphabet the reader could not
+ * predict is worth replacing with one they can. But the order is not an alphabet any more: it
+ * is **use**, which is the first of the two exemptions this app grants — an order that *is* the
+ * information. Re-sorting it here would throw away the fact the backend went and counted.
+ *
+ * "None" is pinned in front rather than sorted in: it is the row that takes a label *off*, not
+ * one of the labels — `Any card`'s and `Top level`'s arrangement.
  *
  * Exported so the rule above can be pinned without mounting a menu.
  */
@@ -482,7 +490,7 @@ export function deckCardTagRows(
       checked: card.tagId === null,
       onSelect: () => setTag(card, null),
     },
-    ...sortOptions(tags, (tag) => tag.name).map(
+    ...tags.map(
       (tag): MenuItem => ({
         kind: "radio",
         id: `tag-${tag.id}`,
