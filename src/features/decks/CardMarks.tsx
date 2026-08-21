@@ -197,6 +197,13 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * already settle the other way round, that one fact may be drawn twice when the two surfaces have
  * different room.
  *
+ * **Echoing the banner means reflecting it, and it is narrower than the thing it echoes** (issue
+ * #182). Both are 22px tall and both are cut by the same 10px slant, but the tag is widest along
+ * its **top** edge and so is this — a 180° rotation of the polygon puts the bite in the right
+ * corner and the taper the wrong way up, which is what shipped and what was reported. The width
+ * is where the two part company on purpose: a digit needs the room a stroked tick's own bearings
+ * already give back, and this corner of a stacked card is laid over the printed **mana cost**.
+ *
  * ## The four separations, and the one this mark has to work hardest for
  *
  * A tick is a **verdict-shaped glyph**, and this file's founding rule is that a mark saying a
@@ -255,16 +262,19 @@ export function TheoryMatchMark({
       // words are already the whole of what a keyboard reader gets from the button this sits
       // inside, so `describes: false` leaves `aria-describedby` unset.
       {...tip(THEORY_MATCH_LABEL, { describes: false })}
-      // Mirrored, because this sits in the card's **right**-hand corner — see the constant. The
+      // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole of
+      // issue #182 — because this sits in the card's **right**-hand corner; see the constant. The
       // chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a 14px
       // box is most of the box.
       style={banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : undefined}
       className={cn(
         banner
-          ? // **The mirrored box, and the pairing is not optional** (issue #158). The slant above
-            // and the paddings that centre content inside it are one shape: worn with
+          ? // **The mirrored box, and the pairing is not optional** (issues #158 and #182). The
+            // slant above and the paddings that centre content inside it are one shape: worn with
             // `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's visible
-            // centre and was reported as left-aligned.
+            // centre and was reported as left-aligned. The pair is `6/1` rather than `12/6` since
+            // #182 — the same `pl − pr = 5px` centring, 11px less of the card's printed mana cost
+            // covered, and the constant carries the arithmetic both issues are instances of.
             COUNT_TAG_BOX_MIRRORED
           : // The Grid tile's copy count, verbatim but for the fill: `rounded-sm`, the mono face
             // and the same two scaled sizes. Written out rather than imported because that chip is
