@@ -455,6 +455,30 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `ZOOM_STEPS` is **spelled out as literals rather than generated**, for the reason the ladder
   exists at all: 0.1 added seven times is 0.7999999999999999. One stop is still not round in binary
   (1.1 × 100 is 110.00000000000001), which is why `formatZoom` rounds.
+- **Driven in the shipped window 2026-08-22** (`npm run tauri dev`, a **debug** build at 1920×1080,
+  a first-run sync of 116,700 cards, the search wall on `bolt` at 37 results), because the one
+  claim this feature makes — a size surviving a **restart** — is the one thing no jsdom suite can
+  reach. The wheel was dispatched synthetically on the scroller, the same carve-out the 2026-08-14
+  pass recorded: the handler and everything downstream were exercised, the `preventDefault`/WebView2
+  page-zoom interaction was **not** re-proved.
+
+  - **The ladder steps ten points a notch.** The 170px base tile drew **170 → 221 → 272** over six
+    notches up — `scaled(170, 1.3)` and `scaled(170, 1.6)`. On the old ladder six notches up was
+    1.75; three was 1.25, which would have drawn 213 rather than 221.
+  - **The gesture reaches `app_meta` and the row holds one entry per wall.** After the wheel
+    stopped, `select value from app_meta where key = 'card_zoom'` read **`{"search":1.6}`** — the
+    section named, and nothing invented for the six walls nobody had touched.
+  - **The restart is the whole feature and it works.** The process was stopped, `tauri dev`
+    relaunched, and the same search re-run: the wall drew **272px** from its first paint, and **no
+    badge appeared** — the seed does not pulse, so a launch says nothing about a size it restored.
+  - **The write path is live in the restored session too**, which is the half a read-only check
+    would miss. Four notches down drew **204px** (`scaled(170, 1.2)`) and the row read
+    **`{"search":1.2}`** — updated in place rather than accumulating a second entry.
+  - **Two reads that lie, both already on the trap list.** A width read in the *same* `cdp.mjs eval`
+    as the wheel dispatch answers about the frame before React re-rendered — two notches read back
+    as "no change" and looked exactly like a dead handler until the dispatch and the measurement
+    were split into separate evals. And `root.childElementCount` is **0** for a few seconds after
+    `tauri dev` reports the process, which is the blank-window tell rather than a blank window.
 - **The zoom sizes the _tile_, and the column count is what falls out of it** (changed
   2026-08-14). `CardGrid` draws a tile at `scaled(baseTileWidth, cardZoom)` exactly, fits however
   many of that size the wall holds, and splits the remainder either side of the row
