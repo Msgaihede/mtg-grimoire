@@ -31,7 +31,7 @@ const AT_MIN_WIDTH = "w-[776px]";
  * `toggleColor` makes colourless exclusive both ways (`useCardSearch.ts:125-129`), and
  * `toggleOwned` is a three-state cycle through one boolean — so the badge and the chips would
  * drift from the app while every story here stayed green. The hook is cheap: it queries the
- * seeded fake backend, and the 47-printing corpus answers at once.
+ * seeded fake backend, and the 52-printing corpus answers at once.
  *
  * **The preset is applied from an effect, once.** The only initial state `useCardSearch` takes
  * is a default *format*, which this wrapper does not pass — so every filter a story here opens
@@ -294,15 +294,15 @@ export const SomeUnavailable: Story = {
     // **The exact settled count, not a prefix.** The count rides in the accessible name, so
     // waiting on one is how a story waits for the facets — but the row wears the *previous*
     // search's counts while the next answer is in flight (`keepPreviousData`), and every
-    // state this passes through is also called "Red — N printings". 42 is the answer for a
+    // state this passes through is also called "Red — N printings". 46 is the answer for a
     // red search: pressing Red again would clear the filter, so its own chip counts the whole
     // searchable corpus — paper and playable — rather than the red part of it.
-    await canvas.findByRole("button", { name: "Red — 42 printings" }, { timeout: 5000 });
+    await canvas.findByRole("button", { name: "Red — 46 printings" }, { timeout: 5000 });
 
     // Empty over a red search, and saying so where a reader can hover it. The count rides in
     // the accessible name as well as the tooltip (`ValueChip`'s own rule), so the exact name —
     // not a prefix — is what proves the sentence rather than only that the row is greyed.
-    for (const value of [4, 5, 6, 7]) {
+    for (const value of [5, 6, 7]) {
       const chip = canvas.getByRole("button", {
         name: `Mana value ${value} — nothing in this search`,
       });
@@ -314,7 +314,7 @@ export const SomeUnavailable: Story = {
       await expect(chip).not.toBeDisabled();
     }
     // …and the ones that are not empty are untouched.
-    for (const value of [0, 1, 2, 3, 8]) {
+    for (const value of [0, 1, 2, 3, 4, 8]) {
       await expect(
         canvas.getByRole("button", { name: new RegExp(`^Mana value ${value}\\b`) }),
       ).not.toHaveAttribute("aria-disabled");

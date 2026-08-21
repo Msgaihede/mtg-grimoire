@@ -10,7 +10,16 @@ import {
   type RefObject,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FlipHorizontal2, Gem, Sparkles, X } from "lucide-react";
+import {
+  ArrowRight,
+  Combine,
+  FlipHorizontal2,
+  Gem,
+  RotateCcw,
+  RotateCw,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
@@ -33,6 +42,7 @@ import {
   type CardDetail,
   type CardFace,
   type DeckFinish,
+  type MeldRelation,
   type Printing,
 } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
@@ -62,6 +72,7 @@ import {
   type DwellRowProps,
 } from "./PrintingPreview";
 import { usePrintingGroupBy } from "./usePrintingGroupBy";
+import { cardTurn, meldPartsOf, meldResultOf, type CardTurn } from "./orientation";
 
 /**
  * A header control that is not a chip — here, the one `<select>` in this pane.
@@ -79,6 +90,45 @@ const CONTROL =
   "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
   `${PRESS} ` +
   "disabled:active:scale-100";
+
+/**
+ * One control in the bar under the art — the row that changes **what the picture is showing**
+ * and never what the card *is*.
+ *
+ * Five buttons are drawn from this now (flip a side, turn the card, meld, open the melded card,
+ * view as foil) where two were hand-copied before, and the copies are what argue for the
+ * constant: they had already drifted into being the same five classes written twice.
+ *
+ * **`grow basis-[…]` rather than `flex-1`, and the two are not interchangeable here.**
+ * `flex-1` is `flex: 1 1 0%` — a zero basis, so three buttons share one line at a third each
+ * and "Turn to Tok-Tok, Volcano Born" becomes "Tu…". The explicit half-width basis is what
+ * makes the row wrap instead: one button takes the whole width as it always has, two split it,
+ * and a third drops to a second line and grows to fill it. The `0.5rem` subtracted is `gap-2`,
+ * with the slack left deliberately generous — a basis of exactly `50% - gap/2` sums to 100%
+ * and sub-pixel rounding then wraps a pair that was meant to fit.
+ *
+ * `aria-pressed:` is inert on the buttons that are not toggles, which is the point of one
+ * recipe: a control that becomes a toggle later gets the state styling by being in the row.
+ */
+const ART_CONTROL =
+  "flex min-w-0 grow basis-[calc(50%-0.5rem)] items-center justify-center gap-1.5 rounded-md " +
+  "border border-border py-1.5 text-xs text-dim transition-colors duration-150 " +
+  "hover:text-text motion-reduce:transition-none " +
+  "aria-pressed:border-accent/40 aria-pressed:text-text";
+
+/**
+ * {@link CARD_ASPECT} on its side — the box a quarter-turned card fills.
+ *
+ * **Derived rather than written out**, and that is a rule this repo has already paid for: the
+ * deck editor's Grid view kept `aspect-[488/680]` beside `CARD_ASPECT` for weeks and drew the
+ * same card two ways on one screen (`src/CLAUDE.md`). A reciprocal spelled `"7 / 5"` is a
+ * second place the proportions of a Magic card are stated, and the one that would be missed if
+ * they ever changed.
+ */
+const TURNED_CARD_ASPECT = CARD_ASPECT.split("/")
+  .map((side) => side.trim())
+  .reverse()
+  .join(" / ");
 
 /**
  * The colour of a legality chip.
@@ -379,6 +429,16 @@ function Body({
    */
   const deckRow = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  /**
+   * How the meld controls under the art re-point the pane at the melded card.
+   *
+   * **`setSelectedCardId` and deliberately not `viewPrinting`.** That verb means "another
+   * printing of the card that is already open" and keeps the deck context alive so the pane's
+   * "Use this printing" offers survive the click. Brisela is not another printing of Gisela —
+   * it is a different card, and it is not the card the deck row holds — so the context has to
+   * go, which is exactly what this setter does (see the store).
+   */
+  const openCard = useAppStore((s) => s.setSelectedCardId);
   // The context's own variant, so the swap rewrites the list the reader is looking at. Passing
   // nothing here would take the hook's `live` default — which, where the same printing sits in
   // the same category of both lists, rewrites the live row from a theory pane and reports
@@ -640,6 +700,44 @@ function Body({
     enabled: oracleId !== null,
   });
 
+  /**
+   * The cards this printing melds with — Scryfall's `all_parts`, narrowed to the meld
+   * components and with the card itself already taken out.
+   *
+   * **A read of its own rather than a field on {@link CardDetail}, because of where the answer
+   * lives.** There is no `all_parts` column: it is inside `raw`, which is a gzip blob, so
+   * answering it costs an inflate and a JSON parse. `card_meld_parts` gates that on
+   * `layout = 'meld'` — **72 of 116 590 rows** (measured 2026-08-21) — and this query is
+   * fenced on the same fact, so the other 116 518 cards a reader opens cost neither the call
+   * nor the parse. Carried on `CardDetail` instead, it would have been an inflate per card
+   * open, forever, to answer nothing.
+   *
+   * **No marketplace in the key**, unlike every other read in this pane: a meld relationship
+   * is not priced, so switching marketplace must not refetch it.
+   */
+  const meld = useQuery({
+    queryKey: ["card", "meld", cardId],
+    queryFn: () => ipc.cardMeldParts(cardId),
+    enabled: card.data?.layout === "meld",
+  });
+  const relations = useMemo(() => meld.data ?? [], [meld.data]);
+
+  /**
+   * The counterpart whose picture is standing in for this card's own, or `null` for the
+   * ordinary state.
+   *
+   * State rather than a second `selectedCardId`, because the two acts under the art are
+   * genuinely different: **Meld** shows the melded card *here*, on a pane that is still about
+   * the card the reader opened, and **Open** makes it the open card. A reader comparing the two
+   * halves against the whole wants the first; a reader who has decided they want Brisela's
+   * prices wants the second, and collapsing them into one control would take the comparison
+   * away.
+   *
+   * It needs no reset: `Body` is mounted as `<Body key={cardId}>`, so browsing to another card
+   * throws this state away with the rest of the subtree.
+   */
+  const [melded, setMelded] = useState<MeldRelation | null>(null);
+
   return (
     <>
       <div className="flex items-start gap-2">
@@ -702,6 +800,7 @@ function Body({
             face={face}
             onFlip={() => setFace((f) => (f === 0 ? 1 : 0))}
             deckFinish={deckFinish}
+            meld={{ relations, melded, onMeld: setMelded, onOpen: openCard }}
           />
           <Facts card={card.data} face={face} marketplace={marketplace} />
           <Legalities card={card.data} />
@@ -720,9 +819,14 @@ function Body({
           {/* Not decoration and not optional: Scryfall requires the artist and the source
               to be identifiable in the same interface that shows the art. The artist is
               the one whose art is on screen — the two sides of a double-faced card are not
-              always the same illustrator. */}
+              always the same illustrator, and **neither are the two halves of a meld**, which
+              is the whole reason `MeldRelation` carries an artist at all. A credit that named
+              the open card while the melded card's picture was on screen would be the wrong
+              illustrator under the right art. */}
           <p className="border-t border-border pt-3 text-[0.7rem] leading-relaxed text-dim">
-            {artistOf(card.data, face) && <>Illustrated by {artistOf(card.data, face)}. </>}
+            {artistOf(card.data, face, melded) && (
+              <>Illustrated by {artistOf(card.data, face, melded)}. </>
+            )}
             Card images © Wizards of the Coast · Data © Scryfall
           </p>
         </>
@@ -731,8 +835,17 @@ function Body({
   );
 }
 
-/** Who drew the side on screen, falling back to the card's own credit. */
-function artistOf(card: CardDetail, face: number): string | null {
+/**
+ * Who drew the side on screen, falling back to the card's own credit.
+ *
+ * **`melded` wins outright** rather than falling back to the open card: while the melded card's
+ * picture is up, the open card's illustrator is not the one being credited, and a fallback that
+ * reached for it would print a name that is wrong rather than missing. `null` — a relation whose
+ * printing has left `cards` — draws no credit, which is the honest answer for a frame that is
+ * also drawing no picture.
+ */
+function artistOf(card: CardDetail, face: number, melded: MeldRelation | null): string | null {
+  if (melded !== null) return melded.artist;
   return card.faces[face]?.artist ?? card.artist;
 }
 
@@ -799,23 +912,73 @@ interface DeckFinishTarget {
   set: (to: DeckFinish) => void;
 }
 
+/**
+ * The meld half of the bar under the art — what the counterparts are, which one is being
+ * looked at, and the two things a press can do about it.
+ *
+ * **The surface supplies a fact and never a decision**, as `DeckFinishTarget` above puts it:
+ * `relations` is Rust's answer verbatim, and which of them is a result and which are halves is
+ * `orientation.ts`'s conclusion drawn here.
+ */
+interface MeldTarget {
+  /** `ipc.cardMeldParts`' answer, or `[]` for every card that is not a meld. */
+  relations: readonly MeldRelation[];
+  /** The counterpart whose picture is standing in for the card's own, or `null`. */
+  melded: MeldRelation | null;
+  /** Show a counterpart's picture here, or `null` to go back to the card's own. */
+  onMeld: (to: MeldRelation | null) => void;
+  /** Make a counterpart the open card. */
+  onOpen: (cardId: string) => void;
+}
+
 function Art({
   card,
   face,
   onFlip,
   deckFinish,
+  meld,
 }: {
   card: CardDetail;
   face: number;
   onFlip: () => void;
   deckFinish: DeckFinishTarget | null;
+  meld: MeldTarget;
 }) {
   const sides = faceCount(card.layout, card.faces.length);
-  const src = cardImageUrl(card.id, face, "display");
   // The src that failed, so a flip or a new card clears it without an effect.
   const [broken, setBroken] = useState<string | null>(null);
   const shown = card.faces[face];
   const other = card.faces[face === 0 ? 1 : 0];
+
+  /**
+   * How far this card has to be turned to be read, and whether the reader has asked for it.
+   *
+   * `null` for the overwhelming majority of cards, which is what keeps the row unchanged for
+   * them: a `transform` still gets its flip and nothing else, because a second *side* and a
+   * sideways *printing* are different problems and the pane already solved the first.
+   *
+   * The state is this component's and needs no reset, for {@link Art}'s `foilView` reason:
+   * `Body` is keyed on the card, so browsing away throws the whole subtree out.
+   */
+  const turn = cardTurn(card.layout, card.faces);
+  const [turned, setTurned] = useState(false);
+  const angle: CardTurn | 0 = turned && turn !== null ? turn : 0;
+  const quarter = angle === 90 || angle === -90;
+
+  /**
+   * The two meld controls' subjects: the melded card a half offers, and the halves a melded
+   * card offers. Exactly one of them is ever non-empty — see `orientation.ts`, where the
+   * asymmetry is the reason they are two functions.
+   */
+  const meldResult = meldResultOf(meld.relations);
+  const meldParts = meldPartsOf(meld.relations);
+
+  // What the frame is actually a picture *of*. A meld view replaces the card's own art with a
+  // counterpart's — a different printing, so a different id, and always its only side.
+  const src = meld.melded
+    ? cardImageUrl(meld.melded.id, 0, "display")
+    : cardImageUrl(card.id, face, "display");
+  const pictured = meld.melded?.name || shown?.name || card.name;
 
   /**
    * Whether the reader has asked to see this printing shiny.
@@ -838,7 +1001,12 @@ function Art({
   // the toggle is the only thing that ever adds to it; the two cannot both answer, because
   // `soleFinish` speaks only for a printing with one finish and `foilable` only for one with at
   // least two.
-  const marked = foilView && foilable ? foilable : soleFinish(card.finishes);
+  //
+  // **Nothing at all while a meld view is up**, and that is not the same rule as hiding the
+  // button: the statement arm survives a hidden toggle, so a foil-only printing would otherwise
+  // go on drawing "this cardboard is foil" over a photograph of the *other* card. Both halves
+  // are needed or the mark outlives the control that explains it.
+  const marked = meld.melded ? null : foilView && foilable ? foilable : soleFinish(card.finishes);
   // What that mark is *called*, against the finish it is drawn for — so the pane's own art says
   // "Halo Foil" where the printings wall behind it does, and the foil **view** names the
   // treatment it is previewing rather than the generic word.
@@ -877,77 +1045,245 @@ function Art({
     return foilView ? `View as ${FINISH_LABEL.nonfoil.toLowerCase()}` : `View as ${shiny}`;
   })();
 
+  /**
+   * What the turn button says, and — like the foil button above — it says what the press
+   * **does**.
+   *
+   * A half turn names the half it brings up, because a `flip` card's two halves have two
+   * different names and "turn it over" is not what a reader is after: they want Tok-Tok. A
+   * quarter turn names nothing, because both halves of a split and every word of a plane are
+   * already on screen and the only thing the press changes is whether they can be read.
+   */
+  const turnLabel = (() => {
+    if (turn === 180) {
+      const half = card.faces[turned ? 0 : 1];
+      return `Turn to ${half?.name || "the other half"}`;
+    }
+    return turned ? "Turn back" : "Turn to read";
+  })();
+
+  /**
+   * The glyph on that button, which names the **direction the press turns the card** — so it
+   * reverses once the card is turned, and a reader who has turned a plane clockwise is shown
+   * the counter-clockwise arrow that puts it back.
+   *
+   * A half turn has no direction to name and takes the clockwise glyph either way.
+   */
+  const TurnGlyph = (() => {
+    if (turn === 180) return RotateCw;
+    return (turned ? turn === -90 : turn === 90) ? RotateCw : RotateCcw;
+  })();
+
   return (
     <div className="space-y-2">
-      {/* Positioned, so the foil overlay has something to hang from. Wrapped rather than
-          routed through `CardArt`: this frame keeps a flip fade, a bespoke "no image yet"
-          panel and no retry hook, and trading those three deliberate behaviours for one
-          shared frame would be a bad bargain. What it *must* share with the wall is the
+      {/* **The frame is what the column sees, and the card inside it is what turns.**
+          Two elements rather than one, because a quarter-turned card is a *landscape*
+          rectangle and the pane's own layout has to know that: the frame carries the
+          proportions, so everything under the art — the facts, the legalities, the printings
+          list — moves up to meet a turned card instead of leaving a hand's width of nothing
+          under it.
+
+          `aspect-ratio` is transitioned rather than snapped, which is worth stating because it
+          is not obvious that it can be: Chromium interpolates a `<ratio>`, sampled over a
+          600ms transition on a standalone page in Chromium 151 — 280.0px → 208.3px → 142.8px
+          across 79 frames, 2026-08-22 — and the shipped window (WebView2, `Edg/151`) was then
+          driven through the turn and measured at rest in both states. The alternative was a
+          `padding-bottom` percentage, which would have spelled the card's proportions out twice
+          more.
+
+          Positioned, so the card and the foil overlay have something to hang from. **No
+          `overflow-hidden` on the frame** — the turning card's corners stick out past it for
+          the length of the transition, and clipping them chops the corners off a card that is
+          mid-turn. The rounding it used to carry belongs to the card, which is where the
+          rounded corners actually are.
+
+          Wrapped rather than routed through `CardArt`: this frame keeps a flip fade, a bespoke
+          "no image yet" panel and no retry hook, and — since this — a turn. Trading those for
+          one shared frame would be a bad bargain. What it *must* share with the wall is the
           marking, which is why `FoilOverlay` is its own component. */}
-      <span className="relative block overflow-hidden rounded-xl">
-        {broken === src ? (
-          // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
-          // rather than guessing: the card is still identified, and the way back is stated.
-          <div
-            style={{ aspectRatio: CARD_ASPECT }}
-            className="flex w-full flex-col items-center justify-center gap-1 rounded-xl bg-bg px-6 text-center"
-          >
-            <span className="text-sm">{shown?.name || card.name}</span>
-            <span className="text-xs text-dim">
-              No image yet — it may still be downloading. Reopen the card to try again.
-            </span>
-          </div>
-        ) : (
-          <CardImage
-            // The name, not "card image": this is what a screen reader announces and what
-            // shows if the fetch fails, and both readers want the card.
-            alt={shown?.name || card.name}
-            // Keyed on the `src` inside {@link CardImage}, which is both the flip and the card:
-            // a new face is a new image, so the fade *is* the flip (150ms, the whole motion
-            // budget, gone entirely under `prefers-reduced-motion`; a 3D card turn would be the
-            // biggest animation in an app whose only other one is the sync sweep) — and a new
-            // *card* is a new image too, which a `key={face}` was not. That mattered on the one
-            // path the pane does not blank itself first: a card already in the query cache is
-            // handed over in the same render, with no pending state to unmount the picture, so
-            // browsing back to a card you just looked at kept the other card's art on screen.
-            src={src}
-            onError={() => setBroken(src)}
-            decoding="async"
-            style={{ aspectRatio: CARD_ASPECT }}
-            // No filters and no crop: distorting, recolouring or cropping a card image is
-            // forbidden by Scryfall's usage rules. `object-cover` on a 5:7 frame holding a
-            // 5:7 image is a no-op that stays safe if the frame ever changes.
-            className="w-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
-          />
+      <div
+        className={cn(
+          "relative w-full transition-[aspect-ratio] duration-[var(--duration-slow)]",
+          "ease-standard motion-reduce:transition-none",
         )}
-        <FoilOverlay finish={marked} treatments={markedTreatments} />
-      </span>
-      {/* The two ways of looking at the card, on one line under it.
-          **A row rather than two stacked bars**, because a double-faced card that also has a
-          foil printing would otherwise put 60px of button under a picture the direction doc
-          calls the loudest thing on the screen. Each takes half by `flex-1`, which is also what
-          keeps a lone flip button the full-width bar it has always been — so the common case is
-          unchanged and the pair is the special one. `min-w-0` and a truncating label because
-          the flip button names a *card face*, and half of a 352px column is not enough for
-          "Hanweir, the Writhing Township". */}
-      {(sides === 2 || foilable) && (
-        <div className="flex gap-2">
-          {sides === 2 && (
-            <button
-              type="button"
-              onClick={onFlip}
-              className={cn(
-                "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md",
-                "border border-border py-1.5 text-xs text-dim transition-colors duration-150",
-                "hover:text-text motion-reduce:transition-none",
-                FOCUS,
-              )}
+        style={{ aspectRatio: quarter ? TURNED_CARD_ASPECT : CARD_ASPECT }}
+      >
+        {/* Centred on the frame and turned about its own middle.
+
+            **The size is the whole trick.** A card that has been quarter-turned has to be as
+            wide as the frame is *tall*, and as tall as the frame is *wide*, for its rotated
+            self to fill the frame exactly — which is `CARD_ASPECT` of the frame's width and
+            its reciprocal of the frame's height, the same ratio read both ways round. At rest
+            in either state the card and the frame are the same rectangle (measured in the
+            shipped window, 2026-08-22: a 335×469 frame holding a 335×469 card, and a 335×239
+            one holding a 335×239 card), so the foil sheen laid over it needs no arithmetic of
+            its own; only the 260ms between them is a card slightly larger than its box, which
+            is why nothing clips it.
+
+            **Centred by `inset-0 m-auto` rather than by `translate(-50%, -50%)`, and that is a
+            sharpness fix rather than a preference.** The pane's art column is **335px** in the
+            shipped window — an odd number, because the pane's own scrollbar takes 17 of its 352
+            — so a translate-centred card resolved to `matrix(1, 0, 0, 1, -167.5, -234.5)`:
+            a **half-pixel** composited offset, on every card the app draws here, turnable or
+            not. Auto margins are a *layout* operation and land on the pixel grid, so the
+            resting transform is the identity and nothing is resampled. Verified over CDP the
+            same day, before and after. */}
+        <span
+          // How far the card is turned, in degrees, as a handle a test can find it by —
+          // `data-foil-sheen`'s idiom one component over. It is not decoration: jsdom has no
+          // layout engine and no opinion about a `transform`, so the *only* thing a suite can
+          // assert about a turn is that the component decided on one. The pixels are checked in
+          // the running window, which is where a rotation can be seen at all.
+          data-card-turn={angle}
+          className={cn(
+            "absolute inset-0 m-auto block overflow-hidden rounded-xl",
+            "transition-[width,height,transform] duration-[var(--duration-slow)]",
+            "ease-standard motion-reduce:transition-none",
+          )}
+          style={{
+            width: quarter ? `calc(100% * ${CARD_ASPECT})` : "100%",
+            height: quarter ? `calc(100% * ${TURNED_CARD_ASPECT})` : "100%",
+            // Omitted rather than written as `rotate(0deg)` for the resting card: an identity
+            // transform is still a compositing layer, and this frame is drawn for every card
+            // the reader opens. A transition *from* `none` interpolates from the identity, so
+            // the turn animates either way.
+            transform: angle === 0 ? undefined : `rotate(${angle}deg)`,
+          }}
+        >
+          {broken === src ? (
+            // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
+            // rather than guessing: the card is still identified, and the way back is stated.
+            <div
+              // `size-full` rather than an aspect ratio, because the box around it already has
+              // one and it is not always the card's: a turned frame is landscape, and a panel
+              // that insisted on 5:7 inside it would stand proud of its own frame.
+              className="flex size-full flex-col items-center justify-center gap-1 rounded-xl bg-bg px-6 text-center"
             >
+              <span className="text-sm">{pictured}</span>
+              <span className="text-xs text-dim">
+                No image yet — it may still be downloading. Reopen the card to try again.
+              </span>
+            </div>
+          ) : (
+            <CardImage
+              // The name, not "card image": this is what a screen reader announces and what
+              // shows if the fetch fails, and both readers want the card. It follows a meld
+              // view onto the melded card, because that is the card in the picture.
+              alt={pictured}
+              // Keyed on the `src` inside {@link CardImage}, which is the flip, the card and
+              // now the meld view: a new face is a new image, so the fade *is* the flip (150ms,
+              // the whole motion budget, gone entirely under `prefers-reduced-motion`; a 3D card
+              // turn would be the biggest animation in an app whose only other one is the sync
+              // sweep) — and a new *card* is a new image too, which a `key={face}` was not. That
+              // mattered on the one path the pane does not blank itself first: a card already in
+              // the query cache is handed over in the same render, with no pending state to
+              // unmount the picture, so browsing back to a card you just looked at kept the
+              // other card's art on screen.
+              src={src}
+              onError={() => setBroken(src)}
+              decoding="async"
+              // No filters and no crop: distorting, recolouring or cropping a card image is
+              // forbidden by Scryfall's usage rules. **A turn is none of those three** — it is
+              // the card at its own proportions, the way a reader would hold a plane or a split
+              // card at the table, and it is what Scryfall's own card pages offer.
+              //
+              // `size-full` rather than a width and an aspect ratio, because the box it fills is
+              // sized by the turn now and the two would fight: an image insisting on 5:7 inside a
+              // box interpolating towards 7:5 spills past it for the length of the animation.
+              // `object-cover` is a **no-op at rest in both states** — the box is the card's own
+              // rectangle either way up — and never stretches, which is the part the rules are
+              // about; the most it does is trim a few pixels of border mid-turn.
+              className="size-full animate-in rounded-xl bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
+            />
+          )}
+          <FoilOverlay finish={marked} treatments={markedTreatments} />
+        </span>
+      </div>
+      {/* Every way of looking at the card, under it.
+          **One wrapping row rather than stacked bars**, because a double-faced card that also
+          has a foil printing would otherwise put 60px of button under a picture the direction
+          doc calls the loudest thing on the screen. Each takes half by {@link ART_CONTROL}'s
+          basis, which is also what keeps a lone control the full-width bar it has always been —
+          so the common case is unchanged and the pair is the special one.
+
+          **It wraps because a meld card asks for three.** A half offers *Meld* and *Open*, and
+          a printing with a foil offers that too; a third button on one 352px line would leave
+          each of them 110px, so the row breaks and the odd one out takes a line of its own.
+          `min-w-0` and a truncating label throughout, because these name *cards* and half a
+          column is not enough for "Hanweir, the Writhing Township". */}
+      {(sides === 2 || turn !== null || meldResult || meldParts.length > 0 || foilable) && (
+        <div className="flex flex-wrap gap-2">
+          {sides === 2 && (
+            <button type="button" onClick={onFlip} className={cn(ART_CONTROL, FOCUS)}>
               <FlipHorizontal2 className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">Flip to {other?.name || "the other face"}</span>
             </button>
           )}
-          {foilable && (
+          {turn !== null && (
+            <button
+              type="button"
+              // A toggle, on the foil control's terms below: the state is `aria-pressed` rather
+              // than two buttons swapping places, and the visible words change with it because
+              // they *are* the accessible name.
+              aria-pressed={turned}
+              onClick={() => setTurned((t) => !t)}
+              className={cn(ART_CONTROL, FOCUS)}
+            >
+              <TurnGlyph className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">{turnLabel}</span>
+            </button>
+          )}
+          {/* A half of a meld gets both verbs, and they are different acts rather than two
+              spellings of one. **Meld** puts the melded card's picture in this frame, on a pane
+              that is still about the card the reader opened — which is how you check what two
+              halves make without losing your place. **Open** makes it the open card, with its
+              own prices, printings and collection state.
+
+              The glyphs are what tell them apart at a glance and they are used that way
+              throughout this row: `Combine` means *shown here*, the arrow means *go there*. */}
+          {meldResult && (
+            <>
+              <button
+                type="button"
+                aria-pressed={meld.melded !== null}
+                onClick={() => meld.onMeld(meld.melded ? null : meldResult)}
+                className={cn(ART_CONTROL, FOCUS)}
+              >
+                <Combine className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 truncate">Meld — {meldResult.name}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => meld.onOpen(meldResult.id)}
+                className={cn(ART_CONTROL, FOCUS)}
+              >
+                <ArrowRight className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 truncate">Open melded card</span>
+              </button>
+            </>
+          )}
+          {/* The melded card's own two controls, and they only open. There is nothing for a
+              *view* to do here — the picture in the frame already **is** the meld — so what a
+              reader on Brisela wants of Gisela and Bruna is their cards: what they cost, which
+              printings exist, whether the collection holds one. The label names the
+              relationship because nothing else on this pane would say why those two cards are
+              under this one. */}
+          {meldParts.map((part) => (
+            <button
+              key={part.id}
+              type="button"
+              onClick={() => meld.onOpen(part.id)}
+              className={cn(ART_CONTROL, FOCUS)}
+            >
+              <ArrowRight className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">Meld part — {part.name}</span>
+            </button>
+          ))}
+          {/* Not while a meld view is up: the sheen and the chip are a statement about **this
+              printing's** cardboard, and the picture in the frame is another card's. A control
+              that stayed and marked the wrong card would be the artist-credit bug one paragraph
+              down, drawn instead of written. */}
+          {foilable && meld.melded === null && (
             <button
               type="button"
               // A **toggle**, so the state is `aria-pressed` and not two buttons swapping places
@@ -957,13 +1293,7 @@ function Art({
               // control can no longer press (WCAG 2.5.3, the rule `DeckStats`' send button set).
               aria-pressed={foilView}
               onClick={pressFoil}
-              className={cn(
-                "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md",
-                "border border-border py-1.5 text-xs text-dim transition-colors duration-150",
-                "hover:text-text motion-reduce:transition-none",
-                "aria-pressed:border-accent/40 aria-pressed:text-text",
-                FOCUS,
-              )}
+              className={cn(ART_CONTROL, FOCUS)}
             >
               {/* The glyph `FinishMark` draws for this finish, imported straight from lucide
                   rather than through that component — deliberately. `FinishMark` is a

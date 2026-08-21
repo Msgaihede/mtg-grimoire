@@ -142,7 +142,7 @@ export const Empty: Story = {
  * The 105-line list this feature was designed around, previewed.
  *
  * **Most of it quotes itself back, and that is the workbench rather than the app.** The fake's
- * corpus is 43 printings; the real one is 116 k, where this list resolves to 117 cards across
+ * corpus is 52 printings; the real one is 116 k, where this list resolves to 117 cards across
  * eight piles. What the story is worth is the shape at that size: a hundred quoted lines in a
  * box that scrolls inside the dialog rather than growing it, with the tally of what *did*
  * resolve still readable above them.
