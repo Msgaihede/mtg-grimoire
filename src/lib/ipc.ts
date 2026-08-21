@@ -12,7 +12,7 @@
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
  * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
  * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
- * `FinishPrices`                                 — `src-tauri/src/card.rs`
+ * `FinishPrices`/`MeldRelation`                  — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
@@ -528,6 +528,41 @@ export interface PrintingsResponse {
    *  paper price, so the backend filters them out and the count agrees with the page. */
   items: Printing[];
   total: number;
+}
+
+/**
+ * One of the *other* cards a `meld` printing is part of — the third card two halves make, or
+ * the two halves a melded card was made from.
+ *
+ * Read out of Scryfall's `all_parts` on the row's `raw` blob, which is why it is a command
+ * rather than a column: nothing in `cards` carries the relationship, and the blob is a gzip
+ * member the frontend has no copy of.
+ *
+ * **The card the question was asked about is excluded by _name_, not by id.** A meld row's
+ * `all_parts` can name a *different printing* of the same card — measured on
+ * `Brisela, Voice of Nightmares` id `0cd83c0e-…`, whose own `meld_result` entry is id
+ * `bbcd6747-…` — so an id-based exclusion leaves the open card in its own list of relatives.
+ */
+export interface MeldRelation {
+  id: string;
+  name: string;
+  /**
+   * Scryfall's `component`, verbatim: `"meld_part"` or `"meld_result"` — which side of the
+   * relationship this row is, and the only thing telling "the card this melds into" from "the
+   * halves this melded from". Handed over unread, like every other Scryfall vocabulary in this
+   * file.
+   */
+  component: string;
+  /**
+   * The illustrator of *that* card, carried on the relation rather than fetched with a second
+   * `cardDetail`: an orientation control swaps the **picture** to the melded card while the
+   * pane's facts stay those of the card the reader opened, and Scryfall's image policy requires
+   * the credit to name the illustrator whose art is on screen.
+   *
+   * `null` when the id names no row in `cards` — which no live row does: all 72 `meld` rows'
+   * references resolve (measured on the 116 590-row corpus).
+   */
+  artist: string | null;
 }
 
 /** One row of the set picker. */
@@ -2898,6 +2933,20 @@ export const ipc = {
    */
   cardPrintings: (oracleId: string, marketplace: MarketplaceId, limit?: number) =>
     invoke<PrintingsResponse>("card_printings", { oracleId, marketplace, limit }),
+  /**
+   * The cards this printing melds with — see {@link MeldRelation}.
+   *
+   * **`[]` is the answer for almost every card in the game, and it never rejects.** Every layout
+   * that is not `meld`, an unknown id, and a `meld` row whose `raw` carries no `all_parts` all
+   * come back empty: a card the reader opened must not fail to open because the relationship
+   * behind an orientation control could not be read. 72 of the 116 590 live rows are `meld` — 48
+   * parts and 24 results — and every meld id they name resolves to a row in `cards` (0 missing).
+   *
+   * **No `marketplace`, unlike every other card read on this object.** This is a relationship
+   * rather than a price, so nothing about the answer moves when the setting does, and putting it
+   * in a priced query key would refetch a fixed fact on every switch.
+   */
+  cardMeldParts: (id: string) => invoke<MeldRelation[]>("card_meld_parts", { id }),
   /**
    * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
    * the work is queued, and an image that fails to prefetch simply fetches when it is
