@@ -463,15 +463,27 @@ reader to configure the deck they had just made; it now asks all of them.
     reaches — the toolbar's `Add to → Auto (by what it does)`, the card's `Move to`, the Categories
     dialog's own field. `QUICK_ZONE_ATTR` is how a test or a live pass addresses one box, because
     the bar has no accessible name and two of its labels are also headings on the desk behind it.
-- **The arrow keys walk the desk, and the printings modal walks the deck** (2026-08-18).
-  In `StackView`, up/down move within a pile and left/right to the neighbouring pile's **top**
-  card — the reader's own choice over "same depth, clamped" — with empty piles skipped and both
-  ends clamped rather than wrapped. The order is `splitRail`'s, `command` then `flow` then `rail`,
-  which is what the desk draws, so the keys and the layout cannot disagree. (It was two runs until
-  2026-08-20; the command zones are the third and they come first, which changes nothing here
-  because the walk reads whatever that split answers.) **It yields to `CategoryGrip`**,
-  whose arrows already reorder the piles and `preventDefault`, through the same `defaultPrevented`
-  handshake `useDismissOnEscape` runs on; that is the one thing here most easily broken by a tidy.
+- **The arrow keys walk the desk, and they walk it the way the printings modal does** (2026-08-18,
+  rewritten 2026-08-21 for [#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)).
+  In `StackView`, **left and right step one card and a pile boundary is not a stop** — right off
+  the foot of a pile lands on the head of the next, left off the head lands on the **foot** of the
+  one before (the near edge, which is what makes the walk reversible: one press then the other is
+  the card you started on). Empty piles are skipped, both ends clamp rather than wrap, and the two
+  keys therefore read the entire deck. **Up and down reach no branch at all** — no answer, no
+  `preventDefault` — so the press falls to `DeckEditor`'s page scroller, which is the one thing
+  behind this view that scrolls. "Up does nothing" would be a claim; leaving the key alone is the
+  absence of one, and it is `AllPrintingsDialog`'s own wording.
+  It used to be two axes, up/down inside a pile and left/right to the neighbouring pile's top
+  card, which needed a paragraph about masonry to explain; that paragraph is gone with it.
+  The order is `splitRail`'s, `command` then `flow` then `rail`, which is what the desk draws, so
+  the keys and the layout cannot disagree. (It was two runs until 2026-08-20; the command zones
+  are the third and they come first, which changes nothing here because the walk reads whatever
+  that split answers.) **It yields to `CategoryGrip`**, whose arrows already reorder the piles and
+  `preventDefault`, through the same `defaultPrevented` handshake `useDismissOnEscape` runs on;
+  that is the one thing here most easily broken by a tidy. **Driven in the shipped window
+  2026-08-21** — thirteen presses across a fourteen-card deck, and the page scrolling under
+  up/down, which is the half jsdom cannot see:
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   `onSelect` is `openCardFromDeck`, so the gold ring and the card pane follow the caret — one
   `[data-deck-card-selected]` in the DOM, on the focused card, confirmed live.
   **Every selection this view makes goes through `selectCard`, which keeps the caret on the card**
@@ -496,8 +508,13 @@ reader to configure the deck they had just made; it now asks all of them.
 - **A pile can be dragged past its neighbours on the desk, and only in `StackView`'s flow**
   (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
   source and the arrow keys on it are the keyboard's whole path — `CategoriesDialog`'s rule, kept
-  verbatim, position in the accessible name included. Six decisions, each of which is the reason
-  something is where it is:
+  verbatim, position in the accessible name included. **Left and right only, since 2026-08-21**
+  ([#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)): the desk answers two keys
+  everywhere on it, cards and grips alike, so a reader learns one pair rather than finding that a
+  heading takes four presses and a card takes two. The reorder loses nothing — Up did what Left
+  does and Down what Right does. **`CategoriesDialog`'s own grip stays on up/down** and that is
+  not a drift: its piles are a vertical list in a dialog, where those are the two keys that name a
+  place. Six decisions, each of which is the reason something is where it is:
   - **The gesture lives in `categoryDrag.ts`, shared with the Categories dialog**, because the two
     surfaces draw a category completely differently and mean exactly the same write. Its mark is
     **not** `dnd.ts`'s: that one carries a **card** between piles, this one carries a **pile** past

@@ -5,11 +5,12 @@ import { nextStackPosition, type StackPosition } from "./stackNav";
  * The deck every case below is about, unless it says otherwise: three flowing piles of 3, 1 and
  * 2 cards, then the rail's Sideboard of 2.
  *
- * **The single-card pile in the middle is what makes the up/down clamp testable at all** — its
- * only card is both the top and the bottom of its pile, so a movement that leaked past either
- * end would land somewhere rather than answering `null`. And the rail on the end is what proves
- * the walk does not stop at the flow: `StackView` concatenates the two before it asks anything,
- * so a rail pile is one more pile here and carries no mark of its own.
+ * **The single-card pile in the middle is what makes the crossing testable at all** — its only
+ * card is both the head and the foot of its pile, so a press from it has to leave in whichever
+ * direction it was made, and a movement that still thought a pile boundary was a stop would sit
+ * there. And the rail on the end is what proves the walk does not stop at the flow:
+ * `StackView` concatenates the runs before it asks anything, so a rail pile is one more pile here
+ * and carries no mark of its own.
  */
 const SIZES = [3, 1, 2, 2];
 
@@ -17,70 +18,56 @@ const SIZES = [3, 1, 2, 2];
 const step = (at: StackPosition, key: string) => nextStackPosition(SIZES, at, key);
 
 describe("nextStackPosition", () => {
-  /** Down the pile, one card at a time — the movement inside a stack, which is the one axis a
-   *  reader can point at without knowing how wide the window is. */
-  it("steps down the cards of the pile the caret is in", () => {
-    expect(step({ pile: 0, card: 0 }, "ArrowDown")).toEqual({ pile: 0, card: 1 });
-    expect(step({ pile: 0, card: 1 }, "ArrowDown")).toEqual({ pile: 0, card: 2 });
-  });
-
-  it("steps back up the same pile", () => {
-    expect(step({ pile: 0, card: 2 }, "ArrowUp")).toEqual({ pile: 0, card: 1 });
-    expect(step({ pile: 0, card: 1 }, "ArrowUp")).toEqual({ pile: 0, card: 0 });
+  /** One card at a time, inside the pile the caret is in — the ordinary press, and the half of
+   *  the walk that never leaves a pile. */
+  it("steps along the cards of the pile the caret is in", () => {
+    expect(step({ pile: 0, card: 0 }, "ArrowRight")).toEqual({ pile: 0, card: 1 });
+    expect(step({ pile: 0, card: 1 }, "ArrowRight")).toEqual({ pile: 0, card: 2 });
+    expect(step({ pile: 0, card: 2 }, "ArrowLeft")).toEqual({ pile: 0, card: 1 });
+    expect(step({ pile: 0, card: 1 }, "ArrowLeft")).toEqual({ pile: 0, card: 0 });
   });
 
   /**
-   * **Both ends of a pile are a clamp and never a jump into the pile beside it.**
-   *
-   * The flow is a masonry: a pile that will not fit on a line starts at the foot of the pile
-   * above it, so what is "above" the top card of a pile is whatever the window's width put
-   * there — a different card at a different desk width, and nothing the reader can aim at. The
-   * one-card pile answers `null` in both directions from its only card, which is the same rule
-   * seen from both sides at once.
+   * **A pile boundary is not a stop**, which is the whole of the change of 2026-08-21: the foot
+   * of a pile leads to the head of the next one, so the two keys walk the entire deck rather than
+   * clamping inside a column. The one-card pile is crossed in both directions from its only card,
+   * which is the same rule seen from both sides at once.
    */
-  it("clamps at the top and the bottom of a pile rather than leaving it", () => {
-    expect(step({ pile: 0, card: 0 }, "ArrowUp")).toBeNull();
-    expect(step({ pile: 0, card: 2 }, "ArrowDown")).toBeNull();
-    expect(step({ pile: 1, card: 0 }, "ArrowUp")).toBeNull();
-    expect(step({ pile: 1, card: 0 }, "ArrowDown")).toBeNull();
-  });
-
-  /**
-   * **Sideways is a pile at a time, and it lands on the top card.**
-   *
-   * The reader was offered "the same depth, clamped" and chose this: the top of a pile is a
-   * place that always exists, so one press means one thing whatever the neighbour is holding.
-   * Stepping right out of the *third* card of a pile and landing on card 0 is what says so.
-   */
-  it("steps to the next pile and lands on its top card", () => {
+  it("crosses into the next pile rather than clamping at a pile's end", () => {
     expect(step({ pile: 0, card: 2 }, "ArrowRight")).toEqual({ pile: 1, card: 0 });
     expect(step({ pile: 1, card: 0 }, "ArrowRight")).toEqual({ pile: 2, card: 0 });
-  });
-
-  it("steps back to the previous pile, also at its top", () => {
-    expect(step({ pile: 2, card: 1 }, "ArrowLeft")).toEqual({ pile: 1, card: 0 });
-    expect(step({ pile: 1, card: 0 }, "ArrowLeft")).toEqual({ pile: 0, card: 0 });
+    expect(step({ pile: 2, card: 1 }, "ArrowRight")).toEqual({ pile: 3, card: 0 });
   });
 
   /**
-   * **The rail is reachable from the last pile of the flow**, and that is a claim about the
-   * walk's shape rather than about this function: the caller hands over `flow` then `rail` as
-   * one list, so the Sideboard is simply the pile after the last flowing one. Nothing here knows
-   * which side of the desk a pile is drawn on, and nothing should — the rail is a *place*, and
-   * a caret that could not reach it would make the piles played beside the deck keyboard-only
-   * by accident.
+   * **And it enters a pile at the near edge, which is what makes the walk reversible.** Left off
+   * the head of a pile lands on the pile before it at its **last** card, not its first — so one
+   * press and then the other puts the reader back where they were. Entering from the top both
+   * ways would send them a pile further back every time they changed their mind.
    */
-  it("reaches the rail from the last pile of the flow, and stops there", () => {
-    expect(step({ pile: 2, card: 0 }, "ArrowRight")).toEqual({ pile: 3, card: 0 });
-    expect(step({ pile: 3, card: 0 }, "ArrowRight")).toBeNull();
+  it("steps back into the previous pile at its last card", () => {
+    expect(step({ pile: 1, card: 0 }, "ArrowLeft")).toEqual({ pile: 0, card: 2 });
+    expect(step({ pile: 2, card: 0 }, "ArrowLeft")).toEqual({ pile: 1, card: 0 });
+    expect(step({ pile: 3, card: 0 }, "ArrowLeft")).toEqual({ pile: 2, card: 1 });
   });
 
-  /** No wrapping, at either end: the first pile has nothing to its left and the last nothing to
-   *  its right. A walk that wrapped would take a reader arrowing steadily right back to the card
-   *  they started on with nothing on screen saying they had been all the way round. */
+  /** The reversibility stated as the property rather than as three pairs of coordinates: every
+   *  stop of the walk, stepped forward and straight back, is the stop it started on. */
+  it("undoes every forward step with a backward one", () => {
+    for (let pile = 0; pile < SIZES.length; pile += 1) {
+      for (let card = 0; card < SIZES[pile]; card += 1) {
+        const forward = step({ pile, card }, "ArrowRight");
+        if (forward === null) continue;
+        expect(nextStackPosition(SIZES, forward, "ArrowLeft")).toEqual({ pile, card });
+      }
+    }
+  });
+
+  /** No wrapping, at either end: the first card of the deck has nothing before it and the last
+   *  nothing after it. A walk that wrapped would take a reader arrowing steadily right back to
+   *  the card they started on with nothing on screen saying they had been all the way round. */
   it("clamps at both ends of the walk rather than wrapping", () => {
     expect(step({ pile: 0, card: 0 }, "ArrowLeft")).toBeNull();
-    expect(step({ pile: 0, card: 2 }, "ArrowLeft")).toBeNull();
     expect(step({ pile: 3, card: 1 }, "ArrowRight")).toBeNull();
   });
 
@@ -95,13 +82,13 @@ describe("nextStackPosition", () => {
   it("skips a pile that holds no cards", () => {
     const gappy = [2, 0, 0, 1];
 
-    expect(nextStackPosition(gappy, { pile: 0, card: 0 }, "ArrowRight")).toEqual({
+    expect(nextStackPosition(gappy, { pile: 0, card: 1 }, "ArrowRight")).toEqual({
       pile: 3,
       card: 0,
     });
     expect(nextStackPosition(gappy, { pile: 3, card: 0 }, "ArrowLeft")).toEqual({
       pile: 0,
-      card: 0,
+      card: 1,
     });
   });
 
@@ -113,12 +100,29 @@ describe("nextStackPosition", () => {
   });
 
   /**
-   * Anything that is not one of the four arrows is not this movement's press, and `null` is how
-   * the caller is told to leave the event alone. The three below are the ones that would do real
-   * damage if they were swallowed: Tab is the browser's own walk, Enter opens the card, and a
+   * **Up and down are not this movement's presses any more**, and `null` is how the caller is
+   * told to leave the event alone — which is the point of them rather than a gap. This view has
+   * no scrollport of its own, so what those two keys reach on a focused card is the page's
+   * scrolling, and a reader pressing them on a wall of card art wants exactly that.
+   */
+  it("answers nothing for up and down", () => {
+    for (const at of [
+      { pile: 0, card: 0 },
+      { pile: 0, card: 1 },
+      { pile: 0, card: 2 },
+      { pile: 1, card: 0 },
+    ]) {
+      expect(step(at, "ArrowUp")).toBeNull();
+      expect(step(at, "ArrowDown")).toBeNull();
+    }
+  });
+
+  /**
+   * Anything else is not this movement's press either. The three below are the ones that would do
+   * real damage if they were swallowed: Tab is the browser's own walk, Enter opens the card, and a
    * plain letter belongs to whatever is typing.
    */
-  it("answers nothing for a key that is not an arrow", () => {
+  it("answers nothing for a key that is not one of the two arrows", () => {
     for (const key of ["Tab", "Enter", "a", "Home", "PageDown", " "]) {
       expect(step({ pile: 0, card: 0 }, key)).toBeNull();
     }

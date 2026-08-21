@@ -846,21 +846,24 @@ export const Reorderable: Story = {
 };
 
 /**
- * **The caret walking the deck**: left and right across the piles, up and down through the pile
- * it is in.
+ * **The caret walking the deck**: left and right, one card at a time, from the commander to the
+ * last card of the rail.
  *
- * The two axes mean different things and the asymmetry is the point. **Up and down** run through
- * one pile and stop at its ends — the flow is a masonry, so a pile that wraps starts at the foot
- * of the pile *above* it, and "the pile above this one" is a fact about how wide the window
- * happens to be rather than about the deck. **Left and right** change pile, and land on the
- * **top card**: the reader was offered "the same depth" and chose this, because the top of a pile
- * is a place that always exists where the same depth is a card a shorter neighbour may not have.
+ * **Two keys are the whole gesture** (2026-08-21, #178), and a pile boundary is not a stop —
+ * right off the foot of a pile lands on the head of the next one, left off the head lands on the
+ * foot of the one before. So a reader can read their entire deck without lifting a hand off the
+ * two keys, which is what the printings modal has always asked of them, and there is no second
+ * axis to learn or to lose a place on. **Up and down are left alone entirely** — no branch, no
+ * `preventDefault` — because this view has no scrollport of its own and what is under those two
+ * keys is the page's own scrolling.
  *
- * Two more decisions are visible here rather than merely written down. A pile holding no cards is
- * **stepped over**, because there is no card in it for the caret to be on. And the rail's piles —
- * the Sideboard and the Maybeboard, drawn beside the deck rather than in it — are the **end of the
- * walk** rather than outside it: where a pile is drawn is a layout, and a caret that stopped at
- * the deck's last flowing pile would make the two piles a reader consults most mouse-only.
+ * A pile is entered at its **near** edge, and that is what makes the walk reversible: one press
+ * and then the other is the card you started on. Two more decisions are visible here rather than
+ * merely written down. A pile holding no cards is **stepped over**, because there is no card in
+ * it for the caret to be on. And the rail's piles — the Sideboard and the Maybeboard, drawn
+ * beside the deck rather than in it — are the **end of the walk** rather than outside it: where a
+ * pile is drawn is a layout, and a caret that stopped at the deck's last flowing pile would make
+ * the two piles a reader consults most mouse-only.
  *
  * **What to look at**: the card the caret is on stands out of its pile, exactly as a hovered one
  * does — `StackedCard`'s own `onFocus` opens it — so a walk across the desk reads as a card being
@@ -883,26 +886,34 @@ export const KeyboardWalk: Story = {
     ),
   ],
   play: async ({ canvasElement, args }) => {
-    // Commander(1) · Ramp(3) · Removal(3) · … in the flow, then the rail — so index 1 is the top
-    // of Ramp and index 4 the top of Removal.
+    // Commander(1) · Ramp(3) · Removal(3) · … in the flow, then the rail — so index 1 is the head
+    // of Ramp, index 3 its foot and index 4 the head of Removal. Document order *is* walk order,
+    // which is what lets this address the cards by position at all.
     const cards = [...canvasElement.querySelectorAll<HTMLElement>(`[${DECK_CARD_ATTR}]`)];
 
     cards[1].focus();
-    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{ArrowRight}");
     expect(cards[2]).toHaveFocus();
     expect(args.onSelect).toHaveBeenCalledTimes(1);
 
-    // Out of the *second* card of Ramp and onto the **first** of Removal, which is the whole of
-    // the "top card, not the same depth" call.
+    // Off the foot of Ramp and straight onto the head of Removal — the pile boundary is not a
+    // stop, which is the whole of the change.
+    await userEvent.keyboard("{ArrowRight}");
     await userEvent.keyboard("{ArrowRight}");
     expect(cards[4]).toHaveFocus();
-    await userEvent.keyboard("{ArrowLeft}");
-    expect(cards[1]).toHaveFocus();
 
-    // And the clamp: there is no card above the top of a pile, so the press moves nothing.
+    // And back the way it came: left off the head of Removal lands on Ramp's **last** card, not
+    // its first. Enter both ways from the top and a reader who changed their mind would come back
+    // a pile further than they left.
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(cards[3]).toHaveFocus();
+
+    // Up and down are nobody's business here: no branch, no `preventDefault`, so the press is the
+    // page's. In this frame the page has nothing to scroll, so the caret simply stays put.
     await userEvent.keyboard("{ArrowUp}");
-    expect(cards[1]).toHaveFocus();
-    expect(args.onSelect).toHaveBeenCalledTimes(3);
+    await userEvent.keyboard("{ArrowDown}");
+    expect(cards[3]).toHaveFocus();
+    expect(args.onSelect).toHaveBeenCalledTimes(4);
   },
 };
 

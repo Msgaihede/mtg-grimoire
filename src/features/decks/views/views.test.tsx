@@ -2833,9 +2833,7 @@ describe("StackView reordering", () => {
    * right of Ramp is **Draw**, whose id is 6 — three past Ramp's own in the deck's list, with the
    * Sideboard and the pinned Commander in between. An index would have said 2.
    *
-   * All four arrows, because the flow is a masonry: a pile that wraps sits under the pile above
-   * it, so "down" is a fact about how much room the window had rather than about the order. The
-   * two backward presses are made from **Draw** rather than from Ramp: with the Commander pinned
+   * The backward press is made from **Draw** rather than from Ramp: with the Commander pinned
    * out of the flow, Ramp is the first pile that can be moved and has nothing to its left, so a
    * press there would be asserting the clamp below instead of the step.
    */
@@ -2848,19 +2846,31 @@ describe("StackView reordering", () => {
     expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
 
     moveCategory.mockClear();
-    grip("Ramp").focus();
-    await user.keyboard("{ArrowDown}");
-    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
-
-    moveCategory.mockClear();
     grip("Draw").focus();
     await user.keyboard("{ArrowLeft}");
     expect(moveCategory).toHaveBeenCalledWith(DRAW.id, RAMP.id);
+  });
 
-    moveCategory.mockClear();
+  /**
+   * **Up and down were the same two moves and are not any more** (2026-08-21, #178). The desk
+   * answers two keys everywhere on it now, cards and grips alike, so a reader learns one pair
+   * rather than finding that a heading takes four presses and a card takes two. Nothing is lost:
+   * Up did what Left does and Down did what Right does, so both moves are still one press away.
+   *
+   * Worth its own case rather than a line in the one above, because the failure is silent — a
+   * grip that still answered would reorder a pile under a reader who pressed Down meaning to
+   * scroll the desk.
+   */
+  it("leaves up and down alone on a grip", async () => {
+    const moveCategory = draw();
+    const user = userEvent.setup();
+
+    grip("Ramp").focus();
+    await user.keyboard("{ArrowDown}");
     grip("Draw").focus();
     await user.keyboard("{ArrowUp}");
-    expect(moveCategory).toHaveBeenCalledWith(DRAW.id, RAMP.id);
+
+    expect(moveCategory).not.toHaveBeenCalled();
   });
 
   /** Stepping past either end sends nothing rather than a reorder that would land where it
@@ -2988,11 +2998,11 @@ describe("StackView reordering", () => {
 });
 
 /**
- * **The arrows walk the deck**: left and right across the piles, up and down through the pile the
- * caret is in. `nextStackPosition` is the movement itself and `stackNav.test.ts` drives
- * every corner of it against nothing but pile sizes; this block is about the half that needs a
- * document — which press reaches the handler, which card it decides it is on, where the caret
- * ends up, and what the pane is told.
+ * **The arrows walk the deck**: left and right, one card at a time, through every pile of it —
+ * and up and down are left to the page. `nextStackPosition` is the movement itself and
+ * `stackNav.test.ts` drives every corner of it against nothing but pile sizes; this block is
+ * about the half that needs a document — which press reaches the handler, which card it decides
+ * it is on, where the caret ends up, and what the pane is told.
  *
  * **Every press here is `user.keyboard`, never `user.type`.** `user.type` focuses whatever
  * element it is handed, so a focus assertion after one passes for the wrong reason and an
@@ -3023,10 +3033,11 @@ describe("StackView arrow keys", () => {
    * comes out `Commander(1 card) · Ramp(2) · Draw(0)` with `Sideboard(1) · Maybeboard(1)` in the
    * rail, so the walk is five piles holding `[1, 2, 0, 1, 1]` cards.
    *
-   * Four of those are here on purpose. **Ramp holds two cards**, which is the only way up and
-   * down have anywhere to go and the only way the two clamps can be told from each other.
+   * Four of those are here on purpose. **Ramp holds two cards**, which is the only way a press
+   * that stays *inside* a pile can be told from one that crosses out of it — every other pile
+   * here holds one card or none, so every press from them is a crossing.
    * **Draw is empty and still drawn** — a pile the reader made is a *place*, so it keeps its
-   * heading — which makes it the pile a sideways press has to step over rather than land on.
+   * heading — which makes it the pile a press has to step over rather than land on.
    * And **the rail is on the end of the walk**, which is what says the piles played beside the
    * deck are reachable at all: where a pile is drawn is a layout, and the caret does not read
    * layouts.
@@ -3065,97 +3076,102 @@ describe("StackView arrow keys", () => {
   };
 
   /**
-   * Down the pile and back up it — the axis a reader can point at, because a pile is a column of
-   * cards whatever the window is doing.
+   * **The whole deck under one key** (2026-08-21, #178) — the reader's own ask, and four
+   * decisions in one press each.
    *
-   * The order inside the pile is the one the pile already holds, which under `alphabetical` puts
-   * Arcane Signet over Sol Ring; asserted once here so the cases below can name a position.
+   * The walk is `Serah Farron · Arcane Signet · Sol Ring · Rest in Peace · Avacyn`, and each step
+   * of it says something the others do not. Out of the **command zone** into the flow: the
+   * commander is pinned to the head of the desk in a box of its own, and a walk that started at
+   * the first flowing pile would make it mouse-only. Along the **inside** of Ramp, which is the
+   * only press here that does not change pile. Over **Draw**, which is a pile the reader made,
+   * still drawn and holding nothing — `CardStack` renders no card in it, so landing there would
+   * put the caret nowhere. And into the **rail**: the Sideboard and the Maybeboard are drawn
+   * beside the deck rather than in it, and where a pile is drawn is a layout the caret does not
+   * read.
+   *
+   * The order inside Ramp is the one the pile already holds, which under `alphabetical` puts
+   * Arcane Signet before Sol Ring; asserted here so the cases below can name a position. The
+   * "Nothing here yet." assertion is what keeps the skip honest: drop the empty pile from the
+   * fixture and it stops being tested while every other line still passes.
    */
-  it("walks down the pile the caret is in, and back up it", async () => {
+  it("steps one card at a time through the whole deck, pile boundaries and all", async () => {
     const onSelect = draw();
     const user = userEvent.setup();
-    const top = control(RAMP.id, "Arcane Signet")!;
-    const under = control(RAMP.id, "Sol Ring")!;
-
     expect(pile("Ramp").cards.map((c) => c.name)).toEqual(["Arcane Signet", "Sol Ring"]);
-
-    act(() => top.focus());
-    await user.keyboard("{ArrowDown}");
-    expect(under).toHaveFocus();
-    // The pane follows the caret: in this view the picked card is also the pile's resting state,
-    // so a selection lagging behind would leave the gold ring on a card the reader has left.
-    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[1]);
-
-    await user.keyboard("{ArrowUp}");
-    expect(top).toHaveFocus();
-    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[0]);
-  });
-
-  /**
-   * **Both ends of a pile are a clamp, and that is a decision rather than a limitation.** The
-   * flow is a masonry — a pile that will not fit on a line starts at the foot of the pile above
-   * it — so "the pile above this one" is a fact about how wide the window happened to be, and a
-   * reader pressing ArrowUp on a top card cannot point at what they would get.
-   */
-  it("clamps at the top and the foot of a pile rather than leaving it", async () => {
-    const onSelect = draw();
-    const user = userEvent.setup();
-    const top = control(RAMP.id, "Arcane Signet")!;
-    const foot = control(RAMP.id, "Sol Ring")!;
-
-    act(() => top.focus());
-    await user.keyboard("{ArrowUp}");
-    expect(top).toHaveFocus();
-
-    act(() => foot.focus());
-    await user.keyboard("{ArrowDown}");
-    expect(foot).toHaveFocus();
-
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  /**
-   * **Sideways is a pile at a time, it lands on the top card, and it steps over a pile holding
-   * none.**
-   *
-   * The reader was offered "the same depth, clamped" and chose the top card, which is what the
-   * return leg asserts: the press leaves Ramp from its *second* card and comes back to its
-   * first. The top of a pile is a place that always exists, so one press means one thing whatever
-   * the neighbour is holding.
-   *
-   * `Draw` is between Ramp and the rail, drawn (it is a pile of the reader's own) and empty, so
-   * `CardStack` renders no card in it at all — landing there would put the caret nowhere. The
-   * "Nothing here yet." assertion is what keeps this case honest: drop that pile from the fixture
-   * and the skip stops being tested while every other line still passes.
-   */
-  it("steps to the next pile's top card, over a pile that holds none", async () => {
-    const onSelect = draw();
-    const user = userEvent.setup();
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
 
-    act(() => control(RAMP.id, "Sol Ring")!.focus());
+    act(() => control(COMMANDER.id, "Serah Farron")!.focus());
+
+    await user.keyboard("{ArrowRight}");
+    expect(control(RAMP.id, "Arcane Signet")).toHaveFocus();
+    // The pane follows the caret: in this view the picked card is also the pile's resting state,
+    // so a selection lagging behind would leave the gold ring on a card the reader has left.
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[0]);
+
+    await user.keyboard("{ArrowRight}");
+    expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[1]);
+
     await user.keyboard("{ArrowRight}");
     expect(control(SIDE.id, "Rest in Peace")).toHaveFocus();
     expect(onSelect).toHaveBeenLastCalledWith(pile("Sideboard").cards[0]);
 
-    await user.keyboard("{ArrowLeft}");
-    expect(control(RAMP.id, "Arcane Signet")).toHaveFocus();
-    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[0]);
-  });
-
-  /**
-   * **The rail is part of the walk**, which is the half of this that no layout rule decides: the
-   * Sideboard and the Maybeboard are drawn beside the deck rather than in it, and a caret that
-   * stopped at the last flowing pile would make them mouse-only.
-   */
-  it("reaches the piles played beside the deck", async () => {
-    const onSelect = draw();
-    const user = userEvent.setup();
-
-    act(() => control(SIDE.id, "Rest in Peace")!.focus());
     await user.keyboard("{ArrowRight}");
     expect(control(MAYBE.id, "Avacyn")).toHaveFocus();
     expect(onSelect).toHaveBeenLastCalledWith(pile("Maybeboard").cards[0]);
+  });
+
+  /**
+   * **And back the way it came, which is not the same claim.** A pile is entered at its **near**
+   * edge — left off the head of one lands on the *last* card of the pile before it — so a reader
+   * who presses one key and then the other is on the card they started on. Entering from the top
+   * both ways would send them a pile further back every time they changed their mind, and that is
+   * exactly what the middle step here would catch: left out of Rest in Peace reaches **Sol Ring**,
+   * Ramp's second card, not Arcane Signet.
+   */
+  it("walks back the way it came, entering each pile at its last card", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+
+    act(() => control(MAYBE.id, "Avacyn")!.focus());
+
+    await user.keyboard("{ArrowLeft}");
+    expect(control(SIDE.id, "Rest in Peace")).toHaveFocus();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[1]);
+
+    await user.keyboard("{ArrowLeft}");
+    expect(control(RAMP.id, "Arcane Signet")).toHaveFocus();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(control(COMMANDER.id, "Serah Farron")).toHaveFocus();
+    expect(onSelect).toHaveBeenLastCalledWith(pile("Commander").cards[0]);
+  });
+
+  /**
+   * **Up and down are left to the page, and the absence is the feature** (2026-08-21, #178).
+   * This view is given no height of its own — the piles wrap and `DeckEditor`'s page scroller is
+   * the one thing that scrolls — so what those two keys reach on a focused card is the page's own
+   * scrolling, which is what a reader pressing them on a wall of card art wants.
+   *
+   * What is assertable here is the half jsdom has: the caret does not move and the pane is not
+   * told anything. That the page then scrolls is the browser's, and the live pass's.
+   */
+  it("leaves up and down to the page", async () => {
+    const onSelect = draw();
+    const user = userEvent.setup();
+    const first = control(RAMP.id, "Arcane Signet")!;
+
+    act(() => first.focus());
+    await user.keyboard("{ArrowDown}");
+    expect(first).toHaveFocus();
+
+    await user.keyboard("{ArrowUp}");
+    expect(first).toHaveFocus();
+
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   /** No wrapping at either end. A walk that came round again would take a reader pressing
@@ -3226,7 +3242,7 @@ describe("StackView arrow keys", () => {
     const body = control(RAMP.id, "Arcane Signet")!.closest<HTMLElement>(`[${CARD_BODY_ATTR}]`)!;
 
     act(() => body.focus());
-    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{ArrowRight}");
 
     expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
     expect(onSelect).toHaveBeenLastCalledWith(pile("Ramp").cards[1]);
@@ -3247,7 +3263,7 @@ describe("StackView arrow keys", () => {
     const inside = body.querySelector<HTMLElement>(`button:not([${DECK_CARD_ATTR}])`)!;
 
     act(() => inside.focus());
-    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{ArrowRight}");
 
     expect(inside).toHaveFocus();
     expect(onSelect).not.toHaveBeenCalled();
@@ -3275,10 +3291,13 @@ describe("StackView arrow keys", () => {
     const user = userEvent.setup();
     const top = control(RAMP.id, "Arcane Signet")!;
 
+    // All three are the arrows this view *does* answer unmodified, which is what keeps the case
+    // from passing for the wrong reason: hold the modifier over a key nothing is bound to and
+    // the assertion is satisfied by the binding that was never there.
     act(() => top.focus());
-    await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
-    await user.keyboard("{Control>}{ArrowDown}{/Control}");
-    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await user.keyboard("{Control>}{ArrowRight}{/Control}");
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
 
     expect(top).toHaveFocus();
     expect(onSelect).not.toHaveBeenCalled();
@@ -3289,6 +3308,12 @@ describe("StackView arrow keys", () => {
    * one that is really there: an `<input type="number">` drawn *on* a card, where ArrowUp and
    * ArrowDown step the number. A pile heading in rename mode is the other, drawn through
    * `renameCategory`.
+   *
+   * **Left and right are what this guard is about now** (2026-08-21, #178) — a text caret moving
+   * through what the reader typed, and the only two presses the view answers, so the only two it
+   * could steal. Up and down are still pressed here and are still the stepper's, which is the
+   * browser's doing rather than this guard's now that the view has no branch for them; holding on
+   * to them is what keeps the case honest if the walk ever grows an axis back.
    *
    * Two guards deliver this and the test does not care which: the stepper is a **sibling** of the
    * button carrying `DECK_CARD_ATTR` rather than inside it, so the caret is not "on a card" by
@@ -3304,13 +3329,14 @@ describe("StackView arrow keys", () => {
     act(() => field.focus());
     await user.keyboard("{ArrowDown}");
     await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowLeft}");
 
     expect(field).toHaveFocus();
     expect(onSelect).not.toHaveBeenCalled();
   });
 
   /**
-   * **The regression this change can most easily cause**: `CategoryGrip` binds the same four keys
+   * **The regression this change can most easily cause**: `CategoryGrip` binds the same two keys
    * to *reordering the pile* and marks each press with `preventDefault()`, and the view's own
    * handler returns early on `defaultPrevented`. So one key means two things, told apart by where
    * the caret is — and if the yield were dropped, this is where it would show.
@@ -3359,7 +3385,7 @@ describe("StackView arrow keys", () => {
     const user = userEvent.setup();
 
     act(() => control(RAMP.id, "Arcane Signet")!.focus());
-    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{ArrowRight}");
 
     expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
   });
