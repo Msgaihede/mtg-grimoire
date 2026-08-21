@@ -1394,7 +1394,7 @@ lock-free path: a `file://` page linking the **built** `dist/assets/index-*.css`
 out of the image cache, the components' own class strings pasted onto the markup, and
 `msedge --headless=new --screenshot`. Before and after in one frame, and candidates side by side —
 which is the whole reason it can settle a question a test cannot. **The shipped-window pass was
-not run** and is still owed.
+owed and was run on 2026-08-21** — see the alignment section below, which is what it found.
 
 - **The fill is `--color-pie-u`, not `bg-accent`.** Gold was the obvious first choice — a chip on
   a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
@@ -1424,6 +1424,39 @@ not run** and is still owed.
 drawn it in that corner all along, so this is existing shipped behaviour rather than something the
 move introduced — but the stacked card is 210px against a tile's 150 and covers proportionally
 more of it. Worth a look if the illustrator-credit rule above is ever read strictly.
+
+### And the fifth thing, which only the shipped window found (issue #158)
+
+The `file://` frame above pasted the components' class strings onto **its own** markup, so it
+photographed the mark and not the mark *in the card*. Both of the things it therefore could not
+show were reported the next day, by a reader, off one screenshot: the tick read as **left-aligned
+inside its own banner**, and the banner stood short of the card's right edge with a **square**
+corner where the quantity tag at the other end has the card's round one.
+
+Both were real, both were arithmetic, and neither is visible to the suite — jsdom lays nothing
+out. **Driven in the shipped window 2026-08-21** (`npm run tauri dev`, a **debug** build at 1920
+against the real 116 700-card corpus, five Live cards all matching the plan), with the change
+backed out through `element.style` in the same session so the two states are one pass:
+
+| | before | after |
+| --- | --- | --- |
+| tick's right edge, from the card's | **5px short** | **0** — flush, exactly as the quantity tag is at the left |
+| glyph, from its banner's visible mid-height centre | **−5.5px** | **+0.5px** |
+
+- **The glyph was off-centre because a slant and its paddings are one shape.** `COUNT_TAG_BOX`'s
+  `pr` is larger than its `pl` because `COUNT_TAG_SLANT` bites the **right** edge; the tick wears
+  `COUNT_TAG_SLANT_MIRRORED`, which bites the **left**, so it needed the pair swapped and had been
+  wearing them unswapped. `COUNT_TAG_BOX_MIRRORED` is that swap, exported beside the mirrored slant
+  so a caller reaching for one can see it has to take both. Re-measured at **2×** — 24/12px
+  paddings, glyph **+1px** off centre, the same half-pixel doubled — so it scales rather than
+  agreeing at one stop.
+- **The 5px was a rule that outlived its corner.** `CARD_MARKS_STRIP` was inset
+  `right-[calc(5px*var(--mark-scale,1))]` "to keep the strip off the card's own clipped corner",
+  written when the strip's marks were drawn on the **right** and that corner held a `RULE BREAK`
+  box with a hairline border. The marks went left on 2026-08-13 and the inset stayed. It is
+  `inset-x-0` now: the face is `overflow-hidden rounded-[7px]`, so the tick gets the same clipped
+  corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
+  `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant.
 
 ## The two marks a deck card carries: picked, and just landed
 
@@ -1853,24 +1886,73 @@ full-width and anything hung off its edge would sit off-window.
 
 | | 1280×800 | 1024×768 |
 | --- | --- | --- |
-| Panel | x 80 → 1200 (**1120** wide, 32 narrower than the 1152 it drew before) | x 80 → 944 (**864**) |
-| Chevrons | 37–73 and 1207–1243 | 37–73 and 951–987 |
+| Panel | x 128 → 1152 (**1024** wide) | x 80 → 944 (**864**) |
+| Chevrons | 85–121 and 1159–1195 | 37–73 and 951–987 |
 | `documentElement.scrollWidth` | 1280 = `clientWidth` | 1024 = `clientWidth` |
+
+The 1280 column is the width that shipped on 2026-08-21 — the section under this one. Before it,
+while the panel asked for the whole reserved column, that column read x 80 → 1200, **1120** wide,
+with chevrons at 37–73 and 1207–1243. **The 1024 one has never moved**, through three different
+widths, which is the argument for reserving the room in the shell rather than off the panel.
 
 Both are 36px discs on the panel's vertical centre (`cy` 400 against the panel's own 400 at
 1280×800), and `elementFromPoint` at each centre hits the chevron rather than the scrim — the check
 this repo's drag pass learnt to make before concluding anything about a control.
 
-**Those two rows are unchanged by the width the panel asks for now, which is the argument for it.**
-It asked for `w-[72rem]` when they were taken and `max-w-full` clamped it to the column at both
-sizes, so 1120 and 864 were already the *column's* numbers rather than the request's. On 2026-08-20
-it became `w-full` — the request **is** the column — and both figures come out the same. What moves
-is the case the table has no row for: at 2560 maximised the reserved column is 2400 and the panel
-used to draw 1152 in the middle of it, six 170px tiles with the rest of the window left to the
-scrim. It draws 13 across now. Nothing about the chevrons had to change, and that is the point of
-spelling the width this way rather than as a `calc(100vw - 10rem)`: the room they sit in is
-`FLANK_COLUMNS` plus the scrim's own padding, and a length here would have had to restate both and
-would have parted company with them the first time either moved.
+**No width the panel has asked for has needed anything of the chevrons, and that is the point of
+where the room is bought.** It asked for `w-[72rem]` when the 1024 row was taken and `max-w-full`
+clamped it to the column at both sizes, so 864 was already the *column's* number rather than the
+request's; on 2026-08-20 it became `w-full` and the request **was** the column; since 2026-08-21 it
+is a proportion of the window with that column as its ceiling. The chevrons sit in `FLANK_COLUMNS`
+plus the scrim's own padding and travel with whatever the panel turns out to be — where a
+`calc(100vw - 10rem)` would have had to restate both constants and would have parted company with
+them the first time either moved.
+
+### Three quarters of the window, and why the panel stopped being one
+
+`AllPrintingsDialog` asks for `w-[min(100%,max(64rem,75vw))]` since 2026-08-21 — issue #157,
+*Reduce the width of the View all printings popup*, reported against a 2560 display with a
+screenshot of a **two-printing** card: two tiles packed against the left edge of a scrim-to-scrim
+panel, and the rest of the window dim behind glass it could not be seen past.
+
+The two widths before it were each right about the case they were built on and wrong about the
+other one. `w-[72rem]` — 1152px — drew six 170px tiles in the middle of a 2400px column on that
+same display. `w-full` (2026-08-20) fixed the wide-display end by asking for the whole column,
+13 tiles across, and in doing so made *every* open the window. A wall is the only body in the
+builder that can use arbitrary width, but only a wall with something in it: the modal is opened
+from twelve surfaces, and the card under most of those presses has fewer than ten printings.
+
+So the request is a proportion between a floor and a ceiling, and both guards are load-bearing:
+
+- **`100%` is the ceiling**, which is `w-full`'s old meaning kept as a limit rather than a
+  request. The panel never asks for more than the grid area the shell worked out — `p-4 sm:p-6`
+  off the scrim plus `FLANK_COLUMNS`' 3.5rem either side whenever a walk asks for chevrons — so
+  the flanks keep their room by construction. A `calc(100vw - 10rem)` would have had to restate
+  both constants and would have parted company with them the first time either moved.
+- **`64rem` is the floor**, the app's own 1024px window floor spelled as a panel width. At that
+  window the reserved column is 864 and 75vw would ask for 768, less than the filter bar wants;
+  the ceiling wins there and the panel is what it always was.
+
+Measured in the shipped window 2026-08-21 (debug build, `tauri dev`), on `"Lifetime" Pass Holder`
+— a two-printing card, the reporter's own case:
+
+| Window | Panel | Wall | Tiles across at 100% zoom |
+| --- | --- | --- | --- |
+| 1920×1080 | x 240 → 1680 (**1440**), was 1760 | 1372 | 7, was 9 |
+| 1280×800 | x 128 → 1152 (**1024**), was 1120 | 956 | 5 |
+| 1024×768 | x 80 → 944 (**864**), unchanged | 796 | 4 |
+
+`documentElement.scrollWidth` equals `clientWidth` at all three, both chevrons stay inside the
+window, and the panel's own `scrollWidth` overhang is exactly **44px** — the 36px next chevron
+plus its 8px gap, sitting outside a panel that deliberately does not clip. The filter bar wraps
+its treatments onto a second line at 1280 and reports `scrollWidth === clientWidth`, so nothing
+is cut off; at 1024 nothing moved at all.
+
+Storybook's `Card/All printings` stories answer for the size the report came from, 2560×900:
+panel **1920**, centred, wall 1852, **10** tiles across, and the flanked story's chevrons at
+277–313 and 2247–2283 with `scrollWidth` still 2560. Forcing the panel back to `100%` in the same
+frame is what the before column of the table above is — the fix and the fault photographed in one
+pass rather than in two builds.
 
 ### What the walk does, confirmed live
 

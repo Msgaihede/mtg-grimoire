@@ -1390,6 +1390,25 @@ describe("CardStack marks", () => {
     expect(ticks[0].className).toContain("ml-auto");
     expect(ticks[0].className).not.toContain("absolute");
 
+    // **Issue #158, and both halves of it are geometry jsdom cannot see** — it lays nothing out,
+    // so a tick 5px short of the card's edge with its glyph 5.5px left of its own banner's centre
+    // is invisible to every other assertion here. Classes are what is left, as they are for the
+    // drop-mark padding one folder over.
+    //
+    // The paddings are `COUNT_TAG_BOX_MIRRORED`'s: the larger one on the **left**, because the
+    // mirrored slant takes its bite out of that edge and the pair is what centres the glyph in
+    // the visible trapezium rather than in the box.
+    expect(ticks[0].className).toContain("pl-[calc(0.75rem*var(--mark-scale,1))]");
+    expect(ticks[0].className).toContain("pr-[calc(0.375rem*var(--mark-scale,1))]");
+
+    // And the strip it rides is flush to **both** of the card's edges, so the face's own
+    // `rounded-[7px]` clips this mark's corner exactly as it has always clipped the quantity
+    // tag's at the other end. A `right-` inset here is the defect: it leaves a square corner
+    // floating 5px inside a round one.
+    const strip = ticks[0].parentElement as HTMLElement;
+    expect(strip.className).toContain("inset-x-0");
+    expect(strip.className).not.toContain("right-[");
+
     // …and its sentence is still one hover away — `describes: false`, redundant with the
     // button's own name, so the panel carries no `role="tooltip"` and is found by its id.
     expect(await openTooltip(ticks[0])).toHaveTextContent("In the theory list");
