@@ -262,6 +262,61 @@ try {
         Assert ($r2.out -match 'HELD') "no HELD line: $($r2.out)"
         Remove-Item $appLock -Force -ErrorAction SilentlyContinue
     }
+    Check 'acquire -Wait on a free lock does not wait' {
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+        $r = Run acquire app -Wait -What 'uncontended'
+        Assert ($r.code -eq 0) "exit $($r.code): $($r.out)"
+        Assert ($r.out -match 'OK') "no OK line: $($r.out)"
+        Assert ($r.out -notmatch 'WAIT') "waited on a free lock: $($r.out)"
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+    }
+
+    # -WaitMinutes 0 puts the deadline in the past, so this exercises the give-up path
+    # without spending the wait. The holder has a live pid, so the lock is HELD on its
+    # own account rather than merely inside the un-adopted grace window.
+    Check 'acquire -Wait gives up at the deadline and names the holder' {
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+        $r0 = Run acquire app -What 'squatter'
+        Assert ($r0.code -eq 0) "setup acquire exited $($r0.code): $($r0.out)"
+        $sleeper = NewSleeper
+        $ra = Run adopt app -ProcessId $sleeper.Id
+        Assert ($ra.code -eq 0) "setup adopt exited $($ra.code): $($ra.out)"
+
+        $r = Run acquire app -Wait -WaitMinutes 0 -What 'waiter'
+        Assert ($r.code -eq 1) "expected exit 1, got $($r.code): $($r.out)"
+        Assert ($r.out -match 'still held after') "no give-up line: $($r.out)"
+        Assert ($r.out -match 'squatter') "give-up report did not name the holder: $($r.out)"
+
+        Stop-Process -Id $sleeper.Id -Force -ErrorAction SilentlyContinue
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+    }
+
+    # The whole point of -Wait: the agent makes one call and it comes back holding the
+    # lock, without a single HELD round trip in between.
+    Check 'acquire -Wait takes the lock once the holder releases' {
+        Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+        $r0 = Run acquire app -What 'holder'
+        Assert ($r0.code -eq 0) "setup acquire exited $($r0.code): $($r0.out)"
+        $sleeper = NewSleeper
+        $ra = Run adopt app -ProcessId $sleeper.Id
+        Assert ($ra.code -eq 0) "setup adopt exited $($ra.code): $($ra.out)"
+
+        $env:MTG_LOCK_TEST_POLL_SECONDS = '1'
+        $releaser = Start-Process pwsh -ArgumentList '-NoProfile', '-Command', `
+            "Start-Sleep 3; Remove-Item '$appLock' -Force" -WindowStyle Hidden -PassThru
+        try {
+            $r = Run acquire app -Wait -WaitMinutes 1 -What 'waiter'
+            Assert ($r.code -eq 0) "waiting acquire exited $($r.code): $($r.out)"
+            Assert ($r.out -match 'WAIT') "no WAIT line: $($r.out)"
+            Assert ($r.out -match 'OK') "never acquired: $($r.out)"
+        } finally {
+            $env:MTG_LOCK_TEST_POLL_SECONDS = $null
+            try { Stop-Process -Id $releaser.Id -Force -ErrorAction SilentlyContinue } catch {}
+            Stop-Process -Id $sleeper.Id -Force -ErrorAction SilentlyContinue
+            Remove-Item $appLock -Force -ErrorAction SilentlyContinue
+        }
+    }
+
 } finally {
     foreach ($p in $sleepers) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}

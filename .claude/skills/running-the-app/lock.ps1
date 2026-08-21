@@ -25,7 +25,9 @@ param(
     [string]$What = '',
     [int]$ProcessId = 0,
     [switch]$KeepProcess,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Wait,
+    [int]$WaitMinutes = 10
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +38,16 @@ $ErrorActionPreference = 'Stop'
 # shorten it and an agent steals a lock out from under a build that is still going.
 # SKILL.md's poll ceiling matches it; change one and change the other.
 $UnadoptedGraceMinutes = 10
+
+# How often `acquire -Wait` retries. Inside the script rather than in the agent's hands:
+# a contended acquire is then one tool call instead of forty, and none of the intermediate
+# HELD lines reach anyone's context.
+$PollSeconds = 15
+
+# MTG_LOCK_TEST_POLL_SECONDS is for lock.test.ps1 only, like MTG_LOCK_DIR, and is a no-op
+# unless set. It only shortens the retry gap - it cannot make a held lock acquirable, so a
+# test that uses it still proves the same thing the 15-second gap would.
+if ($env:MTG_LOCK_TEST_POLL_SECONDS) { $PollSeconds = [int]$env:MTG_LOCK_TEST_POLL_SECONDS }
 
 function Get-LockDir {
     # MTG_LOCK_DIR is for lock.test.ps1 only. Never set it in real use.
@@ -144,16 +156,20 @@ function Invoke-Status {
     }
 }
 
-function Invoke-Acquire {
-    Require-Name
+$script:AcquireOk = $false
+
+function Try-Acquire([bool]$Quiet) {
+    $script:AcquireOk = $false
     $path = Get-LockPath $Name
 
     if (Test-Path $path) {
         $existing = Read-Lock $path
         if (Test-LockLive $existing) {
-            Write-Host "HELD  $Name is held by $($existing.worktree) (pid $($existing.pid), '$($existing.what)') since $($existing.since)"
-            Write-Host "      Wait and retry. Do NOT kill it - another agent may be mid-measurement."
-            exit 1
+            if (-not $Quiet) {
+                Write-Host "HELD  $Name is held by $($existing.worktree) (pid $($existing.pid), '$($existing.what)') since $($existing.since)"
+                Write-Host "      Retry with -Wait. Do NOT kill it - another agent may be mid-measurement."
+            }
+            return
         }
         Write-Host "STALE $Name lock taken over (was $($existing.worktree), pid $($existing.pid), now dead)"
         Remove-Item $path -Force
@@ -162,7 +178,7 @@ function Invoke-Acquire {
     # CreateNew is O_EXCL: it throws if another agent won the race since the check above.
     $since = [DateTimeOffset]::UtcNow.ToString('o')
     try { $stream = [System.IO.File]::Open($path, 'CreateNew', 'Write') }
-    catch { Write-Host "HELD  $Name was claimed by another agent moments ago"; exit 1 }
+    catch { if (-not $Quiet) { Write-Host "HELD  $Name was claimed by another agent moments ago" }; return }
     try {
         $json = [ordered]@{
             worktree = Get-Worktree
@@ -200,12 +216,34 @@ function Invoke-Acquire {
         try { $landedSince = [DateTimeOffset]$landed.since } catch { $landedSince = $null }
     }
     if ($null -eq $landedSince -or $landedSince -ne [DateTimeOffset]$since) {
-        Write-Host "HELD  $Name was claimed by another agent moments ago"
-        exit 1
+        if (-not $Quiet) { Write-Host "HELD  $Name was claimed by another agent moments ago" }
+        return
     }
 
     Write-Host "OK    $Name acquired by $(Get-Worktree)"
     Write-Host "      Now launch, then: lock.ps1 adopt $Name -ProcessId <pid>"
+    $script:AcquireOk = $true
+}
+
+# The wait ceiling matches $UnadoptedGraceMinutes for the reason it always did: an
+# abandoned un-adopted lock is live for exactly that long, so waiting for less than the
+# grace window means it can never be waited out.
+function Invoke-Acquire {
+    Require-Name
+    Try-Acquire $false | Out-Null
+    if ($script:AcquireOk) { return }
+    if (-not $Wait) { exit 1 }
+
+    $deadline = (Get-Date).AddMinutes($WaitMinutes)
+    Write-Host "WAIT  $Name - retrying every $PollSeconds s until $($deadline.ToString('HH:mm:ss'))"
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds $PollSeconds
+        Try-Acquire $true | Out-Null
+        if ($script:AcquireOk) { return }
+    }
+    Write-Host "HELD  $Name still held after $WaitMinutes minutes - report who holds it, do not kill it"
+    Invoke-Status
+    exit 1
 }
 
 function Invoke-Adopt {
