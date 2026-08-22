@@ -877,3 +877,51 @@ clicked.** That is the design — the pane covers what the reader was not lookin
 a CDP pass that opens a deck card and then reaches for a search tile is aiming at the pane. Close
 the card first.
 
+
+## The deck driven collection, driven end to end — 2026-08-22, `npm run tauri dev` (debug), 1920×1080
+
+Driven against a copy of the main checkout's `data/` — a real 787 MB corpus with five real
+decks and, as it happens, **an empty hand-kept collection**. That last is worth stating up
+front, because it makes one of the eight checks weaker than it looks (see the limitation at the
+end).
+
+### What the window showed
+
+| Check | Result |
+| --- | --- |
+| The panel exists, in the right place | Between **Prices** and **Hidden tags**, reading `Disabled`, `aria-checked="false"`, labelled by `deck-driven-heading deck-driven-state` |
+| Its copy fits | Three paragraphs, 672 px wide in a 1920 px window; `scrollWidth` equals `innerWidth`, so nothing overflows |
+| **The collection changes with no restart** | **0 cards → 62 cards across 27 rows**, on the press |
+| The columns change | Header reads `Finish`, not `Finish · condition`; the **Condition** chip group is gone from the filter bar; cells read `Nonfoil` with no condition half |
+| The Actions column answers | `2 decks` on Access Denied, `1 deck` (singular) elsewhere |
+| **The tooltip adds up** | Hovering that count gave `1 × test` and `1 × test (copy)` — two decks, one copy each, summing to the row's 2 copies and its `$4.88 / $2.44 ea` |
+| **The search wall agrees** | Searching Access Denied showed `×2` and `2 in your collection`. Same card, same number, two surfaces, one source |
+| No live card is short | A 32-card Commander deck: **zero** occurrences of "short" or "missing" in the editor |
+| **A deck write moves the collection** | Arbor Elf `1 → 3` in the deck editor took the collection **62 → 64** with no restart — exactly the two copies |
+| The writes are inert and say why | Every stepper `aria-disabled="true"` with the reason inside the accessible name: `Increase Quantity of … — Your collection is driven by your decks` |
+| Switching back off restores | `Cards 0`, "Nothing here yet", and the **Condition** chip group returns |
+
+### Two things worth knowing
+
+- **A deck's search panel opens on the deck's format, so a banned card returns nothing.**
+  Searching `Black Lotus` inside a Commander deck gave zero rows and read, for a moment, like a
+  broken search. It is the documented format fence doing its job; pick a legal card. This cost a
+  few minutes and will cost them again.
+- **The mode note reads "Your collection is the sum of the cards in your decks. Theory lists are
+  left out. Change this in Settings."** — not the phrase the spec drafted. A probe grepping for
+  "driven by your decks" on that page finds nothing; that sentence is on the *controls*, not the
+  note.
+
+### The limitation, stated rather than buried
+
+**The restore was proved against an empty hand-kept collection.** This database had no
+`collection_entries` rows, so "switching back off returns the reader's own rows untouched" was
+satisfied trivially in the window — 0 before, 0 after. The non-empty case is covered by
+`collection.rs`'s `the_hidden_rows_are_unchanged_by_a_flip_there_and_back`, which dumps every
+column of every row through `pragma_table_info` and compares before to after; but it has not
+been seen in a real WebView2 against real data, and a pass on a database with a hand-built
+collection would be worth doing.
+
+**Not driven this pass:** the card context menu's Collection submenu and the import dialog's
+collection destination. Both are covered by their own tests, and the stepper above proves the
+same `DECK_DRIVEN_REASON` wiring reaches an accessible name — but neither was seen in the window.
