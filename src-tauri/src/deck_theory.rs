@@ -18,9 +18,13 @@
 //!   now a plan, which is why [`move_live_into_theory`] makes its caller reallocate.
 //! * **The difference.** [`theory_diff`] answers what theory holds that live does not — **one
 //!   direction only**, because this is a shopping list rather than a reconciliation. What live
-//!   has and theory dropped is a cut the user already made; it needs no row.
+//!   has and theory dropped is a cut the user already made; it needs no row. Each row also says
+//!   how much of itself the deck is already *playing*, as a different printing or finish of the
+//!   same card ([`TheoryDiffRow::held_as_other_printing`]) — a hole for the buyer and not for
+//!   the player, and the one question this module answers at the oracle card's grain.
 //! * **Buying it.** [`missing_to_wishlist`] turns that difference into wishes — the difference
-//!   itself, with nothing netted out of it. See that function on why subtracting
+//!   itself, with nothing netted out of it, pinned to the printings the plan names, and
+//!   optionally narrowed to the rows the reader ticked. See that function on why subtracting
 //!   [`TheoryDiffRow::owned_spare`] there counts the live list twice.
 //!
 //! **Switching the theory list off keeps every row.** It hides a switch; it does not delete a
@@ -102,6 +106,35 @@ pub struct TheoryDiffRow {
     /// copies read as spare here, which is right for a person and wrong for a subtraction. It is
     /// for a reader, beside a price.
     pub owned_spare: i64,
+    /// How many of this row's [`Self::quantity`] the **live list already plays**, as a different
+    /// printing or finish of the same oracle card — the copies that are an upgrade rather than a
+    /// hole.
+    ///
+    /// The comparison above is on the exact card, so a plan naming one Sol Ring against a deck
+    /// sleeving another is a full row and reads as a card the reader has not got. **That is
+    /// right for buying and wrong for playing** — they would still have to find that printing,
+    /// and meanwhile the deck runs — and this field is the difference between the two readings.
+    /// It is the one number on this struct asked at the *oracle card's* grain, because "the deck
+    /// already plays a different printing of this" is a sentence about the card rather than
+    /// about the cardboard.
+    ///
+    /// **`0 <= held_as_other_printing <= quantity`, and one live copy can excuse at most one
+    /// row's copy.** Copies are claimed per oracle card out of a pool sized as *live copies of
+    /// that card, less the ones an exact line already matched*, walked in the list's own reading
+    /// order — see [`grouped_diff`], which is where both invariants are enforced.
+    ///
+    /// A row can be **partly both**: theory 2× printing A against live 1× printing B is
+    /// `quantity: 2`, `held_as_other_printing: 1` — one copy to go and find, one already on the
+    /// table.
+    ///
+    /// **`0` for an orphan**, whose printing has left `cards`: it names no oracle card, so there
+    /// is no card for another printing to be a printing *of*.
+    ///
+    /// **A display field, and never a term in an arithmetic** — [`Self::owned_spare`]'s rule,
+    /// for a sharper reason. [`missing_to_wishlist`] writes [`Self::quantity`] whole, because a
+    /// reader who asked for that printing asked for that printing; netting this out would turn
+    /// the button into the app deciding the substitution is good enough.
+    pub held_as_other_printing: i64,
 }
 
 /// A diff row and the oracle id its group was built on.
@@ -127,11 +160,21 @@ pub struct TheoryDiffRow {
 /// `card_id` is its identity like everything else's, so the prefix that used to keep oracle ids
 /// and card ids apart went with the oracle key.
 ///
-/// The oracle id survives on *this* struct and is deliberately **not** on [`TheoryDiffRow`]: the
-/// webview draws a printing and a count and has no use for it, while [`missing_to_wishlist`]
-/// cannot do without it — a wish is oracle-grained ("any printing"), because a shopping list is
-/// not a printing preference. So two printings of one card are two lines here and **one** wish,
-/// folded on quantity by [`crate::wishlist::add_wish`]'s upsert.
+/// The oracle id survives on *this* struct because two things need it, and neither draws it.
+///
+/// **The wish.** [`missing_to_wishlist`] writes through [`crate::wishlist::add_wish`], whose
+/// grain is `(oracle_id, card_id, preferred_finish)` — so a wish pinned to this row's exact
+/// printing still carries the oracle card that printing is of. That wish stopped being
+/// oracle-grained on **2026-08-22**: this paragraph used to end "a wish is oracle-grained ('any
+/// printing'), because a shopping list is not a printing preference", and that argument had
+/// already lost on 2026-08-20, when the comparison itself became per printing. Two printings of
+/// one card are two lines here and now **two** wishes.
+///
+/// **The substitution count.** [`TheoryDiffRow::held_as_other_printing`] is per oracle card by
+/// definition, so the pool it draws from is keyed here and nowhere else.
+///
+/// It is deliberately **not** on [`TheoryDiffRow`]: the webview draws a printing, a count and
+/// two figures, and has no use for a uuid it cannot show.
 struct Grouped {
     oracle_id: Option<String>,
     row: TheoryDiffRow,
@@ -271,6 +314,12 @@ fn grouped_diff(
     // it is what decides both which printing represents a group and where its line lands.
     let mut wanted: HashMap<String, i64> = HashMap::new();
     let mut held: HashMap<String, i64> = HashMap::new();
+    // Live copies per **oracle card** — the grain `held_as_other_printing` is asked at, and the
+    // only figure in this function that is not about the exact card. Summed in *this* pass and
+    // not by a second query over `deck_cards`, for the reason the one statement above already
+    // gives: two reads are two moments of the deck, and a card write between them would put a
+    // copy on one side of an arithmetic and not the other.
+    let mut live_by_oracle: HashMap<String, i64> = HashMap::new();
     let mut order: Vec<(String, Grouped)> = Vec::new();
     for row in rows {
         let (
@@ -307,19 +356,37 @@ fn grouped_diff(
                             collector_number,
                             finish,
                             owned_spare: 0,
+                            held_as_other_printing: 0,
                         },
                     },
                 ));
             }
         } else {
+            // An orphan contributes nothing to the pool: a row whose printing has left `cards`
+            // names no oracle card, so it is not another printing *of* anything. Inactive
+            // categories are already off both sides — `diff_select` does that once, for both.
+            if let Some(oracle) = &oracle {
+                *live_by_oracle.entry(oracle.clone()).or_insert(0) += quantity;
+            }
             *held.entry(key).or_insert(0) += quantity;
         }
     }
 
     let mut spare = conn.prepare(OWNED_SPARE_SQL).map_err(|e| e.to_string())?;
     let mut diff = Vec::new();
+    // What the **exact** lines have already spoken for, per oracle card. Accumulated over every
+    // group, including the ones that drop out just below: a plan the deck answers card for card
+    // still spends those live copies, and leaving them in the pool would let them excuse a
+    // second row as well. Only a group with a theory row can be non-zero — `wanted` is 0 for
+    // every other key — and a group with a theory row is a group whose oracle id is known.
+    let mut matched_by_oracle: HashMap<String, i64> = HashMap::new();
     for (key, mut grouped) in order {
-        let short = wanted.get(&key).copied().unwrap_or(0) - held.get(&key).copied().unwrap_or(0);
+        let wanted_here = wanted.get(&key).copied().unwrap_or(0);
+        let held_here = held.get(&key).copied().unwrap_or(0);
+        if let Some(oracle) = &grouped.oracle_id {
+            *matched_by_oracle.entry(oracle.clone()).or_insert(0) += wanted_here.min(held_here);
+        }
+        let short = wanted_here - held_here;
         if short <= 0 {
             continue;
         }
@@ -333,6 +400,34 @@ fn grouped_diff(
             .map_err(|e| e.to_string())?
             .max(0);
         diff.push(grouped);
+    }
+
+    // Live copies of each oracle card that no exact line already claimed — the pool a surviving
+    // row draws [`TheoryDiffRow::held_as_other_printing`] out of. Floored at zero for
+    // `owned_spare`'s reason: a negative here would be a number with no reading.
+    let mut pool = live_by_oracle;
+    for (oracle, matched) in matched_by_oracle {
+        let left = pool.entry(oracle).or_insert(0);
+        *left = (*left - matched).max(0);
+    }
+    // **Walked in the surviving rows' own reading order, and that is what makes the answer
+    // deterministic.** The pool belongs to the oracle card, so when two lines of one card both
+    // qualify for it the first one down the page takes it and the second reads what is left —
+    // which is how one live copy comes to excuse one row's copy and never two. Spreading it
+    // instead would tell the reader that two rows are half-covered when one is covered and the
+    // other is not.
+    for grouped in &mut diff {
+        // An orphan is never a substitution: it names no oracle card to be another printing of.
+        let Some(oracle) = grouped.oracle_id.as_deref() else {
+            continue;
+        };
+        let Some(left) = pool.get_mut(oracle) else {
+            continue;
+        };
+        // The `min` is the whole of `0 <= held_as_other_printing <= quantity`.
+        let take = grouped.row.quantity.min(*left);
+        grouped.row.held_as_other_printing = take;
+        *left -= take;
     }
     Ok(diff)
 }
@@ -518,13 +613,51 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
 /// "one of these is in the box already", for a person to read beside a price. It is not a term
 /// in this sum.
 ///
-/// **Any printing**, always: written through [`crate::wishlist::add_wish`] with an oracle id, so
-/// the grain, the canonicalisation and the fold all stay in the one module that owns them, and
-/// pressing twice raises one line rather than making two.
+/// **`only` narrows the press to the rows the reader ticked** — [`group_key`] strings, which is
+/// the spelling [`theory_slots`] already answers in, so the dialog and this command name a
+/// planned card with the same code and nothing new crosses the IPC boundary. `None` is the whole
+/// difference, which is what every caller written before the dialog meant and still means.
 ///
-/// An orphaned row is skipped, [`crate::deck::missing_to_wishlist`]'s rule: a wish needs an
-/// oracle card, and an orphan has none. It is already carrying a `needs_review` sentence.
-pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
+/// **A key naming no row of the *current* difference writes nothing rather than refusing.** The
+/// diff is re-read inside this transaction, so a row the reader ticked and then acquired in
+/// another window is simply not short any more — that is the button working, not a stale request
+/// to reject.
+///
+/// **It is an include list, even though the gesture it serves is exclusion** ("let me drop three
+/// of these and send the rest"). The two spellings differ only for rows that appeared between
+/// the read and the press, and those are rows the reader never saw: an exclude list would have
+/// the dialog sending cards on its own initiative.
+///
+/// **The wish is pinned to the printing the plan names** (2026-08-22), and to its finish. This
+/// wrote an any-printing wish until then, on the argument that a shopping list is not a printing
+/// preference — an argument that had already lost on **2026-08-20**, when the comparison itself
+/// became per printing and per finish. A plan naming a printing is a plan for *that* cardboard,
+/// and answering it with a wish for any printing hands the reader back the very substitution the
+/// two lists exist to track. Still written through [`crate::wishlist::add_wish`], so the grain,
+/// the canonicalisation and the fold all stay in the one module that owns them, and pressing
+/// twice raises one line rather than making two.
+///
+/// **The regular copy pins no finish.** `deck_cards.finish` is NULL for it
+/// ([`crate::deck::normalise_finish`]) and writing `nonfoil` here would put this wish on a
+/// different row of [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN) from every other wish the
+/// app makes for that card. `foil` and `etched` pass straight through, because those *are* what
+/// the reader is going out to find.
+///
+/// A pinned wish and an any-printing one are **different rows** on that grain, so a reader who
+/// pressed this before the change keeps their old any-printing line and gains a pinned one.
+/// Nothing is lost and nothing is double-counted: each folds into its own row on the upsert.
+///
+/// An orphaned row is skipped, [`crate::deck::missing_to_wishlist`]'s rule — and that guard is
+/// now doing double duty, which is the non-obvious part. A wish needs an oracle card and an
+/// orphan has none; *and* an orphan is exactly a row whose printing has left `cards`, while
+/// [`crate::wishlist::add_wish`] **refuses** a `card_id` it cannot find there ("no card with that
+/// id is in the card database"). From inside this transaction that refusal would abort the whole
+/// press rather than skip one line. It is already carrying a `needs_review` sentence.
+pub fn missing_to_wishlist(
+    conn: &Connection,
+    deck_id: i64,
+    only: Option<&[String]>,
+) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let exists: bool = tx
         .query_row(
@@ -541,6 +674,15 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
     // names and counts, never a price, and a shopping list must not depend on where the reader
     // shops.
     for grouped in grouped_diff(&tx, deck_id, crate::sorting::Marketplace::default())? {
+        // Recomputed rather than carried out of `grouped_diff`, which answers rows and not keys:
+        // `group_key` is the one place "the same planned card" is spelled, and spelling it twice
+        // here is how the tick, the dialog and this write stay one convention.
+        if let Some(only) = only {
+            let key = group_key(&grouped.row.card_id, grouped.row.finish.as_deref());
+            if !only.contains(&key) {
+                continue;
+            }
+        }
         let Some(oracle_id) = grouped.oracle_id else {
             continue;
         };
@@ -548,10 +690,14 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
             &tx,
             &crate::wishlist::WishInput {
                 oracle_id: Some(oracle_id),
+                // The printing the plan named, and the object it named — the whole of the
+                // 2026-08-22 change, argued above.
+                card_id: Some(grouped.row.card_id.clone()),
                 // The deck row's own name, which is the one name an orphan-safe row always has
                 // and the same name the list would show for it.
                 name: Some(grouped.row.name),
                 quantity: grouped.row.quantity,
+                preferred_finish: grouped.row.finish.clone(),
                 ..Default::default()
             },
         )?;
@@ -663,15 +809,17 @@ pub async fn deck_theory_copy_from_live(
         .map_err(unfinished)?
 }
 
-/// The one click: everything the plan is short of, onto the wishlist.
+/// The one click: everything the plan is short of, onto the wishlist — or, with `only`, the
+/// rows the reader left ticked, as [`group_key`] strings. Absent means the whole difference.
 #[tauri::command]
 pub async fn deck_theory_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
+    only: Option<Vec<String>>,
 ) -> Result<usize, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| missing_to_wishlist(c, deck_id))
+        with_write(&state, |c| missing_to_wishlist(c, deck_id, only.as_deref()))
     })
     .await
     .map_err(unfinished)?
@@ -1218,6 +1366,140 @@ mod tests {
         );
     }
 
+    /// Each diff row as `(printing, finish, quantity, held as another printing)`, in the
+    /// editor's own reading order — the four figures every substitution test below turns on.
+    fn substitutions(conn: &Connection, deck_id: i64) -> Vec<(String, Option<String>, i64, i64)> {
+        theory_diff(conn, deck_id, ANY_MARKET)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.card_id, r.finish, r.quantity, r.held_as_other_printing))
+            .collect()
+    }
+
+    /// **A card the deck is already playing, in another printing, is still a full row — and says
+    /// so.** The comparison is per printing (2026-08-20), so a plan naming the Alpha Bolt against
+    /// a live list sleeving the M10 one is a card to go and find. That is right for *buying* and
+    /// wrong for *playing*, because the deck runs; `held_as_other_printing` is the difference
+    /// between the two readings, and it is the whole of what this row's reader needs to tell
+    /// "missing" from "upgrade".
+    #[test]
+    fn a_row_the_deck_plays_another_printing_of_says_so() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-m10", main, LIVE, 1);
+        add(&conn, id, "bolt-lea", main, THEORY, 1);
+
+        assert_eq!(
+            substitutions(&conn, id),
+            vec![("bolt-lea".to_owned(), None, 1, 1)],
+            "one Bolt to buy, and the deck is not missing a Bolt today"
+        );
+
+        // **The upper half of the invariant**, which the line above cannot tell apart from "the
+        // pool, whatever it is": a second M10 Bolt on the table does not make the row two-thirds
+        // covered, because there is only one copy on it. `0 <= held_as_other_printing <=
+        // quantity`, and this is the clamp at the top.
+        crate::deck::set_card_quantity(&conn, id, "bolt-m10", main, LIVE, None, 2).unwrap();
+        assert_eq!(
+            substitutions(&conn, id),
+            vec![("bolt-lea".to_owned(), None, 1, 1)]
+        );
+    }
+
+    /// **A row can be partly both.** Two wanted against one different printing held is one copy
+    /// to go and find and one already on the table: `quantity` keeps its full value — that is
+    /// what a press writes — and this field says how much of it is an upgrade rather than a hole.
+    #[test]
+    fn a_partly_substituted_row_keeps_its_whole_quantity() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-m10", main, LIVE, 1);
+        add(&conn, id, "bolt-lea", main, THEORY, 2);
+
+        assert_eq!(
+            substitutions(&conn, id),
+            vec![("bolt-lea".to_owned(), None, 2, 1)],
+            "two to buy, one of which the deck is already playing"
+        );
+    }
+
+    /// **One live copy excuses one row's copy and never two.** The pool is per oracle card and is
+    /// drawn down as the list is walked, so two lines of the same card competing for one live
+    /// copy are settled by the editor's own reading order rather than both being told they are
+    /// covered. Spreading it instead would report two half-covered rows where one is covered and
+    /// the other is not.
+    ///
+    /// The two theory lines are two **objects** of one printing — the regular copy and the foil,
+    /// which is [`group_key`]'s other half — so the fixture needs no third `cards` row to make
+    /// the point, and the live copy is a third object again.
+    #[test]
+    fn one_live_copy_cannot_excuse_two_rows() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-m10", main, LIVE, 1);
+        // Added regular-first, because `diff_select` breaks the name tie on `dc.id` and the
+        // order of these two adds *is* the reading order the pool is spent in.
+        add_finish(&conn, id, "bolt-lea", main, THEORY, None, 1);
+        add_finish(&conn, id, "bolt-lea", main, THEORY, Some("foil"), 1);
+
+        assert_eq!(
+            substitutions(&conn, id),
+            vec![
+                ("bolt-lea".to_owned(), None, 1, 1),
+                ("bolt-lea".to_owned(), Some("foil".to_owned()), 1, 0),
+            ],
+            "one M10 Bolt on the table covers one of the two lines, not both"
+        );
+    }
+
+    /// **An exact match is not also a substitute.** The copy that answered the row card for card
+    /// was already spent by the subtraction that produced `quantity`, so it may not be counted a
+    /// second time from the other side — only what is left over of the oracle card's live copies
+    /// can excuse a remainder.
+    ///
+    /// Two live copies, one of them the very printing the plan names: 2 wanted less 1 held is one
+    /// to buy, and the *other* printing is what covers it.
+    #[test]
+    fn an_exact_match_is_not_counted_as_a_substitute_as_well() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, LIVE, 1);
+        add(&conn, id, "bolt-m10", main, LIVE, 1);
+        add(&conn, id, "bolt-lea", main, THEORY, 2);
+
+        assert_eq!(
+            substitutions(&conn, id),
+            vec![("bolt-lea".to_owned(), None, 1, 1)],
+            "the Alpha copy paid for the subtraction; the M10 one covers what is left"
+        );
+    }
+
+    /// **An orphan reads zero**, however many copies of anything the live list holds: a row whose
+    /// printing has left `cards` names no oracle card, so there is no card for another printing
+    /// to be a printing *of*. The live Bolt below would excuse an ordinary row of its own card
+    /// and cannot reach this one.
+    #[test]
+    fn an_orphaned_row_is_never_held_as_another_printing() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, LIVE, 1);
+        add(&conn, id, "bolt-m10", main, THEORY, 1);
+        // What the next sync does to a printing Scryfall stopped publishing.
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-m10'", [])
+            .unwrap();
+
+        assert_eq!(
+            substitutions(&conn, id),
+            vec![("bolt-m10".to_owned(), None, 1, 0)],
+            "an orphan has no oracle card to be matched by"
+        );
+    }
+
     /// Every wish this deck raised, oldest first.
     fn wishes(conn: &Connection) -> Vec<(Option<String>, i64)> {
         conn.prepare("SELECT oracle_id, quantity FROM wishlist_entries ORDER BY id")
@@ -1239,7 +1521,7 @@ mod tests {
         add(&conn, id, "serra-lea", main, LIVE, 1);
         add(&conn, id, "serra-lea", main, THEORY, 1);
 
-        let touched = missing_to_wishlist(&conn, id).unwrap();
+        let touched = missing_to_wishlist(&conn, id, None).unwrap();
 
         assert_eq!(touched, 1);
         assert_eq!(wishes(&conn), vec![(Some("o1".to_owned()), 3)]);
@@ -1277,7 +1559,7 @@ mod tests {
         assert_eq!((diff[0].quantity, diff[0].owned_spare), (1, 2));
         assert_eq!((diff[1].quantity, diff[1].owned_spare), (4, 3));
 
-        let touched = missing_to_wishlist(&conn, id).unwrap();
+        let touched = missing_to_wishlist(&conn, id, None).unwrap();
 
         assert_eq!(touched, 2, "the Bolt is a wish, not a skipped negative");
         assert_eq!(
@@ -1285,6 +1567,92 @@ mod tests {
             vec![(Some("o1".to_owned()), 1), (Some("o2".to_owned()), 4)],
             "and the Angel asks for four, not for four less what is in the box"
         );
+    }
+
+    /// Every wish there is as `(oracle card, pinned printing, pinned finish, copies)` —
+    /// [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s three columns and the count. The
+    /// first two are read as `String` on purpose: this command writes both on every wish now,
+    /// so a NULL there is a failure and reads as one.
+    fn pinned_wishes(conn: &Connection) -> Vec<(String, String, Option<String>, i64)> {
+        conn.prepare(
+            "SELECT oracle_id, card_id, preferred_finish, quantity
+               FROM wishlist_entries ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// **The wish is pinned to the printing the plan names, and to its finish** (2026-08-22).
+    /// This wrote an any-printing wish until then, on an argument the comparison itself had
+    /// already abandoned on 2026-08-20: a plan naming a printing is a plan for that cardboard,
+    /// and a wish for any printing hands the reader back the substitution the two lists exist to
+    /// track.
+    ///
+    /// **The regular copy pins no finish**, and that is the second assertion. `deck_cards.finish`
+    /// is NULL for it, and writing `nonfoil` would put this wish on a different row of the
+    /// wishlist grain from every other wish the app makes for that card.
+    #[test]
+    fn missing_to_wishlist_pins_the_printing_and_the_finish() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "bolt-lea", main, THEORY, Some("foil"), 1);
+        add_finish(&conn, id, "serra-lea", main, THEORY, None, 2);
+
+        assert_eq!(missing_to_wishlist(&conn, id, None).unwrap(), 2);
+
+        assert_eq!(
+            pinned_wishes(&conn),
+            vec![
+                (
+                    "o1".to_owned(),
+                    "bolt-lea".to_owned(),
+                    Some("foil".to_owned()),
+                    1
+                ),
+                ("o2".to_owned(), "serra-lea".to_owned(), None, 2),
+            ],
+            "the Alpha Bolt in foil and the Angel plain — not two wishes for any printing"
+        );
+    }
+
+    /// **`only` writes just the rows the reader left ticked**, named in [`group_key`]'s own
+    /// spelling so the dialog and this write cannot drift apart.
+    ///
+    /// **And a key naming no row of the current difference writes nothing rather than refusing**,
+    /// which is the second half: the diff is re-read inside the write, so a row ticked and then
+    /// acquired in another window is simply not short any more. A press that finds nothing to do
+    /// is the button working.
+    #[test]
+    fn missing_to_wishlist_writes_only_the_keys_it_was_given() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, THEORY, 1);
+        add(&conn, id, "bolt-m10", main, THEORY, 1);
+        add(&conn, id, "serra-lea", main, THEORY, 1);
+
+        let only = vec![group_key("bolt-m10", None)];
+        assert_eq!(missing_to_wishlist(&conn, id, Some(&only)).unwrap(), 1);
+
+        assert_eq!(
+            pinned_wishes(&conn),
+            vec![("o1".to_owned(), "bolt-m10".to_owned(), None, 1)],
+            "the two rows the reader unticked stayed off the list"
+        );
+
+        // A key for a card this deck's difference does not hold — and one for a *finish* it does
+        // not hold, which is the near miss the shared `group_key` is there to make impossible to
+        // spell by accident.
+        let unknown = vec![
+            group_key("serra-lea", Some("foil")),
+            group_key("nothing-at-all", None),
+        ];
+        assert_eq!(missing_to_wishlist(&conn, id, Some(&unknown)).unwrap(), 0);
+        assert_eq!(pinned_wishes(&conn).len(), 1, "nothing written, no refusal");
     }
 
     /// Rule 1 of the audit table reaches this button too: a press that moves forty cards into
@@ -1394,7 +1762,7 @@ mod tests {
 
         assert_eq!(copy_from_live(&conn, 404).unwrap_err(), crate::deck::GONE);
         assert_eq!(
-            missing_to_wishlist(&conn, 404).unwrap_err(),
+            missing_to_wishlist(&conn, 404, None).unwrap_err(),
             crate::deck::GONE
         );
     }
@@ -1588,6 +1956,7 @@ mod tests {
             collector_number: "161".to_owned(),
             finish: Some("foil".to_owned()),
             owned_spare: 1,
+            held_as_other_printing: 1,
         })
         .unwrap();
         assert_eq!(
@@ -1595,7 +1964,8 @@ mod tests {
             serde_json::json!({
                 "cardId": "bolt-lea", "name": "Lightning Bolt", "categoryName": "Main deck",
                 "quantity": 2, "unitPrice": 400.0,
-                "setCode": "lea", "collectorNumber": "161", "finish": "foil", "ownedSpare": 1
+                "setCode": "lea", "collectorNumber": "161", "finish": "foil", "ownedSpare": 1,
+                "heldAsOtherPrinting": 1
             })
         );
     }

@@ -647,9 +647,10 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
     // --- deck 1: 20 lands + 40 spells --------------------------------------------------
     main(1, printing("unf", "239"), 10),
     main(1, printing("lea", "288"), 6),
-    // **The one seeded foil row**, and it is deliberately *beside* three regular copies of the
-    // same printing: `deck_cards.finish` is part of the grain, so this is what a pile holding a
-    // printing twice looks like — and it is the state every foil story needs and no story can
+    // **The one seeded foil row in a *live* list** — deck 4's plan holds the other, and the two
+    // are seeded for different reasons. This one is deliberately *beside* three regular copies of
+    // the same printing: `deck_cards.finish` is part of the grain, so this is what a pile holding
+    // a printing twice looks like — and it is the state every foil story needs and no story can
     // build for itself, since a seed is the world.
     //
     // Urza's Saga because MH2 printed one (`finishes: '["nonfoil","foil"]'` in the corpus), and
@@ -725,10 +726,14 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
  * Everything schema v8 added is reachable from this one deck, and each piece is here to be seen
  * rather than to be counted:
  *
- * * **A real difference between the two lists.** The plan wants a Smuggler's Copter and a Jace
- *   the deck does not have, and wants *one* Sol Ring where the deck holds two — so
- *   `deck_theory_diff` answers two rows and not three: what live has and theory dropped is a
- *   cut the reader already made, and this list runs one direction only.
+ * * **A real difference between the two lists, in both of the shapes the dialog files a row
+ *   under.** The plan wants a Smuggler's Copter and a Jace the deck does not have — `Missing`,
+ *   cards to go and find. It also names the **foil** `sld 913` Sol Ring against the two regular
+ *   `c21 263` copies the deck sleeves: short by one, and that one copy is already on the table
+ *   as a different printing *and* a different object, so the row reads `heldAsOtherPrinting: 1`
+ *   and files under `Different printing`. That pair is what makes this deck the fixture for the
+ *   whole of issue #164. What the list still never carries is the other direction — what live
+ *   has and theory dropped is a cut the reader already made, and this list runs one way only.
  * * **A card with a rule violation.** Two Sol Rings in a singleton format, which the engine
  *   reports against the card. The plan is the fix, which is what a plan is for.
  * * **Two game changers**, Rhystic Study and Consecrated Sphinx, so the editor's game-changer
@@ -769,14 +774,36 @@ function testbedDeckCards(
 
     // --- theory: the plan ---------------------------------------------------------------
     filed(printing("eld", "303"), "Commander", 1, "theory"),
-    // One, not two: the plan is where the copy limit gets fixed. And **not a diff row** — a
-    // card live has more of is a cut the reader already made, which this list does not carry.
-    filed(printing("c21", "263"), "Ramp", 1, "theory"),
+    // One, not two: the plan is still where the singleton copy limit gets fixed. What changed on
+    // 2026-08-22 is *which* Sol Ring — **the foil Secret Lair against the deck's two regular
+    // precon copies** — and that one substitution is what makes deck 4 the fixture for the whole
+    // of issue #164.
+    //
+    // A different printing **and** a different object at once, which is the pair the comparison
+    // keys on (`(cardId, finish)`) and the pair `heldAsOtherPrinting` folds back together: the
+    // row is short by one, every copy of that shortfall is already on the table as cardboard the
+    // reader owns, and so it files under `Different printing` rather than `Missing`. That is also
+    // why the dialog's view is called `Different printing` and not "different art" — a finish is
+    // a different piece of cardboard here, not a different picture. It is deck 4's only theory
+    // row with a `FinishMark` to draw, and the only one whose pinned wish carries a
+    // `preferredFinish` the whole way to the wishlist.
+    //
+    // `foil` and not `null` because `sld 913` is `finishes: '["foil"]'`: a regular copy of it is
+    // a piece of cardboard that does not exist, and {@link deckCard}'s note above states the
+    // convention this row is the second instance of. It is also unpriced in every currency — the
+    // foil rate is null too — which the Black Lotus below no longer has to itself.
+    //
+    // The consequence worth knowing before writing a story against it: `seed_from_live` matches
+    // on `(categoryId, cardId)`, so "copy the deck into the plan" no longer finds a Sol Ring row
+    // here and adds the `c21 263` pair beside this one — three Sol Rings in the plan, and a plan
+    // reporting the copy limit it exists to fix. That is the press behaving, not a broken seed.
+    filed(printing("sld", "913"), "Ramp", 1, "theory", { finish: "foil" }),
     // **Wanted in an active pile while the live copy sits in the switched-off one**, which is
     // the case that proves the exclusion runs on *both* sides: the Cut list's Black Lotus is
-    // not "held", so the plan is short of one. It is also the corpus's only unpriced card —
-    // `lea` Black Lotus is quoted in euros and in nothing else — so this is the row whose cost
-    // a total cannot count, and the figure says so rather than rounding it to zero.
+    // not "held", so the plan is short of one. It is also unpriced — `lea` Black Lotus is quoted
+    // in euros and in nothing else — so it is a row whose cost a total cannot count, and the
+    // figure says so rather than rounding it to zero. Since 2026-08-22 it is not the only one:
+    // the `sld 913` Sol Ring above is quoted in no currency at all.
     filed(printing("lea", "232"), "Ramp", 1, "theory"),
     // Wanted and not held. The collection records this printing without holding a copy, so it
     // reads no spare either — a zero that came from the real arithmetic.

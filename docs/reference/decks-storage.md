@@ -146,6 +146,45 @@ preferred_finish`'s nullability one table over.
   `ON CONFLICT` here would be the wrong repair twice over: it would hide the guard's removal, and
   either arm of it, skip or fold, silently rewrites a plan the reader started. The copy that used
   to sit here could carry `DO NOTHING` precisely because it was a copy; a move cannot.
+- **The difference has two readings, and `held_as_other_printing` is the second one** (2026-08-22).
+  `deck_theory_diff` compares the **exact card** — printing and finish, `deck_theory::group_key` —
+  so a plan naming one Sol Ring against a deck sleeving another is a full row and reads as a card
+  the deck has not got. That is right for _buying_ and wrong for _playing_: the deck runs. So the
+  row also carries how many of its `quantity` the live list already covers with a **different
+  printing or finish of the same oracle card**, which is what the Compare dialog's `Missing` and
+  `Different printing` views are computed from — the frontend re-derives none of it, exactly as it
+  re-derives none of the subtraction. The pool is sized per oracle card as _live copies minus the
+  copies an exact line already matched_ and spent down the surviving rows in the editor's own
+  reading order, which is the whole of why it is deterministic: one live copy can excuse one row's
+  copy and never two. A row whose printing has left `cards` reads zero, having no oracle card to be
+  matched by. A row can be **partly both** — two copies wanted with one already on the table — and
+  shows under both views **at its full quantity**, because the count on screen is what a press
+  writes. That is the discipline `owned_spare` is held to one field over, stated on the other axis.
+- **`deck_theory_missing_to_wishlist` takes an include list and writes a _pinned_ wish**
+  (2026-08-22). `only` is a list of `group_key` strings — the spelling `deck_theory_slots` already
+  answers in, so nothing new crosses the boundary — and an absent one still means the whole
+  difference. It is an **include** list although the gesture it serves is exclusion ("drop three of
+  these and send the rest"): the two differ only for rows that appeared between the read and the
+  press, and those are rows the reader never saw. The diff is re-read inside the write, so a key
+  naming no current row writes nothing rather than refusing — a row ticked and then acquired in
+  another window is simply not short any more.
+  - **The wish is pinned to the printing the plan names**, carrying its `foil`/`etched` finish. This
+    is the comparison's own 2026-08-20 rule finally read from the buying end: a plan naming a
+    printing is a plan for _that_ cardboard, and answering it with an any-printing wish hands the
+    reader back the very substitution the two lists exist to track. The sentence that stood here
+    before — a wish is oracle-grained because a shopping list is not a printing preference — is the
+    argument that lost.
+  - **The regular copy pins no finish.** `deck_cards.finish` is NULL for it, and writing `nonfoil`
+    would split this wish from every other one the app makes for that card on the wishlist grain
+    `(oracle_id, card_id, preferred_finish)`. `foil` and `etched` pass straight through.
+  - **A pinned wish and an any-printing one are different rows on that grain**, so a reader who
+    pressed this before the change keeps their old line and gains a pinned one. Nothing is lost or
+    double-counted — the upsert folds each into its own row — but it is the one visible wart of the
+    change and it is worth recognising before treating it as a duplicate bug.
+  - **The orphan skip is now load-bearing twice.** `add_wish` **refuses** a `card_id` that is not in
+    `cards` ("no card with that id is in the card database"), and that refusal would abort the whole
+    transaction — so the `oracle_id.is_none()` guard that was there to keep a wish from having no
+    oracle card is now also what keeps a pinned write from taking the rest of the list down with it.
 - **The editor's last view is stored on the deck, because reading a deck is not editing it.**
   Schema v12 adds `decks.last_variant`, `last_group_by` and `last_sort_by` — three `TEXT NOT NULL`
   columns defaulting to `live`, `category` and `alphabetical` — carried on `DeckRow` as
