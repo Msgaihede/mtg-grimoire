@@ -175,6 +175,21 @@ shared_cell` walks both into two databases and compares them column by column.
   is unset on every existing database until that ingest runs, so every reader of it needs either a
   fence or a backfill in the same rung.** Ask which population a `DEFAULT` is lying to — a fresh
   worktree is a fresh install and is the one population that cannot show it.
+- **A tag slug reaching `filters::picked_tags` has never been typed, and `tag_resolve` is what
+  keeps that true.** That function compares `slug` byte for byte and case-sensitively, on the
+  stated grounds that a slug arrives from the tag search's own results rather than from a
+  keyboard. The search box reads Scryfall's tagger syntax now (`o:ramp`, `-a:dragon`), so
+  something had to give — either the filter SQL learns to normalise, or the typed name is
+  resolved at the edge and the filter goes on receiving real slugs.
+  **It is the second**, `tags::query::run_tag_resolve`: `slug` keeps one meaning throughout the
+  crate, `index::facets` narrows by exactly the list the search does with no second copy of a
+  normalisation to drift, and the caller learns *which* name was unknown — which SQL that quietly
+  matched nothing could never tell it. It matches `slug_norm` (Scryfall's own rule: all four
+  spellings of `spot removal` answer 4 907 cards, `otag:remov` 404s), it is **exact** where
+  `run_tag_search` is a substring, it **ignores `muted_tags`** — the one read in that module that
+  does, because muting is documented never to hide a card — and it refuses a blank needle outright,
+  because `slug_norm = ''` matches a *whole taxonomy* on any database between v20 and v22. Full
+  reasoning: [tag-search-syntax.md](../docs/reference/tag-search-syntax.md).
 - **`muted_tags` is a user table and sits outside both `*_TAG_TABLES` lists** (schema v20) — it is
   the reader's answer about which tags they never want offered, and those two lists are what a
   refresh drops and rebuilds wholesale. It carries the namespace rather than being two tables,

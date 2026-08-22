@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
+import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
+import type { TagToken } from "./tagQuery";
 import { FilterBar } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
@@ -26,6 +28,15 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleManaValue: vi.fn(),
     manaX: false,
     toggleManaX: vi.fn(),
+    // The tagger syntax's five members. Empty on every case here but the ones that override
+    // them: `TagQueryRow` draws nothing at all with no tags typed, so the row this suite has
+    // always measured is exactly the row it measures now.
+    tagChips: [] as TagChip[],
+    tagNotFound: [] as TagToken[],
+    tagsResolving: false,
+    removeTagChip: vi.fn(),
+    toggleTagChipMode: vi.fn(),
+    replaceTagToken: vi.fn(),
     // The sort's four members, in the shape `useCardSearch` hands them over. `sortSelection` is
     // a **controlled** select's value and has to be a string on every render an override does
     // not touch: `undefined` would make the picker uncontrolled, and React says so once, on the

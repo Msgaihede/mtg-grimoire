@@ -390,6 +390,7 @@ pub fn run() {
             tags::art::art_tags_status,
             tags::query::tag_search,
             tags::query::tag_children,
+            tags::query::tag_resolve,
             tags::muted::tag_mute,
             tags::muted::tag_unmute,
             tags::muted::tags_muted,

@@ -59,8 +59,8 @@
 
 use super::{normalize, Dataset};
 use crate::sync::AppState;
-use rusqlite::{params_from_iter, Connection};
-use serde::Serialize;
+use rusqlite::{params_from_iter, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -439,6 +439,140 @@ pub fn run_tag_children(
     Ok(scored.into_iter().map(|s| s.hit).collect())
 }
 
+/// One tag a reader named in the search box, and which taxonomy they named it in.
+///
+/// The parser's token minus everything that is the *box's* business — where it sat in the
+/// string, and whether it was negated. Resolution answers "is there such a tag"; the
+/// include/exclude split stays in `tagQuery.ts`, because it decides which of
+/// [`crate::filters::TagTerms`]' two lists the slug lands in and nothing here needs to know.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagLookup {
+    /// `"art"` or `"oracle"`. **Never `"both"`**, unlike [`run_tag_search`]'s: a typed `o:`
+    /// names one taxonomy, and answering across both would let `o:dog` return the picture.
+    pub namespace: String,
+    /// What the reader typed after the keyword — `spot removal`, `spot-removal`,
+    /// `SPOT-REMOVAL`. Normalised here rather than by the caller, for the reason the module
+    /// note gives: two copies of that rule would leave both halves self-consistent and the
+    /// search matching nothing.
+    pub value: String,
+}
+
+/// How many tags one query may name.
+///
+/// [`crate::filters::picked_tags`] deliberately has **no** cap and argues why: a chip arrives
+/// one press at a time from a rail, so that list cannot grow by accident. This one is built
+/// from a string a reader can paste, so the assumption that paragraph rests on does not hold
+/// and the cap is the difference. Far above any query anybody types — it exists so a pasted
+/// wall of text is a truncated answer rather than 10 000 prepared statements.
+const MAX_LOOKUPS: usize = 64;
+
+/// Resolve typed tag names to the canonical slugs the card filters match on.
+///
+/// One entry per ask, **in the order asked**, `None` where that taxonomy has no such tag.
+/// Every caller needs that shape rather than a filtered list: the box has to name the token it
+/// could not find, and a list with the misses dropped cannot say which one is missing.
+///
+/// # Why this exists at all
+///
+/// [`crate::filters::picked_tags`] matches `slug` exactly and case-sensitively, and its doc
+/// says why — a slug arrives there from the tag search's own results rather than from a
+/// keyboard. Typed syntax breaks that assumption, and there were two ways to mend it: teach the
+/// filter SQL to normalise, or normalise at the edge and go on handing the filter real slugs.
+/// This is the second. The filter keeps one meaning of `slug` throughout the crate,
+/// [`crate::index::facets`] goes on narrowing by exactly the list the search does with no
+/// second copy of a normalisation to drift from it, and the caller learns *which* token was
+/// unknown — which SQL that quietly matched nothing could never tell it.
+///
+/// # Exact, through `slug_norm` — which is Scryfall's own rule
+///
+/// Verified live 2026-08-20 and recorded in [the art-tags
+/// research](../../../docs/superpowers/research/2026-08-20-scryfall-art-tags.md):
+/// `otag:"spot removal"`, `otag:spot-removal`, `otag:spotremoval` and `otag:SPOT-REMOVAL` all
+/// return exactly the same 4 907 cards, while `otag:remov` 404s and `otag:*spot*` answers
+/// nothing. So separators and case are noise, and a partial name is not a tag. That is
+/// [`normalize`] exactly, which is why this compares against `slug_norm` — the column the
+/// ingest wrote with that same function — and never against `slug`.
+///
+/// **Substring matching would have been the wrong favour here.** [`run_tag_search`] does it and
+/// should: the Tags page is a type-ahead, and a reader who types `dog` and is told "no such
+/// tag" until they spell `dogs-of-war` is not using a search box. But a *filter* built from a
+/// substring resolves one token to many tags, which would have to be ORed — and every other tag
+/// filter in this app intersects, so `a:dragon` would silently also answer `dragonborn`. The
+/// box offers the near misses instead, from the command that is built to find them.
+///
+/// # A muted tag still resolves
+///
+/// `muted_tags` is absent from this statement, deliberately, and this is the one read in the
+/// module that leaves it out. Muting hides a tag from the search box, from the rail and from a
+/// parent's `childCount`; the module note above says it is **not** a card filter and that
+/// nothing in [`crate::filters`] consults that table. A reader who spells a tag out in the
+/// query box has named it rather than browsed onto it, and refusing them the cards would be
+/// muting doing the one thing it is documented never to do.
+///
+/// # A blank needle is `None`, never a query
+///
+/// `o:` on its own — and `o:"---"`, and every keystroke on the way to a real tag — normalises
+/// to `""`. Bound into the statement that would be `slug_norm = ''`, which is **not** "no
+/// rows": v20 added the column with `DEFAULT ''` and `schema::backfill_oracle_slug_norm` is
+/// what repairs it, so a database between those two rungs has a whole taxonomy sitting at `''`
+/// and a half-typed keyword would resolve to an arbitrary one of them. See the module note on
+/// [issue #180](https://github.com/Msgaihede/mtg-grimoire/issues/180): that column has been
+/// wrong before, and this is the guard that means it cannot be wrong in this direction.
+pub fn run_tag_resolve(
+    conn: &Connection,
+    asks: &[TagLookup],
+) -> Result<Vec<Option<TagRef>>, String> {
+    let mut out: Vec<Option<TagRef>> = Vec::with_capacity(asks.len());
+    for ask in asks.iter().take(MAX_LOOKUPS) {
+        // Validated the way every other entry point here validates a namespace, so a typo'd one
+        // is an error rather than a tag that does not exist — `namespaces_for` draws exactly
+        // that distinction, and for exactly this reason.
+        let ds = match ask.namespace.as_str() {
+            "art" => &crate::tags::art::ART,
+            "oracle" => &crate::tags::oracle::ORACLE,
+            other => return Err(format!("unknown tag namespace: {other}")),
+        };
+        let needle = normalize(&ask.value);
+        if needle.is_empty() {
+            out.push(None);
+            continue;
+        }
+        let tags = ds.tags_table;
+        // `t.slug = :raw` leads the order as a tie-break, and it only ever fires where two tags
+        // normalise onto one needle (`spot-removal` and `spot_removal` would). Preferring the
+        // spelling the reader actually typed is the only non-arbitrary answer available; the
+        // slug behind it makes the order total, so one query cannot answer two different tags
+        // on two runs. `idx_{family}_tags_norm` covers the `WHERE`.
+        let sql = format!(
+            "SELECT t.slug, t.label FROM {tags} t
+              WHERE t.slug_norm = :needle
+              ORDER BY (t.slug = :raw) DESC, t.slug
+              LIMIT 1"
+        );
+        let mut stmt = conn
+            .prepare_cached(&sql)
+            .map_err(|e| format!("could not look up the {} tags: {e}", ask.namespace))?;
+        let hit = stmt
+            .query_row(
+                rusqlite::named_params! { ":needle": &needle, ":raw": &ask.value },
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("could not look up the {} tags: {e}", ask.namespace))?;
+        out.push(hit.map(|(slug, label)| TagRef {
+            slug,
+            label,
+            namespace: ask.namespace.clone(),
+        }));
+    }
+    // Anything past the cap is answered `None` rather than dropped, so the answer still lines up
+    // index-for-index with the asks and the box reports those tokens as unknown instead of
+    // silently applying nothing.
+    out.resize_with(asks.len(), || None);
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------------------
@@ -477,6 +611,25 @@ pub async fn tag_children(
     })
     .await
     .map_err(|e| format!("could not read the tag tree: {e}"))?
+}
+
+/// Turn the tag names typed into a card-search box into the slugs the filters match on.
+///
+/// One answer per ask, in order, `null` where there is no such tag — see [`run_tag_resolve`]
+/// for why the misses ride along rather than being dropped, and for why this is exact where
+/// [`tag_search`] is a substring.
+#[tauri::command]
+pub async fn tag_resolve(
+    state: tauri::State<'_, Arc<AppState>>,
+    asks: Vec<TagLookup>,
+) -> Result<Vec<Option<TagRef>>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&state);
+        run_tag_resolve(&conn, &asks)
+    })
+    .await
+    .map_err(|e| format!("could not resolve the tags: {e}"))?
 }
 
 #[cfg(test)]
@@ -870,5 +1023,177 @@ mod tests {
         let conn = seeded_tag_db();
         assert!(run_tag_search(&conn, "dog", "arty", 10).is_err());
         assert!(run_tag_children(&conn, "", None).is_err());
+        assert!(run_tag_resolve(&conn, &[ask("arty", "dog")]).is_err());
+    }
+
+    fn ask(namespace: &str, value: &str) -> TagLookup {
+        TagLookup {
+            namespace: namespace.to_owned(),
+            value: value.to_owned(),
+        }
+    }
+
+    /// The answered slugs, `None` spelled `""` so a whole run reads on one line.
+    fn resolved(conn: &Connection, asks: &[TagLookup]) -> Vec<String> {
+        run_tag_resolve(conn, asks)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.map_or_else(String::new, |t| t.slug))
+            .collect()
+    }
+
+    /// Scryfall's own rule, verified live 2026-08-20: separators and case are noise, so all
+    /// four spellings of one tag are one tag. This is the whole reason the command exists —
+    /// `filters::picked_tags` compares `slug` byte for byte, and three of these four would
+    /// have matched nothing.
+    #[test]
+    fn every_spelling_of_a_name_resolves_to_the_one_slug() {
+        let conn = seeded_tag_db();
+        assert_eq!(
+            resolved(
+                &conn,
+                &[
+                    ask("art", "dogs-of-war"),
+                    ask("art", "dogs of war"),
+                    ask("art", "dogsofwar"),
+                    ask("art", "DOGS-OF-WAR"),
+                    ask("art", "  Dogs Of War  "),
+                ],
+            ),
+            ["dogs-of-war"; 5],
+        );
+    }
+
+    /// The two taxonomies are separate files with separate id spaces that share plenty of
+    /// slugs, and `dog` is in both. A resolver that answered across both would let `o:dog`
+    /// filter by the picture — which is the one mistake this whole feature could make
+    /// invisibly, since both answers are a wall of dogs.
+    #[test]
+    fn a_shared_slug_resolves_inside_the_namespace_it_was_asked_in() {
+        let conn = seeded_tag_db();
+        let out = run_tag_resolve(&conn, &[ask("art", "dog"), ask("oracle", "dog")]).unwrap();
+        let namespaces: Vec<&str> = out
+            .iter()
+            .map(|r| r.as_ref().unwrap().namespace.as_str())
+            .collect();
+        assert_eq!(namespaces, ["art", "oracle"]);
+    }
+
+    /// A tag that only one taxonomy has is a miss in the other, not a fallback to it.
+    #[test]
+    fn a_tag_the_other_taxonomy_has_is_still_a_miss() {
+        let conn = seeded_tag_db();
+        assert_eq!(resolved(&conn, &[ask("oracle", "hound")]), [""]);
+    }
+
+    /// Scryfall 404s on a partial name and `run_tag_search` deliberately does not. This is the
+    /// filter side, where a substring would resolve one token to many tags and have to OR them
+    /// — so `hound` is unreachable from `houn`, and the box offers the near miss instead.
+    #[test]
+    fn a_partial_name_is_a_miss_rather_than_a_prefix_match() {
+        let conn = seeded_tag_db();
+        assert_eq!(
+            resolved(&conn, &[ask("art", "houn"), ask("art", "ound")]),
+            ["", ""],
+        );
+        // The same needle through the type-ahead does find it — the two are different jobs.
+        assert_eq!(
+            slugs(&run_tag_search(&conn, "houn", "art", 10).unwrap()),
+            ["hound"]
+        );
+    }
+
+    /// Every miss keeps its place, so the caller can say *which* token it could not find. A
+    /// filtered list would be the same length only by accident and could name nothing.
+    #[test]
+    fn misses_ride_along_in_place_rather_than_being_dropped() {
+        let conn = seeded_tag_db();
+        assert_eq!(
+            resolved(
+                &conn,
+                &[
+                    ask("art", "nonesuch"),
+                    ask("art", "hound"),
+                    ask("oracle", "nonesuch"),
+                ],
+            ),
+            ["", "hound", ""],
+        );
+    }
+
+    /// `o:` on its own, and every keystroke on the way to a real tag, normalises to `""`.
+    /// Bound into the statement that is `slug_norm = ''` — which on a database between v20 and
+    /// v22 matches a **whole taxonomy**, so a half-typed keyword would resolve to an arbitrary
+    /// tag. Seeded here the way that rung leaves it, because a fresh worktree cannot show it.
+    #[test]
+    fn a_blank_needle_resolves_to_nothing_even_against_an_unrepaired_slug_norm() {
+        let conn = seeded_tag_db();
+        conn.execute("UPDATE oracle_tags SET slug_norm = ''", [])
+            .unwrap();
+        assert_eq!(
+            resolved(
+                &conn,
+                &[
+                    ask("oracle", ""),
+                    ask("oracle", "   "),
+                    ask("oracle", "---")
+                ],
+            ),
+            ["", "", ""],
+        );
+    }
+
+    /// Muting hides a *tag* and never a card: nothing in `crate::filters` consults that table,
+    /// and a reader who spells a tag out has named it rather than browsed onto it. So this is
+    /// the one read in the module that a mute does not narrow — and the type-ahead beside it
+    /// still hides the tag, which is what makes the difference deliberate rather than a leak.
+    #[test]
+    fn a_muted_tag_still_resolves_because_muting_never_hides_a_card() {
+        let conn = seeded_tag_db();
+        mute(&conn, "art", "art-hound", "hound");
+        assert_eq!(resolved(&conn, &[ask("art", "hound")]), ["hound"]);
+        assert!(run_tag_search(&conn, "hound", "art", 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Past the cap the answer still lines up index-for-index with the asks, so the box reports
+    /// those tokens as unknown rather than silently applying nothing.
+    #[test]
+    fn asks_past_the_cap_are_answered_none_rather_than_dropped() {
+        let conn = seeded_tag_db();
+        let asks: Vec<TagLookup> = (0..MAX_LOOKUPS + 3).map(|_| ask("art", "hound")).collect();
+        let out = run_tag_resolve(&conn, &asks).unwrap();
+        assert_eq!(out.len(), asks.len());
+        assert!(out[MAX_LOOKUPS - 1].is_some());
+        assert!(out[MAX_LOOKUPS..].iter().all(Option::is_none));
+    }
+
+    /// Two tags normalising onto one needle is the only case the tie-break fires in, and the
+    /// spelling the reader typed is the only non-arbitrary answer available. Both orders are
+    /// asked, so a statement that merely happened to return the right row first would fail.
+    #[test]
+    fn the_spelling_the_reader_typed_wins_a_collision() {
+        let conn = seeded_tag_db();
+        for slug in ["spot_removal", "spot-removal"] {
+            conn.execute(
+                "INSERT INTO art_tags (slug, id, label, description, slug_norm)
+                 VALUES (?1, ?2, ?3, '', ?4)",
+                params![slug, format!("art-{slug}"), slug, normalize(slug)],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            resolved(
+                &conn,
+                &[ask("art", "spot-removal"), ask("art", "spot_removal")],
+            ),
+            ["spot-removal", "spot_removal"],
+        );
+        // A spelling that is neither still resolves, deterministically, to the lower slug.
+        assert_eq!(
+            resolved(&conn, &[ask("art", "Spot Removal")]),
+            ["spot-removal"]
+        );
     }
 }
