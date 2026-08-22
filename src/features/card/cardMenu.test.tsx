@@ -7,11 +7,12 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuAction, MenuItem, MenuSubmenu } from "@/components/menu/types";
 import { copyText } from "@/lib/clipboard";
 import { openExternal } from "@/lib/externalLinks";
-import { ipc, type DeckFolder, type DeckRow } from "@/lib/ipc";
+import { ipc, type DeckFolder, type DeckRow, type WishlistFolder } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import {
   buildCardMenu,
   buildDeckTargetItems,
+  buildWishlistTargetItems,
   CardToDeckProvider,
   DeckTargetSubmenu,
   useCardToDeck,
@@ -63,6 +64,22 @@ const BOLT: CardMenuTarget = {
   finishes: '["nonfoil"]',
 };
 
+/**
+ * One wishlist folder.
+ *
+ * Module-level and named for its own cabinet rather than declared inside the picker's `describe`,
+ * because two blocks need it — the wishlist picker's own tests and the `buildCardMenu` row that
+ * turns into a submenu the moment one of these exists — and the deck gallery's `folder` helper
+ * further down builds a `DeckFolder`. Two `folder`s in one file, one shadowing the other, is the
+ * kind of thing that reads as a typo forever.
+ */
+const wishFolder = (
+  id: number,
+  name: string,
+  parentId: number | null = null,
+  sortOrder = 0,
+): WishlistFolder => ({ id, parentId, name, sortOrder });
+
 /** Everything the menu needs that is not the card, with every write a spy. A surface's real
  *  deps are its own; this is the shape, so a test can name the one it is about. */
 function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
@@ -70,6 +87,9 @@ function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
     marketplace: MARKETPLACES.tcgplayer,
     addToCollection: vi.fn(),
     addToWishlist: vi.fn(),
+    // A wishlist that files nothing, which is every reader who has never made a folder and the
+    // case each of these tests was already asserting before folders existed.
+    wishlistFolders: [],
     // No `printingsDeck` and no `printingsOracleId`: the shape a *plain* card surface hands
     // over, which is every one of them except the deck editor and the modal itself.
     openAllPrintings: vi.fn(),
@@ -167,6 +187,7 @@ describe("buildCardMenu", () => {
       oracleId: "o-bolt",
       name: "Lightning Bolt",
       deck: null,
+      wish: null,
     });
   });
 
@@ -180,6 +201,7 @@ describe("buildCardMenu", () => {
       oracleId: "o-bolt",
       name: "Lightning Bolt",
       deck: SLOT,
+      wish: null,
     });
   });
 
@@ -265,8 +287,30 @@ describe("buildCardMenu", () => {
   it("wishes for the exact printing", () => {
     const addToWishlist = vi.fn();
     const addTo = find(buildCardMenu(BOLT, deps({ addToWishlist })), "Add to") as MenuSubmenu;
-    (find(addTo.items, "Wishlist") as MenuAction).onSelect();
-    expect(addToWishlist).toHaveBeenCalledWith(BOLT);
+    const wishlist = find(addTo.items, "Wishlist");
+    // **One row and one press for a reader who has never made a folder**, which is the
+    // overwhelming majority of them and the shape this row had before folders existed. `null`
+    // is the root wishlist, spelled out because the argument is not optional.
+    expect(wishlist.kind).toBe("action");
+    (wishlist as MenuAction).onSelect();
+    expect(addToWishlist).toHaveBeenCalledWith(BOLT, null);
+  });
+
+  it("opens the wishlist into a picker once there are folders to file into", () => {
+    const addToWishlist = vi.fn();
+    const addTo = find(
+      buildCardMenu(BOLT, deps({ addToWishlist, wishlistFolders: [wishFolder(1, "Expensive")] })),
+      "Add to",
+    ) as MenuSubmenu;
+    const wishlist = find(addTo.items, "Wishlist") as MenuSubmenu;
+    // `submenu` rather than `lazy`: the folder list is one small query the page already holds,
+    // so there is nothing for a right-click to fire.
+    expect(wishlist.kind).toBe("submenu");
+    expect(labels(wishlist.items)).toEqual(["Wishlist", "Expensive"]);
+    (wishlist.items[2] as MenuAction).onSelect();
+    // The target rides through the closure the row was built with, so a folder press is the
+    // same add as the root one with a different destination.
+    expect(addToWishlist).toHaveBeenCalledWith(BOLT, 1);
   });
 
   it("puts the deck picker behind a lazy row", () => {
@@ -385,6 +429,61 @@ describe("buildDeckTargetItems", () => {
     expect(labels(row.items)).toEqual(["Theory", "Live"]);
     (row.items[0] as MenuAction).onSelect();
     expect(choose).toHaveBeenCalledWith(10, "theory");
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * The wishlist picker
+ * ------------------------------------------------------------------------------------------ */
+
+describe("buildWishlistTargetItems", () => {
+  it("offers the root first, then the folders", () => {
+    const items = buildWishlistTargetItems([wishFolder(1, "Ordered")], vi.fn());
+    expect(items.map((i) => ("label" in i ? i.label : i.kind))).toEqual([
+      "Wishlist",
+      "separator",
+      "Ordered",
+    ]);
+  });
+
+  it("offers a folder with nothing in it", () => {
+    // Unlike `deckLevel`, which drops an empty folder: a folder there is a container of
+    // destinations, and here it IS the destination.
+    expect(buildWishlistTargetItems([wishFolder(1, "Empty")], vi.fn())).toHaveLength(3);
+  });
+
+  it("draws a folder with children as a submenu whose first row is the folder itself", () => {
+    const items = buildWishlistTargetItems(
+      [wishFolder(1, "Expensive"), wishFolder(2, "Someday", 1)],
+      vi.fn(),
+    );
+    const expensive = items.find((i) => "label" in i && i.label === "Expensive");
+    expect(expensive?.kind).toBe("submenu");
+    expect((expensive as MenuSubmenu).items.map((i) => ("label" in i ? i.label : i.kind))).toEqual([
+      "Expensive",
+      "separator",
+      "Someday",
+    ]);
+  });
+
+  it("passes the folder id to the chooser, and null for the root", () => {
+    const choose = vi.fn();
+    const items = buildWishlistTargetItems([wishFolder(1, "Ordered")], choose);
+    (items[0] as MenuAction).onSelect();
+    expect(choose).toHaveBeenCalledWith(null);
+    (items[2] as MenuAction).onSelect();
+    expect(choose).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps the reader's own folder order rather than the alphabet", () => {
+    // The wishlist's cabinet is an arrangement the reader made, which is one of the two kinds
+    // of list `src/lib/options.ts` exempts -- `buildDeckTargetItems` is exempt for the same
+    // reason, and a picker that disagreed with the page would read as a bug.
+    const items = buildWishlistTargetItems(
+      [wishFolder(2, "Zoo", null, 0), wishFolder(1, "Alpha", null, 1)],
+      vi.fn(),
+    );
+    expect(labels(items)).toEqual(["Wishlist", "Zoo", "Alpha"]);
   });
 });
 

@@ -942,6 +942,10 @@ describe("the card menu", () => {
         cardId: "c-bolt-lea",
         quantity: 1,
         preferredFinish: undefined,
+        // The root wishlist. Written out because the menu always sends one: a wishlist with no
+        // folders draws the single row this press used, and that row's destination is `null`
+        // rather than an omitted field.
+        folderId: null,
       }),
     );
   });

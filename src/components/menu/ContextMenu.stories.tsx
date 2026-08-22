@@ -175,7 +175,13 @@ function cardDeps(act: Act): CardMenuDeps {
   return {
     marketplace: MARKETPLACES.cardmarket,
     addToCollection: (target, finish) => act(`collection:${target.cardId}:${finish}`),
-    addToWishlist: (target) => act(`wishlist:${target.cardId}`),
+    addToWishlist: (target, folderId) =>
+      act(`wishlist:${target.cardId}${folderId === null ? "" : `:${folderId}`}`),
+    // **No folders**, which keeps `Add to → Wishlist` the single row these stories are about:
+    // one press, straight to the root list. A cabinet with drawers in it turns that row into a
+    // picker, and a story of that belongs beside the wishlist's own fixtures rather than here,
+    // where the subject is the panel's kinds and its keyboard model.
+    wishlistFolders: [],
     openAllPrintings: (t) => act(`printings:${t.oracleId}`),
     DeckTargetSubmenu,
   };

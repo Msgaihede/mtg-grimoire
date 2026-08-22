@@ -17,6 +17,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useWishlistFolders } from "@/features/wishlist/useWishlistFolders";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -56,6 +57,21 @@ export function useCardMenuDeps(): CardMenuWiring {
   const queryClient = useQueryClient();
   const { marketplace } = useMarketplace();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
+
+  /**
+   * The wishlist's folders, so "Add to → Wishlist" can offer them.
+   *
+   * **One subscription per page mount, not one per right-click, and that is the whole reason
+   * the row is a plain `submenu`.** The deck picker is `lazy` because `useDecks()` and
+   * `useDeckFolders()` are two queries a right-click on a wall of forty tiles must not fire;
+   * this is a hook the host already ran, cached under `["wishlist", "folders"]`, shared with
+   * whatever else on the page wants it — so there is nothing for a right-click to reach.
+   *
+   * Only `folders` is read. The hook's four writes and its per-folder summary belong to the
+   * wishlist page, and a menu that used them would be a second surface deciding what a folder
+   * is.
+   */
+  const { folders: wishlistFolders } = useWishlistFolders();
 
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -97,13 +113,17 @@ export function useCardMenuDeps(): CardMenuWiring {
    * row draws `wishlisted`.
    */
   const wishlistAdd = useMutation({
-    mutationFn: (target: CardMenuTarget) =>
+    mutationFn: ({ target, folderId }: { target: CardMenuTarget; folderId: number | null }) =>
       ipc.wishlistAdd({
         cardId: target.cardId,
         quantity: 1,
         // The surface's own where it names one — a wish for the foil is a different wish, and
         // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
         preferredFinish: target.finish,
+        // Where the reader pointed, and `null` for the root — never omitted. The field is part
+        // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
+        // in the wrong drawer but a *second* wish for the same card.
+        folderId,
       }),
     // Superseded on the next add, exactly as the collection's is, and clearing the same one.
     onMutate: () => setRefusal(null),
@@ -123,13 +143,21 @@ export function useCardMenuDeps(): CardMenuWiring {
     (target: CardMenuTarget, finish: Finish) => addCopy({ cardId: target.cardId, finish }),
     [addCopy],
   );
-  const addToWishlist = useCallback((target: CardMenuTarget) => addWish(target), [addWish]);
+  const addToWishlist = useCallback(
+    (target: CardMenuTarget, folderId: number | null) => addWish({ target, folderId }),
+    [addWish],
+  );
 
   const deps = useMemo<CardMenuDeps>(
     () => ({
       marketplace,
       addToCollection,
       addToWishlist,
+      // Straight through, and the array's *identity* is what matters here: `useWishlistFolders`
+      // answers one stable empty array while nothing is filed and React Query's own cached array
+      // once something is, so this memo holds still across a render of a wall of forty tiles for
+      // the same reason the two callbacks above do.
+      wishlistFolders,
       // **No `printingsDeck` and no `printingsOracleId`, and both absences are the point.** This
       // is the object every *plain* card surface takes — the search walls, the collection, the
       // wishlist, the card pane — and not one of them is a row of an open deck or a list of one
@@ -145,7 +173,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       // exists to prevent.
       DeckTargetSubmenu,
     }),
-    [marketplace, addToCollection, addToWishlist, openAllPrintings],
+    [marketplace, addToCollection, addToWishlist, wishlistFolders, openAllPrintings],
   );
 
   return { deps, error: refusal };

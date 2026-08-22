@@ -17,6 +17,9 @@ const CARD_DEPS: CardMenuDeps = {
   marketplace: MARKETPLACES.tcgplayer,
   addToCollection: vi.fn(),
   addToWishlist: vi.fn(),
+  // A wishlist that files nothing — the case this file was already asserting, and the one that
+  // leaves "Add to → Wishlist" the single row it has always been.
+  wishlistFolders: [],
   openAllPrintings: vi.fn(),
   DeckTargetSubmenu: () => null,
 };
