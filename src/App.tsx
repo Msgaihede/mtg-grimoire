@@ -51,6 +51,14 @@ function ActiveView({ update }: { update: Update }) {
  * from stays live, scrollable and clickable, so opening a second card is one click rather
  * than a dismiss and a hunt.
  *
+ * **The deck editor is the exception, and it draws its own** (issue #183, 2026-08-22). Docking
+ * costs the view 384px plus a gap for as long as a card is open, which on every other screen is
+ * width a wall of tiles simply reflows into — and in the editor is width taken off a deck *and*
+ * the search column beside it, so a click on a card re-packed the piles and collapsed the search
+ * a reader was adding from. There the pane is an overlay over one of those two columns, drawn by
+ * `DeckEditor` and positioned by where the card was opened from; `inDeckEditor` below is this
+ * component standing aside for it, and exactly one of the two mounts is ever live.
+ *
  * ## `MotionConfig` is here for the same reason `QueryClientProvider` is
  *
  * Outermost, and in `App.tsx` rather than `main.tsx`, so that **every** `motion` component in
@@ -77,6 +85,28 @@ function ActiveView({ update }: { update: Update }) {
 export default function App() {
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
+  /**
+   * Whether a deck editor is on screen — and therefore whether the card pane is **this**
+   * component's to draw at all.
+   *
+   * The editor hosts its own copy of the pane, as an overlay over one of its two columns rather
+   * than as a third one (issue #183); see `DeckEditor`'s pane host. So exactly one of the two
+   * mounts is live at any moment, and this is the switch. Suppressing the docked one is not
+   * cosmetic — left up it would be a second `CardDetailPane` on the same card, a second
+   * `complementary` landmark answering every `getByRole` in the suite, and the 400px of shell
+   * width the overlay exists to give back.
+   *
+   * `openDeckId` alone, with no `activeView` clause: `setActiveView` clears the open deck in the
+   * same write, so a non-null id already means the Decks view in its second state.
+   *
+   * **The editor draws no pane until its deck has loaded, and nothing is lost by that**, which is
+   * worth stating because it is the one hole in the switch. `setOpenDeckId` deliberately keeps
+   * `selectedCardId` — the card belongs to the reader, not to the view behind it — so in principle
+   * a card could be open across the read. Nothing on the gallery can open one: it draws deck
+   * tiles and folders and no card surface at all, and every other view clears the card on the way
+   * out through `setActiveView`. So the id is null whenever an editor mounts.
+   */
+  const inDeckEditor = useAppStore((s) => s.openDeckId !== null);
 
   // Stable, because it is the pane's `onDismiss` and therefore a dependency of the
   // `keydown` listener behind it. An inline arrow is a new function on every render of the
@@ -136,7 +166,7 @@ export default function App() {
                   the animated element, where React can throw the body away without the box it
                   is in going anywhere. See `CardDetailPane`. */}
                   <AnimatePresence>
-                    {selectedCardId && (
+                    {selectedCardId && !inDeckEditor && (
                       <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
                     )}
                   </AnimatePresence>

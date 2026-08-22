@@ -3298,14 +3298,17 @@ describe("the busy fault", () => {
     // 49 → 50 and was right about the tree it was in; the merged table holds both, so it is 51.
     // Re-measure after the next merge rather than adding one to whichever figure you find here.
     //
-    // The collapsible sidebar then added `set_nav_collapsed`, 51 → 52 — the fifth `app_meta`
-    // setting and the same split as the four before it: the write takes the write connection
-    // and is refusable, while the read (`nav_collapsed`, on `db_read`) answers through every
-    // second of a sync. It is the first write here with **no validation of its own**, which is
-    // exactly why this loop matters more for it than for its neighbours: a handler that forgot
-    // `refuseIfBusy` would have an empty body, and nothing else in the file would notice.
+    // **And a third time, on the same merge.** The collapsible sidebar added `set_nav_collapsed`
+    // and the remembered search column added `set_deck_search_open`; each branch wrote 51 → 52
+    // and was right about the tree it was in, so the merged table holds both and it is 53. Both
+    // are the same split as every preference before them — the write takes the write connection
+    // and is refusable, while the read (`nav_collapsed` and `deck_search_open`, on `db_read`)
+    // answers through every second of a sync. And both are writes with **no validation of their
+    // own**, a `boolean` having arrived narrowed, which is exactly why this loop matters more
+    // for them than for their neighbours: a handler that forgot `refuseIfBusy` would have a
+    // one-line body, and nothing else in the file would notice.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(52);
+    expect(names).toHaveLength(53);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -5018,51 +5021,191 @@ describe("categories, tags, folders, history and the plan", () => {
       // quoted in euros and in nothing else.
       ["Black Lotus", 1],
       ["Smuggler's Copter", 2],
+      // **The grain is the whole of `(cardId, finish)`, not the oracle card** (2026-08-20), and
+      // the seed stages both halves at once rather than a mutation: the deck sleeves two regular
+      // `c21 263` Sol Rings and the plan names the foil `sld 913`, so the plan is short of one —
+      // where an oracle-grained answer saw a Sol Ring against a Sol Ring and reported nothing.
+      ["Sol Ring", 1],
       ["Urza's Saga", 1],
       ["Jace, the Mind Sculptor", 1],
     ]);
     expect(diff[0].unitPrice).toBeNull();
-    // The deck holds two `c21 263` Sol Rings and the plan wants one of the same printing. A cut
-    // is not a purchase, so there is no row for it in either direction.
-    expect(diff.some((d) => d.name === "Sol Ring")).toBe(false);
+    // Deck 4's one theory row with an object to mark, and the row `heldAsOtherPrinting` is about:
+    // two regular copies on the table against a foil the reader would still have to buy.
+    expect(diff[2]).toMatchObject({ finish: "foil", heldAsOtherPrinting: 1 });
     // A plan that is a copy of its deck asks for nothing.
     expect(r.deck_theory_diff({ deckId: 3 })).toEqual([]);
 
-    // **And the grain is the printing, not the oracle card** (2026-08-20). Re-print the live
-    // copies as `sld 913` and the plan's `c21 263` is suddenly something to go and find — where
-    // an oracle-grained answer saw a Sol Ring against a Sol Ring and reported nothing. This is
-    // the fixture's own "same card, different printing" pair.
+    // Re-print the *plan's* Sol Ring onto the exact object the deck already sleeves — that
+    // printing **and** the regular copy — and the row goes: one wanted against two held is a cut
+    // the reader already made, and this list runs one direction only.
     const c21 = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "c21")!;
-    const sld = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "sld")!;
-    for (const dc of db.deckCards) {
-      if (dc.deckId === 4 && dc.variant === "live" && dc.name === "Sol Ring") {
-        dc.cardId = sld.id;
-        dc.setCode = sld.setCode;
-        dc.collectorNumber = sld.collectorNumber;
-      }
-    }
-    const swapped = r.deck_theory_diff({ deckId: 4 });
-    expect(swapped.find((d) => d.name === "Sol Ring")).toMatchObject({
+    const planned = db.deckCards.find(
+      (dc) => dc.deckId === 4 && dc.variant === "theory" && dc.name === "Sol Ring",
+    )!;
+    planned.cardId = c21.id;
+    planned.setCode = c21.setCode;
+    planned.collectorNumber = c21.collectorNumber;
+    planned.finish = null;
+    expect(r.deck_theory_diff({ deckId: 4 }).some((d) => d.name === "Sol Ring")).toBe(false);
+
+    // **And half of that key is the finish.** Put the foil back and leave the printing where the
+    // deck's own copies are: `c21 263` in foil is a different object from `c21 263`, so the plan
+    // is short of one again — and the two regular copies excuse it for *playing* while the row
+    // stays for buying. `deckCards.finish` is `null` for the regular one.
+    planned.finish = "foil";
+    expect(r.deck_theory_diff({ deckId: 4 }).find((d) => d.name === "Sol Ring")).toMatchObject({
       quantity: 1,
-      finish: null,
+      finish: "foil",
+      heldAsOtherPrinting: 1,
+    });
+  });
+
+  /** The three Lightning Bolts these directed cases need: one oracle card, three printings, so
+   *  "a different printing of the same card" is a fixture rather than a comment. */
+  const BOLTS = CARDS.filter((c) => c.name === "Lightning Bolt");
+
+  /** A one-deck world with a plan, for the cases the seed cannot stage: the substitution
+   *  arithmetic needs printings paired against each other, and deck 4 stages exactly one pair. */
+  const planDeck = (deckCards: FakeDeckCard[]) =>
+    makeDeckDb({ decks: [deck({ id: 1, theoryEnabled: true })], deckCards });
+
+  /**
+   * `heldAsOtherPrinting` at its simplest — the plan names one printing and the deck plays
+   * another of the same card. The row stays, because the reader would still have to go and buy
+   * it; the number beside it says the deck runs without them doing so. That difference is the
+   * whole of what the dialog's `Missing` / `Different printing` split is computed from.
+   */
+  it("counts a wanted copy as held when the deck plays another printing of that card", () => {
+    const db = planDeck([
+      deckCard({ id: 1, cardId: BOLTS[1].id, quantity: 1 }),
+      deckCard({ id: 2, cardId: BOLTS[0].id, variant: "theory", quantity: 1 }),
+    ]);
+    expect(readHandlers(db).deck_theory_diff({ deckId: 1 })).toMatchObject([
+      { setCode: BOLTS[0].setCode, quantity: 1, heldAsOtherPrinting: 1 },
+    ]);
+  });
+
+  /**
+   * A row is **partly both**, which is why the field is a count and never a flag: two copies
+   * wanted, one of them already on the table as another printing. The row still shows its full
+   * `quantity` under either filter, because the full quantity is what a press writes.
+   */
+  it("covers only the copies another printing accounts for, leaving the rest missing", () => {
+    const db = planDeck([
+      deckCard({ id: 1, cardId: BOLTS[1].id, quantity: 1 }),
+      deckCard({ id: 2, cardId: BOLTS[0].id, variant: "theory", quantity: 2 }),
+    ]);
+    expect(readHandlers(db).deck_theory_diff({ deckId: 1 })).toMatchObject([
+      { quantity: 2, heldAsOtherPrinting: 1 },
+    ]);
+  });
+
+  /**
+   * One live copy excuses **one** row's copy. Two theory printings of one oracle card against a
+   * single live copy of a third: the pool holds one, the first row in the list's own reading
+   * order takes it and the second reads zero. Without the pool both rows would read 1 and the
+   * dialog would say the deck already plays two copies it has never owned.
+   */
+  it("lets one live copy excuse one row and not the next one down the list", () => {
+    const db = planDeck([
+      deckCard({ id: 1, cardId: BOLTS[2].id, quantity: 1 }),
+      // Same name and same pile, so `deckReadOrder` breaks the tie on the row id — which is
+      // what makes "the first row" a fact about the deck rather than about who asked.
+      deckCard({ id: 2, cardId: BOLTS[0].id, variant: "theory", quantity: 1 }),
+      deckCard({ id: 3, cardId: BOLTS[1].id, variant: "theory", quantity: 1 }),
+    ]);
+    expect(
+      readHandlers(db)
+        .deck_theory_diff({ deckId: 1 })
+        .map((d) => [d.setCode, d.quantity, d.heldAsOtherPrinting]),
+    ).toEqual([
+      [BOLTS[0].setCode, 1, 1],
+      [BOLTS[1].setCode, 1, 0],
+    ]);
+  });
+
+  /**
+   * An exact match is not *also* a substitute. Two wanted against one of the same printing and
+   * one of another: the exact line has already taken its copy, so only the second is left in
+   * the pool and the one remaining copy is covered once rather than twice.
+   */
+  it("does not let a copy an exact line already matched excuse a row as well", () => {
+    const db = planDeck([
+      deckCard({ id: 1, cardId: BOLTS[0].id, quantity: 1 }),
+      deckCard({ id: 2, cardId: BOLTS[1].id, quantity: 1 }),
+      deckCard({ id: 3, cardId: BOLTS[0].id, variant: "theory", quantity: 2 }),
+    ]);
+    expect(readHandlers(db).deck_theory_diff({ deckId: 1 })).toMatchObject([
+      { quantity: 1, heldAsOtherPrinting: 1 },
+    ]);
+  });
+
+  /**
+   * An orphan reads zero however full the pool is. A printing that has left `cards` has no
+   * oracle card, so nothing can be said to be another printing *of* it — and the row is still a
+   * row, because a deck card outlives the card database's memory of it.
+   */
+  it("reads zero for an orphan, whatever else the deck is playing", () => {
+    const db = planDeck([
+      deckCard({ id: 1, cardId: BOLTS[0].id, quantity: 2 }),
+      deckCard({ id: 2, cardId: "gone", name: "Gone", variant: "theory", quantity: 1 }),
+    ]);
+    expect(readHandlers(db).deck_theory_diff({ deckId: 1 })).toMatchObject([
+      { name: "Gone", quantity: 1, heldAsOtherPrinting: 0, ownedSpare: 0 },
+    ]);
+  });
+
+  /**
+   * `only` is the reader's ticks, in {@link readHandlers.deck_theory_slots}' own `group_key`
+   * spelling. A key naming no row of the *current* difference writes nothing rather than
+   * refusing: the diff is re-read inside the write, so a row ticked and then acquired in another
+   * window is simply not short any more.
+   */
+  it("writes only the rows `only` names, and nothing for a key the difference has not got", () => {
+    const { db, r, w } = testbed();
+    const diff = r.deck_theory_diff({ deckId: 4 });
+    const lotus = diff.find((d) => d.name === "Black Lotus")!;
+    const before = db.wishlistEntries.length;
+
+    expect(w.deck_theory_missing_to_wishlist({ deckId: 4, only: [`${lotus.cardId}|`] })).toBe(1);
+    expect(db.wishlistEntries).toHaveLength(before + 1);
+    expect(db.wishlistEntries[before]).toMatchObject({ name: "Black Lotus", cardId: lotus.cardId });
+
+    expect(w.deck_theory_missing_to_wishlist({ deckId: 4, only: [] })).toBe(0);
+    expect(w.deck_theory_missing_to_wishlist({ deckId: 4, only: ["no-such-card|"] })).toBe(0);
+    expect(db.wishlistEntries).toHaveLength(before + 1);
+  });
+
+  /**
+   * **The wish is pinned to the printing the plan names** (2026-08-22) and carries its finish.
+   * A plan naming a printing is a plan for *that* cardboard — the rule the comparison has
+   * followed since 2026-08-20 — and an any-printing wish would hand the reader back the very
+   * substitution the plan was tracking.
+   */
+  it("pins the wish to the plan's printing and its finish, and pins nothing for a regular copy", () => {
+    const { db, r, w } = testbed();
+    const diff = r.deck_theory_diff({ deckId: 4 });
+    const ring = diff.find((d) => d.name === "Sol Ring")!;
+    const lotus = diff.find((d) => d.name === "Black Lotus")!;
+
+    w.deck_theory_missing_to_wishlist({ deckId: 4 });
+
+    // Found by id, because the seed already holds an **any-printing** Sol Ring wish and the two
+    // are different rows on the grain `(oracleId, cardId, preferredFinish)`.
+    const wish = db.wishlistEntries.find((x) => x.cardId === ring.cardId)!;
+    // The plan names the foil Secret Lair, so that is the cardboard being shopped for — the
+    // printing and the object both, carried end to end.
+    expect(wish).toMatchObject({
+      setCode: "sld",
+      collectorNumber: "913",
+      preferredFinish: "foil",
     });
 
-    // **And the finish is in the key too.** Put the live copies back on `c21 263` and make them
-    // foils: the plan's plain `c21 263` is again something to go and find, because a foil and a
-    // regular copy are two objects. `deckCards.finish` is `null` for the regular one.
-    for (const dc of db.deckCards) {
-      if (dc.deckId === 4 && dc.variant === "live" && dc.name === "Sol Ring") {
-        dc.cardId = c21.id;
-        dc.setCode = c21.setCode;
-        dc.collectorNumber = c21.collectorNumber;
-        dc.finish = "foil";
-      }
-    }
-    const foiled = r.deck_theory_diff({ deckId: 4 });
-    expect(foiled.find((d) => d.name === "Sol Ring")).toMatchObject({
-      quantity: 1,
-      finish: null,
-    });
+    // The regular copy pins **nothing**: `null` and not `"nonfoil"`, because the unmarked case in
+    // `deckCards` is the unmarked case here too, and spelling it out would split this wish from
+    // every other one the app makes for that card.
+    expect(db.wishlistEntries.find((x) => x.cardId === lotus.cardId)!.preferredFinish).toBeNull();
   });
 
   it("seeds the plan from the deck without overwriting what the plan already says", () => {
@@ -5095,8 +5238,10 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(w.deck_theory_missing_to_wishlist({ deckId: 4 })).toBe(diff.length);
 
     const wish = db.wishlistEntries.find((x) => x.name === "Black Lotus")!;
-    // Any printing, always: a shopping list is not a printing preference.
-    expect(wish.cardId).toBeNull();
+    // Pinned to the printing the plan named (2026-08-22). This used to assert `cardId: null` —
+    // "a shopping list is not a printing preference" — which is the wrong rule for a list built
+    // out of a plan: the plan named `lea 232`, so that is the cardboard being shopped for.
+    expect(wish.cardId).toBe(lotus.cardId);
     expect(wish.quantity).toBeGreaterThanOrEqual(1);
   });
 

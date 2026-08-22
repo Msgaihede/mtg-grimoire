@@ -182,7 +182,17 @@ Every one of these has its measurement and its story in
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
   column, whose tiles are drag sources into the deck's own category columns, and the card detail
   pane, which is how a reader flips through a card's printings — and both of those are
-  collapsible or dismissible and **neither opens by default**.
+  collapsible or dismissible.
+  **Both of those halves moved on 2026-08-22 (issue #183), in opposite directions, and they moved
+  together.** The card pane stopped taking a place in the deck editor's layout at all: there it is
+  an **overlay** over one of the desk's two columns — over the search column for a card opened
+  from the deck, over the deck for a card opened from the search column, so that either way it
+  covers what the reader was _not_ looking at — and `App` draws the docked one for every other
+  view. With the 384px gone from the desk, the search column **opens by default** again and
+  remembers which way the reader last left it (`app_meta.deck_search_open`). The rule above is
+  unchanged and it is what decided both: a consulted surface is a modal, a worked-out-of surface
+  earns its place — and a surface worked out of _beside_ another one may not take the other's
+  width to do it.
 - **A modal is clamped to the window and scrolls inside itself — its content never decides its
   height.** Every panel here has something in it that can grow without a ceiling: a decklist, a
   validation list, a category list, an error carrying a Scryfall message. Unclamped, the panel
@@ -465,6 +475,14 @@ Every one of these has its measurement and its story in
   `MIN_PANEL_WIDTH_PX` plus the gap) and every pixel the sidebar takes is a pixel off that.
   Widening the sidebar is a change to `DECK_FLOOR`'s arithmetic first. Both, with every figure:
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **The app's own mark is `components/GrimoireMark`, never a bare `<img>` and never a re-pasted
+  SVG.** It takes a pixel `size` and picks its own variant at the **24px** detail floor: the
+  master is drawn on a 64-unit grid, so below that its hairlines land under a third of a pixel and
+  a caption drawn from the full artwork is a smudge of gold rather than a book. Strokes are
+  `currentColor` and fills are `var(--color-surface)`, so the caller sets the colour and the
+  tokens stay in charge; `logos/` is the artwork's source of truth. It is `aria-hidden` unless
+  given a `label` — the inverse of `GameChangerMark`'s "the mark names itself", because this mark
+  is always a duplicate of a name already set in type beside it.
 - **The window's caption is the app's, not Windows'** — `tauri.conf.json` sets
   `decorations: false` and `components/TitleBar.tsx` draws a 34px row above the sidebar and the
   ribbon (2026-08-20). Four rules it does not share with the rest of the chrome, each because the
@@ -481,8 +499,11 @@ Every one of these has its measurement and its story in
 - **`data-tauri-drag-region` does not inherit, so every element that should move the window
   carries its own** — Tauri reads the attribute off the element under the pointer and nothing
   else. A child without it is a hole in the grab area; an element *with* it that also handles a
-  click is a button that drags the window instead of pressing. The row and the wordmark have it,
-  the three buttons deliberately do not.
+  click is a button that drags the window instead of pressing. The row, the lockup wrapper and
+  the wordmark have it; the three buttons deliberately do not. **The mark inside the lockup is
+  the fourth case and takes neither answer**: an `<svg>` cannot usefully carry the attribute, so
+  it is `pointer-events-none` and the pointer resolves to the wrapper above it — which is free
+  only because the mark binds no tooltip, `pointer-events` being inherited.
 - **The maximize button's hover is state, never `:hover`, and the reason is native.**
   `tauri-plugin-snap-layout` parks a transparent Win32 child window over that button's rectangle
   so Windows 11 can answer `HTMAXBUTTON` to its own `WM_NCHITTEST` and raise the Snap Layouts

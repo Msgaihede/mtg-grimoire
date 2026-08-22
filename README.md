@@ -1,10 +1,20 @@
-# MTG Grimoire
+<!-- The mark is decorative here: the <h1> right below it says the name, so an alt text
+     would be the product announced twice. `logos/` is the source of truth for the artwork. -->
+<p align="center">
+  <img src="logos/png/mark-256.png" alt="" width="128" height="128">
+</p>
 
-[![CI](https://github.com/Msgaihede/mtg-grimoire/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Msgaihede/mtg-grimoire/actions/workflows/ci.yml)
-[![frontend coverage 97%](https://img.shields.io/badge/frontend%20coverage-97%25-brightgreen)](docs/reference/test-coverage.md)
-[![rust coverage 77%](https://img.shields.io/badge/rust%20coverage-77%25-yellowgreen)](docs/reference/test-coverage.md)
+<h1 align="center">MTG Grimoire</h1>
 
-Portable desktop app for tracking a Magic: The Gathering collection — Tauri 2 + React 19.
+<p align="center">
+  <a href="https://github.com/Msgaihede/mtg-grimoire/actions/workflows/ci.yml"><img src="https://github.com/Msgaihede/mtg-grimoire/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="docs/reference/test-coverage.md"><img src="https://img.shields.io/badge/frontend%20coverage-97%25-brightgreen" alt="frontend coverage 97%"></a>
+  <a href="docs/reference/test-coverage.md"><img src="https://img.shields.io/badge/rust%20coverage-77%25-yellowgreen" alt="rust coverage 77%"></a>
+</p>
+
+<p align="center">
+  Portable desktop app for tracking a Magic: The Gathering collection — Tauri 2 + React 19.
+</p>
 
 ## Install
 
@@ -54,3 +64,16 @@ each file at its test module and reports both halves. Measured 2026-08-12 on deb
 Windows — [docs/reference/test-coverage.md](docs/reference/test-coverage.md) has the per-file
 tables, the thin spots, and the traps. **The numbers above are hand-maintained and nothing
 recomputes them.**
+
+## License
+
+[GNU Affero General Public License v3.0 or later](LICENSE) — © 2026 Markus Seerup.
+
+Strong copyleft with a network clause: anyone who distributes a modified build, or offers a
+modified version to users over a network, has to make that version's complete source available
+under the same terms.
+
+That covers this app's own code and nothing else. Card data and card images belong to their
+owners, are fetched from Scryfall at runtime, and are never redistributed from this repository —
+the app credits them the same way it does on screen: **Card images © Wizards of the Coast ·
+Data © Scryfall**.

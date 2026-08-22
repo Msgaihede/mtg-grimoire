@@ -51,7 +51,17 @@ function Rail({ text, namespace }: { text: string; namespace: TagNamespace | "bo
         namespace={namespace}
         hits={text.trim().length > 0 ? hits : null}
         pending={isPending}
-        onPick={(hit) => setPicked((s) => new Set(s).add(chipKey(hit.namespace, hit.slug)))}
+        // A **toggle**, matching the page: a second press on a row takes the tag back off. A
+        // workbench that only ever added would draw a rail whose rows go dead once pressed, and
+        // that is the bug issue #181 was reported as rather than the behaviour to demonstrate.
+        onToggle={(hit) =>
+          setPicked((s) => {
+            const next = new Set(s);
+            const key = chipKey(hit.namespace, hit.slug);
+            if (!next.delete(key)) next.add(key);
+            return next;
+          })
+        }
         onMute={onMute}
         picked={picked}
       />
@@ -237,12 +247,17 @@ export const ACategoryWithNoTaggingsOfItsOwn: Story = {
       within(under).getByRole("button", { name: "Monkey, art tag, 1 illustration" }),
     ).toBeInTheDocument();
 
-    // Picking the category marks the row, and the mark is in the name as well as in the tick.
+    // Picking the category presses the row in, and pressing it again lets it back out — one
+    // control, both directions (issue #181). `aria-pressed` is where the state lives; the tick
+    // beside the label is the same fact drawn.
     await userEvent.click(animal);
     await waitFor(async () => {
-      await expect(
-        within(level).getByRole("button", { name: "Animal, art tag, 2 illustrations, picked" }),
-      ).toBeInTheDocument();
+      await expect(animal).toHaveAttribute("aria-pressed", "true");
+    });
+
+    await userEvent.click(animal);
+    await waitFor(async () => {
+      await expect(animal).toHaveAttribute("aria-pressed", "false");
     });
   },
 };
