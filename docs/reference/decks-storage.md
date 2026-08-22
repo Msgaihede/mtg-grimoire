@@ -6,17 +6,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   declared `REFERENCES cards(id)` aborts every sync, because `swap_staging` drops the table.
   The `ON DELETE` action is chosen per delete-site, not fixed once. **CASCADE** on
   `deck_cards.deck_id`, `deck_cards.category_id`, `deck_allocations.deck_id`,
-  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`,
-  `deck_audit.deck_id` and `deck_folders.parent_id`: a deleted deck's cards and reservations,
-  a deleted category's cards and a deleted folder's sub-folders have nowhere else to be.
+  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`, `deck_audit.deck_id`,
+  `deck_undo.audit_id`, `deck_undo.deck_id` and `deck_folders.parent_id`: a deleted deck's
+  cards and reservations, a deleted category's cards, a reversal for a history row that is
+  gone, and a deleted folder's sub-folders have nowhere else to be.
   **`deck_tags.deck_id` was on that list until schema v21 and no longer exists**: a tag belongs
   to no deck, so deleting the deck where a label was first typed must not take it off the nine
   other decks wearing it. The one place that still clears the table is `reset::clear_decks`,
   by hand, because every deck at once is the case where clearing them is right.
-  **SET NULL** on exactly two — `decks.folder_id` (a folder is a filing decision; the decks in
-  it are the user's work, not the folder's to take down) and `deck_cards.tag_id` (deleting a
-  tag must never delete a card). `schema.rs`'s module doc carries this list; check it against
-  the DDL rather than trusting either copy. CASCADE is also right at the app's one **non-user**
+  **SET NULL** on exactly two of the deck side's — `decks.folder_id` (a folder is a filing
+  decision; the decks in it are the user's work, not the folder's to take down) and
+  `deck_cards.tag_id` (deleting a tag must never delete a card). **The schema's own total is
+  three since v23**, and the third is not a deck's: `wishlist_entries.folder_id` repeats
+  `decks.folder_id` exactly, one list over, because the wishlist got the same filing cabinet
+  (`wishlist_folders.parent_id` joined the CASCADE list in the same rung).
+  `schema.rs`'s module doc carries the whole-schema list and is the copy of record; this
+  bullet is the deck slice of it, and both want checking against the DDL rather than trusting
+  either copy. CASCADE is also right at the app's one **non-user**
   delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
   _before_ the DELETE, so that cascade fires over nothing.
 - **`reset::decks_clear` is the one delete-site that clears `deck_folders` too, and it needs a

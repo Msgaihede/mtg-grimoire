@@ -312,10 +312,14 @@ Full detail, with the measurements and the traps behind each rule, is in
 - **Enforced foreign keys exist only _between user tables_, never against `cards.id`.** The
   `ON DELETE` action is chosen per delete-site: **CASCADE** where a row has nowhere else to be
   (`deck_cards.deck_id`/`.category_id`, both `deck_allocations` keys, `deck_categories.deck_id`,
-  `deck_audit.deck_id`, `deck_folders.parent_id`), **SET NULL** on exactly two —
-  `decks.folder_id` and `deck_cards.tag_id`, because deleting a folder must not delete the decks
-  in it and deleting a tag must never delete a card. **`deck_tags` left that list at schema v21**
-  and has no `deck_id` to cascade from — see the tag rule below.
+  `deck_audit.deck_id`, both `deck_undo` keys, `deck_folders.parent_id`), **SET NULL** on
+  exactly two of the deck
+  side's — `decks.folder_id` and `deck_cards.tag_id`, because deleting a folder must not delete
+  the decks in it and deleting a tag must never delete a card. **`deck_tags` left that list at
+  schema v21** and has no `deck_id` to cascade from — see the tag rule below. **The
+  whole-schema totals are one higher on each list since v23**, and neither addition is a deck's:
+  `wishlist_folders.parent_id` CASCADEs and `wishlist_entries.folder_id` SET NULLs, the same
+  pair one list over. `schema.rs`'s module doc is the copy of record for both lists.
 - **A tag is one app-wide row, and `deck_tags` has no `deck_id`** (schema v21). Its grain is
   `schema::DECK_TAG_GRAIN` — `name_key`, one name for the whole app — where it was `deck_id, name`
   from v8. A category says *where in a deck* a card lives and belongs to that deck; a tag says

@@ -460,23 +460,40 @@ mod tests {
     }
 
     /// The sibling the folders needed. Emptying the wishlist takes the filing cabinet it was
-    /// filed in, and stops there.
+    /// filed in, stops there, and still answers the number of **wishes**.
     ///
-    /// `deck_folders` is the row that makes the second assertion mean something: the two
+    /// `deck_folders` is the row that makes the third assertion mean something: the two
     /// tables are the same shape under two names, so a `DELETE` written against the wrong
     /// one — or a wipe that decided "folders" meant all of them — passes every assertion
     /// about `wishlist_folders` alone.
+    ///
+    /// **The wish is seeded *inside* the folder so the returned count is not a vacuous pass.**
+    /// With one wish and no folder — which is what the sibling test above seeds — `1` is the
+    /// answer whether the number counts entries or entries plus folders, so an edit to
+    /// `Ok((entries + folders) as i64)` would keep every test green and make the Settings
+    /// sentence tell a reader with one wish in one folder that it removed two wishes. One
+    /// wish and one folder is the cheapest seed where the two answers differ.
     #[test]
     fn clearing_the_wishlist_takes_its_folders_and_leaves_the_decks_alone() {
         let conn = db();
         conn.execute_batch(
             "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
              VALUES (1, NULL, 'Ordered', 0, 0, 0);
+             INSERT INTO wishlist_entries
+                (oracle_id, name, quantity, folder_id, created_at, updated_at)
+             VALUES ('o1', 'Black Lotus', 1, 1, 0, 0);
              INSERT INTO deck_folders (id, parent_id, name, sort_order, created_at, updated_at)
              VALUES (1, NULL, 'Standard', 0, 0, 0);",
         )
         .unwrap();
-        clear_wishlist(&conn).unwrap();
+
+        assert_eq!(
+            clear_wishlist(&conn).unwrap(),
+            1,
+            "the number is wishes removed, and the folder is not one"
+        );
+
+        assert_eq!(count(&conn, "wishlist_entries"), 0);
         assert_eq!(count(&conn, "wishlist_folders"), 0);
         assert_eq!(count(&conn, "deck_folders"), 1);
     }

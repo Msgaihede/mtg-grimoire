@@ -25,16 +25,29 @@
 //!
 //! CASCADE is the common case — `deck_cards.deck_id`, `deck_cards.category_id`,
 //! `deck_allocations.deck_id`, `deck_allocations.collection_entry_id`,
-//! `deck_categories.deck_id`, `deck_audit.deck_id` and
-//! `deck_folders.parent_id` all take it, because a deleted deck's cards and reservations, a
-//! deleted category's cards, and a deleted folder's sub-folders have nowhere else to be. It
-//! is right, too, at the app's one *non-user* delete: [`crate::reconcile`]'s fold repoints
+//! `deck_categories.deck_id`, `deck_audit.deck_id`, `deck_undo.audit_id`,
+//! `deck_undo.deck_id`, `deck_folders.parent_id` and `wishlist_folders.parent_id` all take
+//! it, because a deleted deck's cards and reservations, a deleted category's cards, a
+//! reversal for a history row that is gone, and a deleted folder's sub-folders have nowhere
+//! else to be. It is right, too, at the app's one *non-user* delete:
+//! [`crate::reconcile`]'s fold repoints
 //! allocations onto the surviving entry *before* the delete runs, so the cascade fires over
 //! nothing, and `collection::remove_entry` relies on the same action to free reservations on
-//! copies that no longer exist. SET NULL is the other two — `decks.folder_id` (a folder is a
-//! filing decision, and the decks inside it are the user's work, not the folder's to take
-//! down with it) and `deck_cards.tag_id` (deleting a tag must never delete a card) — named
-//! here so this list can be checked against the DDL rather than trusted on its own.
+//! copies that no longer exist. SET NULL is the other three — `decks.folder_id` (a folder is
+//! a filing decision, and the decks inside it are the user's work, not the folder's to take
+//! down with it), `deck_cards.tag_id` (deleting a tag must never delete a card) and
+//! `wishlist_entries.folder_id` (`decks.folder_id`'s argument one list over: a wish is the
+//! reader's shopping list, so deleting the cabinet surfaces it at the root rather than
+//! throwing it away) — named here so this list can be checked against the DDL rather than
+//! trusted on its own.
+//!
+//! **The wishlist's pair (schema v23) is the deck gallery's pair verbatim**, and the symmetry
+//! is the decision rather than a coincidence: `wishlist_folders.parent_id` is
+//! `deck_folders.parent_id` and `wishlist_entries.folder_id` is `decks.folder_id`, because
+//! "folders nest, and the things filed in them outlive the filing" is a rule this schema has
+//! now made twice. Both halves of a new filing cabinet belong on both lists above, one on
+//! each — a rung that adds one and forgets the other is what these two paragraphs exist to
+//! catch, since a prose-only edit routes to neither CI job and nothing here can go red.
 //!
 //! **`deck_tags` left the CASCADE list at v21** and has no key of its own at all: a tag belongs
 //! to no deck, so deleting the deck a label was first typed in must not take it off the others
