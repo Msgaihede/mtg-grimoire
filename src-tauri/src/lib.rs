@@ -31,6 +31,7 @@ pub mod tags;
 pub mod update;
 pub mod window;
 pub mod wishlist;
+pub mod wishlist_folders;
 pub mod zoom;
 
 use std::path::Path;
@@ -325,6 +326,14 @@ pub fn run() {
             wishlist::wishlist_remove,
             wishlist::wishlist_list,
             wishlist::wishlist_import_commit,
+            wishlist::wishlist_set_printing,
+            wishlist_folders::wishlist_folder_list,
+            wishlist_folders::wishlist_folder_create,
+            wishlist_folders::wishlist_folder_rename,
+            wishlist_folders::wishlist_folder_move,
+            wishlist_folders::wishlist_folder_delete,
+            wishlist_folders::wishlist_set_folder,
+            wishlist_folders::wishlist_folder_summary,
             deck::deck_create,
             deck::deck_update,
             deck::deck_delete,
