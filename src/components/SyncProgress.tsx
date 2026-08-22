@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { GrimoireMark } from "@/components/GrimoireMark";
 import { ManaLine } from "@/components/ManaLine";
 import { syncActivity } from "@/lib/activity";
 import type { SyncProgressEvent } from "@/lib/ipc";
@@ -58,7 +59,9 @@ export function SyncProgress({ progress, cardCount, error, busy, onRetry }: Sync
  * First launch: 77 MB to download and ~117 k rows to import, with nothing usable behind
  * it. Taking the screen is honest about that — the alternative is an empty app that looks
  * broken. It is also the first thing anyone ever sees of this app, which is why it opens
- * with the name and then says, in one sentence, what the wait buys.
+ * with the mark drawn at full size over the name and then says, in one sentence, what the
+ * wait buys — and why it is the one surface that draws the mark large enough to be read as
+ * artwork rather than as a glyph.
  *
  * **It draws the mana line rather than a bar of its own**, and that is not a repetition of
  * the app's one signature — it is the signature standing in the one place it cannot be. This
@@ -150,23 +153,69 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
         LAYER.gate,
       )}
     >
-      {/* The name in full, and the only place in the app it is set in type — the ribbon
-          shows the mark alone, because 56px of chrome is not where a two-word name earns
-          its keep, and this screen is nothing but room. Deliberately the ribbon's own
-          treatment (`font-heading text-xl leading-none text-dim`, clear of Cinzel's 18px
-          floor) with letterspacing for the one thing that differs: this is a wordmark rather
-          than the first step of app › view. **The pairing is the point, so this size follows
-          the ribbon's**: it went 18 → 20px with it on 2026-08-14, and a reader who watches
-          this screen fill finds the same treatment in the ribbon a second later. Dim rather
-          than gold — gold means "you can act on this", and a name is not an action. Hidden
-          from the accname for the ribbon mark's reason: the window title bar already says it,
-          and the dialog is named by the heading below. */}
-      <p
-        aria-hidden="true"
-        className="font-heading text-xl leading-none tracking-[0.2em] text-dim"
-      >
-        MTG Grimoire
-      </p>
+      {/* **The mark and the name are one object, so they are one box.** The page's `gap-6` is
+          the distance between the *things on this screen* — the lockup, the heading block, the
+          line, the button — and 24px between a mark and the name printed directly under it
+          would read as two unrelated objects that happen to be stacked rather than as one
+          signature. Nesting is what buys the pairing distance without touching the page's
+          rhythm: the column outside keeps its 24, the lockup keeps its own 12. Nothing in here
+          animates on its own — both are static children of the surface's own fade, which is
+          all the motion this screen has. */}
+      <div className="flex flex-col items-center gap-3">
+        {/* **64px, and this is the only surface in the app that earns it.** The mark picks its
+            variant off the size it is drawn at, because below about 24px the casting circle
+            and the clasp rivets fill in — so the small copy in the title bar is a silhouette,
+            and everything the artwork actually says is drawn nowhere. Here there is a whole
+            screen with four things on it: at 64px the dashed casting circle, the seven runes
+            and the gradient burning through the diamond all resolve, which is the entire
+            reason the full variant exists. The first thing anyone ever sees of this app is the
+            one place the mark should be seen whole.
+
+            **Gold, and that is not a contradiction of the `text-dim` on the name below.** That
+            rule — "gold means 'you can act on this', and a name is not an action" — is about
+            *type and controls*, where the accent is this app's one signal that a thing answers
+            a press, and a heading painted in it is a button that never does. A mark is a
+            picture rather than a word: nothing about it invites a press, and it is the app's
+            own colour on the app's own emblem. The name stays dim underneath, so the pair
+            reads as an emblem over its caption instead of two things competing to be loudest.
+
+            **Its fills are `var(--color-surface)` and this screen is `bg-bg`, so one drawing
+            gives two pictures on two grounds.** In the title bar, over `bg-surface`, the boards
+            fill with the ground they sit on and the mark is pure line art. Here they fill one
+            step *above* the ground, so the book reads as a faint raised plate with the gold
+            drawn over it — the depth this screen has the room for, out of the token the logo
+            package already specified, with no branch in `GrimoireMark` and no second file.
+
+            **No `label`, so it stays out of the accessibility tree** — which is `GrimoireMark`'s
+            own default and this is the case it was chosen for. The name below is `aria-hidden`
+            for the reason given there, and both reasons still hold here: the window title bar
+            says the name in full, and this dialog is named by `#first-run-title`. A mark that
+            named itself would put the product name into the tree twice in a row, once as a
+            graphic and once beside the heading. */}
+        <GrimoireMark size={64} className="text-accent" />
+
+        {/* The name in full, and one of the *two* places it is set in type rather than the
+            only one — `TitleBar` says it at 13px a row above every other screen, and this is
+            the one with room. **Both halves of what stood here had rotted**: it read "the only
+            place in the app it is set in type — the ribbon shows the mark alone", and the
+            ribbon's dim `MTG` was deleted on 2026-08-20 while `decorations: false` had already
+            handed the wordmark to `TitleBar` before that. A prose-only edit routes to neither
+            CI job, so nothing went red for either. Deliberately the ribbon's own
+            treatment (`font-heading text-xl leading-none text-dim`, clear of Cinzel's 18px
+            floor) with letterspacing for the one thing that differs: this is a wordmark rather
+            than the first step of app › view. **The pairing is the point, so this size follows
+            the ribbon's**: it went 18 → 20px with it on 2026-08-14, and a reader who watches
+            this screen fill finds the same treatment in the ribbon a second later. Dim rather
+            than gold — gold means "you can act on this", and a name is not an action. Hidden
+            from the accname for the ribbon mark's reason: the window title bar already says it,
+            and the dialog is named by the heading below. */}
+        <p
+          aria-hidden="true"
+          className="font-heading text-xl leading-none tracking-[0.2em] text-dim"
+        >
+          MTG Grimoire
+        </p>
+      </div>
 
       <div className="max-w-md space-y-2">
         <h2 id="first-run-title" className="font-heading text-2xl text-text">

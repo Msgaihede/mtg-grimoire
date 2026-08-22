@@ -2,7 +2,14 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- A copy of `logos/svg/mtg-grimoire-mark.svg`, not a link to it: Vite serves `public/`
+         at the site root and copies it verbatim into `dist/`, and `dist/` is what a
+         `tauri build` embeds. Anything outside `public/` would have to be imported by a
+         module to survive the build, and a favicon has no module to import it.
+         `img-src 'self'` in both CSPs (`src-tauri/tauri.conf.json`) covers it — the file is
+         same-origin under `http://localhost:1420` in dev and under the Tauri asset origin in
+         a built app, so no CSP change was needed to point at it. -->
+    <link rel="icon" type="image/svg+xml" href="/mtg-grimoire-mark.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MTG Grimoire</title>
   </head>

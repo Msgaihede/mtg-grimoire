@@ -46,8 +46,28 @@ const meta = {
           "The first run, and nothing else. 77 MB to download and ~117 k rows to import with " +
           "nothing usable behind them — taking the whole screen is honest about that, and the " +
           "alternative is an empty app that looks broken. It is also the first thing anyone ever " +
-          "sees of this app, which is why it opens with the name in full and then says, in one " +
-          "sentence, what the wait buys.\n\n" +
+          "sees of this app, which is why it opens with the mark over the name in full and then " +
+          "says, in one sentence, what the wait buys.\n\n" +
+          "**The mark is drawn at 64px, and this is the only surface in the app that draws it " +
+          "large.** `GrimoireMark` picks its variant off the rendered size — below about 24px " +
+          "the casting circle and the clasp rivets fill in, so the small copy in the window's " +
+          "title bar is a silhouette and the artwork itself is drawn nowhere. On a screen with " +
+          "four things on it the dashed circle, the seven runes and the gradient burning " +
+          "through the diamond all resolve, which is the whole reason the full variant exists. " +
+          "Two things about it are decisions rather than defaults. It is **gold** where the " +
+          "wordmark beneath it is dim, because “gold means you can act on this” is a rule about " +
+          "type and controls and a mark is a picture rather than a word. And it is " +
+          "**`aria-hidden`** — no `label` — because the title bar already says the name and the " +
+          "dialog is named by its heading, so a named mark would be the product name announced " +
+          "twice in a row.\n\n" +
+          "**One drawing, two grounds.** The mark's fills are `--color-surface`, and this " +
+          "screen is `bg-bg` — one step below it — so the book reads as a faint raised plate " +
+          "with the gold drawn over it, where the same file in the title bar fills with the " +
+          "ground it sits on and is pure line art. Nothing in `GrimoireMark` branches on this; " +
+          "it falls out of the token. The mark and the wordmark are also nested in a column of " +
+          "their own at `gap-3`, because the page's `gap-6` separates the *things on the " +
+          "screen* and 24px between an emblem and its own caption reads as two unrelated " +
+          "objects.\n\n" +
           "**The progress element is the mana line itself**, not a bar of this component's own. " +
           "That is not a repetition of the app's one signature — this surface covers the ribbon, " +
           "so while it is up there is exactly one mana line on screen, and the reader who has " +
@@ -93,6 +113,10 @@ type Story = StoryObj<typeof meta>;
  * **Retry is not on screen.** `sync_run` refuses a second concurrent run, so while one is in
  * flight the button could not do anything — it comes back in the three states that need it,
  * which are exactly the three where nothing is running.
+ *
+ * **The mark is in every story below**, because it belongs to the surface rather than to any
+ * one state — so it is asserted here, once, and the assertion is about which *variant* was
+ * drawn rather than that something was drawn at all.
  */
 export const Starting: Story = {
   play: async ({ canvasElement }) => {
@@ -102,6 +126,16 @@ export const Starting: Story = {
     const bar = canvas.getByRole("progressbar", { name: "Syncing card data" });
     await expect(bar).not.toHaveAttribute("aria-valuenow");
     await expect(canvas.queryByRole("button", { name: "Retry download" })).toBeNull();
+
+    // Found by selector rather than by role, and that *is* the assertion below it: the mark
+    // carries no `label`, so there is nothing in the accessibility tree to query for. The
+    // gradient is the only thing in the markup that separates the full variant from the
+    // simplified one — which ships no `<defs>` at all — so it is what says 64px reached the
+    // artwork rather than the silhouette the title bar draws.
+    const mark = canvasElement.querySelector("svg");
+    await expect(mark).toHaveAttribute("aria-hidden", "true");
+    await expect(mark?.querySelector("linearGradient")).toBeInTheDocument();
+    await expect(canvas.queryByRole("img")).toBeNull();
   },
 };
 
