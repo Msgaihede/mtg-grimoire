@@ -11,11 +11,13 @@ import {
 } from "@/components/FilterChips";
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { FOCUS } from "@/lib/focus";
+import { LAYER } from "@/lib/layers";
 import {
   ipc,
   ipcError,
@@ -139,8 +141,16 @@ const CONTROL =
  * panel come to 1044 before the deck gets a pixel, and the deck was measured at **2px** before
  * this existed, which reads as a rendering fault rather than as a squeeze.
  *
+ * **Every measurement below was taken with the card pane docked beside the editor, and that is
+ * history rather than the current layout** (issue #183, 2026-08-22). The pane is an overlay over
+ * one of this row's two columns now and takes no width from either, so the "card pane" column in
+ * the table is a state the app cannot be in any more. The figures are kept because they are what
+ * this constant's value was derived from and because they are the evidence for the rule — *the
+ * narrowest thing yields first* — which has not changed. What has changed is that the case the
+ * number was tuned against no longer arises, so 192 now binds only on a genuinely narrow window.
+ *
  * 208 rather than the 224 this was first drawn at, and the 16px is a *scrollbar*: the page's
- * own, which the arithmetic did not count. At 1280 with a card open the row measures **617**,
+ * own, which the arithmetic did not count. At 1280 with a card open the row measured **617**,
  * not the 632 on paper, so a 224 floor collapsed the panel at the app's default window size —
  * the common case, where a reader clicking a tile to read a card would have lost their search
  * to it. Verified in the running window at every width below.
@@ -177,6 +187,23 @@ const DECK_FLOOR = 192;
 /** The `gap-4` between the two things on the desk, which both of their widths have to be
  *  counted with. */
 const DESK_GAP = 16;
+
+/**
+ * Which of the desk's two columns the card pane is drawn over — `"search"` or `"deck"`.
+ *
+ * **An attribute because the decision is invisible to everything else.** What the two positions
+ * differ by is a `right` offset and a width, and both are numbers this component measures — so
+ * jsdom, which has no layout engine, reads `0` for each of them and cannot tell the two apart at
+ * all. The attribute is the *choice* rather than its geometry, which is the half a suite can
+ * honestly hold; the geometry is a live-window question, and this is also the handle a CDP pass
+ * uses to ask it (`[data-pane-over]`, then the rects).
+ *
+ * `DECK_GROUP_ATTR`'s argument, one surface over: an attribute is a question the DOM can answer
+ * from anywhere, and the alternative here — walking up from the pane's own `complementary` role
+ * to whatever box happens to be its parent — is a test that breaks when a wrapper is added and
+ * says nothing about what the wrapper is for.
+ */
+export const PANE_OVER_ATTR = "data-pane-over";
 
 /**
  * The shortest the desk row may be squeezed to — `DECK_FLOOR`'s rule turned on its side, because
@@ -703,6 +730,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const paneDeckContext = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  /**
+   * Which of the desk's two columns the card pane is drawn **over** — see the pane host at the
+   * end of the desk row, and {@link useAppStore}'s `paneFromDeckSearch` for why this is a field
+   * of its own rather than `paneDeckContext !== null` read backwards.
+   */
+  const paneFromDeckSearch = useAppStore((s) => s.paneFromDeckSearch);
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
@@ -791,6 +824,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
   const dockRef = useRef<HTMLDivElement>(null);
   /**
+   * The box the card pane is drawn in — **placed and sized by the same effect the dock is**,
+   * because it stands beside the dock and the two must never be measured a frame apart. See the
+   * pane host, the first thing this column draws.
+   */
+  const paneFrameRef = useRef<HTMLDivElement>(null);
+  /**
    * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
    * (2026-08-14).
    *
@@ -800,6 +839,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * instead and this measurement is about the axis the desk really does have to share.
    */
   const [deskWidth, setDeskWidth] = useState(0);
+  /**
+   * How wide the docked search panel is drawn, in px — **read here only to place the card pane
+   * beside it**, never to decide anything about the panel itself.
+   *
+   * The width is the panel's own state (the reader drags it) and this component does not get to
+   * know it any other way, so it is measured rather than passed: an editor that was *told* the
+   * panel's width would be a second copy of a number the panel clamps twice, and the two would
+   * disagree the first time a drag was refused. A measurement cannot disagree with what is drawn.
+   *
+   * `0` is jsdom, which has no layout engine, and is read below as "not measured" rather than as
+   * a panel of no width — the pane then falls back on its own 384 and is laid out by nothing,
+   * which is the honest answer on a surface with no layout at all.
+   */
+  const [dockWidth, setDockWidth] = useState(0);
   /**
    * How wide the window is, for the half-of-it cap on the docked panel's drag.
    *
@@ -1379,14 +1432,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // frame apart.
   useEffect(() => {
     const el = deskRef.current;
-    if (!el) return;
-    const measure = () => setViewport(document.documentElement.clientWidth);
-    const observer = new ResizeObserver(([entry]) => {
-      setDeskWidth(entry.contentRect.width);
-      measure();
-    });
+    const dock = dockRef.current;
+    if (!el || !dock) return;
+    const measure = () => {
+      setViewport(document.documentElement.clientWidth);
+      setDeskWidth(el.clientWidth);
+      // `offsetWidth` rather than a `contentRect`: what the pane has to be placed beside is the
+      // panel's **border box**, hairline and all, and the rail state has a border of its own.
+      setDockWidth(dock.offsetWidth);
+    };
+    // Both boxes, and neither is redundant. The desk resizes when the window does; the dock
+    // resizes when the reader drags the panel's edge or collapses it, which moves nothing else
+    // on this row. `entry` is deliberately not read any more — with two observed elements the
+    // callback fires for either, so the widths are taken off the elements themselves rather than
+    // off whichever one happened to trigger this call.
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-    setDeskWidth(el.clientWidth);
+    observer.observe(dock);
     measure();
     return () => observer.disconnect();
   }, [hasRow]);
@@ -1459,17 +1521,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   useLayoutEffect(() => {
     const page = editorRef.current;
-    const dock = dockRef.current;
-    const deskEl = deskRef.current;
-    if (!page || !dock || !deskEl) return;
+    if (!page) return;
 
     let frame = 0;
     const size = () => {
       frame = 0;
       const visible = page.clientHeight;
       if (visible === 0) return;
-      const below = deskEl.getBoundingClientRect().top - page.getBoundingClientRect().top;
-      dock.style.height = `${Math.max(0, visible - Math.max(0, below))}px`;
+      // **Where the desk starts is what both boxes are measured from**, and it is read fresh
+      // rather than closed over: the deck may not have arrived yet, and a refused write may take
+      // it away again while the pane over it is still up.
+      const deskEl = deskRef.current;
+      const below = deskEl
+        ? deskEl.getBoundingClientRect().top - page.getBoundingClientRect().top
+        : 0;
+      const top = Math.max(0, below);
+      const height = Math.max(0, visible - top);
+      // The dock is inside the desk row and shares its left edge with the panel, so it needs
+      // only the height; the pane's frame is pinned to the top of the *page* and needs the
+      // offset as well. **One read for both**, which is the whole reason they are written here
+      // together: two measurements a frame apart would draw the search column and the card
+      // beside it at different heights on every scroll.
+      if (dockRef.current) dockRef.current.style.height = `${height}px`;
+      if (paneFrameRef.current) {
+        paneFrameRef.current.style.top = `${top}px`;
+        paneFrameRef.current.style.height = `${height}px`;
+      }
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(size);
@@ -1479,7 +1556,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     page.addEventListener("scroll", schedule, { passive: true });
     const observer = new ResizeObserver(schedule);
     observer.observe(page);
-    observer.observe(deskEl);
+    // The desk only when it is drawn. Everything else this effect answers for — the window
+    // resizing, the page growing — reaches it through `page`, and `hasRow` re-runs the whole
+    // effect when the deck arrives or goes, which is what re-observes this.
+    if (deskRef.current) observer.observe(deskRef.current);
     return () => {
       if (frame !== 0) cancelAnimationFrame(frame);
       page.removeEventListener("scroll", schedule);
@@ -2189,6 +2269,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `paneDeckContext`, and writing a store slice on every click on the desk would re-render the
    * pane's whole subtree for nothing.
    */
+  /**
+   * The pane's ✕ and its Escape, which are the same act — closing the card and forgetting the
+   * row it was anchored to, exactly as {@link dropSelection} below does for a click on the desk.
+   *
+   * Stable, because it is the pane's `onClose` and therefore a dependency of the `keydown`
+   * listener behind it: an inline arrow is a new function on every render of this editor — every
+   * keystroke in the deck's filter box, every optimistic patch — and each one tears that window
+   * listener down and adds it back for no change in behaviour. `App` holds the identical
+   * `useCallback` for the identical reason, one mount over.
+   */
+  const closeCard = useCallback(() => setSelectedCardId(null), [setSelectedCardId]);
+
   const dropSelection = useCallback(
     (event: React.MouseEvent) => {
       if (selectedCardId === null || keepsSelection(event.target)) return;
@@ -2613,6 +2705,100 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           one read at the other end of the gesture, so both ends of a drag now re-render
           themselves rather than the editor.) */}
       <QuickZones categories={categories} onDrop={applyDrop} onNewCategory={openQuickCategory} />
+
+      {/**
+       * **The card pane, drawn over one of this editor's own columns rather than beside them**
+       * (issue #183). Everything about this box serves one sentence: opening a card must not
+       * change the flow of the deck.
+       *
+       * It used to be `App`'s, docked at the right-hand edge of the shell — a real flex item,
+       * 384px plus a gap, taken out of this editor whether or not the reader was reading a card.
+       * That is a **reflow of the whole deck on a click**: the piles re-pack, the desk narrows
+       * past {@link DECK_FLOOR}, and the search column beside it collapses to its rail — so a
+       * reader who pressed a card to look at it lost the search they were adding from. `App`
+       * still draws the docked pane for every other view and steps aside for this one; see its
+       * `inDeckEditor`.
+       *
+       * ## The two positions
+       *
+       * **A card opened from the deck draws over the search column; a card opened from the
+       * search column draws over the deck, against that column's left edge.** Either way the
+       * pane covers what the reader was *not* looking at — a search whose answer covers the
+       * search is the failure the whole arrangement exists to avoid. `paneFromDeckSearch` is the
+       * whole of the decision, and the store's own note says why it is a field rather than
+       * `paneDeckContext` read backwards.
+       *
+       * ## Why it is here and not inside the desk row
+       *
+       * The desk row is where the panel it is drawn against lives, and the dock beside it is
+       * already sticky and already sized — so that is where this went first. Two things make it
+       * wrong. **The desk row is unmounted when the deck read answers `null`**, which is the one
+       * state the pane matters most in: a swap refused with GONE draws its sentence *in the
+       * pane*, over an editor that has stopped painting the deck (`App.test.tsx` holds both
+       * halves). And **the dock is `position: sticky`, which always creates a stacking
+       * context**, so a pane inside it could never be raised above the {@link LAYER.raised} the
+       * deck's own stack puts on an open card — a card standing proud of its neighbours would
+       * paint straight through the pane drawn over it. Here it is a sibling of the desk row and
+       * competes in this column's context, where `LAYER.popup` beats that lift.
+       *
+       * `sticky top-0 h-0 -mb-3` is `QuickZones`' arrangement one line up and for its reason:
+       * the first children of this scroller are the only ones a `sticky` box can be pinned to
+       * the top of the window from, and this one has to cost no layout in either state — `h-0`
+       * so it takes no height and `-mb-3` so it takes back the column's `gap-3`. That is the
+       * "no reflow" claim, and it is structural rather than a number to keep in step.
+       */}
+      <div className={cn("pointer-events-none sticky top-0 -mb-3 h-0", LAYER.popup)}>
+        {/**
+         * Where the pane is allowed to be, on the side it was opened from — a real box rather
+         * than an offset, because `max-w-full` needs something to be full *of*. The pane asks
+         * for 384px; a desk narrower than that would otherwise clip it against the editor's own
+         * `overflow`, and content overflowing the inline-start edge is unreachable rather than
+         * scrollable, so the missing half of the card could not even be scrolled to.
+         *
+         * `top` and `height` are written by the dock effect and are deliberately not classes:
+         * at rest the pane starts where the desk starts, under the deck's ribbon and toolbar,
+         * and scrolled past it takes the whole window — the same two ends the search column
+         * beside it is drawn between, measured once for both.
+         *
+         * `pointer-events-none`, because this box spans a whole column and is transparent; the
+         * pane inside re-enables them for itself (`CardDetailPane`). Without it, opening a card
+         * would make the deck under it unclickable, which is the exact opposite of what an
+         * overlay that leaves the list live is for.
+         *
+         * An undefined width is jsdom, where nothing has been measured: the box then shrinks to
+         * the pane's own 384 and `max-w-full` binds on nothing, which is the honest answer on a
+         * surface with no layout engine.
+         */}
+        <div
+          ref={paneFrameRef}
+          {...{ [PANE_OVER_ATTR]: paneFromDeckSearch ? "deck" : "search" }}
+          className="pointer-events-none absolute flex justify-end"
+          // The desk's right edge, or the search column's left edge one gap further in. The
+          // unmeasured fallback for the second is the first — it is reachable only before the
+          // observers have answered, which on this side means before the reader can have pressed
+          // a tile in a column that has not been laid out yet, and in jsdom, which never lays
+          // anything out. See {@link PANE_OVER_ATTR} for what a suite can hold instead.
+          style={
+            paneFromDeckSearch
+              ? {
+                  right: dockWidth > 0 ? dockWidth + DESK_GAP : 0,
+                  width:
+                    deskWidth > 0 ? Math.max(0, deskWidth - dockWidth - DESK_GAP) : undefined,
+                }
+              : { right: 0, width: deskWidth > 0 ? deskWidth : undefined }
+          }
+        >
+          {/* The presence and nothing finer — `App`'s note on this key holds word for word: a
+              constant, because keying on the card would turn every card-to-card move into one
+              pane leaving and another arriving. The per-card remount lives inside the pane,
+              where React can throw the body away without the box going anywhere. */}
+          <AnimatePresence>
+            {selectedCardId && (
+              <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
 
       {/**
        * The deck's own ribbon, and the `py-1.5` on it is load-bearing rather than spacing.
@@ -3221,6 +3407,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               maxWidth={maxPanelWidth}
             />
           </div>
+
         </div>
       )}
 

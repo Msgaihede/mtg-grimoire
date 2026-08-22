@@ -1806,9 +1806,16 @@ price | type`). An **inactive category stays its own group in all three grouping
   as it was up while giving the deck nothing. The card search column stayed a docked sidebar
   because it is the one surface here that is **worked out of**: its tiles are drag sources into
   the deck's own category columns beside it, so a scrim would end the drag path and cover the card
-  pane a reader flips printings in. It opens **collapsed** instead, which is the same 602px
-  argument answered the other way — the deck starts with the whole desk and one press on the rail
-  gets the wall back. **Its body is mounted on the reader's press and merely _hidden_ when the
+  pane a reader flips printings in.
+  **It opens _open_ again since 2026-08-22 (issue #183), and remembers which way the reader last
+  left it.** It opened collapsed for eight days on the 602px argument — 384px of panel plus the
+  desk's gap out of a row measured at 1280×800 _with the card pane docked beside the editor_ left
+  the deck 202px. That row is gone: the card pane is an overlay over one of these two columns now
+  and takes no width from either, so the desk the panel is measured against is the full one and
+  `roomy` is the only thing that still rails it. The memory is the other half and the two ship
+  together — `app_meta.deck_search_open` behind `useDeckSearchOpen`, written on the **press** and
+  never on the drawn state, because a railing is a measurement about a narrow window and not
+  something the reader asked for. **Its body is mounted on the reader's press and merely _hidden_ when the
   editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
   choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
   filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
