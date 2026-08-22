@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "lucide-react";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { LAYER } from "@/lib/layers";
 import {
   SNAP_BUTTON_ID,
   closeWindow,
@@ -132,11 +133,19 @@ export function TitleBar() {
   }, []);
 
   return (
+    // `LAYER.caption` is what keeps this row drawn, and it is not decoration: without it the
+    // window has no caption at all for the length of a first sync, and none while any modal is
+    // open. Both of those surfaces are `fixed inset-0`, and this row is a flex item carrying no
+    // z-index of its own — a positioned element paints over non-positioned content in the same
+    // stacking context however small its number, so the bar was never competing. It needs no
+    // `position` of its own: a z-index on a flex item creates a stacking context whatever its
+    // position. The reasoning, and the measurement it came from, are on the rung itself.
     <div
       data-tauri-drag-region
       className={cn(
         "flex shrink-0 items-center justify-between border-b border-border bg-surface pl-3",
         BAR_H,
+        LAYER.caption,
       )}
     >
       {/* The mark and the wordmark are one lockup, and this wrapper exists for the drag region

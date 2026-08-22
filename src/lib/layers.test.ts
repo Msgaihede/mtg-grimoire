@@ -35,6 +35,11 @@ describe("the layer scale", () => {
     // still cover a hint describing a control the reader can no longer see.
     expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.tooltip));
     expect(numberOf(LAYER.tooltip)).toBeLessThan(numberOf(LAYER.gate));
+    // And the window's own caption is above every one of them. `decorations: false` makes that
+    // row the only way to move, minimize or close the app, so a surface covering it does not
+    // obscure a control — it takes the window away. Both full-window surfaces did exactly that
+    // until 2026-08-22, the gate for the length of a first sync and the scrim for every modal.
+    expect(numberOf(LAYER.gate)).toBeLessThan(numberOf(LAYER.caption));
   });
 
   /**
