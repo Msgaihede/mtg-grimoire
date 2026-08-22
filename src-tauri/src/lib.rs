@@ -1,6 +1,7 @@
 pub mod card;
 pub mod card_row;
 pub mod collection;
+pub mod collection_decks;
 pub mod collection_source;
 pub mod db;
 pub mod deck;
@@ -322,6 +323,7 @@ pub fn run() {
             collection::collection_list,
             collection::collection_summary,
             collection::collection_import_commit,
+            collection_decks::collection_row_decks,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
