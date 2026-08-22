@@ -3292,8 +3292,15 @@ describe("the busy fault", () => {
     // the tag standing — while the remembered card zoom added `set_card_zoom`. Each branch wrote
     // 49 → 50 and was right about the tree it was in; the merged table holds both, so it is 51.
     // Re-measure after the next merge rather than adding one to whichever figure you find here.
+    //
+    // The remembered search column then added `set_deck_search_open` (51 → 52), on the same
+    // split as every preference before it: the write takes `sync::with_write` and is refusable,
+    // while the read (`deck_search_open`, on `db_read`) answers through every second of a sync.
+    // It is the one write in this loop with **nothing of its own to refuse** — a `boolean` has
+    // arrived narrowed — so BUSY is the whole of what it can say no to, which is exactly what
+    // this loop is measuring.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(51);
+    expect(names).toHaveLength(52);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

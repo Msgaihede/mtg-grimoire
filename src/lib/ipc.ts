@@ -28,15 +28,22 @@
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Three settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Four settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — and one, `cardZoom`/
- * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`. All three are the
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — one, `cardZoom`/
+ * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and one,
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`), as a bare `boolean`. All four
+ * are the
  * shape a stored preference has to have: the read falls back on its default for a row that is
  * missing *or* holds a value this build does not recognise, and only the *write* refuses. So each
  * is typed loosely here rather than as its union: the narrowing belongs to the module that owns
  * the vocabulary (`@/lib/marketplace`, `@/features/card/printings`, `@/lib/cardZoom`), and a row
  * a newer build wrote must reach this side as what it is.
+ *
+ * **The boolean is the one with no narrowing left to do on this side**, and it is the exception
+ * that shows what the rule is about: `deck_search_open` stores `"1"`/`"0"` and every other value
+ * a database could hold — a hand-edit, a spelling a future build invents — is already collapsed
+ * into the default by the read, because a `bool` has no room to carry it across the wire.
  *
  * The zoom row is the one of the three whose *shape* is a map, and the difference is worth a
  * sentence: it has no single default to fall back on, because there are seven walls and each one
@@ -3700,6 +3707,22 @@ export const ipc = {
    */
   setCardZoom: (section: string, zoom: number) =>
     invoke<void>("set_card_zoom", { section, zoom }),
+  /**
+   * Whether the deck editor's card search column was last left open.
+   *
+   * The fourth `app_meta` setting and the only one that arrives narrowed — see this file's
+   * header. `true` for a database nobody has expressed a preference in, which is issue #183's
+   * reversal of the disclosure this column used to open shut, and `true` again for a row holding
+   * anything but the `"1"`/`"0"` the backend writes.
+   */
+  deckSearchOpen: () => invoke<boolean>("deck_search_open"),
+  /**
+   * Remember the answer. Nothing to refuse — a `bool` cannot carry a value the row could not
+   * hold — so unlike {@link setPrintingGroupBy} this one's only failure is the BUSY every write
+   * command takes while a sync holds the write connection, which costs the reader the next
+   * launch's starting state and nothing this session.
+   */
+  setDeckSearchOpen: (open: boolean) => invoke<void>("set_deck_search_open", { open }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.

@@ -794,6 +794,20 @@ export interface FakeDb {
    */
   cardZoom: Record<string, number>;
   /**
+   * `app_meta.deck_search_open` — whether the deck editor's card search column was last left
+   * open.
+   *
+   * The fifth row of the same key/value table, and the only one whose **stored** shape is a
+   * string while its **answered** shape is not: the backend writes `"1"`/`"0"` and reads
+   * anything else as the default, so both states a story wants are reachable — a fresh install
+   * that has never been asked (`null`), and a row a hand-edit or another build left something
+   * unplaceable in.
+   *
+   * A story that wants the editor to open on the rail sets this to `"0"`. Everything else,
+   * including `null`, opens the column — see {@link readHandlers.deck_search_open}.
+   */
+  deckSearchOpen: string | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -1106,6 +1120,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // says nothing about zoom is standing in. A story that wants a restored session passes the
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
+    // The fifth row, unwritten: `deck_search_open` answers `true` for an editor nobody has told,
+    // which is the state every deck story that says nothing about the search column stands in.
+    deckSearchOpen: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -4947,6 +4964,24 @@ export function readHandlers(db: FakeDb) {
       ),
 
     /**
+     * `deck::deck_search_open` — whether the editor's search column was last left open.
+     *
+     * The fifth `app_meta` setting, and **the one whose narrowing happens entirely on this side
+     * of the wire**: it answers a `boolean`, so the three states the others hand across as
+     * strings — never written, written by another build, hand-edited — have all collapsed by the
+     * time the frontend sees it. That is why the fake stores the *string* and converts here: a
+     * fake holding a boolean could not stand in the one case worth a story, which is a row this
+     * build cannot place.
+     *
+     * `"1"` and `"0"` and nothing else, `deck::stored_deck_search_open` verbatim. Anything else
+     * is `true` — including `"true"`, which is the spelling a hand-edit reaches for first and
+     * exactly the value that must not quietly work.
+     *
+     * A read, so it answers through a sync like every other one here — the write below does not.
+     */
+    deck_search_open: (): boolean => db.deckSearchOpen !== "0",
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -8049,6 +8084,24 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.cardZoom = { ...db.cardZoom, [args.section]: args.zoom };
+    },
+
+    /**
+     * `deck::set_deck_search_open` — remember whether the search column is open.
+     *
+     * **The one write in this family with nothing to refuse**, and the asymmetry is the type
+     * rather than a softer fake: its two neighbours take a string and so can be sent a value the
+     * read side would discard, while a `boolean` has arrived narrowed and there is no third thing
+     * a caller could send. So the note that belongs here is the *storage* one — `"1"`/`"0"`,
+     * because that is what the row holds and what {@link readHandlers.deck_search_open} reads
+     * back, and a fake that stored `String(open)` would make `"true"` work here and nowhere else.
+     *
+     * It honours `busy` like every other ordinary write here — `deck.rs` takes the write
+     * connection through `sync::with_write`.
+     */
+    set_deck_search_open: (args: { open: boolean }): void => {
+      refuseIfBusy(db);
+      db.deckSearchOpen = args.open ? "1" : "0";
     },
 
     /**
