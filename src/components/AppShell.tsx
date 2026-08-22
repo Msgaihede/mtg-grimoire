@@ -185,11 +185,22 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
     // instead of to the window, and the whole shell scrolls the document.
     <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
       {/* The window's caption, drawn by the app because `tauri.conf.json` sets
-          `decorations: false`. Outside `min-h-0` and above everything: it is chrome belonging
-          to the *window* rather than to the app, which is why it sits above the sidebar rather
-          than beside it — and why it is the one row here that is never covered by
-          `SyncProgress`'s first-run overlay. A reader on a blank first launch can still close
-          the app. */}
+          `decorations: false`. Outside `min-h-0`: it is chrome belonging to the *window*
+          rather than to the app, which is why it sits above the sidebar rather than beside it,
+          and why it is the one row here that nothing the app draws may cover. A reader on a
+          blank first launch can still close the app.
+
+          **That last sentence was false from the day this row replaced Windows' caption until
+          2026-08-22, and being written down is what hid it.** `SyncProgress`'s overlay and
+          `Dialog`'s scrim are both `fixed inset-0`, and this row is a flex item carrying no
+          z-index of its own — which does not lose the ordering contest so much as never enter
+          it. (Spelling that default as a class here would have Tailwind emit a rule for it,
+          which is why `layers.test.ts` sweeps comments too, and it caught this one.) Driven in the
+          shipped window: on a first launch `elementFromPoint` over the Close button answered
+          the overlay, and there was no caption on screen for the whole ~90s sync. It is kept
+          now by `LAYER.caption` in `TitleBar` itself, where the rung carries the argument; the
+          claim lives here because this is where the row is placed, and `layers.test.ts` is
+          what holds the two together. */}
       <TitleBar />
 
       <div className="flex min-h-0 flex-1">
