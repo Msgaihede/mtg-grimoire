@@ -1,4 +1,5 @@
 import { useState, type JSX, type ReactNode } from "react";
+import { useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { BUTTON } from "./controls";
@@ -28,11 +29,26 @@ interface Row {
   warning: ReactNode;
 }
 
+/**
+ * The collection row's summary, and the clause it gains while the collection is deck-driven.
+ *
+ * **The button itself stays enabled on purpose** — clearing the hidden hand-built rows is a
+ * legitimate thing to want, and the backend deliberately allows this one write while the
+ * setting is on. So this is the whole of what deck-driven collection changes here: one clause,
+ * said where the button already is, on the sentence that is on screen without the reader
+ * opening anything.
+ */
+const COLLECTION_SUMMARY =
+  "Every card you own, with its condition, purchase price, tags and notes.";
+const COLLECTION_SUMMARY_DECK_DRIVEN =
+  "Every card you own, with its condition, purchase price, tags and notes — your hand-built " +
+  "collection, which is currently hidden because this collection is driven by your decks.";
+
 const ROWS: readonly Row[] = [
   {
     key: "collection",
     label: "Clear collection",
-    summary: "Every card you own, with its condition, purchase price, tags and notes.",
+    summary: COLLECTION_SUMMARY,
     warning: (
       <>
         Deletes every entry in your collection — each one’s condition, purchase price, tags,
@@ -91,6 +107,14 @@ const ROWS: readonly Row[] = [
  * banner) so this component renders one sentence and makes no decision about which.
  */
 export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element {
+  const { deckDriven } = useDeckDrivenCollection();
+  // The one row this setting touches, and only its summary — the button underneath it stays
+  // exactly as enabled as it always was.
+  const rows: readonly Row[] = deckDriven
+    ? ROWS.map((row) =>
+        row.key === "collection" ? { ...row, summary: COLLECTION_SUMMARY_DECK_DRIVEN } : row,
+      )
+    : ROWS;
   const [asking, setAsking] = useState<Asking>(null);
   // **The row outlives the flag by the length of the dialog's fade**, which is why it is held
   // beside `asking` rather than looked up from it. `Dialog` animates out over ~200 ms, and a
@@ -123,7 +147,7 @@ export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element
       </p>
 
       <ul className="space-y-3">
-        {ROWS.map((row) => (
+        {rows.map((row) => (
           <li
             key={row.key}
             className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3 first:border-t-0 first:pt-0"

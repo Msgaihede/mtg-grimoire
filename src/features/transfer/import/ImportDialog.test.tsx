@@ -45,11 +45,26 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const pickFile = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
+/** Whether the collection is deck-driven, for the destination-refusal tests near the end of
+ *  this file. Mocked rather than driven through the real hook's `QueryClient`, per this task's
+ *  own instruction — a sibling is still wiring the Storybook fake's support for this setting. */
+const deckDriven = { value: false };
+vi.mock("@/lib/useDeckDrivenCollection", async (original) => ({
+  ...(await original<typeof import("@/lib/useDeckDrivenCollection")>()),
+  useDeckDrivenCollection: () => ({
+    deckDriven: deckDriven.value,
+    setDeckDriven: vi.fn(),
+    error: null,
+  }),
+}));
+
 import type { ImportDestination } from "./destination";
+import { collectionDestination } from "./destinations/CollectionPreview";
 import type { DeckImportInto } from "./destinations/DeckPreview";
 import { deckDestination } from "./destinations/deckInto";
 import { NewDeckPreview } from "./destinations/NewDeckPreview";
 import { newDeckDestination } from "./destinations/newDeck";
+import { wishlistDestination } from "./destinations/WishlistPreview";
 import { ImportDialog } from "./ImportDialog";
 
 /** One resolved printing, with everything this surface does not read filled in as nothing —
@@ -365,6 +380,7 @@ beforeEach(() => {
   onDismiss.mockReset();
   onClose.mockReset();
   onImported.mockReset();
+  deckDriven.value = false;
 });
 
 describe("the import dialog", () => {
@@ -1007,5 +1023,69 @@ describe("the import dialog", () => {
       "Could not read that file — That file is larger than 1 MB.",
     );
     expect(screen.getByLabelText("Decklist")).toHaveValue("");
+  });
+});
+
+/**
+ * Refused at the picker, rather than after a whole plan has been built — the collection is the
+ * only destination that ever refuses, since the backend's fence is on collection writes alone.
+ */
+describe("the picker while the collection is deck-driven", () => {
+  beforeEach(() => {
+    deckDriven.value = true;
+  });
+
+  it("greys the collection radio and names the reason, leaving the other destination live", async () => {
+    wrap(
+      <ImportDialog
+        destinations={[wishlistDestination, collectionDestination]}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    await panel();
+
+    // A greyed control's accessible name carries its reason, so an exact match on the label
+    // reads as "the control is missing" -- match with a regex instead.
+    const collection = screen.getByRole("radio", { name: /collection.*driven by your decks/i });
+    expect(collection).toHaveAttribute("aria-disabled", "true");
+    expect(collection).not.toBeChecked();
+
+    // The other destination is untouched: nothing about a wishlist import writes the
+    // collection.
+    const wishlist = screen.getByRole("radio", { name: "Import into your wishlist" });
+    expect(wishlist).not.toHaveAttribute("aria-disabled");
+    expect(wishlist).toBeChecked();
+  });
+
+  /**
+   * **`CollectionPage` mounts this dialog with the collection as its one destination**, which
+   * draws no radios at all — "a choice between one thing is not a choice." So the refusal has
+   * to reach the Preview button on the source step too, or the collection's own bulk-import
+   * button would be the one write surface in the app this task left standing.
+   */
+  it("refuses to preview a bulk import with no destination to switch to", async () => {
+    wrap(
+      <ImportDialog
+        destinations={[collectionDestination]}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    await panel();
+
+    await userEvent.click(await screen.findByLabelText("Decklist"));
+    await userEvent.paste("1 Sol Ring");
+
+    const go = screen.getByRole("button", { name: /preview.*driven by your decks/i });
+    expect(go).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(go);
+
+    expect(importResolve).not.toHaveBeenCalled();
   });
 });
