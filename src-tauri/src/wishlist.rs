@@ -2712,6 +2712,10 @@ mod tests {
         assert_eq!(row.collector_number.as_deref(), Some("161"));
         assert_eq!(row.lang.as_deref(), Some("en"));
         assert_eq!(row.name, "Lightning Bolt", "the oracle name is unchanged");
+        assert_eq!(
+            row.quantity, 2,
+            "and the copies are the row's, not just the answer's"
+        );
     }
 
     /// And back. All four columns go NULL together, because that is the only shape "any
@@ -2858,13 +2862,20 @@ mod tests {
             "the wish is still on the list — `removed` means the wish is gone, not the row"
         );
         assert_eq!(wish_count(&conn), 1);
-        let notes: Option<String> = conn
+        // **Read back, never trusted.** `after.quantity` is arithmetic this module did in
+        // Rust (`held + quantity`), so it is the one number in this test that cannot report
+        // the write going wrong: a merge that assigned instead of summing — `quantity = ?2`
+        // — answers 5 to the caller, moves the note, leaves one row, and puts **three**
+        // copies on it. Silent quantity corruption is exactly what the merge rule exists to
+        // avoid, so the row is what gets asserted.
+        let (quantity, notes): (i64, Option<String>) = conn
             .query_row(
-                "SELECT notes FROM wishlist_entries WHERE id = ?1",
+                "SELECT quantity, notes FROM wishlist_entries WHERE id = ?1",
                 params![open.id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
+        assert_eq!(quantity, 5, "and the row holds what the answer claimed");
         assert_eq!(notes.as_deref(), Some("from the trade binder"));
     }
 
@@ -2902,15 +2913,24 @@ mod tests {
         assert_eq!(after.id, filed.id, "the wish stays its own row");
         assert_eq!(after.quantity, 3);
         assert_eq!(wish_count(&conn), 2);
-        let (quantity, folder_id): (i64, Option<i64>) = conn
-            .query_row(
+        // Both rows read back from the table, for the sibling merge test's reason and one
+        // more: "nothing merged" is a claim about **two** rows, and a version of this that
+        // checked only the root one would pass just as happily if the filed wish had been
+        // emptied instead of left alone.
+        let held = |id: i64| -> (i64, Option<i64>) {
+            conn.query_row(
                 "SELECT quantity, folder_id FROM wishlist_entries WHERE id = ?1",
-                params![at_root.id],
+                params![id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .unwrap();
-        assert_eq!(quantity, 2, "the root wish is untouched");
-        assert_eq!(folder_id, None);
+            .unwrap()
+        };
+        assert_eq!(held(at_root.id), (2, None), "the root wish is untouched");
+        assert_eq!(
+            held(filed.id),
+            (3, Some(1)),
+            "and the un-pinned one keeps its copies and its folder"
+        );
     }
 
     /// Choosing a printing **is** the review. The only sentences that column carries are the

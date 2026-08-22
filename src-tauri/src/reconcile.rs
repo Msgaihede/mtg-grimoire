@@ -1074,11 +1074,19 @@ mod tests {
     /// with untouched. A filing decision undone by an upstream tidy-up, with nothing red
     /// anywhere.
     ///
-    /// The fixture is the smallest one that tells the two queries apart: the wish at the root
-    /// is written **first**, so both a rowid scan and a seek through `idx_wishlist_grain` —
-    /// whose fourth column is `coalesce(folder_id, 0)`, and `0` sorts before `1` — reach it
-    /// before the real collision in `Ordered`. With the folder term absent it is what the
-    /// fold finds.
+    /// **Every candidate row's final quantity is asserted, which is what makes this
+    /// independent of the query plan.** [`fold_wish_into_existing`] uses `query_row` and
+    /// therefore takes whichever candidate the planner yields first, so a test that pinned
+    /// only the row it expected to win could be satisfied by the wrong row winning — and a
+    /// future index would turn it vacuous with nothing going red. Pinning the target *and*
+    /// the decoy leaves the fold nowhere to put the copies but the right row: land them at
+    /// the root and the root assertion fails, land them nowhere and the target's does.
+    ///
+    /// The write order is a separate thing and is about the *pre-fix* failure being
+    /// deterministic rather than about the assertions: the wish at the root goes in **first**,
+    /// so both a rowid scan and a seek through `idx_wishlist_grain` — whose fourth column is
+    /// `coalesce(folder_id, 0)`, and `0` sorts before `1` — reach it before the real collision
+    /// in `Ordered`, which is what the three-term query was measured folding onto.
     #[test]
     fn a_repointed_wish_folds_only_onto_a_wish_in_its_own_folder() {
         let mut conn = seeded();
