@@ -34,6 +34,8 @@ import { readWishDrag } from "./wishDrag";
 /** A wish pinned to one printing — `WishlistPage.test.tsx`'s own `BOLT`, copied rather than
  *  shared, since a fixture two suites reach into is a fixture neither can change. */
 const BOLT: WishRow = {
+  // The Arena export filter's field and its only reader — nothing this suite drives touches it.
+  legalities: null,
   id: 7,
   oracleId: "o-bolt",
   cardId: "c1",

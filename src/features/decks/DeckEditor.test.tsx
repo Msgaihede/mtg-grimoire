@@ -4285,6 +4285,9 @@ describe("DeckEditor — a card's menu", () => {
         variant: "live",
         finish: null,
       },
+      // No wish either: `wishlist_set_printing`'s target is set only by the wishlist's own
+      // rows, and `toEqual` reads an absent key and a `null` one as two different answers.
+      wish: null,
     });
   });
 
@@ -4314,6 +4317,9 @@ describe("DeckEditor — a card's menu", () => {
       oracleId: "o-Goblin Guide",
       name: "Goblin Guide",
       deck: null,
+      // No wish either: `wishlist_set_printing`'s target is set only by the wishlist's own
+      // rows, and `toEqual` reads an absent key and a `null` one as two different answers.
+      wish: null,
     });
   });
 

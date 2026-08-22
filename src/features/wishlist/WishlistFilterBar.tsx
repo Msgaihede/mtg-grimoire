@@ -30,9 +30,16 @@ export function WishlistFilterBar({
   onNewFolder,
 }: {
   wishlist: Wishlist;
-  /** Opens the "new folder" field beside the folder cards. Not owned here: this bar only
-   *  offers the button, the write lives on the page. */
-  onNewFolder: () => void;
+  /**
+   * Opens the "new folder" field beside the folder cards. Not owned here: this bar only offers
+   * the button, the write lives on the page.
+   *
+   * **It is handed the button**, `FolderTree.onOpenNew`'s arrangement and for its reason: the
+   * field the page opens is drawn somewhere else on the page, so the page has nothing else to
+   * hand the caret back to when Escape closes it — and an element that unmounts with the caret
+   * on it drops focus to `<body>`, after which the next Tab restarts from the top of the app.
+   */
+  onNewFolder: (opener: HTMLButtonElement) => void;
 }) {
   const view = useAppStore((s) => s.wishlistView);
   const setWishlistView = useAppStore((s) => s.setWishlistView);
@@ -88,7 +95,7 @@ export function WishlistFilterBar({
       {!wishlist.flatten && (
         <button
           type="button"
-          onClick={onNewFolder}
+          onClick={(e) => onNewFolder(e.currentTarget)}
           className={cn("h-8 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
         >
           + New folder

@@ -2097,6 +2097,9 @@ describe("the card menu", () => {
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
       deck: null,
+      // No wish either: `wishlist_set_printing`'s target is set only by the wishlist's own
+      // rows, and `toEqual` reads an absent key and a `null` one as two different answers.
+      wish: null,
     });
     // Nothing else moved: the deck is still open, the view has not changed, and the pane is
     // still on the card it was on rather than on the row that was right-clicked.
@@ -2135,6 +2138,9 @@ describe("the card menu", () => {
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
       deck: null,
+      // No wish either: `wishlist_set_printing`'s target is set only by the wishlist's own
+      // rows, and `toEqual` reads an absent key and a `null` one as two different answers.
+      wish: null,
     });
     // Still open, still on the same card, still on the deck the reader was building.
     expect(useAppStore.getState().selectedCardId).toBe("p1");
@@ -2163,6 +2169,9 @@ describe("the card menu", () => {
       oracleId: "o1",
       name: "Delver of Secrets // Insectile Aberration",
       deck: null,
+      // No wish either: `wishlist_set_printing`'s target is set only by the wishlist's own
+      // rows, and `toEqual` reads an absent key and a `null` one as two different answers.
+      wish: null,
     });
     expect(useAppStore.getState().activeView).toBe("decks");
     // The write that used to send the reader to the Search wall closed the pane on the way.

@@ -44,11 +44,12 @@ const ROWS: readonly Row[] = [
   {
     key: "wishlist",
     label: "Clear wishlist",
-    summary: "Every card you are looking for, with its preferred finish and notes.",
+    summary: "Every card you are looking for and every folder, with its preferred finish and notes.",
     warning: (
       <>
-        Deletes every entry on your wishlist, along with the finish and notes recorded against
-        each one. Your collection and decks are not touched. This cannot be undone.
+        Deletes every entry on your wishlist and every folder you filed them in, along with the
+        finish and notes recorded against each one. Your collection and decks are not touched.
+        This cannot be undone.
       </>
     ),
   },
