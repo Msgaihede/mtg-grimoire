@@ -16,6 +16,7 @@
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
+ * `RowDeck`                                      — `src-tauri/src/collection_decks.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
@@ -28,26 +29,34 @@
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Five settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Six settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — one, `cardZoom`/
- * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and two as a bare
- * `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All five are
+ * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and three as a
+ * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`),
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`) and
+ * `deckDrivenCollection`/`setDeckDrivenCollection` (`src-tauri/src/deck_driven.rs`). All six are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
  * Three of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`), and a row a newer build wrote must reach this
- * side as what it is. **The two booleans are the ones with no narrowing to do**, and that is the
- * same argument arriving at nothing rather than an exception to it: a boolean has no vocabulary
- * for a later build to have widened, so there is no third state a row could come back in. Each
- * far end folds a missing row, a junk row and an unreadable one alike into its own default —
- * `false` for the nav rail, which is expanded, and `true` for the deck editor's search column,
- * which is open — and `boolean` here is the whole of the type, with nothing left for this side to
- * decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit or a
- * spelling a future build invents is already collapsed before it reaches the wire.
+ * side as what it is. **The three booleans are the ones with no narrowing to do**, and that is
+ * the same argument arriving at nothing rather than an exception to it: a boolean has no
+ * vocabulary for a later build to have widened, so there is no third state a row could come back
+ * in. Each far end folds a missing row, a junk row and an unreadable one alike into its own
+ * default — `false` for the nav rail, which is expanded; `true` for the deck editor's search
+ * column, which is open; `false` for the collection's source, which is the reader's own
+ * hand-kept rows — and `boolean` here is the whole of the type, with nothing left for this side
+ * to decide. All three store `"1"`/`"0"` and read anything else as that default, so a hand-edit
+ * or a spelling a future build invents is already collapsed before it reaches the wire.
+ *
+ * **The third of them is the one whose *refusal* is not swallowed**, and that is a caller's
+ * decision rather than a difference in the command: `set_deck_driven_collection` answers the
+ * same `BUSY` the other two do, but the flag decides what the Collection page is a list of, so
+ * `@/lib/useDeckDrivenCollection` rolls the control back and shows the sentence where
+ * `@/lib/useNavCollapsed` keeps the reader's choice and says nothing.
  *
  * The zoom row is the one of the five whose *shape* is a map, and the difference is worth a
  * sentence: it has no single default to fall back on, because there are seven walls and each one
@@ -838,7 +847,15 @@ export interface CollectionRow {
   typeLine: string | null;
   layout: string | null;
   finish: string;
-  condition: string;
+  /**
+   * What state the copy is in, and **`null` when the collection is derived from the decks** —
+   * a deck card has nowhere to record a condition.
+   *
+   * Not the column's `NM` default, which would be a fact nobody stated: this field reaches the
+   * reader's exported file through `fromCollectionRow`, and `NM` on every derived row would be
+   * this app writing a grade into their CSV on their behalf.
+   */
+  condition: string | null;
   quantity: number;
   tradelistQuantity: number;
   /**
@@ -896,6 +913,28 @@ export interface CollectionRow {
    * `null` is an orphan — the printing this entry names has left `cards`.
    */
   legalities: string | null;
+  /**
+   * How many decks these copies are spread across — `null` unless the collection is derived
+   * from them, because the hand-kept table has no such fact.
+   *
+   * Free: it rides along in the same aggregate the quantity is summed by. The deck *names* do
+   * not — {@link ipc.collectionRowDecks} answers those, asked on hover rather than putting
+   * several hundred of them on a 100-row page.
+   */
+  deckCount: number | null;
+}
+
+/**
+ * One deck holding copies of a collection row's printing. `src-tauri/src/collection_decks.rs`.
+ *
+ * Read lazily, per row, behind {@link CollectionRow.deckCount} — never returned with the page.
+ */
+export interface RowDeck {
+  deckId: number;
+  deckName: string;
+  /** Copies in **this** deck, summed across its categories — the inactive ones included,
+   *  because these lines have to add up to the count the row shows. */
+  quantity: number;
 }
 
 export interface CollectionPage {
@@ -3179,6 +3218,26 @@ export const ipc = {
   collectionSummary: (query: CollectionQuery) =>
     invoke<CollectionSummary>("collection_summary", { query }),
   /**
+   * The decks holding one deck-driven collection row's copies — the names behind its
+   * {@link CollectionRow.deckCount}, asked for on hover rather than shipped with the page.
+   *
+   * **`finish` is the collection row's own spelling and is passed straight through.** A plain
+   * copy is `'nonfoil'` on a collection row and NULL on a deck card; the far end translates
+   * (`src-tauri/src/collection_decks.rs`), so a caller that helpfully sent `null` here would get
+   * a deserialization error rather than an empty list. Hand it `row.finish`.
+   *
+   * **Not gated on the setting.** `row_decks` has no flag check and queries `deck_cards`
+   * unconditionally, which is right: "which decks hold this printing" is a fact about decks and
+   * is true in either mode. What is mode-specific is who asks — the page only reaches for this
+   * where a {@link CollectionRow.deckCount} exists to explain, and that is `null` while the
+   * collection is hand-kept.
+   *
+   * A row whose decks have since changed answers whatever they hold now — it is a read, never
+   * a promise that the count it explains is still current.
+   */
+  collectionRowDecks: (cardId: string, finish: string, lang: string) =>
+    invoke<RowDeck[]>("collection_row_decks", { cardId, finish, lang }),
+  /**
    * One transaction for a whole imported file, rather than one `collectionAdd` per line — a
    * 500-row CSV would otherwise be 500 transactions, and a failure halfway through would leave
    * a collection nobody can reason about. A refusal rolls the whole file back.
@@ -4009,6 +4068,25 @@ export const ipc = {
    * launch's starting state and nothing this session.
    */
   setDeckSearchOpen: (open: boolean) => invoke<void>("set_deck_search_open", { open }),
+  /**
+   * Whether the collection is the sum of the reader's live decks rather than a hand-kept list.
+   *
+   * The **sixth** `app_meta` setting and the third bare `boolean` — see this file's header, and
+   * `src-tauri/src/deck_driven.rs`. Nothing to narrow, and the far end is infallible the way the
+   * other two are: a missing row, a junk row and an unreadable one all answer `false`, the
+   * hand-kept collection, which is where a reader who has never touched this switch keeps their
+   * cards.
+   */
+  deckDrivenCollection: () => invoke<boolean>("deck_driven_collection"),
+  /**
+   * Remember it. Answers `collection::BUSY` under a running sync like every other write — and
+   * **unlike {@link setNavCollapsed}, that refusal is surfaced and the control is put back**.
+   * This flag decides what the Collection page is a *list of*, so a switch left disagreeing with
+   * the page under it is worse than a moment's interruption. `@/lib/useDeckDrivenCollection`
+   * has the argument.
+   */
+  setDeckDrivenCollection: (enabled: boolean) =>
+    invoke<void>("set_deck_driven_collection", { enabled }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.

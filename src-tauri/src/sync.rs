@@ -595,7 +595,7 @@ fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::Scryfal
 /// it was trying to write. `do_sync`'s orphan-sweep arm is the site that has to remember: it
 /// has the connection in hand and calls [`crate::errors::record`] directly, because coming
 /// through here would waste that whole wait against a lock that scope already holds.
-/// `spawn_build` holds nothing, and `collection::with_write_owned` releases its guard before
+/// `spawn_build` holds nothing, and `collection_source::with_write_owned` releases its guard before
 /// calling `invalidate_owned` — which its own doc names as the house rule.
 pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {

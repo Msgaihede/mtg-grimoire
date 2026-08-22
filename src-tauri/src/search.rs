@@ -84,14 +84,20 @@ pub struct SearchRequest {
     /// those it does not. Spec §7's owned/wishlist status filter, buildable at last now
     /// that the table exists.
     ///
-    /// **An entry, not a copy.** A row emptied to zero is a row the collection keeps (see
-    /// [`crate::collection::set_quantity`]), and this filter counts it as owned — the same
-    /// reading as `CollectionSummary::unique_cards`, "printings recorded, not printings
-    /// currently held". So a card whose only entry sits at zero passes `owned: true` while
-    /// its [`CardSummary::owned_quantity`] reads `0`, and does *not* appear under
-    /// `owned: false`. Deliberate, and the one place it could surprise a reader is a "what
-    /// am I missing" list, which is the wishlist's `fulfilled` filter — that one counts
-    /// copies, because a wish is filled by copies rather than by paperwork.
+    /// **An entry, not a copy** — while the collection is the reader's own table. A row emptied
+    /// to zero is a row the collection keeps (see [`crate::collection::set_quantity`]), and this
+    /// filter counts it as owned: the same reading as `CollectionSummary::unique_cards`,
+    /// "printings recorded, not printings currently held". So a card whose only entry sits at
+    /// zero passes `owned: true` while its [`CardSummary::owned_quantity`] reads `0`, and does
+    /// *not* appear under `owned: false`. Deliberate, and the one place it could surprise a
+    /// reader is a "what am I missing" list, which is the wishlist's `fulfilled` filter — that
+    /// one counts copies, because a wish is filled by copies rather than by paperwork.
+    ///
+    /// **The distinction has nothing to bite on in the derived arm**, and that is worth saying
+    /// rather than leaving to be rediscovered: `deck_cards` carries `CHECK (quantity > 0)`, so a
+    /// deck row at zero is not a row at all. While the collection is derived from the decks
+    /// (see [`crate::collection_source`]) "entry" and "copy" name the same set, and the
+    /// paragraph above describes a state the reader cannot be in.
     pub owned: Option<bool>,
     /// How to order the page: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is the default — relevance when `text` is set,
@@ -710,13 +716,21 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // None of it touches the default browse: this filter is opt-in, and narrowed by any text
     // at all it is 0.1 ms. `owned: false` is 17 ms at every collection size, because a
     // predicate most rows satisfy reaches the cap immediately.
+    //
+    // **The table it reads is not fixed.** `crate::collection_source::owns_printing` builds
+    // both arms, so with the deck-driven collection on the probe is `deck_cards` over the
+    // live lists instead — and every measurement above was taken against
+    // `collection_entries`, which is the arm the shape of this filter was chosen for.
+    // `NOT EXISTS (…)` and `NOT (EXISTS (…))` are the same plan to SQLite, which is what lets
+    // the negative arm come out of the same builder rather than out of a second literal.
     match req.owned {
         Some(true) => p
             .wheres
-            .push("EXISTS (SELECT 1 FROM collection_entries e WHERE e.card_id = c.id)".to_owned()),
-        Some(false) => p.wheres.push(
-            "NOT EXISTS (SELECT 1 FROM collection_entries e WHERE e.card_id = c.id)".to_owned(),
-        ),
+            .push(crate::collection_source::owns_printing(conn, "c.id")),
+        Some(false) => p.wheres.push(format!(
+            "NOT {}",
+            crate::collection_source::owns_printing(conn, "c.id")
+        )),
         None => {}
     }
     let where_sql = p.where_sql();
@@ -899,6 +913,10 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             )
         };
 
+        // The owned badge, by **oracle card** because the row stands for a whole group of
+        // printings — built by [`crate::collection_source`] rather than written out, so the
+        // wall and the Collection page cannot disagree about what the reader has.
+        let owned_by_oracle = crate::collection_source::copies_of_oracle(conn, "c.oracle_id");
         format!(
             "{cte} g AS (
                 SELECT {COLLAPSE_KEY} AS oid, count(*) AS printings,
@@ -919,9 +937,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     -- **both** branches — the two share one row mapping, and only the three
                     -- collapse-only aggregates may follow it.
                     c.game_changer,
-                    coalesce((SELECT sum(e.quantity) FROM collection_entries e
-                               JOIN cards k ON k.id = e.card_id
-                              WHERE k.oracle_id = c.oracle_id), 0),
+                    {owned_by_oracle},
                     EXISTS (SELECT 1 FROM wishlist_entries w
                              WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
                                 OR w.card_id IN (SELECT id FROM cards
@@ -931,12 +947,14 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
              ORDER BY {final_order}"
         )
     } else {
+        // The same badge, by **printing**: an uncollapsed row is one printing, so the count
+        // beside it is that printing's.
+        let owned_by_printing = crate::collection_source::copies_of_printing(conn, "c.id");
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
                     c.oracle_id, c.finishes, c.promo_types, c.game_changer,
-                    coalesce((SELECT sum(e.quantity) FROM collection_entries e
-                               WHERE e.card_id = c.id), 0),
+                    {owned_by_printing},
                     EXISTS (SELECT 1 FROM wishlist_entries w
                              WHERE w.card_id = c.id
                                 OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
@@ -3860,6 +3878,135 @@ mod tests {
         .unwrap();
         assert_eq!(missing.total, 1);
         assert_eq!(missing.items[0].id, "2");
+    }
+
+    /// Two printings and one deck: `p1` sleeved up twice, `p2` only planned for.
+    ///
+    /// Its own fixture rather than [`seeded`]'s three rows, because every assertion here is
+    /// about the *decks* and that fixture has none — and because the two cards need
+    /// different oracle ids for the collapsed badge, which counts by oracle card.
+    fn deck_driven_search_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                                rarity,finishes,prices,raw)
+                  VALUES ('p1','o1','Sol Ring','cmr','472','en','normal','uncommon',
+                          '[\"nonfoil\"]','{}','{}'),
+                         ('p2','o2','Lightning Bolt','lea','161','en','normal','common',
+                          '[\"nonfoil\"]','{}','{}');
+
+             INSERT INTO decks (id, name, created_at, updated_at) VALUES (1,'Atraxa',0,0);
+             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+                  VALUES (10,1,'Ramp','main',1,0,0,0);
+             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, quantity, finish,
+                                     created_at, updated_at)
+                  VALUES (1,10,'live','p1','cmr','472','en','Sol Ring',2,NULL,0,0),
+                         (1,10,'theory','p2','lea','161','en','Lightning Bolt',3,NULL,0,0);",
+        )
+        .unwrap();
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        conn
+    }
+
+    /// The ids one request answers with, in the order it answered them.
+    fn search_ids(conn: &Connection, req: SearchRequest) -> Vec<String> {
+        run_search(conn, &req)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    }
+
+    /// The Owned chip reads the live deck lists when the setting is on — so the search wall
+    /// and the Collection page cannot disagree about the same card. A theory row is a plan
+    /// and not a card in the reader's hands, which is what puts `p2` under "missing".
+    #[test]
+    fn owned_reads_the_decks_when_deck_driven() {
+        let conn = deck_driven_search_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        let owned = search_ids(
+            &conn,
+            SearchRequest {
+                owned: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(owned, vec!["p1"]);
+
+        let missing = search_ids(
+            &conn,
+            SearchRequest {
+                owned: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(missing, vec!["p2"], "a planned card is a card still wanted");
+    }
+
+    /// The same fixture with the setting **off**: nothing has been entered by hand, so the
+    /// decks' four copies are invisible and the chip answers the other way round. Pinned
+    /// because a swap that read the decks unconditionally would pass every assertion above.
+    #[test]
+    fn owned_still_reads_the_table_when_the_setting_is_off() {
+        let conn = deck_driven_search_db();
+        assert!(
+            search_ids(
+                &conn,
+                SearchRequest {
+                    owned: Some(true),
+                    ..Default::default()
+                }
+            )
+            .is_empty(),
+            "the hand-kept collection is empty however full the decks are"
+        );
+        assert_eq!(
+            search_ids(
+                &conn,
+                SearchRequest {
+                    owned: Some(false),
+                    ..Default::default()
+                }
+            ),
+            // Name order, which is the default: Lightning Bolt before Sol Ring.
+            vec!["p2", "p1"]
+        );
+    }
+
+    /// The badge counts copies, and while the setting is on the copies are the live deck
+    /// rows. **Both branches**, because the uncollapsed one asks by printing and the
+    /// collapsed one by oracle card, and they are two expressions of one rule.
+    #[test]
+    fn the_owned_badge_counts_live_copies_when_deck_driven() {
+        let conn = deck_driven_search_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        let rows = run_search(&conn, &SearchRequest::default()).unwrap().items;
+        let p1 = rows.iter().find(|r| r.id == "p1").unwrap();
+        assert_eq!(p1.owned_quantity, 2);
+        let p2 = rows.iter().find(|r| r.id == "p2").unwrap();
+        assert_eq!(p2.owned_quantity, 0, "a theory row is not a copy held");
+
+        let collapsed = run_search(
+            &conn,
+            &SearchRequest {
+                collapse: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items;
+        let p1 = collapsed.iter().find(|r| r.id == "p1").unwrap();
+        assert_eq!(
+            p1.owned_quantity, 2,
+            "the collapsed badge asks by oracle id"
+        );
     }
 
     /// The count is the picker's only signal, and the picker sits above a search that

@@ -14,6 +14,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckAuditEntry } from "@/lib/ipc";
+import { useDeckWriteRoots } from "@/lib/useDeckDrivenCollection";
 import { auditSentence } from "./auditText";
 
 /** What the editor draws and presses. */
@@ -74,9 +75,20 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
     enabled: deckId !== null,
   });
 
+  /**
+   * `useDeck`'s rule, reached from the other end: an undo *is* a deck write, so it makes the
+   * same roots wrong as the write it reverses.
+   *
+   * While the collection is derived that is all four of `OWNERSHIP_ROOTS` — reversing an add of
+   * three copies takes three copies back out of the collection — and while it is hand-kept it is
+   * `["decks"]` alone, additively. {@link useDeckWriteRoots} owns the choice; this is the only
+   * place in the hook that invalidates, so both writes and all three of their refusals go
+   * through it.
+   */
+  const writeRoots = useDeckWriteRoots();
   const invalidate = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["decks"] });
-  }, [queryClient]);
+    for (const queryKey of writeRoots) void queryClient.invalidateQueries({ queryKey });
+  }, [queryClient, writeRoots]);
 
   const undoWrite = useMutation({
     mutationFn: (auditId: number) => ipc.deckUndoApply(deckId as number, auditId),

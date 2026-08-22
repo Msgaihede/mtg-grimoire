@@ -14,6 +14,20 @@ vi.mock("@/lib/ipc", async (original) => ({
     wishlistAdd: (wish: WishInput) => wishlistAdd(wish),
   },
 }));
+
+/** Whether the collection is deck-driven, for the one test below that needs it true. Mocked
+ *  rather than driven through the real hook's `QueryClient`, per this task's own instruction —
+ *  a sibling is still wiring the Storybook fake's support for this setting. */
+const deckDriven = { value: false };
+vi.mock("@/lib/useDeckDrivenCollection", async (original) => ({
+  ...(await original<typeof import("@/lib/useDeckDrivenCollection")>()),
+  useDeckDrivenCollection: () => ({
+    deckDriven: deckDriven.value,
+    setDeckDriven: vi.fn(),
+    error: null,
+  }),
+}));
+
 import { AddToCollectionButton, type AddTarget } from "./AddToCollection";
 
 const BOLT: AddTarget = {
@@ -78,6 +92,7 @@ const quantity = () => screen.getByRole("spinbutton", { name: "Quantity of Light
 beforeEach(() => {
   collectionAdd.mockReset().mockResolvedValue(written);
   wishlistAdd.mockReset().mockResolvedValue(written);
+  deckDriven.value = false;
 });
 
 describe("AddToCollectionButton", () => {
@@ -339,6 +354,41 @@ describe("AddToCollectionButton", () => {
     await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
 
     expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to wishlist");
+  });
+
+  /**
+   * While the collection is deck-driven, the backend refuses every collection write outright
+   * — so the Add button is inert rather than left to round-trip into that refusal, and it says
+   * why right in its own name.
+   */
+  it("refuses the collection arm and says why, while leaving the write unreachable", async () => {
+    deckDriven.value = true;
+    await open();
+
+    const add = screen.getByRole("button", { name: /collection.*driven by your decks/i });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(add);
+
+    expect(collectionAdd).not.toHaveBeenCalled();
+  });
+
+  /** The wishlist arm writes nothing the collection setting refuses, so it is untouched. */
+  it("leaves the wishlist arm working while the collection is deck-driven", async () => {
+    deckDriven.value = true;
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+    const add = screen.getByRole("button", { name: "Add to wishlist" });
+    expect(add).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(add);
+
+    expect(wishlistAdd).toHaveBeenCalledWith({
+      cardId: "c1",
+      quantity: 1,
+      preferredFinish: "nonfoil",
+    });
   });
 
   /** The popup is 256px of controls hanging over a list. Tabbing out of it must not leave

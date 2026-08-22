@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ipc } from "@/lib/ipc";
+import { useDeckDrivenFlag } from "@/lib/useDeckDrivenCollection";
 import { writeFailure, type Write } from "@/lib/writes";
 import { cacheOutcome, collectionOutcome, decksOutcome, wishlistOutcome } from "./clearOutcome";
 
@@ -61,13 +62,21 @@ const COLLECTION_ROOTS = [["collection"], ["cards"], ["card"], ["decks"], ["wish
 const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
 
 /**
- * Only the decks.
+ * Only the decks — **and only while the collection is hand-kept.**
  *
  * Deliberately short, and it is the one worth stating: a deck holds an allocation *against* a
- * collection row, but nothing the collection page or the search wall draws is derived from it —
- * `CollectionRow` has no deck-shaped field, and `CardSummary.ownedQuantity` is finish-blind and
- * allocation-blind by design. So the claims all being released changes what the deck pages say
- * and nothing else.
+ * collection row, and in that mode nothing the collection page or the search wall draws is
+ * derived from it. `CollectionRow.deckCount` is `null` unless the collection is derived, and
+ * `CardSummary.ownedQuantity` is finish-blind and allocation-blind by design. So the claims all
+ * being released changes what the deck pages say and nothing else.
+ *
+ * **While the collection is derived, this button is `collectionClear` under another name**, and
+ * it takes {@link COLLECTION_ROOTS} for that reason rather than the four a deck *write* takes.
+ * The collection in that mode is the sum of every `variant: 'live'` deck card; `decks_clear`
+ * cascades those rows away, so the press does not release claims — it empties the collection,
+ * every printing's owned count in the card pane with it, and every wish's have/want. That is a
+ * superset of the four write roots (`["cards"]` is a prefix of `["cards", "search"]`), which is
+ * the right direction for the one press here that cannot be undone.
  */
 const DECK_ROOTS = [["decks"]];
 
@@ -93,6 +102,11 @@ export function useDangerZone(): {
   const client = useQueryClient();
   const [outcome, setOutcome] = useState<string | null>(null);
   const started = () => setOutcome(null);
+  /**
+   * Which list the **decks** clear owes — see {@link DECK_ROOTS}. Read here rather than at the
+   * `onSuccess`, because a hook is what answers it and a mutation callback is not a render.
+   */
+  const deckDriven = useDeckDrivenFlag();
 
   const collection = useMutation({
     mutationFn: () => ipc.collectionClear(),
@@ -116,7 +130,7 @@ export function useDangerZone(): {
     mutationFn: () => ipc.decksClear(),
     onMutate: started,
     onSuccess: (r) => {
-      invalidate(client, DECK_ROOTS);
+      invalidate(client, deckDriven ? COLLECTION_ROOTS : DECK_ROOTS);
       setOutcome(decksOutcome(r));
     },
   });

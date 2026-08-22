@@ -242,7 +242,9 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 ///
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
-const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
+///
+/// The hand-kept arm. [`owned_spare_sql`] picks between this and the derived one.
+const OWNED_SPARE_SQL_TABLE: &str = "SELECT coalesce(sum(e.quantity), 0) -
             coalesce((SELECT sum(min(a.quantity, e2.quantity))
                         FROM deck_allocations a
                         JOIN decks d ON d.id = a.deck_id
@@ -251,6 +253,43 @@ const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
                          AND e2.finish = coalesce(?2, 'nonfoil')), 0)
        FROM collection_entries e
       WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')";
+
+/// [`OWNED_SPARE_SQL_TABLE`]'s question, asked of whichever source the collection is.
+///
+/// **The derived arm has no `deck_allocations` in it**, because that ledger is not written in
+/// this mode ([`crate::deck::allocate_deck`] stands down, so the rows still on disk describe a
+/// world the reader left). "Copies a built deck is using" becomes exactly that — a sum over the
+/// built decks' own live rows — and `is_built` keeps the job it has always had: a card sitting
+/// in an unbuilt deck's live list is still available to a plan, and one in a sleeved-up deck is
+/// not.
+///
+/// The bound parameters are the same on both arms — `?1` the printing, `?2` the deck row's
+/// `finish` — so nothing at the call site moves. `coalesce(?2, 'nonfoil')` is doing double duty
+/// on the derived side: it is the same NULL-versus-`nonfoil` translation the doc above
+/// describes, applied to *both* halves of the subtraction, because `deck_cards.finish` spells
+/// the regular copy NULL on the source rows too.
+///
+/// The minuend is spelled through [`crate::collection_source::LIVE`], which is the one place
+/// "a card the reader owns" is written down. The subtrahend spells `dc2.variant = 'live'`
+/// itself, deliberately: that term is not the ownership rule but the *other* side of the
+/// comparison — the built decks' own live lists, the copies already spoken for — and folding
+/// it into the shared constant would make one edit move two unrelated meanings.
+fn owned_spare_sql(conn: &Connection) -> String {
+    if !crate::deck_driven::stored(conn) {
+        return OWNED_SPARE_SQL_TABLE.to_owned();
+    }
+    format!(
+        "SELECT coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
+                           WHERE {live} AND dc.card_id = ?1
+                             AND coalesce(dc.finish, 'nonfoil') = coalesce(?2, 'nonfoil')), 0) -
+                coalesce((SELECT sum(dc2.quantity) FROM deck_cards dc2
+                            JOIN decks d ON d.id = dc2.deck_id
+                           WHERE dc2.variant = 'live' AND d.is_built = 1
+                             AND dc2.card_id = ?1
+                             AND coalesce(dc2.finish, 'nonfoil') = coalesce(?2, 'nonfoil')), 0)",
+        live = crate::collection_source::LIVE
+    )
+}
 
 /// Cards the **theory** list holds that **live** does not.
 ///
@@ -372,7 +411,9 @@ fn grouped_diff(
         }
     }
 
-    let mut spare = conn.prepare(OWNED_SPARE_SQL).map_err(|e| e.to_string())?;
+    let mut spare = conn
+        .prepare(&owned_spare_sql(conn))
+        .map_err(|e| e.to_string())?;
     let mut diff = Vec::new();
     // What the **exact** lines have already spoken for, per oracle card. Accumulated over every
     // group, including the ones that drop out just below: a plan the deck answers card for card
@@ -939,6 +980,25 @@ mod tests {
         own_finish(conn, card_id, "nonfoil", quantity)
     }
 
+    /// Sleeve a deck up, or take it apart. `is_built` is the whole of what a built deck is,
+    /// and it is the one thing the derived spare still asks a `decks` row.
+    fn set_built(conn: &Connection, deck_id: i64, built: bool) {
+        conn.execute(
+            "UPDATE decks SET is_built = ?2 WHERE id = ?1",
+            params![deck_id, built],
+        )
+        .unwrap();
+    }
+
+    /// [`owned_spare_sql`] asked directly, with the two parameters the caller binds — the
+    /// printing and the deck row's `finish`, `None` for the regular copy.
+    fn spare(conn: &Connection, card_id: &str, finish: Option<&str>) -> i64 {
+        conn.query_row(&owned_spare_sql(conn), params![card_id, finish], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
     /// The same, in a named finish — `collection_entries.finish` is NOT NULL and spells the
     /// regular copy `nonfoil`, where `deck_cards` spells it NULL.
     fn own_finish(conn: &Connection, card_id: &str, finish: &str, quantity: i64) -> i64 {
@@ -1238,7 +1298,7 @@ mod tests {
     /// `owned_spare` answers on the whole of the row's identity, finish included — the strip
     /// sums it, so anything wider counts one binder copy once per row that could have used it.
     ///
-    /// **The `coalesce(?2, 'nonfoil')` in [`OWNED_SPARE_SQL`] is what the first assertion pins**:
+    /// **The `coalesce(?2, 'nonfoil')` in [`owned_spare_sql`] is what the first assertion pins**:
     /// `deck_cards.finish` is NULL for the regular copy and `collection_entries.finish` spells
     /// it `nonfoil`, so binding the deck's NULL straight through reads every regular line as
     /// zero spare.
@@ -1972,5 +2032,81 @@ mod tests {
                 "heldAsOtherPrinting": 1
             })
         );
+    }
+
+    /// One deck holding a live copy, another planning for it — the fixture both derived-spare
+    /// tests read. Deck 1 plans, deck 2 holds; nothing is in the collection at all, which is
+    /// what makes the hand-kept arm answer 0 and the derived arm answer from the decks.
+    fn theory_db() -> (Connection, i64, i64) {
+        let conn = seeded();
+        let planner = deck(&conn, "Plan");
+        let holder = deck(&conn, "Krenko");
+        add(
+            &conn,
+            planner,
+            "bolt-lea",
+            category(&conn, planner, "Main deck"),
+            THEORY,
+            1,
+        );
+        add(
+            &conn,
+            holder,
+            "bolt-lea",
+            category(&conn, holder, "Main deck"),
+            LIVE,
+            1,
+        );
+        (conn, planner, holder)
+    }
+
+    /// `is_built` keeps its job under a deck-driven collection: a card sitting in an unbuilt
+    /// deck's live list is still available to a plan, and one in a sleeved-up deck is not.
+    ///
+    /// **There is no `deck_allocations` in the derived arm** — [`crate::deck::allocate_deck`]
+    /// stands down in this mode, so the ledger describes a world the reader left. "Copies a
+    /// built deck is using" becomes a sum over the built decks' own live rows, and this is
+    /// what says the substitution kept the meaning rather than just the shape.
+    #[test]
+    fn the_theory_spare_subtracts_built_decks_when_deck_driven() {
+        let (conn, _planner, holder) = theory_db();
+        assert_eq!(
+            spare(&conn, "bolt-lea", None),
+            0,
+            "hand kept, an empty collection has no spare copies to offer"
+        );
+
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        set_built(&conn, holder, false);
+        assert_eq!(spare(&conn, "bolt-lea", None), 1);
+
+        set_built(&conn, holder, true);
+        assert_eq!(spare(&conn, "bolt-lea", None), 0);
+    }
+
+    /// The NULL-versus-`nonfoil` translation, on the side that already documents the trap.
+    /// `deck_cards.finish` is NULL for the regular copy on **both** halves of the derived
+    /// subtraction, so binding the deck's NULL straight through would read every regular line
+    /// as zero — and here the minuend is a `deck_cards` row too, which is the new half.
+    #[test]
+    fn the_theory_spare_translates_the_regular_finish_when_deck_driven() {
+        let (conn, _planner, _holder) = theory_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(
+            spare(&conn, "bolt-lea", None),
+            1,
+            "the regular copy must not read zero"
+        );
+    }
+
+    /// The finish is still part of the object: the plan wants a foil and the holder has a
+    /// regular one, so there is nothing spare for that line. The same fixture, one finish
+    /// over — which is what stops the `coalesce` above being a blanket match.
+    #[test]
+    fn the_theory_spare_does_not_answer_a_foil_line_with_a_regular_copy_when_deck_driven() {
+        let (conn, _planner, _holder) = theory_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(spare(&conn, "bolt-lea", Some("foil")), 0);
     }
 }

@@ -1219,7 +1219,9 @@ pub async fn deck_undo_apply(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| apply_reversal(conn, deck_id, audit_id, true))
+        crate::collection_source::with_write_owned_if_derived(&state, |conn| {
+            apply_reversal(conn, deck_id, audit_id, true)
+        })
     })
     .await
     .map_err(|e| format!("the change could not be undone: {e}"))?
@@ -1234,7 +1236,7 @@ pub async fn deck_redo_apply(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| {
+        crate::collection_source::with_write_owned_if_derived(&state, |conn| {
             apply_reversal(conn, deck_id, audit_id, false)
         })
     })

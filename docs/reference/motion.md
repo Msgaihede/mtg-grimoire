@@ -2,8 +2,8 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- **Timings live in `src/lib/motion.ts` and nowhere else.** `DURATION` is `fast` 120 · `base`
-  180 · `slow` 260 ms, `EASE` is `standard`/`enter`/`exit`, and consumers import a **preset**
+- **Timings live in `src/lib/motion.ts` and nowhere else.** `DURATION` is `instant` 50 · `fast`
+  120 · `base` 180 · `slow` 260 ms, `EASE` is `standard`/`enter`/`exit`, and consumers import a **preset**
   (`scrim`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
   number. The 150 ms budget it replaces existed only as a prose comment and ~100 hand-copied
   `duration-150` literals. `src/index.css` carries the same scale so CSS-only sites agree.
@@ -18,6 +18,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   cost if that was wrong is one: a future right-hand drawer re-derives 260 ms/`enter` from git
   history. The dated design spec that introduced it still lists it, deliberately — a dated spec
   records what was decided then.
+- **`instant` (50 ms) was added on 2026-08-22, and it is the one tier deliberately below the
+  glitch floor `fast` names.** That floor is about a transition the reader *watches*; this is the
+  other case — the sidebar's labels, which appear only once the rail has finished widening for
+  them, so the arrival has already been announced by 180 ms of travel and the fade is only the
+  hard edge taken off text switching on. At `fast` that softening reads as a second event after
+  the first; at 0 the words snap. Its one consumer is `AppShell`'s nav labels, spelled
+  `duration-[var(--duration-instant)]` beside `animate-in fade-in`. It is not a licence to write
+  short numbers: a surface that *travels* belongs on one of the three above.
 - **`stackCard` moved from `base` to `slow` on 2026-08-14** — the tiers themselves are unchanged.
   The design spec's table filed the deck stack's reflow with the popups, and 180 ms is right for
   a surface that *appears*; this one travels **293 px**, which is drawer distance, and a reader
@@ -25,8 +33,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   arrived before the eye had followed it. `STACK_CLOSE_DELAY_MS` stayed at 180 ms and is now
   deliberately unequal to the tween — it is gesture intent, never derived from it.
 - **`@theme static` is load-bearing for `--duration-*`.** Measured against tailwindcss 4.3.3 by
-  compiling the block both ways: under plain `@theme` the three lines are **absent from the
-  output entirely** (tree-shaken, because nothing references them), under `@theme static` they
+  compiling the block both ways: under plain `@theme` the `--duration-*` lines are **absent from
+  the output entirely** (tree-shaken, because nothing references them), under `@theme static` they
   land in `:root`. `--ease-*` **is** a v4 namespace, so `ease-standard` is a real utility;
   `--duration-*` is **not**, so there is no `duration-base` and it is read as
   `duration-[var(--duration-fast)]`.

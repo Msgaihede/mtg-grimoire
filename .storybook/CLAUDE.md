@@ -28,7 +28,7 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **seventeen** faults
+  Five seeds (`empty`/`starter`/`needsReview`/`large`/`deckDriven`), **seventeen** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`); saying
@@ -75,6 +75,18 @@ deliberately**: no screenshots are stored.
   both `plant` and `landscape` — 43 % of real art tags have more than one), one `weak` tagging so
   the weight floor visibly changes a wall, and one illustration tagged twice so the closure's
   fold to the *strongest* weight has something to fold.
+- **`deckDriven` is the one seed whose subject is a *setting***, and the one that seeds **no
+  `collection_entries` at all**. That emptiness is the fixture: the flag deletes nothing, so a
+  real world usually has hidden hand-built rows under the derived list — but a story drawing
+  five rows cannot tell whether they came from the decks or the table unless the table is empty.
+  A world with both is made by *pressing* the control on `starter`, which is where the switching
+  stories belong. **One rule the fake states in one place**: `liveDeckCopies(db)` in `db.ts` is
+  `collection_source::rows`, and the collection list, the summary, the search's owned badge and
+  filter, the wishlist's owned count, `deck_get`'s per-row owned and the theory diff's
+  `ownedSpare` all read it or the `variant === "live"` predicate above it — never a sum of their
+  own, which is the drift the crate's own `the_two_shapes_agree_on_the_same_database` exists to
+  stop. Every derived read spells the regular copy `finish ?? "nonfoil"`, the grouping key
+  included; a missed translation reads as an empty collection rather than as a bug.
 - **Muting is never seeded.** `muted_tags` is a user table and the only one in that group, so a
   Settings list showing a muted tag is about a press the story made — `deckUndo`'s rule.
 - **`indexCold`'s response answers every map with an *empty* one and every scalar with `0`, and

@@ -14,16 +14,17 @@
  *
  * ## The scale
  *
- * Three tiers, from the spec's §3 table. The app's stated 150ms budget is kept as the
- * *interaction* tier and widened only where a surface travels a real distance:
+ * Four tiers, three of them from the spec's §3 table. The app's stated 150ms budget is kept as
+ * the *interaction* tier and widened only where a surface travels a real distance:
  *
  * | tier | value | for |
  * |---|---|---|
+ * | {@link DURATION.instant} | 50ms | content appearing where it was already expected |
  * | {@link DURATION.fast} | 120ms | press feedback, chevrons, colour |
  * | {@link DURATION.base} | 180ms | popups, status lines |
  * | {@link DURATION.slow} | 260ms | dialogs, which cross the window, and the deck stack's reflow |
  *
- * `src/index.css` carries the same three as `--duration-*` and the same three curves as
+ * `src/index.css` carries the same four as `--duration-*` and the same three curves as
  * `--ease-*`, so a CSS-only transition and a JS one cannot drift. `motion.test.ts` compares
  * the two files and fails if they do.
  *
@@ -74,11 +75,26 @@ import type { TargetAndTransition, Transition, Variants } from "motion/react";
 export type Bezier = [number, number, number, number];
 
 /**
- * The three tiers, in **milliseconds** — the unit the CSS tokens and the design conversation
+ * The four tiers, in **milliseconds** — the unit the CSS tokens and the design conversation
  * are both in. `motion` wants seconds; {@link seconds} is the one place that conversion
  * happens.
  */
 export const DURATION = {
+  /**
+   * Content taking the last step into a place the reader is already looking, and **the one tier
+   * that is deliberately below the glitch floor {@link DURATION.fast} names**.
+   *
+   * The floor is about a transition the reader *watches* — a thing that has to read as having
+   * moved. This is the other case: the sidebar's labels, which appear only once the rail has
+   * finished widening for them, so the arrival has already been announced by 180ms of travel
+   * and all that is left is to take the hard edge off text switching on. At `fast` that
+   * softening becomes a second event after the first, which is what it exists not to be; at 0
+   * the words snap. 50ms is the width of the edge and nothing more.
+   *
+   * Added 2026-08-22 with the sidebar's collapse fixes, and it is not a licence to write short
+   * numbers: a surface that travels belongs on one of the three below.
+   */
+  instant: 50,
   /** Press feedback, chevrons, a colour change. Below this a transition reads as a glitch. */
   fast: 120,
   /** The interaction tier, and the app's old 150ms budget rounded to the scale. */
@@ -115,8 +131,9 @@ export const EASE = {
   exit: [0.4, 0, 1, 1],
 } satisfies Record<string, Bezier>;
 
-/** The three tiers as ready `Transition`s, for a consumer that is not animating enter/exit. */
+/** The four tiers as ready `Transition`s, for a consumer that is not animating enter/exit. */
 export const TRANSITION = {
+  instant: { duration: seconds(DURATION.instant), ease: EASE.standard },
   fast: { duration: seconds(DURATION.fast), ease: EASE.standard },
   base: { duration: seconds(DURATION.base), ease: EASE.standard },
   slow: { duration: seconds(DURATION.slow), ease: EASE.standard },

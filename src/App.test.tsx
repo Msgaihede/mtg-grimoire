@@ -361,6 +361,8 @@ const BOLT_ENTRY: CollectionRow = {
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
+  // A hand-kept row: `null` is what the collection says when it is not derived from the decks.
+  deckCount: null,
 };
 
 /** And as a wish — **pinned to a printing**, because an any-printing wish opens no pane and

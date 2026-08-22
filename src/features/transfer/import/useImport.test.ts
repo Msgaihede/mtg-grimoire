@@ -17,6 +17,7 @@ const deckImportCommit = vi.hoisted(() => vi.fn());
 const importResolve = vi.hoisted(() => vi.fn());
 const importReadFile = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -26,9 +27,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     importResolve,
     importReadFile,
     oracleTagsForPrintings,
+    deckDrivenCollection,
   },
 }));
 
+import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useImport } from "./useImport";
 
 const MADE: DeckRow = {
@@ -90,6 +93,89 @@ beforeEach(() => {
   importResolve.mockReset().mockResolvedValue([]);
   importReadFile.mockReset().mockResolvedValue("");
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
+  deckDrivenCollection.mockReset().mockResolvedValue(false);
+});
+
+/** `useDeck.test.ts`'s helper and its reasoning — a `staleTime: 30_000` cache is *fresh*, so
+ *  `isInvalidated` is the whole of what tells the Collection page anything happened. */
+const OWNED_CACHES: readonly (readonly string[])[] = [
+  ["collection", "list", "{}"],
+  ["cards", "search", "{}"],
+  ["decks", "list"],
+  ["wishlist", "list", "{}"],
+];
+
+function seedOwned(c: QueryClient): void {
+  for (const key of OWNED_CACHES) c.setQueryData(key, { items: [], total: 0 });
+}
+
+const staleRoots = (c: QueryClient): string[] =>
+  OWNED_CACHES.filter((key) => c.getQueryState(key)?.isInvalidated === true)
+    .map((key) => key[0])
+    .sort();
+
+/**
+ * The import commit is the largest single write in the app, and the one the review named twice.
+ *
+ * `deck_import_commit` takes a whole pasted decklist in one command, so a 300-line list adds 300
+ * cards to a derived collection at once. The Rust side routes the command through
+ * `with_write_owned_if_derived` deliberately; before this, `useImport` invalidated `["decks"]`
+ * and every one of those cards arrived unannounced, because `src/lib/query.ts` sets
+ * `staleTime: 30_000` and a cached Collection page does not refetch on being navigated to.
+ */
+describe("useImport while the collection is deck driven", () => {
+  it("marks the whole of what the reader owns stale after a commit", async () => {
+    client.setQueryData(DECK_DRIVEN_KEY, true);
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** A list committed as a **new** deck is the same write with a `deck_create` in front of it,
+   *  and it lands the same cards in the same collection. */
+  it("marks them stale after a list is imported as a new deck", async () => {
+    client.setQueryData(DECK_DRIVEN_KEY, true);
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.importIntoNewDeck.mutateAsync({
+      name: "Selvala",
+      formatKey: "commander",
+      gameKey: "paper",
+      items: ITEMS,
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** Additively — `["decks"]` is the floor in both modes, and the two tests above it in this
+   *  file pin that the refusal path takes it too. */
+  it("marks only the decks stale while the collection is hand kept", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
 });
 
 describe("useImport", () => {

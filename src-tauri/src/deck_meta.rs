@@ -37,6 +37,7 @@
 //! before; running the allocator there would be a rebuild of every claim over a write that
 //! changed none of them.
 
+use crate::collection_source::with_write_owned_if_derived as owned_if_derived;
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -1825,6 +1826,16 @@ pub async fn deck_category_rename(
     .map_err(unfinished)?
 }
 
+/// **Plain [`crate::sync::with_write`], and that is the decision rather than the oversight.**
+/// Every other deck write that can move `deck_cards` goes through
+/// [`crate::collection_source::with_write_owned_if_derived`], which rebuilds the search index's
+/// `owned` dimension while the collection is derived from the decks. This one moves no card:
+/// it flips `is_active`, and [`crate::collection_source::LIVE`] carries no `is_active` term —
+/// an inactive Maybeboard is a statement about how the *deck* is read, not about whether the
+/// cards are in the reader's hands, so a deck-driven collection counts it either way. Routing
+/// it here would be a ~1 MB index clone per press for an answer that cannot have changed.
+/// (It is still the allocator's rule in the hand-kept mode, which is why `set_category_active`
+/// reallocates — the two rules genuinely differ here, on purpose.)
 #[tauri::command]
 pub async fn deck_category_set_active(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1861,7 +1872,7 @@ pub async fn deck_category_delete(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| delete_category(c, id, move_to_category_id))
+        owned_if_derived(&state, |c| delete_category(c, id, move_to_category_id))
     })
     .await
     .map_err(unfinished)?

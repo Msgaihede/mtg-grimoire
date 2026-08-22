@@ -24,6 +24,7 @@ import {
   type ImportResolveRow,
   type PrintingTags,
 } from "@/lib/ipc";
+import { useDeckWriteRoots } from "@/lib/useDeckDrivenCollection";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
 
 /** What a commit into a deck that already exists needs — the four arguments of the command,
@@ -102,11 +103,23 @@ async function tagsFor(rows: readonly ImportResolveRow[]): Promise<PrintingTags[
  * The root is a prefix of `["decks", "list"]` and of every `["decks", "detail", id, variant]`,
  * so one key covers the gallery and the editor both.
  *
+ * **And, while the collection is derived, everything else the reader owns** —
+ * {@link useDeckWriteRoots} is the list and the gate, and `["decks"]` stays in both arms so the
+ * paragraph above holds unchanged in either mode. This is the largest single write in the app:
+ * `deck_import_commit` takes a whole pasted decklist in one command, so three hundred lines is
+ * three hundred cards arriving in the collection at once. Every one of them would otherwise land
+ * unannounced — `src/lib/query.ts` sets `staleTime: 30_000`, so the collection page and the
+ * search wall are *fresh* caches that mounting does not refetch, and nothing but an invalidation
+ * tells them. The Rust side routes this command deliberately; this is the half that was missing.
+ *
  * `resolve` and `readFile` take no key at all: neither writes anything.
  */
 export function useImport() {
   const queryClient = useQueryClient();
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["decks"] });
+  const writeRoots = useDeckWriteRoots();
+  const invalidate = () => {
+    for (const queryKey of writeRoots) void queryClient.invalidateQueries({ queryKey });
+  };
   const writes = { onSuccess: invalidate, onError: invalidate };
 
   /**
