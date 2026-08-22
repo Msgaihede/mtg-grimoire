@@ -71,9 +71,30 @@ export interface TagChipsProps {
    * it greys rather than disappearing. An option that vanishes reads as a control that broke.
    */
   onFloorChange?: (floor: ArtWeightFloor) => void;
+  /**
+   * What the group of chips is called — and it has to be settable, because the Tags page can
+   * draw **two** of these rows at once: the tags picked off its rail, and the tags typed into
+   * the search box above it (`TagQueryRow`). Two groups both announced "Picked tags" would be
+   * two controls a screen reader cannot tell apart, which is `chipKey`'s own argument one
+   * floor up.
+   */
+  ariaLabel?: string;
+  /**
+   * What to say when nothing is picked. `null` draws nothing at all, which is what a row that
+   * only appears once the reader has typed a tag wants — the Tags page's invitation would read
+   * as an instruction the search box cannot carry out.
+   */
+  emptyMessage?: string | null;
 }
 
-export function TagChips({ selection, onRemove, onToggleMode, onFloorChange }: TagChipsProps) {
+export function TagChips({
+  selection,
+  onRemove,
+  onToggleMode,
+  onFloorChange,
+  ariaLabel = "Picked tags",
+  emptyMessage = "No tags picked yet. Pick one from the list to narrow the cards.",
+}: TagChipsProps) {
   const row = useRef<HTMLDivElement>(null);
   /**
    * The chip the caret should land on once the one it was standing on has gone.
@@ -116,13 +137,12 @@ export function TagChips({ selection, onRemove, onToggleMode, onFloorChange }: T
     // outside the `role="group"` that names them — a group whose label promises the reader a
     // list of their tags must not also contain a switch.
     <div ref={row} className="flex flex-wrap items-center gap-1.5">
-      <div role="group" aria-label="Picked tags" className="flex flex-wrap items-center gap-1.5">
+      <div role="group" aria-label={ariaLabel} className="flex flex-wrap items-center gap-1.5">
         {chips.length === 0 ? (
-          // An empty row is an invitation rather than a blank: the page's whole gesture is
-          // picking a motif, and nothing else on screen says where from.
-          <p className="text-sm text-dim">
-            No tags picked yet. Pick one from the list to narrow the cards.
-          </p>
+          // An empty row is an invitation rather than a blank: the Tags page's whole gesture is
+          // picking a motif, and nothing else on screen says where from. A caller with no such
+          // gesture to name passes `null` and gets a row that simply is not there.
+          emptyMessage && <p className="text-sm text-dim">{emptyMessage}</p>
         ) : (
           chips.map((chip, i) => (
             <PickedChip

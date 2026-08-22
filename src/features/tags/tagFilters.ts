@@ -164,3 +164,52 @@ export function termsFor(s: TagSelection): {
 
   return out;
 }
+
+/** One namespace's two lists, concatenated and put back in {@link termsFor}'s canonical shape. */
+function mergeOne(a: TagTerms | undefined, b: TagTerms | undefined): TagTerms | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const join = (x: readonly string[] = [], y: readonly string[] = []) =>
+    [...new Set([...x, ...y])].sort();
+  return { include: join(a.include, b.include), exclude: join(a.exclude, b.exclude) };
+}
+
+/**
+ * Two sets of tag terms as one — the chips a page picked, ANDed with the tags a reader typed
+ * into the search box.
+ *
+ * **Both halves are statements the reader made and both narrow**, so this is a union of the
+ * lists rather than one side winning: a Tags page reader who has chipped `dog` and then types
+ * `o:ramp` is asking for a dog that ramps, and either half silently dropping the other's tags
+ * would answer a question nobody asked. Includes still intersect at the far end —
+ * `filters::picked_tags` gives each slug its own `EXISTS` — so a longer list is a narrower wall,
+ * which is what both gestures mean.
+ *
+ * **A namespace neither side picked from stays absent, not empty**, which is `termsFor`'s rule
+ * and the reason this returns `undefined` rather than `{ include: [], exclude: [] }`: absent
+ * means no filter everywhere in this codebase, and an empty list riding on every request would
+ * be a payload that lies about intent.
+ *
+ * Each list is deduplicated and sorted, so chipping `dog` and *also* typing `a:dog` is one
+ * `EXISTS` and — more to the point — one **query key**: the key `useCardSearch` derives from
+ * this payload must not mint a second cache entry for a search that is the same search.
+ *
+ * **The floor is the caller's alone.** The typed syntax has no keyword for it — Scryfall has no
+ * such qualifier to borrow — so `b` never carries one, and taking `a`'s is both arms of the
+ * `??` doing the only thing they can.
+ */
+export function mergeTagTerms(
+  a: { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor },
+  b: { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor },
+): { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor } {
+  const out: { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor } = {};
+  const artTags = mergeOne(a.artTags, b.artTags);
+  const oracleTags = mergeOne(a.oracleTags, b.oracleTags);
+  // Assigned only when there is one, so the object's *keys* say what was picked — which is what
+  // makes `JSON.stringify` of it a usable query key rather than a constant.
+  if (artTags) out.artTags = artTags;
+  if (oracleTags) out.oracleTags = oracleTags;
+  const floor = a.artWeightFloor ?? b.artWeightFloor;
+  if (floor) out.artWeightFloor = floor;
+  return out;
+}

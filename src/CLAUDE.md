@@ -437,6 +437,21 @@ Every one of these has its measurement and its story in
   marketplace) or when **the reader arranged it themselves** (deck categories, the folder tree).
   Everything else sorts. Every exemption carries a comment at its own site saying which of the two
   it is — that comment is the record, and grepping `sortOptions` is how you count them.
+- **The card search box reads Scryfall's tagger syntax, and the parse is TypeScript's while the
+  slug is Rust's.** `o:ramp`, `otag:"spot removal"`, `-a:dragon` — `features/search/tagQuery.ts`
+  splits the box into tag terms and the free text left for FTS, `tag_resolve` turns each name into
+  a canonical slug, and `useCardSearch` merges the result with whatever chips its caller passed.
+  One wiring reaches both surfaces: the search page and the deck editor's docked panel are the
+  same `FilterBar` over the same hook. Three rules that are not obvious, each with its failure
+  written at its own site and all of it in
+  [tag-search-syntax.md](../docs/reference/tag-search-syntax.md): **`a:` and `o:` mean the two
+  taxonomies here and `artist:`/`oracle:` on Scryfall**, so those two keywords are spent and an
+  artist filter cannot have them; **resolution is exact where the Tags page's type-ahead is a
+  substring**, because a substring resolves one typed name to many tags that would have to be
+  ORed while every tag filter in this app intersects; and **this is the one search in the app that
+  fails closed** — an unresolved name empties the wall in the hook rather than at each call site,
+  because `keepPreviousData` would otherwise leave the *previous* search's cards on screen under a
+  query that asked something else.
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.

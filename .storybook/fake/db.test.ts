@@ -4408,6 +4408,100 @@ describe("the tag search, the tag tree and muting", () => {
   });
 
   /**
+   * `tag_resolve` is the *filter* side and is exact where the type-ahead above is a substring,
+   * because a substring resolves one typed name to many tags that would then have to be ORed —
+   * while every tag filter in this app intersects.
+   *
+   * Separators and case are still noise, which is Scryfall's own rule: `otag:"spot removal"`,
+   * `otag:spot-removal`, `otag:spotremoval` and `otag:SPOT-REMOVAL` all returned exactly 4 907
+   * cards, verified live 2026-08-20.
+   */
+  it("resolves every spelling of a name and refuses a partial one", () => {
+    const read = readHandlers(tagged());
+    const asks = ["SPOT-REMOVAL", "spot removal", "spotremoval", "  spot!removal  "].map(
+      (value) => ({ namespace: "oracle", value }),
+    );
+
+    expect(read.tag_resolve({ asks }).map((r) => r?.slug)).toEqual(Array(4).fill("spot-removal"));
+    // The needle the type-ahead finds it from, which this one must not.
+    expect(read.tag_resolve({ asks: [{ namespace: "oracle", value: "spot-remov" }] })).toEqual([
+      null,
+    ]);
+  });
+
+  /**
+   * The misses ride along **in place**, because the box has to be able to name the token it
+   * could not find — and a list with them filtered out is the same length only by accident and
+   * can name nothing.
+   */
+  it("answers one entry per ask, in order, with the misses kept", () => {
+    const out = readHandlers(tagged()).tag_resolve({
+      asks: [
+        { namespace: "oracle", value: "nonesuch" },
+        { namespace: "oracle", value: "spot-removal" },
+        { namespace: "art", value: "nonesuch" },
+      ],
+    });
+
+    expect(out.map((r) => r?.slug ?? null)).toEqual([null, "spot-removal", null]);
+  });
+
+  /**
+   * The two taxonomies are separate files with separate id spaces that share plenty of slugs, so
+   * resolving across both would let `o:cat` filter by the picture. A resolver that got this
+   * wrong would answer a wall of cats either way, which is why it is asserted rather than
+   * assumed.
+   */
+  it("resolves inside the namespace it was asked in", () => {
+    const read = readHandlers(tagged());
+
+    expect(read.tag_resolve({ asks: [{ namespace: "art", value: "cat" }] })[0]?.namespace).toBe(
+      "art",
+    );
+    expect(read.tag_resolve({ asks: [{ namespace: "oracle", value: "cat" }] })).toEqual([null]);
+    expect(() =>
+      read.tag_resolve({ asks: [{ namespace: "both", value: "cat" }] }),
+    ).toThrow(/unknown tag namespace/);
+  });
+
+  /**
+   * **A muted tag still resolves, and this is the one tag read that ignores the mute table.**
+   * Muting hides a *tag* — from the box, the rail and a parent's `childCount` — and is
+   * documented never to hide a *card*. A reader who spells a tag out in the query box has named
+   * it rather than browsed onto it, and refusing them the cards would be muting doing the one
+   * thing it is documented never to do.
+   */
+  it("still resolves a tag the reader has muted", () => {
+    const db = tagged();
+    const cat = readHandlers(db).tag_search({ text: "cat", namespace: "art", limit: 5 })[0];
+
+    writeHandlers(db).tag_mute({ namespace: "art", tagId: cat.id, slug: cat.slug });
+
+    const read = readHandlers(db);
+    expect(read.tag_resolve({ asks: [{ namespace: "art", value: "cat" }] })[0]?.slug).toBe("cat");
+    // The type-ahead beside it still hides the tag, which is what makes the pair deliberate.
+    expect(slugs(read.tag_search({ text: "cat", namespace: "art", limit: 5 }))).toEqual([]);
+  });
+
+  /**
+   * A blank or all-punctuation value is every keystroke on the way to a real tag. It must answer
+   * nothing rather than the first row whose `slugNorm` happens to be blank — in the app that
+   * column is `NOT NULL DEFAULT ''` between schema v20 and v22, so a whole taxonomy can be
+   * sitting at `''` and a half-typed `o:` would resolve onto an arbitrary one of them.
+   */
+  it("answers nothing for a blank needle", () => {
+    const out = readHandlers(tagged()).tag_resolve({
+      asks: [
+        { namespace: "oracle", value: "" },
+        { namespace: "oracle", value: "   " },
+        { namespace: "art", value: "---" },
+      ],
+    });
+
+    expect(out).toEqual([null, null, null]);
+  });
+
+  /**
    * **Muting takes the tag off every read, and takes nothing off the card wall.**
    *
    * It leaves the search, the tree, its parent's `childCount` and its children's `parents` — and
