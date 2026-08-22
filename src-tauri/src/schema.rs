@@ -223,7 +223,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 21;
+pub const SCHEMA_VERSION: i64 = 22;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -749,6 +749,38 @@ fn globalise_tags(tx: &Connection) -> rusqlite::Result<()> {
          -- of the argument; `deck_audit` is left alone on purpose.
          DELETE FROM deck_undo;",
     )
+}
+
+/// Give every carried-over `oracle_tags` row the normalised slug the search matches on.
+/// The v22 step; issue #180, and that step's comment holds the argument.
+///
+/// **In Rust and through [`crate::tags::normalize`], for the reason that function's own doc
+/// states: there is one copy of this rule, deliberately.** The ingest writes `slug_norm` with
+/// it and `tags::query` compares a typed needle against the column it wrote, so a second
+/// normalisation spelled here in SQL would leave both halves perfectly self-consistent, the
+/// search matching nothing, and no test in either half failing. It is also not expressible
+/// without one: the rule strips every non-alphanumeric character, and SQLite's `lower()` and
+/// `replace()` cannot walk a string.
+///
+/// **`WHERE slug_norm = ''` rather than every row**, so this touches exactly the rows v20's
+/// `DEFAULT ''` left behind and skips a taxonomy a refresh has already rewritten. A tag whose
+/// slug is entirely punctuation normalises to `''` and so is rewritten with itself, which costs
+/// one no-op `UPDATE` on a row Scryfall has never published.
+///
+/// Read-then-write rather than one statement because of the same missing SQL function, and
+/// there is nothing to stream: the oracle taxonomy is a few thousand rows (927 roots measured
+/// 2026-08-20) and the whole of it is already being carried in the migration's transaction.
+fn backfill_oracle_slug_norm(tx: &Connection) -> rusqlite::Result<()> {
+    let slugs: Vec<String> = tx
+        .prepare("SELECT slug FROM oracle_tags WHERE slug_norm = ''")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut stmt = tx.prepare("UPDATE oracle_tags SET slug_norm = ?2 WHERE slug = ?1")?;
+    for slug in &slugs {
+        stmt.execute(params![slug, crate::tags::normalize(slug)])?;
+    }
+    Ok(())
 }
 
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -2067,6 +2099,39 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //
         // Literal `21`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 21;")?;
+        tx.commit()?;
+    }
+    if v < 22 {
+        let tx = conn.unchecked_transaction()?;
+        // **The oracle tag search comes back on. Issue #180.**
+        //
+        // v20 added `slug_norm` with `ALTER TABLE … ADD COLUMN`, which cannot add a `NOT NULL`
+        // column without a default, so every `oracle_tags` row an existing database carried
+        // over reads `''`. That step's comment argued the value was never read, because the
+        // taxonomy is dropped and rebuilt wholesale on every refresh — and it is wrong by up
+        // to a week, which is `tags::oracle::REFRESH_INTERVAL_SECS`. `tags::query` matches a
+        // typed needle against exactly this column, so between the upgrade and the next
+        // refresh **every oracle tag search answered nothing**, with no error, nothing in
+        // `error_log`, and the art taxonomy — created empty by the same step, so ingested in
+        // full at the first launch — working perfectly beside it. Which is how it was
+        // reported.
+        //
+        // Recomputed here rather than waited for, because a refresh is not something this
+        // app can promise: a machine that cannot reach Scryfall is a supported state, and one
+        // that never refreshes would never have got the column back.
+        //
+        // **`id` is deliberately not backfilled and cannot be.** It is Scryfall's uuid and
+        // nothing in the database derives it, so the blank stays until a refresh rewrites the
+        // row. That state is already handled in words: `tags::query::not_muted` fences it with
+        // `id <> ''` so one blank-id mute cannot hide the whole taxonomy, and `tag_mute`
+        // refuses a blank id where the reader asked. A tag nobody can hide for a few days is
+        // visible and reportable; a search that answers nothing is neither.
+        backfill_oracle_slug_norm(&tx)?;
+        // Data only — no table, no column and no index moves, so nothing is FTS-indexed, no
+        // `cards` rowid is renumbered and no rebuild is owed.
+        //
+        // Literal `22`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 22;")?;
         tx.commit()?;
     }
 
@@ -6577,9 +6642,9 @@ pub(crate) mod tests {
 
     /// A database at version 20: everything v20 left behind, and none of v21.
     ///
-    /// The "one step below head" fixture now, the title [`v19_database`] held for exactly one
-    /// rung. Rewinding v21 alone is enough because v21 touches one table and no other rung
-    /// above it exists.
+    /// It held the "one step below head" title for exactly one rung, as [`v19_database`] did
+    /// before it; [`v21_database`] has it now. Rewinding v21 alone is enough because v21
+    /// touches one table and the only rung above it writes no shape at all.
     fn v20_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -7037,13 +7102,24 @@ pub(crate) mod tests {
         }
     }
 
-    /// The step over the version below it: both columns arrive on `oracle_tags`, and a row
-    /// that predates them reads `''`.
+    /// The step over the version below it: both columns arrive on `oracle_tags`, and a row that
+    /// predates them keeps a blank `id` while its `slug_norm` is filled in by v22.
     ///
-    /// **Empty rather than NULL, and it is never read.** The taxonomy is dropped and rebuilt
-    /// wholesale on every refresh, so the first one after this step rewrites every row — what
-    /// the backfill is for is keeping the two columns `NOT NULL`, which is what lets the live
-    /// table and its staging twin share one shape.
+    /// **The two are asserted apart because only one of them can be recovered without the
+    /// file.** v20 adds both with `DEFAULT ''` — the default is what makes an `ALTER TABLE …
+    /// ADD COLUMN` of a `NOT NULL` column legal at all, and `NOT NULL` on both is what lets the
+    /// live table and its staging twin share one shape. What that step then *argued* was that
+    /// neither value is ever read, because the taxonomy is dropped and rebuilt wholesale on
+    /// every refresh. That was wrong by up to a week for `slug_norm`, which `tags::query`
+    /// matches every typed needle against, and it shipped as issue #180: an oracle tag search
+    /// that answered nothing at all. v22 recomputes it here — see
+    /// [`the_oracle_tag_search_answers_over_a_database_that_predates_the_normalised_slug`],
+    /// which is the assertion that actually matters.
+    ///
+    /// `id` stays `''` and that is not the same bug. It is Scryfall's uuid, nothing derives it,
+    /// and every reader of it says so in words: `tags::query::not_muted` fences it with
+    /// `id <> ''` so one blank-id mute cannot hide a whole taxonomy, and `tag_mute` refuses it
+    /// where the reader pressed. The next refresh writes the real one.
     #[test]
     fn the_v20_step_adds_the_uuid_and_the_normalised_slug_over_a_v19_database() {
         let conn = v19_database();
@@ -7066,7 +7142,7 @@ pub(crate) mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(row, (String::new(), String::new()));
+        assert_eq!(row, (String::new(), "ramp".to_owned()));
 
         // **And on an upgraded database, not only a fresh one.** The two sibling tests that
         // check these four indexes run over a fresh install, where they could have come from
@@ -7093,6 +7169,124 @@ pub(crate) mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    // ---- v22: the normalised slug, recomputed rather than waited for ------------------
+    /// A database at version 21: everything v21 left behind, and none of v22.
+    ///
+    /// **The first fixture on this ladder with no rewind to perform, and there is no
+    /// `UNDO_V22` for the same reason.** Every undo above exists because its rung wrote
+    /// *shape* — a column a fixture would hit `duplicate column name` on, a table whose
+    /// `IF NOT EXISTS` would leave a fixture claiming a version it is not. v22 writes none: it
+    /// repairs the contents of one column, so a v21 database and a v22 one are the same
+    /// schema and differ only in what `oracle_tags.slug_norm` holds. Renumbering is therefore
+    /// the honest whole of the rewind, and what a test seeds afterwards is the rung's real
+    /// input.
+    ///
+    /// This is also why it is not on
+    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`]'s list: that test asks
+    /// whether every route arrives at one *schema*, and this route cannot answer anything
+    /// else. [`the_head_minus_one_fixture_really_sits_one_step_below_head`] is where it earns
+    /// its keep.
+    fn v21_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch("PRAGMA user_version = 21;").unwrap();
+        conn
+    }
+
+    /// **Issue #180, and the test the reporter's bug is.** A database that held oracle tags
+    /// before v20 can search them the moment it has been migrated — no refresh, no network.
+    ///
+    /// The failure this pins had every property that makes one expensive: silent, total,
+    /// self-healing after up to a week, and sitting beside an art taxonomy that worked
+    /// perfectly. v20 added `slug_norm` with `DEFAULT ''`, `tags::query` matches every typed
+    /// needle against that column and nothing else, and the taxonomy is only rewritten by a
+    /// refresh — which `tags::oracle::REFRESH_INTERVAL_SECS` puts up to seven days away. So the
+    /// search answered `[]` to everything, with nothing in `error_log` to say why, while the
+    /// rail — which reads `slug` and never `slug_norm` — went on listing the very tags the box
+    /// could not find.
+    ///
+    /// **The fixture is the real upgrade path rather than a hand-built row**: a v19 database
+    /// with a tag in it, walked up the whole ladder. A test that inserted `slug_norm = ''`
+    /// into a head-version database would prove the backfill runs, not that the ladder ever
+    /// reaches it.
+    ///
+    /// **The needle is spelled three ways and the slug is spelled in neither.** `Spot-Removal`
+    /// is how the live file writes it — verified 2026-08-20, and `tags::oracle`'s own ingest
+    /// test uses that exact slug — so a backfill that lower-cased without stripping, or
+    /// stripped without lower-casing, would still answer one of these and fail the others.
+    /// That is the whole hazard `tags::normalize`'s "one copy, deliberately" note describes:
+    /// two normalisations that disagree leave both halves self-consistent and the search wrong.
+    #[test]
+    fn the_oracle_tag_search_answers_over_a_database_that_predates_the_normalised_slug() {
+        let conn = v19_database();
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, label, description)
+             VALUES ('Spot-Removal', 'Spot Removal', NULL);",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Exact, prefix and substring — the three bands `tags::query` ranks by, so a backfill
+        // that satisfied `LIKE '%…%'` by accident could not also answer the exact one.
+        for needle in ["Spot Removal", "spot-rem", "removal"] {
+            let hits = crate::tags::query::run_tag_search(&conn, needle, "oracle", 50).unwrap();
+            assert_eq!(
+                hits.iter().map(|h| h.slug.as_str()).collect::<Vec<_>>(),
+                ["Spot-Removal"],
+                "`{needle}` found no oracle tag",
+            );
+        }
+
+        // And it is `normalize`'s answer rather than merely *an* answer that matched. The
+        // ingest writes this column with that function; a rung that agreed with it on
+        // `Spot-Removal` and nowhere else would pass every assertion above.
+        let norm: String = conn
+            .query_row(
+                "SELECT slug_norm FROM oracle_tags WHERE slug = 'Spot-Removal'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(norm, crate::tags::normalize("Spot-Removal"));
+    }
+
+    /// The rung leaves a taxonomy a refresh has already written exactly as it found it.
+    ///
+    /// `WHERE slug_norm = ''` is what makes the backfill a repair rather than a rewrite, and
+    /// the row it must not touch is the one a *fresh* install has: v20 creates `art_tags` empty
+    /// and `oracle_tags` is rebuilt wholesale by every refresh, so on most databases this step
+    /// has nothing to do. Asserted rather than assumed, because a backfill that recomputed
+    /// every row would be indistinguishable here until the day `normalize` changed — at which
+    /// point it would half-rewrite a taxonomy the ingest had written the other way.
+    #[test]
+    fn the_v22_step_leaves_an_already_normalised_oracle_tag_alone() {
+        let conn = v19_database();
+        // A `slug_norm` that is not what `normalize` would answer, standing in for any row the
+        // backfill has no business touching.
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, label, description)
+             VALUES ('Spot-Removal', 'Spot Removal', NULL);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch("UPDATE oracle_tags SET slug_norm = 'written-by-the-ingest';")
+            .unwrap();
+
+        // The ladder is at head, so this is the idempotence pass rather than a second upgrade —
+        // which is the case a reader actually gets, once per launch.
+        migrate(&conn).unwrap();
+
+        let norm: String = conn
+            .query_row(
+                "SELECT slug_norm FROM oracle_tags WHERE slug = 'Spot-Removal'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(norm, "written-by-the-ingest");
     }
 
     /// A mute is the reader's, and everything around it is rebuilt on a schedule: the card
@@ -7244,30 +7438,47 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION);
     }
 
-    /// [`v19_database`] must really sit one step below head, or the tests below it are a fresh
+    /// [`v21_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     ///
-    /// **The fixture named here has changed six times** — v14's, then v15's, then v16's,
-    /// then v17's, then v18's, now v19's — and each move was this assertion going red, which is
-    /// the whole reason it is written against `SCHEMA_VERSION - 1` rather than a number.
+    /// **The fixture named here has changed eight times** — v14's, then v15's, v16's, v17's,
+    /// v18's, v19's, v20's, now v21's — and each move was this assertion going red, which is the
+    /// whole reason it is written against `SCHEMA_VERSION - 1` rather than a number.
+    ///
+    /// **The second half asks a different question than it used to, because v22 is the first
+    /// rung that writes no shape.** Every version of this test until now proved the fixture
+    /// lacked head's *column*; there is no column to lack, so what it proves instead is that
+    /// the rung's input survives the renumbering and its output does not — a `slug_norm` this
+    /// fixture leaves blank and `migrate` fills. A fixture renumbered to 21 that had somehow
+    /// already been backfilled would pass the version line and prove nothing at all.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v20_database();
+        let conn = v21_database();
+        // v20's `DEFAULT ''`, which is what every carried-over row of a real upgrade holds.
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, id, label, description, slug_norm)
+             VALUES ('Spot-Removal', '', 'Spot Removal', NULL, '');",
+        )
+        .unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+
+        migrate(&conn).unwrap();
+
+        let norm: String = conn
+            .query_row(
+                "SELECT slug_norm FROM oracle_tags WHERE slug = 'Spot-Removal'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(
-            has_column(&conn, "deck_tags", "name_key"),
-            0,
-            "the v21 column must not be there yet"
-        );
-        assert_eq!(
-            has_column(&conn, "deck_tags", "deck_id"),
-            1,
-            "and the column v21 removes must still be"
+            norm, "spotremoval",
+            "the v22 step must not have been skipped"
         );
     }
 
@@ -7555,14 +7766,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_twenty_one() {
+    fn the_schema_version_is_twenty_two() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 21);
+        assert_eq!(SCHEMA_VERSION, 22);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular

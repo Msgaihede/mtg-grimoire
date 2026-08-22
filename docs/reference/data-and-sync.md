@@ -371,9 +371,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v21**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+- **Schema is v22**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
+  **v22 writes no shape at all — it repairs one column's contents**, and it is the first rung
+  here that does. v20 added `oracle_tags.slug_norm` with `ALTER TABLE … ADD COLUMN`, which
+  cannot add a `NOT NULL` column without a default, so every row an existing database carried
+  over read `''`. That step argued the value was never read, because a refresh drops and rebuilds
+  the taxonomy wholesale — and it is wrong by up to a week, which is
+  `tags::oracle::REFRESH_INTERVAL_SECS`. `tags::query` matches every typed needle against exactly
+  that column, so between the upgrade and the next refresh **every oracle tag search answered
+  nothing**: no error, nothing in `error_log`, the rail still listing the tags the box could not
+  find (it reads `slug`), and the art taxonomy — created empty by the same step, so ingested in
+  full at the first launch — working perfectly beside it. That is
+  [issue #180](https://github.com/Msgaihede/mtg-grimoire/issues/180), and it is the shape of
+  failure a `DEFAULT` on a column only an ingest can fill will produce every time.
+  `backfill_oracle_slug_norm` recomputes it through `tags::normalize` — **the same function the
+  ingest writes the column with, and there is one copy of that rule deliberately**: a second
+  normalisation spelled in SQL would leave both halves self-consistent, the search wrong, and no
+  test in either half failing. It is also not expressible in SQLite, which cannot walk a string
+  to strip non-alphanumerics. Recomputed rather than waited for because a refresh is not
+  something this app can promise: a machine that cannot reach Scryfall is a supported state.
+  **`oracle_tags.id` is deliberately not backfilled and cannot be** — it is Scryfall's uuid and
+  nothing derives it — so a mute stays refused-in-words until the next refresh, which is the
+  state `tags::query::not_muted`'s `id <> ''` clause and `tag_mute`'s refusal already exist for.
   **v21 rebuilds one table and takes one column off it**, and both halves of that sentence are
   the feature: `deck_tags` loses `deck_id` and gains `name_key`, so a tag belongs to no deck and
   its grain (`DECK_TAG_GRAIN`) becomes one name, app-wide. `tag_name_key` is what "one name"
@@ -606,7 +627,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
   **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
-  **`v18_database`**, v20 to **`v19_database`** and v21 to **`v20_database`**. The fixtures it
+  **`v18_database`**, v20 to **`v19_database`**, v21 to **`v20_database`** and v22 to
+  **`v21_database`**. The fixtures it
   passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
@@ -648,7 +670,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   census of how many fixtures the newest rung reaches, and it answers for the tree you are
   actually in. **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
   fixture**: `UNDO_V21` drops `deck_tags` and recreates the per-deck shape v8 built, because
-  `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways. **One named `UNDO_V…` constant per rung** is the shape that keeps this
+  `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways.
+  **v22 is the first rung with no `UNDO_V22` at all, and that is a fact about the rung rather
+  than an omission**: it writes no table, no column and no index — it repairs the contents of
+  `oracle_tags.slug_norm` — so a v21 database and a v22 one are the same schema and a
+  `PRAGMA user_version = 21` is the honest whole of the rewind. `v21_database` is built that way,
+  and it is deliberately **not** on
+  `every_version_ends_with_the_same_schema_as_a_fresh_install`'s list: that test asks whether
+  every route arrives at one _schema_, and this route cannot answer anything else. What it seeds
+  instead is the rung's real input — a blank `slug_norm` — which is the second half of
+  `the_head_minus_one_fixture_really_sits_one_step_below_head` now that there is no column for it
+  to find missing. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
+  keeps this
   cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
   whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to
   be a v10 must not already hold what the v11 step is being tested for creating.) Rewinding
