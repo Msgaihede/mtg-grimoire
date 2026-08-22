@@ -485,9 +485,10 @@ it("switches the active view", async () => {
  * **Nothing in this block can see 68px.** jsdom has no layout engine, so the rail measures
  * nothing in either state and the width transition never runs; what is pinned instead is the
  * class that *is* the mechanism, which is what `Dialog.test.tsx` does for the two classes that
- * clamp a modal and for the same reason. The number itself belongs to a live pass: 68 is a 44×44
- * target inside the `<nav>`'s own `p-3`, and it hands `main` back 140px at the window where the
- * deck editor has ten of them to spare.
+ * clamp a modal and for the same reason. The numbers belong to a live pass, and 2026-08-22's
+ * recorded them: 68px is a 43×44 target inside the `<nav>`'s own `p-3` (the rail's `border-r`
+ * takes the pixel that would have made it square), and it hands `main` back 140px — 1072 → 1212
+ * at 1280×800, the window where the deck editor has ten of them to spare.
  *
  * What jsdom *can* see is everything that matters about whether the app is still usable
  * collapsed — the names, the presses, the writes and the live regions — and that is what the

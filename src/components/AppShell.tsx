@@ -198,8 +198,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         {/* **Collapsed, that same arithmetic runs the other way, and that is the whole of issue
           #177.** The paragraph above says a wider column is a change to `DeckEditor`'s sums; a
           *narrower* one is the same change with the sign flipped, and it lands where the app is
-          tightest. 68px is a 44×44 target inside this element's own `p-3` — the row keeps its
-          height, its `size-5` icon and its gold hairline, and loses only the painted word — so
+          tightest. 68px is a **43×44** target inside this element's own `p-3` — the row keeps
+          its height, its `size-5` icon and its gold hairline, and loses only the painted word.
+          **43 rather than the round 44**, and the missing pixel is this element's own
+          `border-r`: Tailwind's `box-sizing: border-box` puts the hairline inside the 68, so
+          the entry gets 68 − 12 − 12 − 1. Measured in the shipped window 2026-08-22, because
+          the round number was written here first and was wrong. So
           at 1280×800 with a card pane docked, where the desk row is 602px and `DECK_FLOOR` (192)
           leaves **10px** of headroom, the rail hands `main` back **140px**.
 
@@ -376,9 +380,10 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
  * against the ribbon's 20px title, which keeps the two rungs of app › view distinguishable by
  * size rather than only by face.
  *
- * **Collapsed it is 44×44 and nothing else about it moves**: same height, same icon, same gold
+ * **Collapsed it is 43×44 and nothing else about it moves**: same height, same icon, same gold
  * hairline, same drop target. The word is still in the DOM, still the button's accessible name,
- * and merely not painted.
+ * and merely not painted. The 43 is measured rather than intended — the rail's `border-r` is
+ * inside its own 68px, and the `<nav>` comment above has the arithmetic.
  */
 function NavItem({
   label,
