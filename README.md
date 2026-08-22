@@ -54,3 +54,16 @@ each file at its test module and reports both halves. Measured 2026-08-12 on deb
 Windows — [docs/reference/test-coverage.md](docs/reference/test-coverage.md) has the per-file
 tables, the thin spots, and the traps. **The numbers above are hand-maintained and nothing
 recomputes them.**
+
+## License
+
+[GNU Affero General Public License v3.0 or later](LICENSE) — © 2026 Markus Seerup.
+
+Strong copyleft with a network clause: anyone who distributes a modified build, or offers a
+modified version to users over a network, has to make that version's complete source available
+under the same terms.
+
+That covers this app's own code and nothing else. Card data and card images belong to their
+owners, are fetched from Scryfall at runtime, and are never redistributed from this repository —
+the app credits them the same way it does on screen: **Card images © Wizards of the Coast ·
+Data © Scryfall**.

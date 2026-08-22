@@ -117,6 +117,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `MTG.Grimoire_<version>_x64-setup.exe` (derived, not yet measured — no release has shipped
   under the new name). Match on the dotted form when scripting against a release, never on
   the local bundle name.
+- **Both Windows installers show a licence page; neither Linux bundle does.**
+  `bundle.licenseFile` is the only knob Tauri v2 has for it — `nsis.license` and
+  `wix.licenseFile` are **v1** names and are absent from the v2 schema, so a config written
+  from a v1 answer is accepted as an unknown key and changes nothing. One field, two very
+  different consumers: NSIS rewrites the file with a UTF-8 BOM and feeds it to
+  `MUI_PAGE_LICENSE`, while WiX generates an RTF from it and sets `WixUILicenseRtf`. Both
+  templates *skip the page entirely* when the field is unset, which is what every release
+  through v0.13.0 did. The `deb` and `appimage` bundlers never read it.
+- **Nothing in `ci-ok` bundles, so a wrong `licenseFile` path is green in CI and broken at
+  tag time.** The only proof is a local bundle. Measured 2026-08-22,
+  `npm run tauri build -- --bundles nsis,msi`, release, 3m28s: `nsis/x64/license_file` came
+  out at 34,526 bytes (the 34,523-byte `LICENSE` plus the BOM) and `wix/LICENSE.rtf` at
+  37,355. **The RTF generator escapes nothing** — it replaces `\n` with `\par ` and leaves
+  `\`, `{` and `}` alone, so a licence text containing any of those would emit malformed RTF.
+  AGPLv3 contains none of them; a different licence might.
 - **A portable copy exits silently if any other instance is running** —
   `tauri-plugin-single-instance` gives it exit code 0, no window and no stderr, and a dev
   build from `target/debug` counts. Measured 2026-08-09 while verifying the v0.2.0 zip: the
