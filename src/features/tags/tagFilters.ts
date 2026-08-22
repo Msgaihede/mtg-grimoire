@@ -70,9 +70,12 @@ const isChip = (c: TagChip, key: string) => chipKey(c.namespace, c.slug) === key
 /**
  * Pick a tag, as an include.
  *
- * Adding a tag that is already picked gives back **the same object**, so a second click on a
- * row that is already chipped costs no re-render of the wall below it — and cannot flip a chip
- * the reader had set to exclude back to include behind their back.
+ * Adding a tag that is already picked gives back **the same object**, so an add that lands on a
+ * chipped tag costs no re-render of the wall below it — and cannot flip a chip the reader had set
+ * to exclude back to include behind their back.
+ *
+ * **Not what a rail row presses.** That is {@link toggleChip}: this reducer only ever adds, and a
+ * control wired straight to it can turn a filter on but never off. See there for issue #181.
  */
 export function addChip(s: TagSelection, hit: TagHit): TagSelection {
   const key = chipKey(hit.namespace, hit.slug);
@@ -84,6 +87,27 @@ export function addChip(s: TagSelection, hit: TagHit): TagSelection {
       { slug: hit.slug, label: hit.label, namespace: hit.namespace, mode: "include" },
     ],
   };
+}
+
+/**
+ * Pick a tag, or un-pick it — **what a press on a rail row does**.
+ *
+ * The rail used to press {@link addChip}, which answers an already-picked tag with the same
+ * object. So the row that turned a filter on could not turn it off: the only way back was to find
+ * the chip two controls away and press its ×, which is what issue #181 was reported as. A control
+ * that has one direction is half a control, and this is the half that was missing.
+ *
+ * **Mode is deliberately not part of the cycle.** An excluded chip is *picked* — the rail draws
+ * its tick, the wall is filtered by it — so a press takes it off rather than walking
+ * include → exclude → off. Include ↔ exclude is {@link toggleChipMode}, and it belongs to the
+ * chip, which is where both states are drawn and named; a rail row shows neither and would be
+ * cycling a reader through a state they cannot see from there.
+ */
+export function toggleChip(s: TagSelection, hit: TagHit): TagSelection {
+  const key = chipKey(hit.namespace, hit.slug);
+  return s.chips.some((c) => isChip(c, key))
+    ? removeChip(s, hit.slug, hit.namespace)
+    : addChip(s, hit);
 }
 
 /** Drop one chip. Naming a tag that is not picked gives back the same object. */

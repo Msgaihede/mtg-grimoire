@@ -1,4 +1,5 @@
 import { CircleArrowUp, CircleCheck, Download, ExternalLink, RefreshCw } from "lucide-react";
+import { GrimoireMark } from "@/components/GrimoireMark";
 import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
@@ -48,8 +49,18 @@ function Bar({ done, total }: { done: number; total: number }) {
  *
  * The panel is deliberately quiet. The direction spends the boldness budget on the mana
  * line, so the box is {@link SettingsSection}'s — `bg-surface` and border grey, like every
- * other panel on this page; the only gold on it is the primary button and the focus ring,
- * which is what gold already means everywhere else in this window.
+ * other panel on this page.
+ *
+ * **Three things on it are gold, and the third is gold for a different reason than the other
+ * two.** The primary button and the focus ring are gold because that is what gold means
+ * everywhere else in this window: something to press, or the thing the caret is on. The
+ * {@link GrimoireMark} beside the version is not an affordance at all — it is the app's own
+ * artwork in the app's own accent, which is the colour the logo package draws it in
+ * (`logos/README.md`: gold `#D1A84B`, `--color-accent`). It is allowed to break the rule
+ * because nothing about it invites a press: it sits outside every control, against a name set
+ * in plain `text-text`, in a panel with no other picture on it. A *fourth* gold thing here
+ * would be worth arguing about; this one is the exception the mark earns by being what the
+ * window is called.
  */
 export function UpdatePanel({
   update,
@@ -65,14 +76,42 @@ export function UpdatePanel({
   return (
     <SettingsSection id="updates" title="Updates">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm text-text">
-            MTG Grimoire{" "}
-            {/* A version is data, and data is Geist Mono — the direction's third type
-                role, alongside collector numbers and prices. */}
-            <span className="font-mono tabular-nums">{status?.currentVersion ?? "…"}</span>
-          </p>
-          <p className="text-xs text-dim">{formatChecked(status?.lastCheckAt ?? null)}</p>
+        {/* The app's mark, beside the version it is the mark for. This panel is the nearest
+            thing the app has to an About screen — the name, the build and the last check are
+            already answers to one question, and the mark is the fourth.
+
+            **36px is the height of the block it stands beside, not a size off a scale.** The
+            two lines to its right are `text-sm` over `text-xs`: 20px and 16px of line box, 36
+            together. So the mark's box is exactly the pair's height and it lines up with them
+            without a nudge, where a larger one would have to be centred against a block it
+            overhangs — which is a logo pulling the eye off the line that actually answers the
+            reader. It is also half again over the 24px `GrimoireMark` needs before it will
+            draw the full artwork, so this is the casting circle, the runes and the clasp
+            rivets rather than the simplified mark anything in a 34px chrome row can hold. A
+            settings page is where the detail is affordable, and that is the whole of why the
+            number here is not the number the chrome uses.
+
+            **Hidden from assistive technology, which is the prop's default and is deliberate
+            here rather than skipped.** The `<p>` beside it sets `MTG Grimoire` in type, in the
+            same sentence as the version — so naming the mark would read the product name out
+            twice in a row to the one reader who cannot see that the two are the same thing.
+            `label` is for a surface that draws the mark *instead of* the words; this one draws
+            both, and that is the test to apply if the sentence beside it ever changes. */}
+        <div className="flex min-w-0 items-center gap-3">
+          <GrimoireMark size={36} className="text-accent" />
+          {/* `min-w-0` on both boxes, because a `min-w-0` that stops one level short of the
+              text is the same as not having it: this wrapper is now the flex item the row
+              wraps, and a flex item cannot shrink below its own min-content unless it is told
+              it may. The mark carries its own `shrink-0`, so what gives way is the type. */}
+          <div className="min-w-0">
+            <p className="text-sm text-text">
+              MTG Grimoire{" "}
+              {/* A version is data, and data is Geist Mono — the direction's third type
+                  role, alongside collector numbers and prices. */}
+              <span className="font-mono tabular-nums">{status?.currentVersion ?? "…"}</span>
+            </p>
+            <p className="text-xs text-dim">{formatChecked(status?.lastCheckAt ?? null)}</p>
+          </div>
         </div>
         <button
           type="button"

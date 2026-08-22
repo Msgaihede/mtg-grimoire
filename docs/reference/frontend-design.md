@@ -2608,3 +2608,66 @@ and `transition-property: none` on both the frame and the card under
 
 **The control is the card pane's and only the card pane's.** A wall of tiles is for finding a card,
 not reading one, and a turned tile in a grid of upright ones would be a hole in the rhythm.
+
+## The app's own mark, and the 24px floor it is drawn against
+
+**2026-08-22.** The artwork lives in `logos/`, which is the source of truth for it:
+`logos/svg/mtg-grimoire-mark.svg` is the master and the thing to edit, and everything beside it
+is an **export of that file** — `logos/svg/mtg-grimoire-tile.svg` (the mark on the dark rounded
+tile), `logos/png/mark-*.png` from 16 to 1024, `logos/icon.ico` (six sizes in one file) and
+`logos/tauri/`, a drop-in replacement for `src-tauri/icons/`. A change that only reaches a PNG is
+a change the next export undoes.
+
+**The colours in that package are this app's own tokens resolved to hex**, which is the whole
+reason the mark can be drawn inline rather than loaded: gold `#D1A84B` is `--color-accent`, the
+panel `#16181E` is `--color-surface`, and the field `#0C0D12` is `--color-bg`.
+`src/components/GrimoireMark.tsx` binds them back the other way — every stroke is `currentColor`
+and every fill is `var(--color-surface)` — so the mark takes its gold from whatever the caller
+sets `text-*` to, and a token that moves takes the mark with it instead of stranding a hex in a
+binary. The `#0C0D12` field is a fact about the exported tile and the icon, not about the
+component: the inline mark is drawn on whatever surface it lands on.
+
+**The floor is a rendered size, not a design intent, and that is why the component takes a pixel
+size rather than a variant flag.** The artwork is on a 64-unit grid, so a rendered pixel costs
+`size / 64` units. At 20px the book's heaviest stroke — the boards' 1.7 — is **0.53px**, and
+every hairline under it is thinner still: the casting circle's dashed ring (0.85) is **0.27px**
+and the diamond's facet lines (0.75) are **0.23px**. That is the logo package's own warning
+arriving as arithmetic (`logos/README.md`: "below about 24 px the casting circle and the clasp
+rivets fill in"), and `DETAIL_FLOOR` is its number. A caller passes `size` and
+`GrimoireMark` picks; a variant flag would make "which drawing does a 34px title bar want" a
+question every call site answers again, and the wrong answer is invisible in jsdom and easy to
+miss in the window.
+
+**The small variant is a rendering of the master, not a second drawing.** Same grid, same
+coordinates, same order; what it drops is exactly what the package predicted would fill in — the
+dashed casting circle and its inner ring, the seven radial runes, the page block and its four
+corner cuts, the diamond's facet lines, the clasp's two rivets and its gem, and the gradient. It
+then thickens **every kept stroke by 1.4×** (`SMALL_STROKE`), which puts that 0.53px board
+outline at **0.74px**: a hairline on purpose rather than by accident, and deliberately delicate
+because the wordmark it stands beside is 13px Cinzel at 0.2em and a heavy mark next to fine type
+is a lockup with two voices. One constant because it is one decision — tuning it moves every kept
+stroke together, which is what keeps the small variant from drifting into a separate drawing.
+
+**The gradient goes with them, and `FinishMark` wrote the reason down first**: a gradient "is not
+perceivable [at that size] and costs an SVG `<defs>` whose id has to be unique per instance". At
+20px the diamond is about four pixels across, which is no room for three stops, so the small
+variant fills it flat and ships no `<defs>` at all. The full variant keeps it and
+scopes the id with `useId`. **Replacing that with a constant id is silently wrong** — duplicate
+ids are legal-looking, the second mark on screen paints from the first one's `<defs>`, and
+nothing shows it until the day two marks are drawn at different sizes.
+
+**Where it is drawn, and at which side of the floor.** The window's own caption draws it in the
+34px row measured under "The window's own title bar" above, at 20px — the one size in the app
+below the floor, so the simplified variant, and it gets there without being asked. The first-run
+overlay draws it at 64px, where the full artwork has the area the gradient and the casting circle
+were designed for. The Settings version panel draws it beside the version it names, clear of the
+floor and so also in full. All three are lockups — the mark stands next to the product name
+already set in type — which is why it is `aria-hidden` unless a caller passes `label`.
+
+**Every one of those three draws it in the accent, and that is not a hole in the gold-vs-dim
+rule.** `SyncProgress.tsx` states the rule at its own site — "Dim rather than gold — gold means
+'you can act on this', and a name is not an action" — and it governs **type and controls**, where
+gold is what tells a reader something is pressable. A mark is a picture rather than a word: it
+makes no offer, so it makes no false one. Extending the rule to the app's own logo would say the app may
+never draw its logo in its own colour, which is a conclusion about branding drawn from a rule
+about affordance.

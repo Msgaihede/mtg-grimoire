@@ -96,20 +96,63 @@ describe("TitleBar", () => {
 
   /**
    * `data-tauri-drag-region` does not inherit — Tauri reads it off the element under the
-   * pointer and nothing else. So the row needs it, the wordmark inside the row needs its own,
-   * and the buttons must not have one at all: on an element that handles a click, the
-   * attribute swallows it and the button becomes a way to drag the window.
+   * pointer and nothing else. So the row needs it, the lockup wrapper needs its own (it is
+   * what holds the 10px between the mark and the wordmark inside the grab area), the wordmark
+   * needs its own, and the buttons must not have one at all: on an element that handles a
+   * click, the attribute swallows it and the button becomes a way to drag the window.
+   *
+   * The mark is the one hole the attribute cannot close, because an `<svg>` under the pointer
+   * is the element Tauri asks and it carries nothing. `pointer-events-none` is what makes the
+   * hit test resolve to the wrapper instead, so that class is load-bearing rather than
+   * cosmetic — and **jsdom has no hit testing at all**, so this assertion on the class is the
+   * whole of what the suite can say about it. The consequence of losing it is a 20×20 patch
+   * of caption that does not drag, which is intermittent by geometry: nobody reports it, they
+   * just press again a few pixels to the right.
    */
-  it("marks the row and the wordmark draggable and the buttons not", () => {
+  it("marks the row, the lockup and the wordmark draggable and the buttons not", () => {
     const { container } = render(<TitleBar />);
 
     const row = container.firstElementChild;
     expect(row).toHaveAttribute("data-tauri-drag-region");
-    expect(screen.getByText("MTG GRIMOIRE")).toHaveAttribute("data-tauri-drag-region");
+
+    const wordmark = screen.getByText("MTG GRIMOIRE");
+    expect(wordmark).toHaveAttribute("data-tauri-drag-region");
+
+    const lockup = wordmark.parentElement;
+    expect(lockup).toHaveAttribute("data-tauri-drag-region");
+
+    const mark = lockup?.querySelector("svg");
+    expect(mark).not.toBeNull();
+    expect(mark).toHaveClass("pointer-events-none");
 
     for (const name of ["Minimize", "Maximize", "Close"]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("data-tauri-drag-region");
     }
+  });
+
+  /**
+   * The mark is drawn and is not announced, which is `GrimoireMark`'s default rather than an
+   * omission: the wordmark two millimetres to its right already sets the product's name in
+   * type, so a named mark here is that name read out twice in a row. `getByRole("img")` is
+   * the assertion because that is exactly what a `label` would add — pass one and the svg
+   * becomes `role="img"` with an accessible name, which is what this must not be.
+   *
+   * Scoped through the lockup rather than the whole container: the three caption buttons each
+   * draw a lucide `<svg>`, so a bare `container.querySelector("svg")` would answer about the
+   * Minimize glyph and pass with the mark deleted.
+   */
+  it("draws the mark and keeps it out of the accessibility tree", () => {
+    render(<TitleBar />);
+
+    const mark = screen.getByText("MTG GRIMOIRE").parentElement?.querySelector("svg");
+    expect(mark).not.toBeNull();
+    // The 34px row's 20px mark, which is under `GrimoireMark`'s 24px detail floor and is
+    // therefore the simplified variant. The size is the whole of what picks that, so it is
+    // worth pinning: a bare `width` change here silently redraws the artwork.
+    expect(mark).toHaveAttribute("width", "20");
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
   /** Without the native caption there is nothing else that names the app on screen. */
