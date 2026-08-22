@@ -1321,6 +1321,28 @@ export interface TheoryDiffRow {
    * deck's own live copies read as spare here — right for a person, wrong for a subtraction.
    */
   ownedSpare: number;
+  /**
+   * How many of this row's {@link TheoryDiffRow.quantity} the **live list already plays as a
+   * different printing or finish of the same card** — the copies that are an upgrade rather
+   * than a hole.
+   *
+   * The diff compares the exact card, so a plan naming one Sol Ring against a deck sleeving
+   * another is a full row here and reads as a card the reader has not got. For buying, that is
+   * right — they would still have to find it. For *playing*, it is not: the deck runs. This
+   * field is the difference between the two readings, and it is what the dialog's
+   * `Missing` / `Different printing` filter is computed from.
+   *
+   * **Never greater than {@link TheoryDiffRow.quantity}, and 0 for an orphan.** Copies are
+   * claimed per oracle card, in the list's own reading order, out of a pool the backend sizes
+   * as *live copies of that card minus the ones an exact line already matched* — so one live
+   * Bolt cannot excuse two rows, and a row whose printing has left the card database has no
+   * oracle card to be matched by.
+   *
+   * A row can be **partly both**: theory 2× art A against live 1× art B is `quantity: 2`,
+   * `heldAsOtherPrinting: 1` — one copy to find, one already on the table. Such a row shows
+   * under both filters at its full quantity, because the full quantity is what a press writes.
+   */
+  heldAsOtherPrinting: number;
 }
 
 /**
@@ -3356,9 +3378,33 @@ export const ipc = {
    * stands is short of — while this one reads the difference between the plan and the deck.
    * Neither nets out {@link TheoryDiffRow.ownedSpare}: it is a display field, and subtracting
    * it here would count the live list twice.
+   *
+   * **`only` narrows it to the rows the reader ticked** — `deck_theory.rs`'s own `group_key`
+   * strings, `` `${cardId}|${finish ?? ""}` ``, which is the same spelling
+   * {@link ipc.deckTheorySlots} answers in and `theoryMatch.ts` builds. Absent means the whole
+   * difference, so the footer's untouched press and every older caller mean what they always
+   * did. A key naming no row of the current difference writes nothing rather than refusing:
+   * the diff is re-read inside the write, so a row the reader ticked and then acquired in
+   * another window is simply not short any more.
+   *
+   * **An include list rather than an exclude list**, though the gesture it serves is exclusion.
+   * The two differ only for rows that appeared between the read and the press — and those are
+   * rows the reader never saw, so sending them would be the dialog acting on its own.
+   *
+   * **The wish is pinned to the printing the plan names** (2026-08-22), carrying its `foil` or
+   * `etched` finish with it, which is the same rule the comparison itself has followed since
+   * 2026-08-20: a plan naming a printing is a plan for that cardboard, and answering it with a
+   * wish for any printing hands the reader back the substitution they were tracking. The
+   * regular copy pins no finish — `null` is the unmarked case in `deck_cards`, and writing
+   * `nonfoil` would split this wish from every other one the app makes for that card.
+   *
+   * Because a pinned wish and an any-printing one are **different rows** on the wishlist grain
+   * `(oracleId, cardId, preferredFinish)`, a reader who pressed this before that change keeps
+   * their old any-printing line and gains a pinned one. Nothing is lost or double-counted; the
+   * upsert folds each into its own row.
    */
-  deckTheoryMissingToWishlist: (deckId: number) =>
-    invoke<number>("deck_theory_missing_to_wishlist", { deckId }),
+  deckTheoryMissingToWishlist: (deckId: number, only?: readonly string[]) =>
+    invoke<number>("deck_theory_missing_to_wishlist", { deckId, only }),
   /**
    * Put copies into a category, folding on `(deck, variant, category, card)` — the drag-in
    * and the click-to-add write, and **not** the stepper's.
