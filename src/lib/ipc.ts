@@ -878,6 +878,21 @@ export interface CollectionRow {
    * than shown raw.
    */
   promoTypes: string | null;
+  /**
+   * JSON: **this printing's** legality blob, the same shape {@link DeckCard.legalities}
+   * carries — 23 keys and growing, so parse it and never index fixed fields.
+   *
+   * **It rides here for one reader, the Arena export filter** — issue #192,
+   * `src/features/transfer/export/arena.ts`. Nothing the collection screen draws touches it.
+   * The blob rather than `cards.legal_mask`, which would have been 8 bytes against this
+   * field's 483-byte average (528 at most, over the 116,712-printing corpus of 2026-08-22,
+   * where `promoTypes` above averages 23): bit positions are stored data Rust owns and freezes
+   * — `src-tauri/src/legalities.rs` — and a copy of that order over here would be a second
+   * place for it to drift. Scryfall's key *names* are public vocabulary and cannot.
+   *
+   * `null` is an orphan — the printing this entry names has left `cards`.
+   */
+  legalities: string | null;
 }
 
 export interface CollectionPage {
@@ -1017,6 +1032,16 @@ export interface WishRow {
   needsReview: string | null;
   /** Unix seconds. */
   updatedAt: number;
+  /**
+   * JSON: the joined printing's legality blob — the fact the Arena export filter reads
+   * (issue #192), and its only reader. {@link CollectionRow.legalities} carries the argument
+   * for the blob over a mask.
+   *
+   * **An any-printing wish carries one**, the same way {@link WishRow.typeLine} and
+   * {@link WishRow.artCardId} beside it do: the join coalesces to the newest printing of the
+   * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
+   */
+  legalities: string | null;
 }
 
 export interface WishlistPage {

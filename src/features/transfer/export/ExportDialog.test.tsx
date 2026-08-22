@@ -209,6 +209,178 @@ describe("ExportDialog", () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * The Arena filter — issue #192. `arena.ts` owns which cards Arena has and has its own tests;
+   * these are about the control: that it draws for one format, that ticking it changes the file,
+   * and that what it left out is said out loud before Copy is pressed.
+   */
+  describe("the Arena filter", () => {
+    /** In Arena (Timeless) and not in Arena (paper-only), as the real blobs read. */
+    const IN_ARENA = '{"timeless":"legal","historic":"banned"}';
+    const PAPER_ONLY = '{"commander":"legal","vintage":"legal"}';
+    const MIXED = [
+      exportCard({
+        name: "Lightning Bolt",
+        quantity: 2,
+        setCode: "lea",
+        collectorNumber: "161",
+        legalities: IN_ARENA,
+      }),
+      exportCard({ name: "Sol Ring", quantity: 1, legalities: PAPER_ONLY }),
+    ];
+    const arenaBox = () => screen.getByRole("checkbox", { name: "Only cards MTG Arena has" });
+
+    it("is offered by the Arena format and by no other", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} />);
+      // Not a field — it changes which cards are written, never what a line says about one —
+      // so it is absent everywhere the question cannot be asked.
+      expect(
+        screen.queryByRole("checkbox", { name: "Only cards MTG Arena has" }),
+      ).not.toBeInTheDocument();
+
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      expect(arenaBox()).toBeInTheDocument();
+      // Off on a first open: the Arena export has written every card handed to it since it
+      // shipped, and a filter that started on would change that silently.
+      expect(arenaBox()).not.toBeChecked();
+
+      await user.click(screen.getByRole("radio", { name: "Moxfield" }));
+      expect(
+        screen.queryByRole("checkbox", { name: "Only cards MTG Arena has" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("writes every card until it is ticked, and then only the ones Arena has", async () => {
+      const user = userEvent.setup();
+      const copy = vi.mocked(copyTextMock);
+      render(<ExportDialog {...props} cards={MIXED} />);
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      // The whole file rather than a line of the preview: the two cards write two lines into
+      // one text node, and `getByText` is a whole-node match.
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith(
+        "Deck\n2 Lightning Bolt (LEA) 161\n1 Sol Ring (LTC) 285\n",
+      );
+
+      await user.click(arenaBox());
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith("Deck\n2 Lightning Bolt (LEA) 161\n");
+    });
+
+    /** Copies rather than rows, and on screen before Copy is pressed — `omittedCount`'s two
+     *  rules, held by the line beside it. */
+    it("says how many copies it held back, counted in copies", async () => {
+      const user = userEvent.setup();
+      render(
+        <ExportDialog
+          {...props}
+          cards={[
+            exportCard({ name: "Lightning Bolt", quantity: 2, legalities: IN_ARENA }),
+            exportCard({ name: "Forest", quantity: 6, legalities: PAPER_ONLY }),
+          ]}
+        />,
+      );
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      expect(screen.queryByText(/not in MTG Arena/)).not.toBeInTheDocument();
+
+      await user.click(arenaBox());
+      expect(
+        screen.getByText("6 cards are not in MTG Arena and are not written."),
+      ).toBeInTheDocument();
+    });
+
+    it("says it in the singular for one card", async () => {
+      const user = userEvent.setup();
+      render(
+        <ExportDialog
+          {...props}
+          cards={[
+            exportCard({ name: "Lightning Bolt", legalities: IN_ARENA }),
+            exportCard({ name: "Sol Ring", legalities: PAPER_ONLY }),
+          ]}
+        />,
+      );
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      await user.click(arenaBox());
+      expect(
+        screen.getByText("1 card is not in MTG Arena and is not written."),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * The two omission lines count different things and must not double-count one card. A
+     * switched-off pile full of paper-only cards is reported by the Arena line alone, because
+     * the filter runs first and `omittedCount` then measures what this format leaves out of
+     * what it was actually handed.
+     */
+    it("does not report a filtered card twice when it is also in a switched-off pile", async () => {
+      const user = userEvent.setup();
+      render(
+        <ExportDialog
+          {...props}
+          cards={[
+            exportCard({ name: "Lightning Bolt", legalities: IN_ARENA }),
+            exportCard({
+              name: "Sol Ring",
+              quantity: 3,
+              legalities: PAPER_ONLY,
+              categoryName: "Cuts",
+              categoryActive: false,
+            }),
+          ]}
+        />,
+      );
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      // Before the tick, the pile is the only thing holding it back.
+      expect(screen.getByText(/3 cards in switched-off piles are not written/)).toBeInTheDocument();
+
+      await user.click(arenaBox());
+      expect(
+        screen.getByText("3 cards are not in MTG Arena and are not written."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+    });
+
+    /** A field set chosen for CSV means nothing to Arena and is re-derived; "leave out what
+     *  Arena does not have" is the same answer whatever the reader passed through. */
+    it("survives a trip through another format", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={MIXED} />);
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      await user.click(arenaBox());
+      await user.click(screen.getByRole("radio", { name: "CSV" }));
+      await user.click(screen.getByRole("radio", { name: "Arena" }));
+      expect(arenaBox()).toBeChecked();
+    });
+
+    /** The filter is fenced on the format as well as on the flag: a reader who ticked it and
+     *  moved to CSV must not find their CSV quietly short of rows. */
+    it("does not narrow another format's export", async () => {
+      const user = userEvent.setup();
+      const copy = vi.mocked(copyTextMock);
+      render(<ExportDialog {...props} cards={MIXED} />);
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      await user.click(arenaBox());
+      await user.click(screen.getByRole("radio", { name: "Plain text" }));
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenCalledWith("2 Lightning Bolt\n1 Sol Ring\n");
+    });
+
+    /** Same claim, same reason as the format radios: the preview redraws, the clipboard does
+     *  not, so "Copied." would sit beside text it is no longer true of. */
+    it("clears the Copied status", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={MIXED} />);
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(await screen.findByText("Copied.")).toBeInTheDocument();
+
+      await user.click(arenaBox());
+      expect(screen.queryByText("Copied.")).not.toBeInTheDocument();
+    });
+  });
+
   it("copies the text of the format that is showing", async () => {
     const user = userEvent.setup();
     const copy = vi.mocked(copyTextMock);

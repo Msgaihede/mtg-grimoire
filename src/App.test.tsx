@@ -322,6 +322,7 @@ const M10: Printing = {
 /** The same card as a collection row, for the Escape-from-a-stepper test below. */
 const BOLT_ENTRY: CollectionRow = {
   promoTypes: null,
+  legalities: null,
   id: 7,
   cardId: "c1",
   name: "Lightning Bolt",
@@ -358,6 +359,7 @@ const BOLT_ENTRY: CollectionRow = {
 /** And as a wish — **pinned to a printing**, because an any-printing wish opens no pane and
  *  a row that cannot open the card cannot test what Escape does to one. */
 const BOLT_WISH: WishRow = {
+  legalities: null,
   id: 11,
   oracleId: "o1",
   cardId: "c1",
