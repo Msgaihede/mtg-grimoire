@@ -32,6 +32,20 @@ pub const GONE: &str = "That collection entry is not there any more.";
 /// in. A second copy of the sentence is a second thing to drift.
 pub const ZERO_ADD: &str = "Adding a card needs a quantity of at least one.";
 
+/// What every write here answers while the collection is derived from the decks.
+///
+/// **A fence, not a courtesy.** The derived row's `id` is a `deck_cards.id`
+/// ([`crate::collection_source::rows`]), the reader's hand-built rows are still on disk, and
+/// [`set_quantity`] and [`remove_entry`] address rows by primary key — so a call that got
+/// through carrying a derived id would rewrite or delete a row the reader cannot currently
+/// see. Greying the buttons is the second fence; this is the first.
+///
+/// The `\` continuation strips the newline **and** the leading whitespace of the next line,
+/// so the space before it is the whole of what keeps `off` and `in` apart —
+/// `the_refusal_sentence_survives_its_line_continuation` is what holds it there.
+pub const DECK_DRIVEN: &str = "Your collection is driven by your decks. Turn the setting off \
+                               in Settings to edit it by hand.";
+
 /// One quick-add, as the UI sends it.
 ///
 /// `#[serde(default)]` throughout: the popup sends the three fields it has (`cardId`,
@@ -247,6 +261,9 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
 
 /// Add copies, folding into the row that already holds this grain.
 pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
+    if crate::deck_driven::stored(conn) {
+        return Err(DECK_DRIVEN.to_owned());
+    }
     let finish = valid_finish(&input.finish)?;
     let condition = valid_condition(input.condition.as_deref())?;
     // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
@@ -460,6 +477,12 @@ fn commit_import(
     items: &[CollectionImportItem],
     mode: &str,
 ) -> Result<ImportCommitOutcome, String> {
+    // Before the transaction opens, not inside it: a refusal that has already begun a write
+    // is a rollback the reader pays for, and `set_entry` — this command's other arm and the
+    // one write here with no fence of its own — is reachable from nowhere else.
+    if crate::deck_driven::stored(conn) {
+        return Err(DECK_DRIVEN.to_owned());
+    }
     if mode != "add" && mode != "set" {
         return Err(format!(
             "`{mode}` is not an import mode. Use `add` or `set`."
@@ -524,6 +547,9 @@ fn commit_import(
 /// "cards owned" figure that counts rows rather than summing quantity is wrong the first
 /// time somebody trades a playset away. See `collection_entries`' schema comment.
 pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
+    if crate::deck_driven::stored(conn) {
+        return Err(DECK_DRIVEN.to_owned());
+    }
     valid_quantity(quantity, "collection quantity")?;
     let changed = conn
         .execute(
@@ -554,6 +580,9 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
 /// this is an edit form, and nothing a user types into a number field should delete the row
 /// they are editing.
 pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<EntryChange, String> {
+    if crate::deck_driven::stored(conn) {
+        return Err(DECK_DRIVEN.to_owned());
+    }
     if let Some(f) = patch.finish.as_deref() {
         valid_finish(f)?;
     }
@@ -632,6 +661,9 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
 /// telling it the row it wants gone is gone is not information — it is an error dialog over
 /// a success.
 pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
+    if crate::deck_driven::stored(conn) {
+        return Err(DECK_DRIVEN.to_owned());
+    }
     conn.execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
         .map_err(friendly)?;
     Ok(EntryChange {
@@ -795,7 +827,12 @@ pub struct CollectionRow {
     pub type_line: Option<String>,
     pub layout: Option<String>,
     pub finish: String,
-    pub condition: String,
+    /// What state the copy is in — `None` when the collection is derived from the decks,
+    /// because a deck card has nowhere to record one.
+    ///
+    /// **Not the column's `'NM'` default.** A default is a fact the reader never stated, and
+    /// this field reaches their exported file through `fromCollectionRow`.
+    pub condition: Option<String>,
     pub quantity: i64,
     pub tradelist_quantity: i64,
     /// Per copy, per finish, at the marketplace the query named. `None` when that marketplace
@@ -825,6 +862,14 @@ pub struct CollectionRow {
     /// `foil` entry on a Surge Foil printing is a Surge Foil and a `nonfoil` one on the same
     /// printing is not. `src/lib/treatment.ts` owns the naming.
     pub promo_types: Option<String>,
+    /// How many decks this row's copies are spread across — `None` unless the collection is
+    /// derived from them, because the hand-kept table has no such fact.
+    ///
+    /// Free: it rides along in the same aggregate the quantity is summed by
+    /// ([`crate::collection_source::rows`]). The deck *names* do not — `collection_decks`
+    /// answers those, asked lazily on hover rather than putting several hundred of them on a
+    /// 100-row page.
+    pub deck_count: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -865,7 +910,17 @@ pub struct CollectionSummary {
 /// exist for, and an inner join would delete exactly those rows from the view that most
 /// needs them. Nothing widens this — see [`scope`] for why even the text filter reaches
 /// `cards_fts` through a subquery rather than a second join.
-const FROM: &str = "collection_entries e LEFT JOIN cards c ON c.id = e.card_id";
+///
+/// **The left side is no longer a table name.** [`crate::collection_source::rows`] answers
+/// with either `collection_entries` or the live deck lists grouped to the same columns, so
+/// everything downstream of this line — the filters, the five sorts, the price expression —
+/// is written once and reads whichever the reader chose.
+fn from_sql(conn: &Connection) -> String {
+    format!(
+        "{} LEFT JOIN cards c ON c.id = e.card_id",
+        crate::collection_source::rows(conn, "e")
+    )
+}
 
 /// The `WHERE` shared by the page, the count and the summary — because a summary taken
 /// over different rows than the list is a header that describes a different screen.
@@ -1043,18 +1098,30 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     let p = scope(q);
     let where_sql = p.where_sql();
     let mut params = p.params;
+    let from = from_sql(conn);
 
     // The count first, while `params` holds exactly the filter parameters. Counted in
     // full — this is a collection, not a 116 k-row table, and a pager that says "1 240
     // cards" should mean it.
     let total: i64 = conn
         .query_row(
-            &format!("SELECT count(*) FROM {FROM} WHERE {where_sql}"),
+            &format!("SELECT count(*) FROM {from} WHERE {where_sql}"),
             rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
 
+    // Column 32, appended for the reason `oracle_id` and `promo_types` were: every index
+    // above stays exactly what it was.
+    //
+    // `collection_entries` has no such column, and wrapping the table in a subquery to
+    // manufacture one would put an aggregate-free view in front of the grain index for no
+    // gain. Only this statement wants the figure, and it builds its own SELECT list.
+    let deck_count = if crate::deck_driven::stored(conn) {
+        "e.deck_count"
+    } else {
+        "NULL"
+    };
     let sql = format!(
         "SELECT e.id, e.card_id, c.name, e.set_code, c.set_name, e.collector_number, e.lang,
                 c.rarity, c.mana_cost, c.type_line, c.layout,
@@ -1062,8 +1129,9 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 {price} AS {UNIT_PRICE_ALIAS},
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
-                e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types
-         FROM {FROM} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+                e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types,
+                {deck_count} AS deck_count
+         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
             q.sort.as_deref(),
@@ -1119,6 +1187,9 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     // nullable TEXT, so an insertion above would have swapped two fields that
                     // each still held a plausible string.
                     promo_types: r.get(31)?,
+                    // 32, and the count above starts at `e.id` = 0: thirty-two columns, so
+                    // the appended one is the thirty-third position.
+                    deck_count: r.get(32)?,
                 })
             },
         )
@@ -1141,7 +1212,8 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 coalesce(sum(e.quantity * coalesce({price}, 0.0)), 0.0),
                 coalesce(sum(CASE WHEN {price} IS NULL THEN e.quantity ELSE 0 END), 0),
                 coalesce(sum(CASE WHEN e.needs_review IS NOT NULL THEN 1 ELSE 0 END), 0)
-         FROM {FROM} WHERE {where_sql}",
+         FROM {from} WHERE {where_sql}",
+        from = from_sql(conn),
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH)
     );
     conn.query_row(
@@ -2906,7 +2978,7 @@ mod tests {
             type_line: Some("Instant".into()),
             layout: Some("normal".into()),
             finish: "nonfoil".into(),
-            condition: "NM".into(),
+            condition: Some("NM".into()),
             quantity: 4,
             tradelist_quantity: 1,
             unit_price: Some(400.5),
@@ -2927,6 +2999,9 @@ mod tests {
             // From the card, not the entry — and the entry above owns the plain copy, which is
             // the pair the two fields exist to tell apart.
             promo_types: Some(r#"["surgefoil"]"#.into()),
+            // The hand-kept collection's answer, and the one every row of this fixture is:
+            // the figure exists only while the rows come from the decks.
+            deck_count: None,
         })
         .unwrap();
 
@@ -2943,7 +3018,8 @@ mod tests {
                 "acquisitionSource": "Local shop", "serialNumber": null, "altered": false,
                 "signed": true, "proxy": false, "misprint": false, "grading": null,
                 "tags": "[]", "notes": null, "needsReview": null,
-                "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]"
+                "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]",
+                "deckCount": null
             })
         );
 
@@ -3011,5 +3087,168 @@ mod tests {
     fn an_unknown_mode_is_refused_rather_than_defaulted() {
         let conn = seeded();
         assert!(commit_import(&conn, &[item("card-1", 1, "nonfoil")], "replace").is_err());
+    }
+
+    // ---------------------------------------------------------------------------------
+    // A collection derived from the decks.
+    // ---------------------------------------------------------------------------------
+
+    /// One deck holding **2 × Sol Ring live and 4 × Sol Ring theory**, and no hand-built rows
+    /// at all — so the two sources answer numbers that cannot be mistaken for each other.
+    ///
+    /// The same printing on both variants on purpose: the live sum is 2 rather than 6 only if
+    /// the plan is excluded, which is the whole of `collection_source::LIVE`. `cards` is seeded
+    /// here for `collection_source`'s reason — a worktree database has never synced, and these
+    /// rows die with the connection.
+    fn deck_driven_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                                rarity,finishes,prices,raw)
+             VALUES ('p1','o1','Sol Ring','cmr','472','en','normal','uncommon',
+                     '[\"nonfoil\",\"foil\"]','{\"usd\":\"2.00\"}','{}');
+
+             INSERT INTO decks (id, name, created_at, updated_at) VALUES (1,'Atraxa',0,0);
+             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+                  VALUES (10,1,'Ramp','main',1,0,0,0);
+             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, quantity, finish,
+                                     created_at, updated_at)
+                  VALUES (1,10,'live','p1','cmr','472','en','Sol Ring',2,NULL,0,0),
+                         (1,10,'theory','p1','cmr','472','en','Sol Ring',4,NULL,0,0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// Every column of every collection row as one comparable string. Blunt on purpose: the
+    /// test it serves is "nothing at all changed", and naming columns would let a new one slip
+    /// past it.
+    ///
+    /// The brief's `quote(e.*)` one-liner is **not** what shipped — `table.*` is only legal in
+    /// a result-column list, so `quote(e.*)` is a syntax error in every SQLite build. The
+    /// columns come out of `pragma_table_info` instead, which keeps the property that matters:
+    /// nothing here names a column, so one added tomorrow joins the comparison by itself.
+    fn dump_entries(conn: &Connection) -> Vec<String> {
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('collection_entries')")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(columns.len() > 10, "the pragma answered nothing to compare");
+        // `quote` never answers NULL, so `||` cannot swallow the row.
+        let quoted = columns
+            .iter()
+            .map(|c| format!("quote(\"{c}\")"))
+            .collect::<Vec<_>>()
+            .join(" || '|' || ");
+        let sql = format!("SELECT {quoted} FROM collection_entries ORDER BY id");
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    /// The page lists the live decks' cards, summed, when the setting is on.
+    #[test]
+    fn the_list_reads_the_decks_when_deck_driven() {
+        let conn = deck_driven_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+        let page = list_entries(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(
+            page.items[0].quantity, 2,
+            "the four theory copies are a plan"
+        );
+        assert_eq!(page.items[0].condition, None);
+        assert_eq!(page.items[0].deck_count, Some(1));
+    }
+
+    /// Off, the same database answers from the reader's own rows and reports no deck count.
+    #[test]
+    fn the_list_reads_the_table_when_not_deck_driven() {
+        let conn = deck_driven_db();
+        let page = list_entries(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(page.total, 0, "nothing was ever added by hand");
+
+        add_entry(&conn, &input("p1", "nonfoil", 3)).unwrap();
+        let page = list_entries(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(page.items[0].quantity, 3);
+        assert_eq!(page.items[0].condition.as_deref(), Some("NM"));
+        assert_eq!(page.items[0].deck_count, None);
+    }
+
+    /// The header describes the same rows the list does — in either mode.
+    #[test]
+    fn the_summary_agrees_with_the_list_when_deck_driven() {
+        let conn = deck_driven_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+        let q = CollectionQuery::default();
+        let page = list_entries(&conn, &q).unwrap();
+        let sum = summarise(&conn, &q).unwrap();
+        assert_eq!(sum.entries, page.total);
+        assert_eq!(
+            sum.total_cards,
+            page.items.iter().map(|r| r.quantity).sum::<i64>()
+        );
+        assert_eq!(
+            sum.tradelist_cards, 0,
+            "a deck card has no tradelist quantity"
+        );
+    }
+
+    /// The safety fence. The derived `id` is a `deck_cards.id` and can collide with a real
+    /// hidden row's primary key, so a write that got through would delete the reader's data.
+    #[test]
+    fn every_write_refuses_while_deck_driven() {
+        let conn = deck_driven_db();
+        add_entry(&conn, &input("p1", "nonfoil", 3)).unwrap();
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        assert_eq!(
+            add_entry(&conn, &input("p1", "nonfoil", 1)).unwrap_err(),
+            DECK_DRIVEN
+        );
+        assert_eq!(set_quantity(&conn, 1, 9).unwrap_err(), DECK_DRIVEN);
+        assert_eq!(
+            update_entry(&conn, 1, &EntryPatch::default()).unwrap_err(),
+            DECK_DRIVEN
+        );
+        assert_eq!(remove_entry(&conn, 1).unwrap_err(), DECK_DRIVEN);
+        assert_eq!(commit_import(&conn, &[], "add").unwrap_err(), DECK_DRIVEN);
+    }
+
+    /// The guarantee the whole "preserve, hide, restore" decision rests on.
+    #[test]
+    fn the_hidden_rows_are_unchanged_by_a_flip_there_and_back() {
+        let conn = deck_driven_db();
+        add_entry(&conn, &input("p1", "nonfoil", 3)).unwrap();
+        let before = dump_entries(&conn);
+        assert_eq!(before.len(), 1, "there is a row to be left alone");
+
+        crate::deck_driven::store(&conn, true).unwrap();
+        let _ = list_entries(&conn, &CollectionQuery::default()).unwrap();
+        crate::deck_driven::store(&conn, false).unwrap();
+        assert_eq!(dump_entries(&conn), before);
+    }
+
+    /// The refusal is one sentence and the `\` continuation is what could break it: it strips
+    /// the newline **and** the next line's indent, so the space before it is the only thing
+    /// keeping `off` and `in` apart.
+    #[test]
+    fn the_refusal_sentence_survives_its_line_continuation() {
+        // `concat!`, not a second `\` continuation: an expectation written with the very
+        // device under test would be wrong in exactly the same way.
+        assert_eq!(
+            DECK_DRIVEN,
+            concat!(
+                "Your collection is driven by your decks. ",
+                "Turn the setting off in Settings to edit it by hand."
+            )
+        );
+        assert!(!DECK_DRIVEN.contains("  "), "{DECK_DRIVEN}");
     }
 }
