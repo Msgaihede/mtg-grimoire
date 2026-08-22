@@ -2641,8 +2641,49 @@ panel `#16181E` is `--color-surface`, and the field `#0C0D12` is `--color-bg`.
 `src/components/GrimoireMark.tsx` binds them back the other way — every stroke is `currentColor`
 and every fill is `var(--color-surface)` — so the mark takes its gold from whatever the caller
 sets `text-*` to, and a token that moves takes the mark with it instead of stranding a hex in a
-binary. The `#0C0D12` field is a fact about the exported tile and the icon, not about the
-component: the inline mark is drawn on whatever surface it lands on.
+binary. The `#0C0D12` field is a fact about the exported **tile**, and about nothing that ships:
+the inline mark is drawn on whatever surface it lands on, and since 2026-08-22 so is the desktop
+icon.
+
+**The desktop and taskbar icon is the transparent mark, and the tile it replaced was only ever
+invisible against a dark background.** `#0C0D12` is `--color-bg`, so on the app's own surfaces and
+on a dark taskbar the plate reads as no plate at all — and that is exactly why it survived as long
+as it did. Everywhere else it is a black rounded square: the Explorer file list, a light-theme
+taskbar, a pale wallpaper, the Alt-Tab strip. The measurement is the whole argument — the tile
+exports were **3–5% non-opaque** (the rounded corners, nothing else) against **45–60%** for the
+mark, across all sixteen files of `src-tauri/icons/`.
+
+Two consequences, both worth knowing before somebody reads them as damage. **The book grew 5.7%**,
+because `mtg-grimoire-mark.svg` draws at `scale(0.92)` where `mtg-grimoire-tile.svg` draws at
+`0.87` and spends the difference on its own edge — so dropping the plate did *not* shrink the icon,
+which is the thing one would expect it to do. And **the `.ico` ladder is 16/24/32/48/64/256 now**,
+where it was 16/32/48/64/128/256: `npx tauri icon` picks that set, and it is the better one for
+this platform — Windows asks for 24 (small taskbar, Alt-Tab) and interpolates 128 from 256 — but it
+was the generator's choice rather than a tuned one, which is the honest way to record it.
+
+**Nothing in either suite can see any of this.** The icons are binaries referenced by
+`tauri.conf.json`'s `bundle.icon` list and by nothing in `src/` or `src-tauri/src/`, so a tile
+could come back through a re-export with `npm run verify` fully green. `logos/README.md` carries
+the regenerate command and the warning next to the artwork, which is the only place that fence can
+live.
+
+**How it was checked instead, and the check is worth repeating rather than rediscovering.** A
+screenshot of the running window proves nothing here — the taskbar icon is a **Win32 resource in
+the exe**, not anything the webview draws, and Windows caches shell icons hard enough that a stale
+one survives a rebuild and reads as a failed change. Three steps, none of which needs the app lock:
+
+1. **Read the `.ico`'s own entries**, not a re-downscale of `icon.png`. Windows picks an entry;
+   walking the directory at offset 6 (16 bytes each) and writing out each embedded PNG is what
+   shows the bytes it will actually paint. Composite them over a light ground — over a dark one
+   the old tile and the new mark are nearly the same picture, which is the whole reason this
+   shipped.
+2. **Read `src-tauri/target/debug/build/mtg-grimoire-*/out/resource.rc`.** `tauri-build` writes it,
+   and the `32512 ICON "…"` line names the absolute path it embedded — `32512` is
+   `IDI_APPLICATION`, the icon the shell reads off the exe.
+3. **Search the sibling `resource.lib` for the literal PNG bytes** of a new entry and of the one it
+   replaced. `Buffer.indexOf` over the file is enough: found-new plus absent-old is the whole
+   chain, config to linked resource, with no launch and no icon cache in the way. Verified that
+   way on 2026-08-22 (debug build) for the 16, 48 and 256 px entries.
 
 **The floor is a rendered size, not a design intent, and that is why the component takes a pixel
 size rather than a variant flag.** The artwork is on a 64-unit grid, so a rendered pixel costs
