@@ -277,14 +277,14 @@
   --animate-card-landed: card-landed 5s linear forwards;
 }
 
-/* Motion, as tokens — the same three durations and three curves `src/lib/motion.ts` hands to
+/* Motion, as tokens — the same four durations and three curves `src/lib/motion.ts` hands to
    `motion`, written here so a CSS-only transition and a JS one cannot drift apart.
    `src/lib/motion.test.ts` compares this block against that module and fails if they do.
 
    **`@theme static`, and the keyword is load-bearing.** A plain `@theme` emits only the
    variables something references, so a token read *only* through `var()` is tree-shaken out
    and never reaches `:root` at all. Measured 2026-08-12 against tailwindcss 4.3.3 by
-   compiling this block both ways: under `@theme` the three `--duration-*` lines are absent
+   compiling this block both ways: under `@theme` the `--duration-*` lines are absent
    from the output entirely, under `@theme static` they are in `:root`. It is a separate block
    from the palette above for the same reason in reverse — the palette *should* keep being
    shaken, and a colour nothing uses should not ship.
@@ -306,6 +306,7 @@
    are the classes this vocabulary exists to have used, so the comment is a few hundred bytes
    early rather than wrong.) */
 @theme static {
+  --duration-instant: 50ms;
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 260ms;

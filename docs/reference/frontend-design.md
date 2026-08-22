@@ -99,6 +99,46 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   activates something. The choice is one `app_meta` row (`nav_collapsed`, `"1"`/`"0"`), and it was
   observed written **through a running sync** — the optimistic write's BUSY case, costing nothing
   the reader can see.
+- **The rail's width is a CSS transition and its labels are a React commit, and the two used to
+  run at once — which was two bugs, not one** (2026-08-22, both reported against the shipped
+  window). The bullet above says "nothing else about an entry moves"; that was true *at rest* and
+  false for the 180ms in between. Sampled a frame at a time in the shipped window, debug build,
+  at the app's own 1920×1080 — and **both readings come from one build**, the old behaviour
+  reproduced by backing each fix out through `element.style` in the running window rather than by
+  rebuilding twice.
+  **The icons jumped away from the left on the way down.** The row centred its content while
+  collapsed, which is the same place to half a pixel at rest — the icon's left edge is **24**
+  expanded and **23.5** centred in the 43px collapsed row — but the class flipped on the *press*
+  while the width took 180ms to follow, so each icon was being centred in a box still 183px wide.
+  Frame by frame: **24 → 93.5** on the first frame, then 93.3, 92.6, 91.2, 88.8 … 24.5, 23.7,
+  settling at 23.5. A **69.5px** leap outward and a slow slide back, six icons at once. The fix is
+  to left-anchor in both states — `gap-3` unconditionally, `justify-center` gone, `h-11` while the
+  label is out of the flow — which reads **24 on all 40 frames** of the collapse and 24 on all 45
+  of the expand. **Nothing about the target changed**, which was the thing to check: the entry and
+  the toggle are still **43×44** collapsed and 183×44 expanded, `main` still gets **140px** back
+  (1712 → 1852 here), `documentElement.scrollWidth` is 1920 in both states, and the collapsed
+  tooltip still stands at **left: 63**, the number the pass above recorded.
+  **The words arrived 180ms before the room for them on the way up.** `collapsed` flipping in one
+  commit put all seven labels back in the flow at full width inside a 68px rail, painted over the
+  view beside them — `<nav>` carries no `overflow-hidden` and *cannot*, because the collapsed
+  rail's floating notes hang off it at `left-full`. Measured with the hold backed out: `Decks` sat
+  with its right edge at **102** against a rail 68 wide, **34px** outside it, for the first ~55ms;
+  `Tags` overhangs by 22, `Collapse` by 52, `Collection` by **62**. `src/lib/useNavLabels.ts` holds
+  them back for the length of the tween and the label sites fade them in over
+  `--duration-instant` (50ms, the tier added for this). The corrected sweep: the rail reaches 208
+  at **172ms**, the word leaves `sr-only` at **195ms**, opacity climbs 0 → 17 → 47 → 70 → 85 → 94
+  → 100 and is full at **242ms** — a **47ms** fade, and the word's right edge never leaves the
+  rail. **Asymmetric on purpose**: closing, the words go in the same commit as the press, because
+  a delay there is the same overflow with the sign flipped.
+  **The reduced-motion half is proven at the class and not in that window, and the reason is the
+  hook.** Under emulated `prefers-reduced-motion: reduce` the `<nav>` computes
+  `transition-property: none` (68 → 208 in **one frame**) and the label computes
+  `animation-name: none`, `animation-duration: 0s` against `enter`/`0.05s` normally — so the fade
+  is off and the rail does not travel. But the labels still waited the full 180ms, because
+  `useReducedMotion()` reads the media query **once at mount** and never updates on a live change
+  (`motion.md` says so about the hook generally). A reader whose OS setting is on *before the app
+  starts* gets `delayMs: 0`; emulating it mid-session cannot show that, and
+  `useNavLabels.test.ts` is what covers the zero-delay path.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats
@@ -2641,8 +2681,49 @@ panel `#16181E` is `--color-surface`, and the field `#0C0D12` is `--color-bg`.
 `src/components/GrimoireMark.tsx` binds them back the other way — every stroke is `currentColor`
 and every fill is `var(--color-surface)` — so the mark takes its gold from whatever the caller
 sets `text-*` to, and a token that moves takes the mark with it instead of stranding a hex in a
-binary. The `#0C0D12` field is a fact about the exported tile and the icon, not about the
-component: the inline mark is drawn on whatever surface it lands on.
+binary. The `#0C0D12` field is a fact about the exported **tile**, and about nothing that ships:
+the inline mark is drawn on whatever surface it lands on, and since 2026-08-22 so is the desktop
+icon.
+
+**The desktop and taskbar icon is the transparent mark, and the tile it replaced was only ever
+invisible against a dark background.** `#0C0D12` is `--color-bg`, so on the app's own surfaces and
+on a dark taskbar the plate reads as no plate at all — and that is exactly why it survived as long
+as it did. Everywhere else it is a black rounded square: the Explorer file list, a light-theme
+taskbar, a pale wallpaper, the Alt-Tab strip. The measurement is the whole argument — the tile
+exports were **3–5% non-opaque** (the rounded corners, nothing else) against **45–60%** for the
+mark, across all sixteen files of `src-tauri/icons/`.
+
+Two consequences, both worth knowing before somebody reads them as damage. **The book grew 5.7%**,
+because `mtg-grimoire-mark.svg` draws at `scale(0.92)` where `mtg-grimoire-tile.svg` draws at
+`0.87` and spends the difference on its own edge — so dropping the plate did *not* shrink the icon,
+which is the thing one would expect it to do. And **the `.ico` ladder is 16/24/32/48/64/256 now**,
+where it was 16/32/48/64/128/256: `npx tauri icon` picks that set, and it is the better one for
+this platform — Windows asks for 24 (small taskbar, Alt-Tab) and interpolates 128 from 256 — but it
+was the generator's choice rather than a tuned one, which is the honest way to record it.
+
+**Nothing in either suite can see any of this.** The icons are binaries referenced by
+`tauri.conf.json`'s `bundle.icon` list and by nothing in `src/` or `src-tauri/src/`, so a tile
+could come back through a re-export with `npm run verify` fully green. `logos/README.md` carries
+the regenerate command and the warning next to the artwork, which is the only place that fence can
+live.
+
+**How it was checked instead, and the check is worth repeating rather than rediscovering.** A
+screenshot of the running window proves nothing here — the taskbar icon is a **Win32 resource in
+the exe**, not anything the webview draws, and Windows caches shell icons hard enough that a stale
+one survives a rebuild and reads as a failed change. Three steps, none of which needs the app lock:
+
+1. **Read the `.ico`'s own entries**, not a re-downscale of `icon.png`. Windows picks an entry;
+   walking the directory at offset 6 (16 bytes each) and writing out each embedded PNG is what
+   shows the bytes it will actually paint. Composite them over a light ground — over a dark one
+   the old tile and the new mark are nearly the same picture, which is the whole reason this
+   shipped.
+2. **Read `src-tauri/target/debug/build/mtg-grimoire-*/out/resource.rc`.** `tauri-build` writes it,
+   and the `32512 ICON "…"` line names the absolute path it embedded — `32512` is
+   `IDI_APPLICATION`, the icon the shell reads off the exe.
+3. **Search the sibling `resource.lib` for the literal PNG bytes** of a new entry and of the one it
+   replaced. `Buffer.indexOf` over the file is enough: found-new plus absent-old is the whole
+   chain, config to linked resource, with no launch and no icon cache in the way. Verified that
+   way on 2026-08-22 (debug build) for the 16, 48 and 256 px entries.
 
 **The floor is a rendered size, not a design intent, and that is why the component takes a pixel
 size rather than a variant flag.** The artwork is on a 64-unit grid, so a rendered pixel costs
