@@ -17,7 +17,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useWishlistFolders } from "@/features/wishlist/useWishlistFolders";
+import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -61,17 +61,22 @@ export function useCardMenuDeps(): CardMenuWiring {
   /**
    * The wishlist's folders, so "Add to → Wishlist" can offer them.
    *
-   * **One subscription per page mount, not one per right-click, and that is the whole reason
-   * the row is a plain `submenu`.** The deck picker is `lazy` because `useDecks()` and
+   * **One query per page mount, not one per right-click, and that is the whole reason the row
+   * is a plain `submenu`.** The deck picker is `lazy` because `useDecks()` and
    * `useDeckFolders()` are two queries a right-click on a wall of forty tiles must not fire;
-   * this is a hook the host already ran, cached under `["wishlist", "folders"]`, shared with
-   * whatever else on the page wants it — so there is nothing for a right-click to reach.
+   * this is one command the host already ran, cached under `["wishlist", "folders"]` and shared
+   * with whatever else on the page wants it — so there is nothing for a right-click to reach.
    *
-   * Only `folders` is read. The hook's four writes and its per-folder summary belong to the
-   * wishlist page, and a menu that used them would be a second surface deciding what a folder
-   * is.
+   * **`useWishlistFolderList` and not `useWishlistFolders`, which is the difference between one
+   * command and two.** The full hook also runs `wishlist_folder_summary` — a `GROUP BY` over
+   * every wish, with the owned-copies subquery and a marketplace price expression in it — for
+   * the counts and subtotals a folder *card* draws. This object is built on five surfaces that
+   * draw no folder cards at all (the search views, the collection, the tags page, the deck
+   * editor, the card pane), so taking the whole hook would compute that on every one of their
+   * mounts and throw it away. The four folder writes are left behind for the same reason: a
+   * menu that could rename a folder would be a second surface deciding what a folder is.
    */
-  const { folders: wishlistFolders } = useWishlistFolders();
+  const { folders: wishlistFolders } = useWishlistFolderList();
 
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);

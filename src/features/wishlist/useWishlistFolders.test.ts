@@ -29,7 +29,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { useWishlistFolders } from "./useWishlistFolders";
+import { useWishlistFolderList, useWishlistFolders } from "./useWishlistFolders";
 
 /** Two folders, one inside the other — flat rows, because the tree is the reader's to build
  *  from `parentId` and `wishlist_folders` has no notion of depth. */
@@ -71,6 +71,49 @@ beforeEach(() => {
   // no observable change from the hook's own initial guess.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+});
+
+describe("useWishlistFolderList", () => {
+  /**
+   * **The card menu's hook, and the whole reason it is not `useWishlistFolders`.**
+   *
+   * `Add to → Wishlist` is built on five surfaces that draw no folder card and no price
+   * subtotal, and `wishlist_folder_summary` is a `GROUP BY` over every wish with the
+   * owned-copies subquery and a marketplace price expression in it. Asserting the command is
+   * **not** called is the only way this stays true: adding the summary back would leave every
+   * other test in this file green, because the folder rows would be identical either way.
+   */
+  it("reads the folder list and asks for no summary", async () => {
+    const { result } = renderHook(() => useWishlistFolderList(), { wrapper });
+
+    await waitFor(() => expect(result.current.folders).toEqual([WANTS, STAPLES]));
+    expect(wishlistFolderList).toHaveBeenCalledWith();
+    expect(wishlistFolderSummary).not.toHaveBeenCalled();
+  });
+
+  /** The same key both hooks read, which is what makes the split free: a page mounting each of
+   *  them once asks the backend for the list once. */
+  it("caches under the key the full hook reads, so the two share one answer", async () => {
+    const { result } = renderHook(
+      () => ({ list: useWishlistFolderList(), full: useWishlistFolders() }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.full.folders).toEqual([WANTS, STAPLES]));
+    expect(result.current.list.folders).toBe(result.current.full.folders);
+    expect(wishlistFolderList).toHaveBeenCalledTimes(1);
+  });
+
+  /** Empty is the ordinary answer and it is **one identity**, so a consumer memoising on this
+   *  array does not see a new one every render while nothing is filed. */
+  it("answers one stable empty array before the first read lands", () => {
+    const { result, rerender } = renderHook(() => useWishlistFolderList(), { wrapper });
+    const first = result.current.folders;
+
+    expect(first).toEqual([]);
+    rerender();
+    expect(result.current.folders).toBe(first);
+  });
 });
 
 describe("useWishlistFolders", () => {

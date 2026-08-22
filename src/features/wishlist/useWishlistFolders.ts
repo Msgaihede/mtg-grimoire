@@ -8,8 +8,43 @@ import { useMarketplace } from "@/lib/useMarketplace";
 const NONE: readonly WishlistFolder[] = [];
 
 /**
+ * Every folder there is, and nothing else — one query, no summary, no writes.
+ *
+ * **The card menu is why this is a hook of its own.** `Add to → Wishlist` offers the cabinet as
+ * a submenu, so `useCardMenuDeps` wants this list on every surface that draws a card menu: the
+ * two search views, the collection, the tags page, the deck editor and the card pane. Not one of
+ * them draws a folder card or a price subtotal, and `wishlist_folder_summary` is a `GROUP BY`
+ * over `wishlist_entries` carrying the owned-copies subquery and a marketplace price expression
+ * — real work, computed on each of those mounts and thrown away. The summary is **opt-in**
+ * because the list has several times as many readers as it does.
+ *
+ * **A split rather than a second `useQuery`, and that is the whole point of the shape.** The key
+ * and its `queryFn` are written once, here; two hooks want the same rows and TanStack serves
+ * both from one cache entry, so the wishlist page — which mounts both, through its folder cards
+ * and through the card menu on its own wishes — still asks the backend for the list exactly
+ * once. A hand-written `useQuery(["wishlist", "folders"])` in `useCardMenuDeps` would have read
+ * the same today and drifted the first time either copy changed.
+ */
+export function useWishlistFolderList() {
+  const query = useQuery({
+    queryKey: ["wishlist", "folders"],
+    queryFn: () => ipc.wishlistFolderList(),
+  });
+
+  return {
+    query,
+    /** Every folder, flat. Empty until the first answer — a wishlist that files nothing and one
+     *  that has not loaded are told apart by `query.isPending`, not by this. */
+    folders: query.data ?? NONE,
+  };
+}
+
+/**
  * The wishlist's filing cabinet: every folder there is, the four writes that shape them, and
  * the per-folder summary a folder card is drawn from.
+ *
+ * **The folder list itself comes from {@link useWishlistFolderList}**, which this composes rather
+ * than repeats — see there for why the summary below is something a caller opts into.
  *
  * **Flat rows, and the tree is the reader's to build from `parentId`** — `wishlist_folders` has
  * no notion of depth and the command takes no wish id, because a folder belongs to no wish: it
@@ -29,10 +64,7 @@ export function useWishlistFolders() {
   const queryClient = useQueryClient();
   const { marketplace } = useMarketplace();
 
-  const query = useQuery({
-    queryKey: ["wishlist", "folders"],
-    queryFn: () => ipc.wishlistFolderList(),
-  });
+  const { query, folders } = useWishlistFolderList();
 
   /**
    * The counts and subtotal a folder card is drawn from, one row per folder that exists.
@@ -108,10 +140,11 @@ export function useWishlistFolders() {
   });
 
   return {
+    // Both passed straight through, so this hook's public surface is exactly what it was before
+    // the list became a hook of its own: `WishFolderCard`, `EditWish` and the wishlist page read
+    // `query` and `folders` off this object and must not have to know about the split.
     query,
-    /** Every folder, flat. Empty until the first answer — a wishlist that files nothing and one
-     *  that has not loaded are told apart by `query.isPending`, not by this. */
-    folders: query.data ?? NONE,
+    folders,
     summary,
     summaryQuery,
     create,
