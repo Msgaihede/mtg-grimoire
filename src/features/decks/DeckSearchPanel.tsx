@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
+import { useDeckSearchOpen } from "./useDeckSearchOpen";
 
 /** Why the disclosure will not open, said where it is refused. */
 const NO_ROOM = "Not enough room — close the card details or widen the window";
@@ -271,42 +272,47 @@ export function DeckSearchPanel({
   maxWidth = Number.POSITIVE_INFINITY,
 }: DeckSearchPanelProps) {
   /**
-   * What the *reader* last chose, and it starts **collapsed** (changed 2026-08-14). What is
-   * drawn is this and `roomy` together.
+   * What the *reader* last chose, and it starts **open** — on this deck, on the next one, and on
+   * the next launch (issue #183, 2026-08-22). What is drawn is this and `roomy` together.
    *
-   * The panel is {@link PANEL_WIDTH_PX} plus the desk row's 16px gap out of a row measured at
-   * **602px** at 1280×800 with the card pane docked (`DeckEditor`'s `DECK_FLOOR` carries that
-   * measurement), which leaves the deck **202px** — one stack column. Open by default, every
-   * reader paid that on every deck they opened whether or not they were adding cards; collapsed,
-   * the deck starts with the whole desk and one press on the rail gets the wall back.
+   * **This reverses the 2026-08-14 default and it is the same argument reaching the other
+   * answer.** The case for opening collapsed was width: the panel is {@link PANEL_WIDTH_PX} plus
+   * the desk row's 16px gap out of a row measured at **602px** at 1280×800 *with the card pane
+   * docked beside the editor*, which left the deck **202px** — one stack column. The card pane is
+   * not docked beside the editor any more; it is an overlay over one of these two columns and
+   * takes no width from either (`DeckEditor`'s pane host), so the row that number was measured on
+   * no longer exists. What is left is a search column against a full-width desk, which is what
+   * `roomy` was already there to judge — and a disclosure whose whole cost was the width it took
+   * from a case that has gone.
    *
-   * **Per editor-open, and deliberately not remembered.** This is `useState` and not a
-   * `useAppStore` field, so a reader who opens the panel, leaves the deck and comes back finds it
-   * collapsed again. That is the choice rather than the omission it looks like: what the store
-   * keeps — `searchView`, `collectionView`, and `cardZoom`'s one number per card *section* — are
-   * answers about a **surface**, held for the session and the same whichever deck is open. This
-   * column is itself one of those sections (`deckSearch`), so the size of the tiles in it really
-   * does survive being collapsed here and reopened three decks later; whether it is open at all
-   * does not, because that is which way a reader last left *one particular deck's* search column
-   * and no answer about the app can say it. It is not the deck's either — `rememberView` keeps
-   * `lastVariant`/`lastGroupBy`/`lastSortBy` on the deck row because they say where the reader
-   * had got to *in that deck*, and a search column is a thing you open to do a job and shut when
-   * the job is done.
+   * **Remembered, and that is the half that makes the default defensible.** {@link
+   * useDeckSearchOpen} keeps it in `app_meta` behind a query, so a reader who shuts the column
+   * shuts it once rather than on every deck they open. The old note here argued the opposite —
+   * that "whether it is open at all" is a fact about *one particular deck's* search column and so
+   * belongs nowhere — and the reports this changed for say it is not: readers do not open a search
+   * column per deck, they either work with one or they do not. The per-deck facts are still the
+   * deck row's (`rememberView`'s `lastVariant`/`lastGroupBy`/`lastSortBy`), and the tile size in
+   * this column is still the `deckSearch` zoom section's; this is the app-wide answer that sits
+   * beside them.
+   *
+   * **The press is what is written, never the drawn state.** A railing is a measurement about a
+   * narrow window and not a thing the reader asked for, so it must not reach the stored answer —
+   * see {@link useDeckSearchOpen} and {@link DeckSearchPanelProps.roomy}.
    *
    * **The search comes up with the disclosure and costs nothing before it** — {@link OpenPanel}
    * is where `useCardSearch` lives, and **this flag on its own is what mounts it**. Closed is
    * nothing mounted, which is the rule every dialog in this editor is built on and the one this
    * panel used to be the exception to: the hook was unconditional here, so every deck a reader
-   * opened fired a `search_cards` for a wall nobody was looking at. That was defensible while
-   * the rail was the rare case — it only happened when `roomy` was false — and stopped being
-   * defensible the day collapsed became the resting state.
+   * opened fired a `search_cards` for a wall nobody was looking at. That gate is worth more now
+   * rather than less — open is the resting state again, so the readers it saves a query for are
+   * exactly the ones who shut the column on purpose.
    *
    * `shown` below is the *drawn* state, this and the editor's room together, and it reaches the
    * classes, the `aria-expanded` and the row's shape and nothing else. **A press is the only
    * thing that can unmount a search; a railing hides one** — see {@link DeckSearchPanelProps.roomy}.
    */
   const tip = useTooltip();
-  const [open, setOpen] = useState(false);
+  const { open, setOpen } = useDeckSearchOpen();
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const bodyId = useId();
@@ -323,12 +329,15 @@ export function DeckSearchPanel({
    * it. A *drag* does write clamped, because there the bound is the edge the reader is pushing
    * against rather than something that happened to the window while they were not looking.
    *
-   * `useState` here rather than `useAppStore`, for {@link open}'s reason and one of its own. It
-   * is not remembered past this editor, which is the same answer this panel gives for whether it
-   * is open at all — a search column is a thing you open to do a job, size for the job, and shut.
-   * It **does** survive a collapse and a railing, though, because it lives in this root rather
-   * than in `OpenPanel`: the disclosure and the reader's width outlast the search they were
-   * pointed at, so reopening gives back the column they had rather than the one the app ships.
+   * `useState` here, and **this is now the one thing about this panel that is not remembered** —
+   * the disclosure beside it went to `app_meta` on 2026-08-22 (see {@link open}) and this
+   * deliberately did not follow it. A width is an answer about *one deck's* desk: how much room
+   * the piles beside it need is a fact about that deck, and a column dragged wide for a 17-pile
+   * Commander list is the wrong column for a 60-card Standard deck. Whether the reader works with
+   * a search column at all is not like that, which is why exactly one of the two crossed over.
+   * It **does** survive a collapse and a railing, because it lives in this root rather than in
+   * `OpenPanel`: the disclosure and the reader's width outlast the search they were pointed at,
+   * so reopening gives back the column they had rather than the one the app ships.
    */
   const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
 
@@ -412,7 +421,12 @@ export function DeckSearchPanel({
       aria-expanded={shown}
       aria-disabled={!roomy || undefined}
       {...tip(roomy ? null : NO_ROOM)}
-      onClick={() => roomy && setOpen((v) => !v)}
+      // `setOpen(!open)` rather than an updater, because the answer is a *query's* now rather
+      // than a `useState`'s and there is no functional form to take one. Safe for the same
+      // reason the updater was never load-bearing here: `open` is read in this render, a press
+      // is one event, and the write is optimistic — the cache holds the new value before the
+      // next press can be made.
+      onClick={() => roomy && setOpen(!open)}
       className={cn(
         "flex shrink-0 items-center gap-1.5 rounded-md text-xs text-dim",
         "transition-colors duration-150 motion-reduce:transition-none",
@@ -721,7 +735,18 @@ function OpenPanel({
   // Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
   // and this is the wall's selection. One field, two subscriptions, no round trip either side.
   const selectedCardId = useAppStore((s) => s.selectedCardId);
-  const selectCard = useAppStore((s) => s.setSelectedCardId);
+  /**
+   * **`openCardFromDeckSearch`, not `setSelectedCardId`** — the one write in the app that says a
+   * card was opened from *this* column.
+   *
+   * What it buys is on the other side of the desk: the editor draws the card pane as an overlay,
+   * and this is what puts it over the **deck** attached to this column's left edge rather than
+   * over this column itself (issue #183). A search whose answer covers the search is the failure
+   * the flag exists to prevent, and it has to be written where the press is: every other opener
+   * in the editor — a deck tile, a validation-panel card name — means the other side, and says so
+   * by going through `setSelectedCardId`, which clears the flag in the same `set`.
+   */
+  const selectCard = useAppStore((s) => s.openCardFromDeckSearch);
 
   /**
    * What the picked id is *called*, for the two names every Add button carries — or `null` under

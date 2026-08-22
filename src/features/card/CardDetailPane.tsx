@@ -358,6 +358,21 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
       // which is the one thing Scryfall's usage rules forbid outright.
       className={cn(
         "relative w-96 shrink-0 space-y-4 overflow-y-auto rounded-lg border border-border bg-surface p-4",
+        // **384px is what it asks for and no longer what it takes.** The deck editor draws this
+        // pane as an *overlay* over one of its two columns (issue #183), inside a frame only as
+        // wide as the space on that side — and a fixed `w-96` overflowing that frame to the left
+        // is not a scrollbar but a **clipped card**, because content overflowing the inline-start
+        // edge is unreachable rather than scrollable. The cap is the frame's own width, which is
+        // why it is stated as a percentage here and measured there. Docked in `App`, the frame is
+        // the shell row and this never binds.
+        "max-w-full",
+        // The pane is drawn inside a `pointer-events-none` frame in the editor — the frame spans
+        // a whole column so that `max-w-full` has something to mean, and a transparent box over
+        // the deck that ate clicks would be worse than the overlay it exists to size. Written
+        // unconditionally rather than at that one call site so the two states below stay the only
+        // thing deciding whether this pane can be pressed, and it is *before* the exit rule for
+        // exactly that reason: on the way out `pointer-events-none` wins.
+        "pointer-events-auto",
         // Grown from the edge it is docked against, so the gesture points at where the pane
         // comes from rather than at its own middle.
         "origin-right",

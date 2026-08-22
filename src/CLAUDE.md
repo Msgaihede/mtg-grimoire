@@ -182,7 +182,17 @@ Every one of these has its measurement and its story in
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
   column, whose tiles are drag sources into the deck's own category columns, and the card detail
   pane, which is how a reader flips through a card's printings — and both of those are
-  collapsible or dismissible and **neither opens by default**.
+  collapsible or dismissible.
+  **Both of those halves moved on 2026-08-22 (issue #183), in opposite directions, and they moved
+  together.** The card pane stopped taking a place in the deck editor's layout at all: there it is
+  an **overlay** over one of the desk's two columns — over the search column for a card opened
+  from the deck, over the deck for a card opened from the search column, so that either way it
+  covers what the reader was _not_ looking at — and `App` draws the docked one for every other
+  view. With the 384px gone from the desk, the search column **opens by default** again and
+  remembers which way the reader last left it (`app_meta.deck_search_open`). The rule above is
+  unchanged and it is what decided both: a consulted surface is a modal, a worked-out-of surface
+  earns its place — and a surface worked out of _beside_ another one may not take the other's
+  width to do it.
 - **A modal is clamped to the window and scrolls inside itself — its content never decides its
   height.** Every panel here has something in it that can grow without a ceiling: a decklist, a
   validation list, a category list, an error carrying a Scryfall message. Unclamped, the panel

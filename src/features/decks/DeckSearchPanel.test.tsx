@@ -20,6 +20,13 @@ const listSets = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const prefetchImages = vi.hoisted(() => vi.fn());
+// The disclosure is an `app_meta` row behind a query now, so the panel reads one on the way up
+// and writes one on every press. Answered `true`, which is the shipped default — a test that
+// wants the other state seeds the cache through `panel({ storedOpen: false })` rather than
+// re-pointing this, because that is the state a *stored* preference puts the panel in and a
+// resolved mock and a resolved cache entry are not the same moment.
+const deckSearchOpen = vi.hoisted(() => vi.fn());
+const setDeckSearchOpen = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -40,10 +47,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     prefetchImages,
+    deckSearchOpen,
+    setDeckSearchOpen,
   },
 }));
 
 import { DeckSearchPanel } from "./DeckSearchPanel";
+import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
@@ -128,6 +138,8 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(null);
   deckAddCard.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
   prefetchImages.mockReset().mockResolvedValue(undefined);
+  deckSearchOpen.mockReset().mockResolvedValue(true);
+  setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
 });
 
 /**
@@ -204,10 +216,22 @@ function panel({
   // assignable.
   defaultFormat = null as FormatFilterOption | null,
   maxWidth = undefined as number | undefined,
+  /**
+   * What `app_meta` already holds about the disclosure, or `undefined` for a database that has
+   * never been asked.
+   *
+   * Seeded into the cache rather than sent through the mocked command, and the difference is a
+   * frame: a `mockResolvedValue` is still a round trip, so the panel's first paint is the
+   * *default* either way and a test asking about the stored state would be asking about the
+   * moment before it arrived. A seeded entry is the state a second deck opens in — the query is
+   * `staleTime: Infinity`, so this is exactly what the reader's own last press leaves behind.
+   */
+  storedOpen = undefined as boolean | undefined,
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  if (storedOpen !== undefined) client.setQueryData(DECK_SEARCH_OPEN_KEY, storedOpen);
   let props: Props = { categories, targetCategoryId, roomy, defaultFormat, maxWidth };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
@@ -231,17 +255,19 @@ function panel({
 }
 
 /**
- * The panel with its disclosure pressed open — which is what most of this file is about, and no
- * longer the state it renders in.
+ * The panel with its wall up — which is what most of this file is about, and **the state it
+ * renders in again** (issue #183, 2026-08-22).
  *
- * The panel opens **collapsed** (its `open` state's own doc has the 602/384/202 arithmetic), so
- * a test that renders it and reaches straight for the wall is asking about a wall that is not
- * drawn. Pressing the control the reader would press keeps each of those tests asking what it
- * meant to ask, rather than being repaired by a prop nobody has.
+ * It pressed the disclosure until then, because the panel opened collapsed and a test that
+ * reached straight for the wall was asking about a wall that was not drawn. The default is open
+ * now, so the press would *shut* it — and every one of those tests would go on to fail for a
+ * reason that had nothing to do with what it was asking. Kept as a name rather than inlined:
+ * "this test needs the wall" is what these call sites mean, and the day the default moves again
+ * it is one function that has to change rather than forty call sites.
  */
 async function openPanel(options: Parameters<typeof panel>[0] = {}) {
   const view = panel(options);
-  await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+  await screen.findByRole("button", { name: "Search cards" });
   return view;
 }
 
@@ -258,50 +284,76 @@ const formatSelect = (): HTMLSelectElement => screen.getByLabelText("Format") as
 
 describe("DeckSearchPanel", () => {
   /**
-   * The state a deck opens in, and the reason it changed: the panel's 384px plus the desk's
-   * 16px gap out of a 602px row at 1280×800 with the card pane docked leaves the deck 202px —
-   * one stack column — so open by default every reader paid for a wall whether or not they were
-   * adding cards.
+   * The state a deck opens in, and the reason it changed **back** (issue #183, 2026-08-22).
+   *
+   * The case for opening collapsed was width, and it was arithmetic: 384px of panel plus the
+   * desk's 16px gap out of a 602px row at 1280×800 *with the card pane docked beside the editor*
+   * left the deck 202px, one stack column. The card pane is not docked beside the editor any
+   * more — it is an overlay over one of the desk's two columns and takes no width from either —
+   * so the row that number was measured on has gone, and with it the reason a reader who wanted
+   * a search column had to ask for one on every deck they opened.
    *
    * `roomy` is left true here on purpose: this is the reader's own default, not the editor
    * refusing for want of width, and the two are kept apart everywhere else in this file.
    */
-  it("starts collapsed, so the deck has the desk until the reader asks for the wall", async () => {
-    const first = panel();
+  it("starts open, so a reader who searches while they build has a wall", async () => {
+    panel();
 
-    const rail = screen.getByRole("button", { name: "Search cards" });
-    expect(rail).toHaveAttribute("aria-expanded", "false");
+    const rail = await screen.findByRole("button", { name: "Search cards" });
+    expect(rail).toHaveAttribute("aria-expanded", "true");
     expect(rail).not.toHaveAttribute("aria-disabled");
-    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
-
-    await userEvent.click(rail);
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+  });
+
+  /**
+   * The other half of the default, and the half that makes it defensible: the reader's answer
+   * outlives the deck they gave it on.
+   *
+   * Both directions, because they fail differently. The **write** is what the press produces —
+   * a boolean through `set_deck_search_open`, and asserting the argument is what would catch a
+   * panel that remembered the drawn state rather than the choice. The **read** is a second panel
+   * mounted over a cache the first one's press left behind, which is exactly what opening a
+   * second deck is: the editor is keyed on the deck id, so the panel is thrown away and the query
+   * entry is not.
+   */
+  it("remembers which way the reader left it, across decks", async () => {
+    const first = panel();
+    await screen.findByRole("searchbox", { name: "Search cards" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+
+    expect(setDeckSearchOpen).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
     first.unmount();
 
-    // And it is not remembered. The choice is this component's `useState` and deliberately not a
-    // `useAppStore` field — a reader who opens the panel, leaves the deck and comes back finds it
-    // collapsed again, which is what makes moving it into the store a change rather than a tidy.
-    panel();
+    // A fresh editor over a database that has been told. Seeded rather than pressed, for the
+    // reason `panel`'s own `storedOpen` gives: this is the state the *stored* answer puts the
+    // panel in, and it is the first paint that has to be right.
+    panel({ storedOpen: false });
     expect(screen.getByRole("button", { name: "Search cards" })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
+
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    expect(setDeckSearchOpen).toHaveBeenLastCalledWith(true);
   });
 
   /**
-   * The other half of opening collapsed, and the regression it introduced: `useCardSearch` was
-   * called unconditionally in the panel's root, so a state that draws no wall ran the wall's
-   * query anyway. That was true of the `roomy: false` rail from the start and cost nothing worth
-   * counting while the rail was the rare case; collapsed is the resting state now, so every deck
-   * the reader opened fired a `search_cards` for a wall nobody was looking at.
+   * **A shut panel costs no query**, which was the fix for opening collapsed and is worth *more*
+   * now rather than less: `useCardSearch` used to be called unconditionally in the panel's root,
+   * so a state that draws no wall ran the wall's query anyway. Open is the resting state again,
+   * so the readers this saves a `search_cards` for are exactly the ones who shut the column on
+   * purpose — and they are the ones who meant it.
    *
-   * The fix is the rule the editor's dialogs already keep — closed is nothing mounted — so the
-   * hook moved into a child the reader's own `open` mounts. **The press is what makes the
-   * silence discriminate**: a mock that had been wired to nothing would pass the first assertion
-   * on its own, and the second one is what says the search really is behind the disclosure.
+   * Started from a **stored** collapse rather than a pressed one, because a press would leave the
+   * search mounted for the frame before it and prove nothing about the deck this reader is
+   * opening. **The press at the end is what makes the silence discriminate**: a mock wired to
+   * nothing would pass the first assertion on its own, and the second one is what says the search
+   * really is behind the disclosure.
    */
-  it("asks the backend for nothing until the reader opens it", async () => {
-    panel();
+  it("asks the backend for nothing while it is shut", async () => {
+    panel({ storedOpen: false });
 
     const rail = await screen.findByRole("button", { name: "Search cards" });
     expect(rail).toHaveAttribute("aria-expanded", "false");
@@ -584,10 +636,10 @@ describe("DeckSearchPanel", () => {
    * disabled, because a press could not open anything and a control that records an intention
    * and moves nothing is worse than one that says why.
    *
-   * Opened first, and that is the whole of what makes the last two acts discriminate: the panel
-   * starts collapsed now, so a reader who never pressed anything is already in the state a
-   * refusal draws, and every assertion below would pass against a component that had thrown the
-   * choice away.
+   * The panel is drawn open first, which is what makes the last two acts discriminate: the
+   * refusal draws the same rail a collapse does, so a test that started from a shut panel would
+   * pass against a component that had thrown the reader's choice away — and the point of the
+   * last two lines is that it has not.
    */
   it("draws its rail, refused and explained, when the editor has no room for it", async () => {
     const view = await openPanel();

@@ -1,10 +1,7 @@
-import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { ipc } from "@/lib/ipc";
-import { useAppStore } from "@/lib/store";
 import { DeckEditor } from "./DeckEditor";
 
 /**
@@ -30,19 +27,14 @@ import { DeckEditor } from "./DeckEditor";
  * else. It is in the query key too: a deck is made once per key, so two formats have to be two
  * keys or the second story would open the first one's deck.
  *
- * The pane is a **sibling** of the editor here exactly as it is in `App.tsx`, keyed on the card
- * id for the same reason: a swap re-keys it onto the printing the deck now holds, and the
- * sentence saying what happened has to cross that unmount.
+ * **The pane is the editor's own now** (issue #183, 2026-08-22) and this wrapper no longer draws
+ * one. It used to render a `CardDetailPane` as a *sibling*, exactly as `App.tsx` did, keyed on
+ * the card id — and both halves of that have moved: the editor draws the pane as an overlay over
+ * one of its two columns, and `App` steps aside for it. A copy left here would be a second
+ * `complementary` landmark answering to the same name as the real one, which is precisely what
+ * `SwapFolds` reaches for.
  */
-function Editor({
-  deckId,
-  pane = false,
-  formatKey = "modern",
-}: {
-  deckId: number | null;
-  pane?: boolean;
-  formatKey?: string;
-}) {
+function Editor({ deckId, formatKey = "modern" }: { deckId: number | null; formatKey?: string }) {
   const created = useQuery({
     queryKey: ["story", "empty-deck", formatKey],
     queryFn: () => ipc.deckCreate({ name: "Untitled", formatKey }),
@@ -51,16 +43,9 @@ function Editor({
   });
   const id = deckId ?? created.data?.id ?? null;
 
-  const selectedCardId = useAppStore((s) => s.selectedCardId);
-  const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
-  const closeCard = useCallback(() => setSelectedCardId(null), [setSelectedCardId]);
-
   return (
     <div className="flex h-full min-h-0 gap-4">
       <div className="min-w-0 flex-1">{id !== null && <DeckEditor key={id} deckId={id} />}</div>
-      {pane && selectedCardId && (
-        <CardDetailPane key={selectedCardId} cardId={selectedCardId} onClose={closeCard} />
-      )}
     </div>
   );
 }
@@ -74,7 +59,7 @@ const meta = {
   // the last deck's view, grouping, filter and add target — which is what `App.tsx` does with
   // the same key, for the same reason. `formatKey` is in the key because on the `deckId: null`
   // path it changes which deck is made, and therefore which headings the editor draws.
-  render: (args) => <Editor key={`${args.deckId}:${args.pane}:${args.formatKey}`} {...args} />,
+  render: (args) => <Editor key={`${args.deckId}:${args.formatKey}`} {...args} />,
   decorators: [
     // The editor is `h-full`, so it needs a parent with a height or its views have none.
     // 1032px is exactly the content column at the app's narrow rung — the 1280-wide window
@@ -1038,7 +1023,7 @@ export const Gone: Story = {
  * announces it. Without the sentence a card would simply disappear out of the deck, which reads
  * like a bug.
  *
- * **This is the one editor story that renders the card pane, because the swap has no control in
+ * **This is the one editor story that opens the card pane, because the swap has no control in
  * the editor at all.** "Use this printing" is drawn on the pane's printings rows and only for a
  * card opened *as a deck card* — `openCardFromDeck` is the sole writer of `paneDeckContext`, so
  * the offer exists exactly where a slot exists to rewrite. The context carries the **variant**
@@ -1052,16 +1037,14 @@ export const Gone: Story = {
  * the category.
  */
 export const SwapFolds: Story = {
-  args: { deckId: 2, pane: true },
+  args: { deckId: 2 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // **The panel starts collapsed**, so the story presses the disclosure before it can search:
-    // 384px plus a gap is most of the desk at the app's own window, and a reader who is not
-    // adding cards should not pay for the wall on every deck they open. The button and the
-    // search field share the name "Search cards" — the disclosure names what it reveals — so
-    // each is addressed by its own role.
-    await userEvent.click(await canvas.findByRole("button", { name: "Search cards" }));
-
+    // **The panel is open at rest again** (issue #183), so there is no disclosure to press
+    // first — the card pane it used to trade width with is an overlay now and takes none. The
+    // button and the search field share the name "Search cards" — the disclosure names what it
+    // reveals — so each is still addressed by its own role.
+    //
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `src/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
     // of 36 cards that its tile is not mounted.

@@ -804,3 +804,76 @@ pile. The caret was put on a card by a **real pointer click**, which is the entr
 Left as the suite's: that ArrowLeft/ArrowRight on a grip still reorder. Driving it live means two
 `deck_category_reorder` writes against the reader's own deck, and the branch was not touched —
 `views.test.tsx` and `DeckEditor.test.tsx` both cover it, including the ids the second one sends.
+
+## The card pane as an overlay, and the remembered search column — 2026-08-22, `npm run tauri dev` (debug), 1280×800
+
+Issue #183, both halves, driven against a copy of the main checkout's database (14-card Commander
+deck, 116 700-card corpus, a sync running throughout — which is the *contended* read connection
+and matters to the last section).
+
+### No reflow, which is the whole claim
+
+The desk row is **1017px** at 1280×800 (a 1032px content box less the editor's own 15px
+scrollbar), and it splits **617 + 16 + 384**. Every figure below was taken in that window.
+
+| state | deck column | search panel | pane | `data-pane-over` |
+| --- | --- | --- | --- | --- |
+| no card open | 617 | 384 @ x 861 | — | `search` |
+| card from a deck pile | **617** | 384 @ x 861 | 384 @ x **861** | `search` |
+| card from the search column | **617** | 384 @ x 861 | 384 @ x **461** | `deck` |
+| card from a deck pile, column railed | **965** | 36 @ x 1209 | 384 @ x **861** | `search` |
+
+- **The deck column does not move.** 617 with a card open and 617 without, against the **202** the
+  docked pane used to leave it (the table on `DECK_FLOOR`, taken when the pane was a shell
+  column). The railed row is the same claim at the other end: 965 either way.
+- **Both anchors are exact to the pixel.** Over the search column, the pane's box *is* the
+  panel's — 861 → 1245 against 861 → 1245. Over the deck, its right edge is 845, which is the
+  deck column's right edge (228 + 617) and therefore one 16px gap clear of the panel at 861.
+- **"Regardless of its size" is real**: with the column railed to 36px the pane is still 384 wide
+  and still anchored to the desk's right edge, overhanging the rail onto the deck.
+- **No horizontal overflow in any state** — the editor's `scrollWidth` equalled its `clientWidth`
+  (1017) at every sample, which is the failure a wrongly clamped overlay would produce and the one
+  the 1024px floor forbids outright.
+- **The pane is clamped by the space on its side, not by its own 384.** At **1024×800** with the
+  pane over the deck, the deck column is 361 and the pane is drawn **361** wide. Without the cap it
+  would overflow the inline-start edge, which is *not* scrollable — the missing 23px of card could
+  not have been reached by any gesture.
+
+### The defect this pass existed to find
+
+**The search column drew itself open for 43 frames — about 700ms — before snapping to its rail,
+on every deck opened after a launch.** Sampled per `requestAnimationFrame` on a database whose
+stored answer was *shut*: `-1` (not drawn) × 15, **384 × 43**, then 36 for the rest. The deck
+beside it re-packed 965 → 617 → 965 on the way past.
+
+- **It is not a slow read.** Asked on its own in the same window, `deck_search_open` answered in
+  **20.7ms** cold and **5.4ms** warm. It is slow *there* because the panel mounts only once
+  `deck_get` has answered, so its read queues behind the deck's on the read connection — and
+  behind the sync, on the launch where this is most likely to be a reader's first deck.
+- **Amplifying it is what made it legible.** Patching `ipc.deckSearchOpen` in the running page to
+  resolve after 800ms turned the 43 frames into **105**, which is the same bug at a speed a person
+  can watch. The technique is the one `repro-races-by-patching-ipc-live` describes.
+- **The fix is to stop asking at the moment the answer is needed.** `usePrefetchDeckSearchOpen`
+  is mounted in `AppShell` beside `useCardZoomPersistence`, so the read starts at launch while the
+  reader is still on the Search view. Re-driven on a cold launch: `-1` × 43 then **36 for every
+  remaining frame** — the column is never drawn at the wrong width at all.
+- **Nothing in either suite could have seen this.** jsdom has no layout engine, so the width does
+  not exist there; and a mocked `deckSearchOpen` resolves on the microtask queue, so the pending
+  frame a real IPC round trip leaves is not produced either.
+
+### The persistence, end to end
+
+- Collapsing the column wrote `app_meta.deck_search_open = '0'` (read back with a read-only
+  `node:sqlite` connection while the app held the database).
+- **Killed the app and relaunched it**: the editor opened on the 36px rail, `aria-expanded`
+  `false`, and no `<input>` mounted anywhere in the panel — so a shut column really does cost no
+  `search_cards`.
+- Reopening it wrote `'1'` back.
+
+### One thing worth knowing that is not a bug
+
+**With a card open from a deck pile, the search column is underneath the pane and cannot be
+clicked.** That is the design — the pane covers what the reader was not looking at — but it means
+a CDP pass that opens a deck card and then reaches for a search tile is aiming at the pane. Close
+the card first.
+

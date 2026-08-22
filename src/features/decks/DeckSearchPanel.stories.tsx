@@ -139,7 +139,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Opened by a press, with the whole corpus in it — the panel itself starts collapsed.
+ * The panel at rest, with the whole corpus in it.
  *
  * The count line is the search view's own `summaryOf`, imported rather than re-written: two
  * copies of these six sentences would be two answers to "why is this list empty", and the one
@@ -159,10 +159,8 @@ export const Docked: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
-    // Collapsed at rest, so the wall arrives on a press. {@link Collapsed} is where that
-    // default is the subject rather than the setup.
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(toggle);
+    // Open at rest, so the wall is simply there (issue #183). {@link Collapsed} is where the
+    // other state is the subject rather than the setup.
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
@@ -208,12 +206,9 @@ export const DeckFormat: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    // Opened first, because the panel comes up collapsed (2026-08-14) and the filter row is
-    // inside `OpenPanel` — there is no Format select to read until the disclosure is pressed.
-    // Which is also what makes the assertions below the interesting ones rather than trivial:
-    // the seed is applied when the search mounts, and the search mounts on this press, so this
-    // is the deck's format arriving at the moment the reader asks for the wall.
-    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
+    // The filter row lives in `OpenPanel`, which the disclosure mounts — and the disclosure is
+    // open at rest again (issue #183), so the seed is applied on the panel's own first paint.
+    // `findBy`, not `getBy`: the search still has a round trip to make.
     const format = (await within(panel).findByLabelText("Format")) as HTMLSelectElement;
 
     // The value is what the request carries; the option's own text is the whole of what the
@@ -240,9 +235,9 @@ export const DeckFormat: Story = {
  * The state a deck opens in — and the state the reader puts it back into — still saying what it
  * is.
  *
- * **Collapsed is the default now** (2026-08-14), so this is the panel at rest rather than a panel
- * somebody shut. The deck gets the whole desk until the reader wants the wall, and one press on
- * the rail is what fetches it back.
+ * **A press away rather than the resting state** (issue #183, 2026-08-22): the panel opens open,
+ * and this is what the reader gets when they say they are done with the wall. The deck then has
+ * the whole desk, and one press on the rail fetches the search back exactly as they left it.
  *
  * The words run down the rail rather than leaving a bare icon to be guessed at, and they are the
  * button's accessible name either way — an `aria-label` would be a second, invisible copy of
@@ -261,12 +256,16 @@ export const Collapsed: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
-    // At rest, before anything is pressed.
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-
-    await userEvent.click(toggle);
+    // At rest, before anything is pressed — open, with the wall already answered.
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
+    // Shut, which is what this story is named for, and then open again: the round trip out and
+    // back is what asks the identity question below.
+    await userEvent.click(toggle);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
     await userEvent.click(toggle);
 
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -354,7 +353,6 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
     await expect(
       await within(panel).findByText(
         "Card database is empty — waiting for the first sync to finish.",
@@ -375,7 +373,6 @@ export const NoMatch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
@@ -411,7 +408,6 @@ export const Busy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    await userEvent.click(within(panel).getByRole("button", { name: "Search cards" }));
     // Matched by prefix, where the click-to-add story above spells the category out.
     //
     // The name's tail is the category the picker is on, which is the deck's **first** in
@@ -469,9 +465,7 @@ export const Resizable: Story = {
   ],
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "Search cards" }));
-
-    const handle = canvas.getByRole("separator", { name: "Resize card search" });
+    const handle = await canvas.findByRole("separator", { name: "Resize card search" });
     await expect(handle).toHaveAttribute("aria-orientation", "vertical");
     await expect(handle).toHaveAttribute("aria-valuenow", "384");
     await expect(handle).toHaveAttribute("aria-valuemin", "206");
