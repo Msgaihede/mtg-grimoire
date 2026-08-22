@@ -287,14 +287,22 @@ pub struct ImportResolveRow {
 /// five SQL arms scan `cards` and count with a window function, and the fold arm reaches the
 /// same columns through `cards_fts` and counts in Rust. One column list, two shapes — the
 /// alternative is two column lists, which is the drift this constant exists to prevent.
-const MATCH_COLUMNS: &str = "SELECT c.id, c.name, c.set_code, c.collector_number, c.lang,
+///
+/// **The last column is now built rather than literal.** `owned_quantity` is what
+/// `MATCH_ORDER` ranks on first, so what "owned" means decides which printing a line becomes
+/// — and while the collection is derived from the decks, it means "already in a live list".
+fn match_columns(conn: &Connection) -> String {
+    format!(
+        "SELECT c.id, c.name, c.set_code, c.collector_number, c.lang,
         c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
         c.color_identity, c.legalities, c.power, c.toughness, c.layout, c.rarity,
         c.faces, c.game_changer,
         EXISTS(SELECT 1 FROM cards u
                 WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon,
-        coalesce((SELECT sum(e.quantity) FROM collection_entries e
-                   WHERE e.card_id = c.id), 0) AS owned_quantity";
+        {owned} AS owned_quantity",
+        owned = crate::collection_source::copies_of_printing(conn, "c.id")
+    )
+}
 
 /// The five SQL arms' tail: their source, and the count only they compute.
 const FROM_CARDS: &str = ",\n        count(*) OVER () AS printing_count\n   FROM cards c";
@@ -434,7 +442,7 @@ fn front_face_range(name: &str) -> (String, String) {
     (format!("{name} // "), format!("{name} //!"))
 }
 
-/// One [`ImportMatch`] out of a row of [`MATCH_COLUMNS`].
+/// One [`ImportMatch`] out of a row of [`match_columns`].
 fn read_match(r: &Row<'_>) -> rusqlite::Result<ImportMatch> {
     Ok(ImportMatch {
         card_id: r.get(0)?,
@@ -558,7 +566,7 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
     let phrase = format!("\"{}\"", name.replace('"', "\"\""));
     let mut kept: Vec<(u8, ImportMatch, String)> = stmt
         // Column 22 is `released`, the one column `FOLD_COLUMNS` adds past what `read_match`
-        // consumes — so this index is `MATCH_COLUMNS`' width plus `printing_count`, and it moved
+        // consumes — so this index is `match_columns`' width plus `printing_count`, and it moved
         // when the price column left. Nothing but a test catches a slip here: `r.get` is
         // positional and every neighbour is a `TEXT` SQLite would happily hand over instead.
         .query_map(params![phrase], |r| Ok((read_match(r)?, r.get(22)?)))
@@ -611,7 +619,11 @@ pub fn resolve_lines(
     conn: &Connection,
     lines: &[ResolveLine],
 ) -> Result<Vec<ImportResolveRow>, String> {
-    let scan = format!("{MATCH_COLUMNS}{FROM_CARDS}");
+    // Bound once and reused by all six arms below — `match_columns` reads
+    // `crate::deck_driven::stored` off this same connection, so one call answers for the whole
+    // resolution rather than each arm risking a second read landing on a different answer.
+    let columns = match_columns(conn);
+    let scan = format!("{columns}{FROM_CARDS}");
     let prepare = |sql: &str| {
         conn.prepare(sql)
             .map_err(|e| format!("the decklist could not be resolved: {e}"))
@@ -622,7 +634,7 @@ pub fn resolve_lines(
     let mut by_name = prepare(&format!("{scan}{BY_NAME}{MATCH_ORDER} LIMIT 1"))?;
     let mut by_front = prepare(&format!("{scan}{BY_FRONT_FACE}{MATCH_ORDER} LIMIT 1"))?;
     let mut by_fold = prepare(&format!(
-        "{MATCH_COLUMNS}{FOLD_COLUMNS}{FTS_FROM_AND_WHERE}{MATCH_ORDER} LIMIT {FOLD_CANDIDATES}"
+        "{columns}{FOLD_COLUMNS}{FTS_FROM_AND_WHERE}{MATCH_ORDER} LIMIT {FOLD_CANDIDATES}"
     ))?;
 
     let mut out = Vec::with_capacity(lines.len());
@@ -990,8 +1002,11 @@ pub fn commit_import(
 
 /// A decklist into a deck: one transaction, one allocation, one or two history rows.
 ///
-/// The **write** connection through [`crate::sync::with_write`], answering
-/// [`crate::db::BUSY`] if it cannot be had.
+/// The **write** connection through
+/// [`crate::collection_source::with_write_owned_if_derived`], answering [`crate::db::BUSY`] if
+/// it cannot be had. A committed decklist adds `live` cards, and while the collection is
+/// derived from the decks that *is* an ownership change — the wrapper is what makes the search
+/// Owned facet notice without a sync, same as any other deck write that can move it.
 #[tauri::command]
 pub async fn deck_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1002,7 +1017,7 @@ pub async fn deck_import_commit(
 ) -> Result<ImportOutcome, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| {
+        crate::collection_source::with_write_owned_if_derived(&state, |conn| {
             commit_import(conn, deck_id, &variant, &mode, &items)
         })
     })
@@ -1201,6 +1216,84 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    /// Two paper English printings of one oracle card, at the house pattern's minimum columns
+    /// plus `released_at` — `p1` (cmr) dated after `p2` (ltr), so with nothing owned `p1` is
+    /// "the newest" and wins on [`MATCH_ORDER`]'s date key alone.
+    fn two_printings_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,rarity,
+                    finishes,prices,raw,released_at)
+             VALUES ('p1','o1','Sol Ring','cmr','1','en','normal','uncommon',
+                     '[\"nonfoil\"]','{}','{}','2023-01-01'),
+                    ('p2','o1','Sol Ring','ltr','2','en','normal','uncommon',
+                     '[\"nonfoil\"]','{}','{}','2010-01-01');",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// A `live` deck line for one printing — what "the reader owns it" means once
+    /// [`crate::deck_driven`] is on. One deck, one active category, the shape
+    /// `collection_source.rs`'s own fixture uses.
+    fn seed_live_deck_card(conn: &Connection, card_id: &str, quantity: i64) {
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, created_at, updated_at) VALUES (1,'Deck',0,0);
+             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+                  VALUES (1,1,'Main','main',1,0,0,0);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, quantity, finish,
+                                     created_at, updated_at)
+                  VALUES (1,1,'live',?1,'','','en','',?2,NULL,0,0)",
+            params![card_id, quantity],
+        )
+        .unwrap();
+    }
+
+    /// The one printing a bare-name line (no set, no collector number) resolves to.
+    fn match_line(conn: &Connection, name: &str) -> ImportMatch {
+        resolve_one(conn, line(name))
+            .matched
+            .unwrap_or_else(|| panic!("`{name}` resolved to nothing"))
+    }
+
+    /// Owned ranks **first** in `MATCH_ORDER`, so this decides which printing a decklist line
+    /// resolves to — not merely what a badge says. With the setting on, "the printing you own"
+    /// means "the printing already in one of your live decks".
+    #[test]
+    fn an_import_resolves_to_the_printing_a_live_deck_already_holds() {
+        let conn = two_printings_db();
+        seed_live_deck_card(&conn, "p2", 1);
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        let matched = match_line(&conn, "Sol Ring");
+        assert_eq!(
+            matched.card_id, "p2",
+            "the deck's printing outranks the newest"
+        );
+        assert_eq!(matched.owned_quantity, 1);
+    }
+
+    /// With the setting off, ownership still reads `collection_entries` exactly as before —
+    /// `match_columns` must not have swapped its meaning unconditionally.
+    #[test]
+    fn hand_kept_ownership_is_unaffected() {
+        let conn = two_printings_db();
+        seed_live_deck_card(&conn, "p2", 1);
+        // Deliberately not turned on: `deck_driven::stored` defaults to `false`.
+        let matched = match_line(&conn, "Sol Ring");
+        assert_eq!(
+            matched.card_id, "p1",
+            "no deck line counts while the collection is hand kept, so the newest wins"
+        );
+        assert_eq!(matched.owned_quantity, 0);
     }
 
     #[test]

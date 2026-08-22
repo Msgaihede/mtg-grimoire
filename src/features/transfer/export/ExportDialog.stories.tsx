@@ -176,6 +176,9 @@ function collectionEntry(
     notes: "sleeved",
     needsReview: null,
     updatedAt: 1_786_266_000,
+    // A hand-kept row, which is what these stories are about — every field filled in is a field
+    // the reader stated. A derived row states neither this nor `condition`.
+    deckCount: null,
     ...over,
   };
 }

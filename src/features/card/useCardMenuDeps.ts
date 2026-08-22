@@ -20,6 +20,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
+import { useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { DeckTargetSubmenu, type CardMenuDeps, type CardMenuTarget } from "./cardMenu";
 
@@ -56,6 +57,7 @@ export function useCardMenuDeps(): CardMenuWiring {
   const queryClient = useQueryClient();
   const { marketplace } = useMarketplace();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
+  const { deckDriven } = useDeckDrivenCollection();
 
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -120,8 +122,14 @@ export function useCardMenuDeps(): CardMenuWiring {
   const addWish = wishlistAdd.mutate;
 
   const addToCollection = useCallback(
-    (target: CardMenuTarget, finish: Finish) => addCopy({ cardId: target.cardId, finish }),
-    [addCopy],
+    (target: CardMenuTarget, finish: Finish) => {
+      // The menu row this reaches is already greyed and inert while the collection is
+      // deck-driven (`collectionItem` in `cardMenu.tsx`) — this is the backstop, not the
+      // fence: greying a row is presentation, and this is what actually stops the write.
+      if (deckDriven) return;
+      addCopy({ cardId: target.cardId, finish });
+    },
+    [addCopy, deckDriven],
   );
   const addToWishlist = useCallback((target: CardMenuTarget) => addWish(target), [addWish]);
 
@@ -144,8 +152,11 @@ export function useCardMenuDeps(): CardMenuWiring {
       // which is the fence: a deck add that quietly never lands is the failure this shape
       // exists to prevent.
       DeckTargetSubmenu,
+      // Whether "Add to → Collection" is currently refused. `buildCardMenu`'s `collectionItem`
+      // is the one place this greys the row; a deck add and a wish are unaffected.
+      deckDriven,
     }),
-    [marketplace, addToCollection, addToWishlist, openAllPrintings],
+    [marketplace, addToCollection, addToWishlist, openAllPrintings, deckDriven],
   );
 
   return { deps, error: refusal };

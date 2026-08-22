@@ -1,5 +1,5 @@
 /**
- * The four worlds a story can mount against.
+ * The five worlds a story can mount against.
  *
  * A story asks for one by name — `parameters: { fake: { seed: "empty" } }` — and
  * `preview.tsx` hands the result to {@link allHandlers}. The names are the four questions a
@@ -21,6 +21,11 @@
  *   it.
  * * **`large`** — past `search::TOTAL_CAP`, so `totalIsCapped` is reachable, and deep enough
  *   that the virtualisers are doing work rather than rendering every row they are given.
+ * * **`deckDriven`** — the collection derived from the decks, with **no `collection_entries`
+ *   at all**. The one seed whose subject is a *setting* rather than a shape of data, and the
+ *   only one that can prove a page is reading the decks: three decks, one printing spread
+ *   across all three, a foil beside its regular copy, and a theory row that is deliberately
+ *   not in the collection. {@link deckDrivenSeed} has the whole argument.
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
@@ -59,7 +64,7 @@ import type {
 import { DECK_CATEGORIES, printing } from "./fixtures";
 import type { CategoryKind, CategoryOrigin, DeckAuditKind, DeckVariant } from "@/lib/ipc";
 
-export type SeedName = "empty" | "starter" | "needsReview" | "large";
+export type SeedName = "empty" | "starter" | "needsReview" | "large" | "deckDriven";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -1362,6 +1367,149 @@ function largeSeed(): FakeDb {
   return makeDb({ cards, collectionEntries: largeEntries(cards) });
 }
 
+/* ------------------------------------------------------------------ deckDriven --------- */
+
+/**
+ * A collection that is the sum of the decks — `deck_driven_collection` on, and **not one
+ * `collection_entries` row anywhere**.
+ *
+ * That emptiness is the fixture rather than a shortcut. The setting deletes nothing, so the
+ * commonest real world has hidden hand-built rows sitting under the derived list — but a story
+ * drawing a page of five rows cannot tell whether they came from the decks or from the table
+ * unless the table is empty. A world with both belongs to the *switching* stories, which make
+ * it by pressing the control on `starter`.
+ *
+ * Three decks and eight rows, chosen so that every clause of `collection_source::LIVE` is
+ * visible at once on the one printing a reader would look at first:
+ *
+ * * **Lightning Bolt (`2x2 117`) is seven copies across all three decks** — four in a deck
+ *   that is played, two in a Maybeboard **switched off**, and one in a deck that is
+ *   **archived**. Neither of the last two is subtracted: an inactive pile is a statement about
+ *   how a deck is *read* and archiving is filing, not disassembling, so the reader still has
+ *   the cards. It is the row whose `deckCount` is 3 and whose tooltip has three lines.
+ * * **Urza's Saga (`mh2 259`) is two rows of one printing**, a regular copy and a foil, because
+ *   `coalesce(finish, 'nonfoil')` is in the grouping key. `mh2` printed a foil
+ *   (`finishes: '["nonfoil","foil"]'`), so the sheen is over a printing that was really sold in
+ *   one.
+ * * **Dismember (`nph 57`) is in a `theory` list and nowhere else, so it is not in the
+ *   collection at all.** A plan is a card the reader has said they do *not* have yet, and this
+ *   is the row a fake that forgot the variant would put on the page.
+ *
+ * The fourth thing it shows is the one no row can: `Sol Ring` and `Ragavan` are ordinary
+ * single-deck lines, so a page of this seed is five rows and not five special cases.
+ */
+const DECK_DRIVEN_DECKS: readonly Omit<
+  FakeDeck,
+  "coverKind" | "folderId" | "notes" | "lastVariant" | "lastGroupBy" | "lastSortBy"
+>[] = [
+  {
+    id: 1,
+    name: "Sunday Commander",
+    formatKey: "commander",
+    description: "Sleeved and on the shelf. Its Maybeboard is switched off and still counts.",
+    coverCardId: null,
+    // Built, which changes nothing about what is *owned* — `is_built` is the allocator's word
+    // and the allocator stands down in this mode. It is here so that `deck_theory_diff`'s
+    // derived arm has a built deck to net out.
+    isBuilt: true,
+    archived: false,
+    theoryEnabled: false,
+    updatedAt: CLOCK_BASE - HOUR,
+  },
+  {
+    id: 2,
+    name: "Modern Burn",
+    formatKey: "modern",
+    description: "The one deck with a plan, so the theory list has somewhere to be.",
+    coverCardId: null,
+    isBuilt: false,
+    archived: false,
+    theoryEnabled: true,
+    updatedAt: CLOCK_BASE - 2 * HOUR,
+  },
+  {
+    id: 3,
+    name: "Retired Affinity",
+    formatKey: "modern",
+    description: "Filed away, not taken apart. Its copies are still the reader's.",
+    coverCardId: null,
+    isBuilt: false,
+    archived: true,
+    theoryEnabled: false,
+    updatedAt: CLOCK_BASE - 40 * DAY,
+  },
+];
+
+/** The three decks' categories: `DECK_CATEGORIES` per deck, Maybeboard inactive as it comes —
+ *  which is what makes deck 1's switched-off pile a state the fixture did not have to invent. */
+function deckDrivenCategories(): FakeDeckCategory[] {
+  const next = ids();
+  return DECK_DRIVEN_DECKS.flatMap((d) =>
+    DECK_CATEGORIES.map((c) => ({
+      id: next(),
+      deckId: d.id,
+      name: c.name,
+      kind: c.kind,
+      isActive: c.isActive,
+      sortOrder: c.sortOrder,
+      origin: c.origin,
+    })),
+  );
+}
+
+function deckDrivenDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
+  const next = ids();
+  const filed = (
+    deckId: number,
+    card: FakeCard,
+    kind: CategoryKind,
+    quantity: number,
+    over: Partial<FakeDeckCard> = {},
+  ) => deckCard(next(), deckId, card, categoryOf(categories, deckId, kind), quantity, over);
+  return [
+    // --- deck 1: played, with a switched-off pile ---------------------------------------
+    filed(1, printing("c21", "263"), "main", 1),
+    filed(1, printing("mh2", "259"), "main", 1),
+    // The foil, beside the regular copy above: two rows of one printing on the derived page.
+    filed(1, printing("mh2", "259"), "main", 1, { finish: "foil" }),
+    // Inactive by `DECK_CATEGORIES`, and counted all the same.
+    filed(1, printing("2x2", "117"), "maybe", 2),
+
+    // --- deck 2: the overlap, and the one theory row ------------------------------------
+    filed(2, printing("2x2", "117"), "main", 4),
+    filed(2, printing("mh2", "138"), "main", 4),
+    // The plan, and the only row in this seed that is **not** part of the collection.
+    filed(2, printing("nph", "57"), "main", 2, { variant: "theory" }),
+
+    // --- deck 3: archived, and counted --------------------------------------------------
+    filed(3, printing("2x2", "117"), "main", 1),
+  ];
+}
+
+function deckDrivenSeed(): FakeDb {
+  const deckCategories = deckDrivenCategories();
+  return makeDb({
+    ...starterFeeds(CARDS),
+    ...starterTaxonomy(CARDS),
+    // **The setting is the seed.** Everything else here is ordinary deck data; what makes this
+    // world different is which source the reads take it from.
+    deckDrivenCollection: true,
+    // Not written out as `[]` for tidiness — this is the assertion. See the doc above.
+    collectionEntries: [],
+    decks: DECK_DRIVEN_DECKS.map((d) => ({
+      ...d,
+      coverKind: "card_art" as const,
+      folderId: null,
+      notes: null,
+      lastVariant: "live" as const,
+      lastGroupBy: "category",
+      lastSortBy: "alphabetical",
+    })),
+    deckCategories,
+    deckCards: deckDrivenDeckCards(deckCategories),
+  });
+}
+
 /* ------------------------------------------------------------------ the switch --------- */
 
 /**
@@ -1378,6 +1526,8 @@ export function seed(name: SeedName): FakeDb {
       return needsReviewSeed();
     case "large":
       return largeSeed();
+    case "deckDriven":
+      return deckDrivenSeed();
     default:
       return starterSeed();
   }

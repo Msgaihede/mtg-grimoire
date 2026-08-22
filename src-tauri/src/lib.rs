@@ -1,9 +1,12 @@
 pub mod card;
 pub mod card_row;
 pub mod collection;
+pub mod collection_decks;
+pub mod collection_source;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;
+pub mod deck_driven;
 pub mod deck_meta;
 pub mod deck_theory;
 pub mod deck_undo;
@@ -320,6 +323,7 @@ pub fn run() {
             collection::collection_list,
             collection::collection_summary,
             collection::collection_import_commit,
+            collection_decks::collection_row_decks,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
@@ -380,6 +384,8 @@ pub fn run() {
             zoom::set_card_zoom,
             nav::nav_collapsed,
             nav::set_nav_collapsed,
+            deck_driven::deck_driven_collection,
+            deck_driven::set_deck_driven_collection,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             tags::oracle::oracle_tags_refresh,

@@ -26,6 +26,21 @@
 //! is an enforced `ON DELETE CASCADE` reference, so a fold that deleted first would take a
 //! deck's claim on copies that still exist. [`fold_into_existing`] moves the claims before
 //! it deletes, in the same transaction — the cascade is left with nothing to take.
+//!
+//! **The deck half of [`apply`] is an ownership change while the collection is derived from
+//! the decks** ([`crate::collection_source`]), and it is the one deck write in the crate with
+//! no command behind it — a sync is the one moment nobody is watching the screen, so there is
+//! no wrapper to hang the search index's `owned` rebuild off. It needs none: `crate::sync`'s
+//! `reconcile_ids` already calls `crate::index::lifecycle::invalidate_owned` whenever a pass
+//! repointed, folded or flagged anything, and every arm of [`merge`] — the deck arm included —
+//! bumps one of those three. That refresh is **not** gated on the setting, which is the right
+//! way round: it was written for the collection rows and costs one dimension re-read on a pass
+//! that has already found something to tell the user about. Nothing here reaches an `AppState`
+//! and nothing here should have to.
+//!
+//! [`sweep_orphans`] is the deliberate exception and needs no refresh at all: it writes
+//! `needs_review` and never a `card_id`, so the set of cards the reader owns is the same
+//! before and after it in **both** modes.
 
 use crate::scryfall::Migration;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -287,7 +302,7 @@ fn merge(
             // `oracle_id` is refreshed too, and only here: it is the **first term of
             // `WISHLIST_GRAIN`**, so a wish left on the old oracle card sits on a grain that
             // no longer describes it — a later wish for the same card would not fold into
-            // it, and the any-printing arm of `wishlist::OWNED_SQL` (which resolves through
+            // it, and the any-printing arm of `wishlist::owned_sql` (which resolves through
             // `cards.oracle_id`) would count the wrong copies against it. The collection has
             // no such column; the wishlist keeps one because an any-printing wish has no
             // card row to join to.
@@ -323,6 +338,12 @@ fn merge(
     // and an upstream id change is not a reason for a card to leave a deck. Same three
     // arms, this table's grain (`schema::DECK_CARD_GRAIN` — `deck_id, variant, category_id,
     // card_id` since schema v8 replaced the fixed zone word with a category the user owns).
+    //
+    // A repoint here is what makes this loop an *ownership* change under a deck-driven
+    // collection: it moves a live deck row onto a different `cards` row, which is a different
+    // rowid, which is a different bit in the index's `owned` set. Refreshed by the caller —
+    // see the module doc; every arm below bumps a `stats` counter, which is what that caller
+    // keys on.
     //
     // `name` is **not** refreshed, and it is the one column the collection loop does not
     // have to decide about. It is the oracle name, and a merge says two ids are one

@@ -279,11 +279,11 @@ pub async fn collection_clear(
 ) -> Result<CollectionCleared, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // The one `with_write_owned` in the crate that is not in `collection.rs`, and it has
-        // to be: the facet index's `owned` bitset is built from `collection_entries`, so a
-        // wipe that skipped the amendment would leave the search sidebar offering an Owned
-        // facet over a collection that no longer exists.
-        crate::collection::with_write_owned(&state, clear_collection)
+        // `with_write_owned` and not bare `with_write`, and it has to be: the facet index's
+        // `owned` bitset is built from `collection_entries`, so a wipe that skipped the
+        // amendment would leave the search sidebar offering an Owned facet over a collection
+        // that no longer exists.
+        crate::collection_source::with_write_owned(&state, clear_collection)
     })
     .await
     .map_err(|e| format!("the collection could not be cleared: {e}"))?
@@ -297,6 +297,16 @@ pub async fn wishlist_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<i6
         .map_err(|e| format!("the wishlist could not be cleared: {e}"))?
 }
 
+/// Empty every deck — which is an **ownership** change too, but only while the collection is
+/// derived from them.
+///
+/// [`crate::collection_source::with_write_owned_if_derived`] and not a bare `with_write`, for
+/// [`collection_clear`]'s reason two arms up and a sharper one: with the setting on, wiping the
+/// decks *is* wiping the collection, and it is the largest such change a reader can make in one
+/// press. Skipping the amendment would leave the search sidebar offering an Owned facet built
+/// from before the wipe, over a deck gallery that is now empty — nothing on screen to suggest
+/// the two disagree. In the hand-kept mode the wrapper asks, finds the flag off and rebuilds
+/// nothing, so this costs a deck wipe exactly what it always cost.
 #[tauri::command]
 pub async fn decks_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -307,7 +317,9 @@ pub async fn decks_clear(
     // `AppHandle`, which is not `Send` across the spawn.
     let covers = crate::paths::covers_dir(&app).ok();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| clear_decks(c, covers.as_deref()))
+        crate::collection_source::with_write_owned_if_derived(&state, |c| {
+            clear_decks(c, covers.as_deref())
+        })
     })
     .await
     .map_err(|e| format!("the decks could not be cleared: {e}"))?
@@ -425,6 +437,31 @@ mod tests {
 
         assert_eq!(count(&conn, "decks"), 1);
         assert_eq!(count(&conn, "wishlist_entries"), 1);
+    }
+
+    /// **The Danger Zone's collection clear stays allowed while the collection is driven by
+    /// the decks**, and nothing but this test says so.
+    ///
+    /// It is a deliberate hole in a fence. The five `collection.rs` writes refuse outright with
+    /// `collection::DECK_DRIVEN`, because with the setting on they address rows the reader
+    /// cannot see; clearing is the exception *for that same reason* — the hidden hand-built
+    /// rows are still on disk, and this is the one legitimate way to be rid of them. A
+    /// refactor that lifted the refusal into a wrapper this command also went through would
+    /// close the hole silently, leaving the reader with rows they can neither see nor delete.
+    #[test]
+    fn clearing_the_collection_is_still_allowed_while_it_is_driven_by_the_decks() {
+        let conn = db();
+        seed(&conn);
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        let out = clear_collection(&conn).unwrap();
+
+        assert_eq!(out.entries, 1, "the hidden hand-built row went");
+        assert_eq!(count(&conn, "collection_entries"), 0);
+        assert!(
+            crate::deck_driven::stored(&conn),
+            "and tidying the hidden rows is not a decision to stop deriving"
+        );
     }
 
     #[test]
