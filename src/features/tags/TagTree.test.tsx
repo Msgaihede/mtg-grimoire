@@ -87,7 +87,7 @@ interface DrawOptions {
 }
 
 function draw(options: DrawOptions = {}) {
-  const onPick = vi.fn();
+  const onToggle = vi.fn();
   // Typed with the parameter, so `onMute.mock.calls[0][0]` below stays a `TagHit` rather than
   // an index into an empty tuple — `vi.fn(impl)` otherwise infers the signature of `impl`.
   const onMute = vi.fn<(hit: TagHit) => Promise<void>>(options.mute ?? (() => Promise.resolve()));
@@ -96,7 +96,7 @@ function draw(options: DrawOptions = {}) {
       namespace={namespace}
       hits={hits}
       pending={pending}
-      onPick={onPick}
+      onToggle={onToggle}
       onMute={onMute}
       picked={picked}
     />
@@ -108,7 +108,7 @@ function draw(options: DrawOptions = {}) {
    * answer about a fresh one and pass whatever the code did.
    */
   const change = (next: DrawOptions) => rerender(element({ ...options, ...next }));
-  return { onPick, onMute, change };
+  return { onToggle, onMute, change };
 }
 
 /** The row a reader presses to pick a tag, found by the label it starts with. */
@@ -277,27 +277,69 @@ describe("TagTree", () => {
     );
   });
 
-  it("adds a chip when a tag row is picked", async () => {
+  it("hands the tag up when a row is pressed", async () => {
     const user = userEvent.setup();
-    const { onPick } = draw();
+    const { onToggle } = draw();
 
     await user.click(await row("Landscape"));
 
-    expect(onPick).toHaveBeenCalledTimes(1);
-    expect(onPick.mock.calls[0][0]).toMatchObject({ slug: "landscape", namespace: "art" });
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle.mock.calls[0][0]).toMatchObject({ slug: "landscape", namespace: "art" });
   });
 
   /**
-   * A row already in the chip row says so — and says it in its **name**, not as `aria-pressed`.
-   * `addChip` answers a second press with the same object, so this is a fact about the row and
-   * not a toggle state; a button announcing "pressed" that does nothing when pressed again
-   * would be a control that lies.
+   * Issue #181: the press is a **toggle**, so a row that is already picked hands the same tag up
+   * again rather than going dead. The rail cannot see the answer — the selection is the page's —
+   * so all this proves is that the second press is not swallowed here.
+   */
+  it("hands a picked row's tag up again on a second press", async () => {
+    const user = userEvent.setup();
+    const { onToggle } = draw({ picked: new Set([chipKey("art", "landscape")]) });
+
+    await user.click(await row("Landscape"));
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle.mock.calls[0][0]).toMatchObject({ slug: "landscape", namespace: "art" });
+  });
+
+  /**
+   * A row already in the chip row says so as `aria-pressed`, which is what the ARIA toggle-button
+   * pattern is for and what the tick beside the label draws. It used to be a `, picked` suffix on
+   * the **name**, because a press on a picked row did nothing and a button announcing "pressed"
+   * that ignores the next press would be a control that lies. Issue #181 made it a real toggle,
+   * so the state moved to where a screen reader already looks for it — and the name went back to
+   * being the tag.
    */
   it("marks a row that is already picked", async () => {
     draw({ picked: new Set([chipKey("art", "landscape")]) });
 
-    expect(await row("Landscape")).toHaveAccessibleName(/, picked$/);
-    expect(await row("Plant")).not.toHaveAccessibleName(/picked/);
+    expect(await row("Landscape")).toHaveAttribute("aria-pressed", "true");
+    expect(await row("Plant")).toHaveAttribute("aria-pressed", "false");
+    expect(await row("Landscape")).not.toHaveAccessibleName(/picked/);
+  });
+
+  /** The menu row runs the same toggle, so it has to say which half of it the press will do —
+   *  a row labelled "Add" that removes the tag is the worse half of the same bug. */
+  it("offers the menu row as an add while the tag is unpicked", async () => {
+    const user = userEvent.setup();
+    const { onToggle } = draw();
+
+    await user.pointer({ keys: "[MouseRight]", target: await row("Landscape") });
+
+    await user.click(await screen.findByRole("menuitem", { name: "Add this tag to the filter" }));
+    expect(onToggle.mock.calls[0][0]).toMatchObject({ slug: "landscape" });
+  });
+
+  it("offers the menu row as a removal once the tag is picked", async () => {
+    const user = userEvent.setup();
+    const { onToggle } = draw({ picked: new Set([chipKey("art", "landscape")]) });
+
+    await user.pointer({ keys: "[MouseRight]", target: await row("Landscape") });
+
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Remove this tag from the filter" }),
+    );
+    expect(onToggle.mock.calls[0][0]).toMatchObject({ slug: "landscape" });
   });
 
   /** When the box has text the rail is the answer to it, and no level of the tree is fetched. */
